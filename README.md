@@ -101,9 +101,8 @@
 
 ## 社区
 
-<a href="./images/wechatgroup.png">
-  <img src="https://img.shields.io/badge/WeChat-加入微信群-07C160?style=for-the-badge&logo=wechat&logoColor=white">
-</a>
+- [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
+- [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
 
 ## 更新日志
 
