@@ -102,7 +102,7 @@
 ## 社区
 
 - [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
-- [GitHub Discussions](https://github.com/Jamailar/RedBox/Discussions）
+- [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
 
 <a href="images/wechatgroup.png">
   <img src="https://img.shields.io/badge/微信-扫码加群-green?style=for-the-badge&logo=wechat" alt="微信群二维码">
