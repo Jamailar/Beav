@@ -102,7 +102,13 @@
 ## 社区
 
 - [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
-- [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
+- [GitHub Discussions](https://github.com/Jamailar/RedBox/）
+
+<a href="images/wechatgroup.png">
+  <img src="https://img.shields.io/badge/微信-扫码加群-green?style=for-the-badge&logo=wechat" alt="微信群二维码">
+</a>
+
+
 
 ## 更新日志
 
