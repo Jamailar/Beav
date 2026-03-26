@@ -29,6 +29,15 @@
 
 ---
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=Jamailar%2FRedBox&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&legend=top-left" />
+ </picture>
+</a>
 ## 📋 快速导航
 
 <p align="center">
@@ -89,6 +98,12 @@
 2. 打开 `设置 -> AI`，填写 Endpoint / Key / Model。
 3. 测试连接并保存。
 4. 从 `红书 -> 采集 -> 知识库 -> 稿件/RedClaw` 开始使用。
+
+## 社区
+
+<a href="./images/wechatgroup.png">
+  <img src="https://img.shields.io/badge/WeChat-加入微信群-07C160?style=for-the-badge&logo=wechat&logoColor=white">
+</a>
 
 ## 更新日志
 
