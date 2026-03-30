@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RedBox Capture</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app">
+    <section class="panel">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="RedBox" class="brand-icon">
+        <div class="eyebrow">RedBox Capture</div>
+      </div>
+      <h1>保存到知识库</h1>
+      <p class="desc">将小红书、YouTube、网页链接和选中文字直接送进 RedBox。</p>
+      <div id="server-status" class="status">正在检测桌面端...</div>
+      <div id="page-meta" class="page-meta"></div>
+    </section>
+
+    <section class="panel actions">
+      <button id="save-primary" class="btn btn-primary">正在识别当前页面...</button>
+      <button id="save-page-link" class="btn">保存当前页面链接</button>
+    </section>
+
+    <section class="panel tips">
+      <div class="tip-title">支持方式</div>
+      <ul>
+        <li>小红书：笔记 / 文章详情页</li>
+        <li>YouTube：视频页 / Shorts 页</li>
+        <li>任意网页：链接收藏 / 文字摘录</li>
+      </ul>
+    </section>
+
+    <section id="result" class="panel result hidden"></section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
