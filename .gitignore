@@ -21,3 +21,4 @@ artifacts/
 .tmp/
 desktop/private/
 desktop/.private-runtime/
+desktop/.plugin-runtime/
