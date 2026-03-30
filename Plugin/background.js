@@ -183,14 +183,149 @@ function extractSelectedTextPayload() {
   };
 }
 
-function extractCurrentPageLinkPayload() {
-  const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-  const title = String(document.title || 'Untitled Page').trim();
-  const text = [title, metaDescription, location.href].filter(Boolean).join('\n\n');
+function collectLinkArticleData() {
+  function cleanText(value) {
+    return String(value || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+  }
+
+  function pickContent(values) {
+    for (const value of values) {
+      const text = cleanText(value);
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function getMeta(selector, attr = 'content') {
+    return document.querySelector(selector)?.getAttribute(attr) || '';
+  }
+
+  function scoreRoot(root) {
+    if (!root) return 0;
+    const text = cleanText(root.innerText || '');
+    const textLength = text.length;
+    const paragraphCount = root.querySelectorAll('p').length;
+    const headingCount = root.querySelectorAll('h1,h2,h3').length;
+    const articleBoost = root.matches?.('article, main, [role="main"]') ? 2000 : 0;
+    return textLength + (paragraphCount * 120) + (headingCount * 50) + articleBoost;
+  }
+
+  function pickBestRoot() {
+    const selectors = [
+      'article',
+      'main',
+      '[role="main"]',
+      '.article',
+      '.article-container',
+      '.post-content',
+      '.entry-content',
+      '.markdown-body',
+      '.rich-text',
+      '.content',
+      '.post',
+      '.note-content',
+    ];
+
+    const candidates = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+    if (!candidates.length) return document.body;
+    return candidates
+      .map((node) => ({ node, score: scoreRoot(node) }))
+      .sort((a, b) => b.score - a.score)[0]?.node || document.body;
+  }
+
+  function collectParagraphText(root) {
+    const selectors = 'h1,h2,h3,p,li,blockquote,pre';
+    const nodes = Array.from(root.querySelectorAll(selectors));
+    const parts = [];
+    const seen = new Set();
+
+    for (const node of nodes) {
+      if (node.closest('nav, header, footer, aside, form, dialog, noscript')) continue;
+      const text = cleanText(node.innerText || '');
+      if (!text || text.length < 18) continue;
+      if (seen.has(text)) continue;
+      seen.add(text);
+      parts.push(text);
+      if (parts.join('\n\n').length > 24000) break;
+    }
+
+    if (parts.length > 0) return parts.join('\n\n');
+    return cleanText(root.innerText || '').slice(0, 24000);
+  }
+
+  function collectImageUrls(root) {
+    const urls = [];
+    const push = (value) => {
+      const url = String(value || '').trim();
+      if (!/^https?:\/\//i.test(url)) return;
+      if (!urls.includes(url)) urls.push(url);
+    };
+
+    push(getMeta('meta[property="og:image"]'));
+    push(getMeta('meta[name="twitter:image"]'));
+
+    const images = Array.from(root.querySelectorAll('img[src], img[data-src], img[data-original]'));
+    for (const img of images) {
+      push(img.getAttribute('src'));
+      push(img.getAttribute('data-src'));
+      push(img.getAttribute('data-original'));
+      if (urls.length >= 4) break;
+    }
+
+    return urls.slice(0, 4);
+  }
+
+  const root = pickBestRoot();
+  const title = pickContent([
+    getMeta('meta[property="og:title"]'),
+    getMeta('meta[name="twitter:title"]'),
+    document.querySelector('h1')?.innerText,
+    document.title,
+  ]) || 'Untitled Page';
+  const content = collectParagraphText(root);
+  const metaDescription = pickContent([
+    getMeta('meta[property="og:description"]'),
+    getMeta('meta[name="description"]'),
+    getMeta('meta[name="twitter:description"]'),
+  ]);
+  const byline = pickContent([
+    getMeta('meta[name="author"]'),
+    document.querySelector('[rel="author"]')?.textContent,
+    document.querySelector('.author, .byline, [class*="author"], [class*="byline"]')?.textContent,
+  ]);
+  const siteName = pickContent([
+    getMeta('meta[property="og:site_name"]'),
+    location.hostname.replace(/^www\./i, ''),
+  ]);
+  const images = collectImageUrls(root);
+  const excerpt = metaDescription || content.slice(0, 180);
+  const looksLikeArticle = content.length >= 280 || root.matches?.('article, main, [role="main"]');
+
   return {
+    looksLikeArticle: Boolean(looksLikeArticle),
     title,
+    text: content || [title, metaDescription, location.href].filter(Boolean).join('\n\n'),
+    excerpt,
     url: location.href,
-    text,
+    author: byline || '',
+    siteName,
+    coverUrl: images[0] || '',
+    images,
+  };
+}
+
+function extractCurrentPageLinkPayload() {
+  const article = collectLinkArticleData();
+  return {
+    type: article.looksLikeArticle ? 'link-article' : 'text',
+    title: article.title,
+    url: article.url,
+    text: article.text,
+    excerpt: article.excerpt,
+    author: article.author,
+    siteName: article.siteName,
+    coverUrl: article.coverUrl,
+    images: article.images,
   };
 }
 
@@ -500,10 +635,20 @@ function detectCaptureTarget() {
     }
   }
 
+  const article = collectLinkArticleData();
+  if (article.looksLikeArticle) {
+    return {
+      kind: 'link-article',
+      action: 'save-page-link',
+      label: '保存链接文章到知识库',
+      description: `将提取正文、来源和封面保存到知识库。${article.siteName ? ` 来源：${article.siteName}` : ''}`,
+    };
+  }
+
   return {
     kind: 'generic',
     action: 'save-page-link',
-    label: '保存当前页面链接',
+    label: '保存当前页面链接到知识库',
     description: '当前页面可作为链接收藏保存到知识库。',
   };
 }
