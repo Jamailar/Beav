@@ -40,11 +40,11 @@ async function init() {
     serverStatusEl.className = 'status error';
   }
 
-  const inspect = await sendMessage({ type: 'inspect-page', tabId: activeTab?.id || 0 });
-  const pageInfo = inspect?.pageInfo || {
+  const inspect = await sendMessage({ type: 'inspect-page', tabId: activeTab?.id || 0 }).catch(() => null);
+  const pageInfo = inspect?.pageInfo || inferPageInfoFromUrl(url) || {
     kind: 'generic',
     action: 'save-page-link',
-    label: '保存当前页面链接',
+    label: '保存当前页面链接到知识库',
     description: '当前页面可作为链接收藏保存到知识库。',
   };
   primaryActionType = pageInfo.action || 'save-page-link';
@@ -61,6 +61,50 @@ async function init() {
 
   buttons.primary.addEventListener('click', () => runAction(primaryActionType));
   buttons.pageLink.addEventListener('click', () => runAction('save-page-link'));
+}
+
+function inferPageInfoFromUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl || ''));
+  } catch {
+    return null;
+  }
+
+  const hostname = String(parsed.hostname || '').toLowerCase();
+  const pathname = String(parsed.pathname || '');
+
+  if (hostname === 'mp.weixin.qq.com') {
+    return {
+      kind: 'wechat-article',
+      action: 'save-page-link',
+      label: '保存公众号文章到知识库',
+      description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
+    };
+  }
+
+  if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') {
+    const isVideoPage = pathname.startsWith('/watch') || pathname.startsWith('/shorts/') || hostname === 'youtu.be';
+    if (isVideoPage) {
+      return {
+        kind: 'youtube',
+        action: 'save-youtube',
+        label: '保存youtube视频到知识库',
+        description: '当前页面已识别为 YouTube 视频页。',
+      };
+    }
+  }
+
+  if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
+    return {
+      kind: 'xhs-generic',
+      action: 'save-xhs',
+      label: '保存小红书图文到知识库',
+      description: '当前页面已识别为小红书内容页。',
+    };
+  }
+
+  return null;
 }
 
 async function runAction(type) {
