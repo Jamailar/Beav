@@ -946,6 +946,7 @@ async function extractCurrentPageLinkPayload() {
     title: article.title,
     url: article.url,
     text: article.text,
+    htmlSnapshot: article.looksLikeArticle ? document.documentElement.outerHTML : '',
     excerpt: article.excerpt,
     author: article.author,
     siteName: article.siteName,
