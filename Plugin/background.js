@@ -1022,30 +1022,182 @@ async function extractXhsNotePayload() {
     return null;
   }
 
+  function getActiveNoteDetailMask() {
+    const strictMasks = Array.from(document.querySelectorAll('.note-detail-mask[note-id]'));
+    const looseMasks = Array.from(document.querySelectorAll('.note-detail-mask'));
+    const masks = strictMasks.length > 0 ? strictMasks : looseMasks;
+    if (masks.length === 0) return null;
+    const scored = masks
+      .filter((mask) => mask instanceof Element)
+      .map((mask, index) => {
+        const style = window.getComputedStyle(mask);
+        const rect = mask.getBoundingClientRect();
+        const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 80 && rect.height > 80;
+        const container = mask.querySelector('#noteContainer.note-container, #noteContainer, .note-container');
+        const titleEl = container?.querySelector?.('#detail-title, .note-content #detail-title, .note-content .title');
+        const titleText = (titleEl?.textContent || '').trim();
+        const area = Math.max(0, rect.width * rect.height);
+        let score = 0;
+        if (visible) score += 100000;
+        if (container) score += 10000;
+        if (titleText) score += 1000;
+        score += Math.floor(area / 100);
+        score += index;
+        return { mask, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return scored[0]?.mask || masks[masks.length - 1] || null;
+  }
+
+  function getCurrentOpenedNoteId() {
+    const mask = getActiveNoteDetailMask();
+    if (!mask) return '';
+    return String(mask.getAttribute('note-id') || '').trim();
+  }
+
+  function normalizeTitle(value) {
+    return String(value || '').replace(/\s+/g, '').trim();
+  }
+
+  function isCommentRelatedNode(el) {
+    if (!el || !el.closest) return false;
+    return Boolean(
+      el.closest('.comments-el') ||
+      el.closest('.comment-list') ||
+      el.closest('.comment-item') ||
+      el.closest('.comment-container') ||
+      el.closest('.comments-container') ||
+      el.closest('[class*="comment"]') ||
+      el.closest('[id*="comment"]')
+    );
+  }
+
   function getCurrentNoteRoot() {
-    return (
+    const directRoot =
       document.querySelector('#noteContainer.note-container[data-render-status]') ||
       document.querySelector('#noteContainer.note-container') ||
-      document.querySelector('#noteContainer') ||
-      document.querySelector('.note-container') ||
+      document.querySelector('#noteContainer');
+    if (directRoot) return directRoot;
+
+    const mask = getActiveNoteDetailMask();
+    if (mask) {
+      const scoped =
+        mask.querySelector('#noteContainer.note-container') ||
+        mask.querySelector('#noteContainer') ||
+        mask.querySelector('.note-container') ||
+        null;
+      if (scoped) return scoped;
+    }
+
+    const anchor =
+      document.querySelector('#detail-desc') ||
+      document.querySelector('#detail-title') ||
       document.querySelector('.note-content') ||
+      null;
+    if (!anchor) return document.body;
+    return (
+      anchor.closest('#noteContainer.note-container') ||
+      anchor.closest('#noteContainer') ||
+      anchor.closest('.note-container') ||
+      anchor.closest('#detail-container') ||
+      anchor.closest('.note-content') ||
+      anchor.closest('[class*="note-container"]') ||
+      anchor.closest('[class*="note-content"]') ||
+      anchor.parentElement ||
       document.body
     );
   }
 
-  function getCurrentStateNote() {
+  function isNodeVisible(el) {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 24 && rect.height > 24;
+  }
+
+  function isLivePhotoNote(root) {
+    if (!root) return false;
+    return Boolean(root.querySelector('img.live-img, .live-img.live-img-visible, [class*="live-img"]'));
+  }
+
+  function getCurrentStateNoteEntry() {
     try {
       const detailMap = getInitialState()?.note?.noteDetailMap || {};
       const keys = Object.keys(detailMap);
       if (keys.length === 0) return null;
+
+      const candidates = [];
+      const openedNoteId = getCurrentOpenedNoteId();
+      if (openedNoteId) candidates.push(openedNoteId);
       const pathPart = location.pathname.split('/').filter(Boolean).pop() || '';
-      if (pathPart && detailMap[pathPart]) {
-        return detailMap[pathPart]?.note || detailMap[pathPart];
+      if (pathPart) candidates.push(pathPart);
+      try {
+        const search = new URLSearchParams(location.search);
+        ['noteId', 'note_id', 'id', 'itemId'].forEach((name) => {
+          const value = search.get(name);
+          if (value) candidates.push(value);
+        });
+      } catch {}
+
+      const uniqCandidates = Array.from(new Set(candidates.filter(Boolean)));
+      for (const candidate of uniqCandidates) {
+        if (detailMap[candidate]) return detailMap[candidate];
+        const matchedKey = keys.find((key) => key === candidate || key.includes(candidate) || candidate.includes(key));
+        if (matchedKey) return detailMap[matchedKey];
+        const matchedByEntry = keys.find((key) => {
+          const entry = detailMap[key];
+          const note = entry?.note || entry;
+          const entryIds = [note?.noteId, note?.id, entry?.noteId, entry?.id]
+            .filter(Boolean)
+            .map((id) => String(id));
+          return entryIds.some((id) => id === candidate || id.includes(candidate) || candidate.includes(id));
+        });
+        if (matchedByEntry) return detailMap[matchedByEntry];
       }
-      return detailMap[keys[0]]?.note || detailMap[keys[0]];
+
+      const domTitle = normalizeTitle(getNoteTitle(getCurrentNoteRoot()));
+      if (domTitle) {
+        const titleMatchedKey = keys.find((key) => {
+          const entry = detailMap[key];
+          const note = entry?.note || entry;
+          const entryTitle = normalizeTitle(note?.title || note?.noteTitle || '');
+          return entryTitle && (entryTitle === domTitle || entryTitle.includes(domTitle) || domTitle.includes(entryTitle));
+        });
+        if (titleMatchedKey) return detailMap[titleMatchedKey];
+      }
+
+      if (keys.length === 1) return detailMap[keys[0]];
+      return null;
     } catch {
       return null;
     }
+  }
+
+  function getCurrentStateNote() {
+    const entry = getCurrentStateNoteEntry();
+    return entry?.note || entry || null;
+  }
+
+  function isStateAlignedWithDomTitle(note) {
+    if (!note) return false;
+    const openedNoteId = getCurrentOpenedNoteId();
+    const stateIds = [note?.noteId, note?.id, note?.note_id]
+      .filter(Boolean)
+      .map((id) => String(id).trim());
+    if (openedNoteId && stateIds.length > 0) {
+      return stateIds.some((id) => id === openedNoteId || id.includes(openedNoteId) || openedNoteId.includes(id));
+    }
+    const domTitle = normalizeTitle(getNoteTitle(getCurrentNoteRoot()));
+    const stateTitle = normalizeTitle(note?.title || note?.noteTitle || '');
+    if (domTitle && stateTitle) {
+      return domTitle === stateTitle || domTitle.includes(stateTitle) || stateTitle.includes(domTitle);
+    }
+    if (domTitle && !stateTitle) return false;
+    return true;
   }
 
   function pushUniqueUrl(list, value) {
@@ -1091,8 +1243,24 @@ async function extractXhsNotePayload() {
     );
   }
 
+  function getCurrentNoteImgEls(root) {
+    let els = root
+      ? Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
+      : [];
+    if (els.length === 0) {
+      els = Array.from(document.querySelectorAll('.note-content .img-container img, .img-container img, .swiper-slide img'));
+    }
+    return els.filter((img) => {
+      if (isCommentRelatedNode(img)) return false;
+      if (img.closest('.avatar,[class*="avatar"]')) return false;
+      const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+      return /^https?:\/\//i.test(src);
+    });
+  }
+
   function getImageUrls(root, stateNote) {
     const urls = [];
+    if (stateNote && isStateAlignedWithDomTitle(stateNote)) {
     const imageList = Array.isArray(stateNote?.imageList)
       ? stateNote.imageList
       : Array.isArray(stateNote?.images)
@@ -1109,14 +1277,31 @@ async function extractXhsNotePayload() {
       pushUniqueUrl(urls, item?.url);
       pushUniqueUrl(urls, item?.urlDefaultWebp);
     });
+    }
 
     if (urls.length > 0) return urls;
 
-    const imgEls = Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'));
+    const imgEls = getCurrentNoteImgEls(root);
     imgEls.forEach((img) => {
       pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
     });
     return urls;
+  }
+
+  function getCurrentMainVideoElement(root) {
+    if (!root) return null;
+    const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+    const visible = candidates.find((el) => !isCommentRelatedNode(el) && isNodeVisible(el));
+    if (visible) return visible;
+    const tagged = candidates.find((el) => {
+      if (isCommentRelatedNode(el)) return false;
+      if (el.getAttribute('mediatype') === 'video') return true;
+      const src = (el.getAttribute('src') || '').trim();
+      if (src.startsWith('blob:')) return true;
+      if (/^https?:\/\//i.test(src)) return true;
+      return Boolean(el.querySelector('source[src^="blob:"], source[src^="http"]'));
+    });
+    return tagged || null;
   }
 
   function collectDeepHttpUrls(input, maxCount = 40) {
@@ -1179,7 +1364,7 @@ async function extractXhsNotePayload() {
     }
   }
 
-  function getVideoUrl(root, stateNote) {
+  function getCurrentNoteVideoUrls(root, stateNote) {
     const candidates = [];
     const h264 = stateNote?.video?.media?.stream?.h264 || [];
     const h265 = stateNote?.video?.media?.stream?.h265 || [];
@@ -1190,16 +1375,19 @@ async function extractXhsNotePayload() {
     pushUniqueUrl(candidates, stateNote?.video?.media?.url);
     pushUniqueUrl(candidates, stateNote?.video?.url);
     collectDeepHttpUrls(stateNote?.video || stateNote, 80).forEach((url) => pushUniqueUrl(candidates, url));
-    getPerformanceMediaUrls().forEach((url) => pushUniqueUrl(candidates, url));
-    if (candidates.length > 0) {
-      return candidates.sort((a, b) => scoreVideoCandidate(b) - scoreVideoCandidate(a))[0];
+    if (getCurrentMainVideoElement(root)) {
+      getPerformanceMediaUrls().forEach((url) => pushUniqueUrl(candidates, url));
     }
 
-    const videoEl = root.querySelector('video');
-    if (videoEl?.src && !String(videoEl.src).startsWith('blob:')) return videoEl.src;
-    const sourceEl = videoEl?.querySelector('source[src]');
-    if (sourceEl?.src && !String(sourceEl.src).startsWith('blob:')) return sourceEl.src;
-    return videoEl?.src || sourceEl?.src || null;
+    const videoEls = Array.from(root.querySelectorAll('video'));
+    videoEls.forEach((videoEl) => {
+      if (isCommentRelatedNode(videoEl)) return;
+      pushUniqueUrl(candidates, videoEl?.src || '');
+      const sourceEls = Array.from(videoEl.querySelectorAll('source'));
+      sourceEls.forEach((source) => pushUniqueUrl(candidates, source?.src || ''));
+    });
+
+    return candidates.sort((a, b) => scoreVideoCandidate(b) - scoreVideoCandidate(a));
   }
 
   function captureVideoCoverDataUrl(root) {
@@ -1222,9 +1410,6 @@ async function extractXhsNotePayload() {
     const poster = root.querySelector('video')?.getAttribute('poster');
     if (poster) return poster;
     if (images[0]) return images[0];
-    if (videoUrl) {
-      return document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null;
-    }
     return document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null;
   }
 
@@ -1271,7 +1456,9 @@ async function extractXhsNotePayload() {
   const title = String(getNoteTitle(root) || '').trim();
   const content = String(getTextContent(root) || '').trim();
   const images = getImageUrls(root, stateNote).slice(0, 9);
-  const videoUrl = getVideoUrl(root, stateNote);
+  const videoCandidates = getCurrentNoteVideoUrls(root, stateNote);
+  const strictVideoNote = !isLivePhotoNote(root) && images.length === 0 && videoCandidates.length === 1;
+  const videoUrl = strictVideoNote ? videoCandidates[0] : null;
   const coverUrl = getCoverUrl(root, images, videoUrl);
   const capturedVideoCover = (!coverUrl && videoUrl) ? captureVideoCoverDataUrl(root) : '';
 
@@ -1353,18 +1540,111 @@ function detectCaptureTarget() {
       }
     }
 
+    function isNodeVisible(el) {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect();
+      return rect.width > 24 && rect.height > 24;
+    }
+
+    function isLivePhotoNote(root) {
+      if (!root) return false;
+      return Boolean(root.querySelector('img.live-img, .live-img.live-img-visible, [class*="live-img"]'));
+    }
+
+    function getCurrentMainVideoElement(root) {
+      if (!root) return null;
+      const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+      const visible = candidates.find((el) => !isCommentRelatedNode(el) && isNodeVisible(el));
+      if (visible) return visible;
+      return candidates.find((el) => {
+        if (isCommentRelatedNode(el)) return false;
+        const src = (el.getAttribute('src') || '').trim();
+        return el.getAttribute('mediatype') === 'video' || src.startsWith('blob:') || /^https?:\/\//i.test(src) || Boolean(el.querySelector('source[src^="blob:"], source[src^="http"]'));
+      }) || null;
+    }
+
+    function pushUniqueUrl(list, value) {
+      if (!value || typeof value !== 'string') return;
+      const url = value.trim();
+      if (!url || !/^https?:\/\//i.test(url)) return;
+      if (!list.includes(url)) list.push(url);
+    }
+
+    function getImageUrlsFromState(note) {
+      const urls = [];
+      const imageList = Array.isArray(note?.imageList)
+        ? note.imageList
+        : Array.isArray(note?.images)
+          ? note.images
+          : [];
+      imageList.forEach((item) => {
+        if (typeof item === 'string') {
+          pushUniqueUrl(urls, item);
+          return;
+        }
+        pushUniqueUrl(urls, item?.urlDefault);
+        pushUniqueUrl(urls, item?.urlPre);
+        pushUniqueUrl(urls, item?.url);
+        pushUniqueUrl(urls, item?.urlDefaultWebp);
+      });
+      return urls;
+    }
+
+    function getCurrentNoteImageUrls(root, note) {
+      const urls = getImageUrlsFromState(note);
+      if (urls.length > 0) return urls;
+      const imgEls = Array.from(root?.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img') || []);
+      imgEls.forEach((img) => {
+        if (isCommentRelatedNode(img)) return;
+        pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
+      });
+      return urls;
+    }
+
+    function getCurrentNoteVideoUrls(root, note) {
+      const urls = [];
+      const h264 = note?.video?.media?.stream?.h264 || [];
+      const h265 = note?.video?.media?.stream?.h265 || [];
+      [...h264, ...h265].forEach((item) => {
+        pushUniqueUrl(urls, item?.masterUrl);
+        if (Array.isArray(item?.backupUrls)) {
+          item.backupUrls.forEach((backup) => pushUniqueUrl(urls, backup));
+        }
+      });
+      pushUniqueUrl(urls, note?.video?.media?.masterUrl);
+      pushUniqueUrl(urls, note?.video?.media?.url);
+      pushUniqueUrl(urls, note?.video?.url);
+      if (getCurrentMainVideoElement(root)) {
+        try {
+          const entries = performance.getEntriesByType('resource') || [];
+          entries.forEach((entry) => {
+            const name = entry && typeof entry.name === 'string' ? entry.name : '';
+            if (!name) return;
+            if (/(\.mp4|\.m3u8|\/hls\/|\/video\/|sns-video|xhscdn)/i.test(name)) {
+              pushUniqueUrl(urls, name);
+            }
+          });
+        } catch {}
+      }
+      const videoEls = Array.from(root?.querySelectorAll('video') || []);
+      videoEls.forEach((videoEl) => {
+        if (isCommentRelatedNode(videoEl)) return;
+        pushUniqueUrl(urls, videoEl?.src || '');
+        const sourceEls = Array.from(videoEl.querySelectorAll('source'));
+        sourceEls.forEach((source) => pushUniqueUrl(urls, source?.src || ''));
+      });
+      return urls;
+    }
+
     const noteRoot = document.querySelector('#noteContainer, .note-container, .note-content');
     const stateNote = getCurrentStateNote();
-    const stateHasVideo = Boolean(
-      stateNote?.video?.media ||
-      stateNote?.video?.stream ||
-      stateNote?.video?.url ||
-      stateNote?.video?.media?.masterUrl ||
-      stateNote?.type === 'video' ||
-      stateNote?.noteType === 'video'
-    );
-    const domHasVideo = Boolean(document.querySelector('#noteContainer video, .note-container video, .note-content video'));
-    const isVideoNote = stateHasVideo || domHasVideo;
+    const imageUrls = getCurrentNoteImageUrls(noteRoot, stateNote);
+    const videoUrls = getCurrentNoteVideoUrls(noteRoot, stateNote);
+    const isVideoNote = Boolean(noteRoot || stateNote) && !isLivePhotoNote(noteRoot) && imageUrls.length === 0 && videoUrls.length === 1;
 
     if (noteRoot || stateNote) {
       return {
