@@ -98,13 +98,22 @@ h1 {
 
 .btn:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
+  opacity: 1;
+  color: #8f8575;
+  border-color: #ddd2c0;
+  background: #eee7dc;
 }
 
 .btn-primary {
   background: #c2410c;
   border-color: #c2410c;
   color: #fff7ed;
+}
+
+.btn-primary:disabled {
+  color: #8f8575;
+  border-color: #ddd2c0;
+  background: #eee7dc;
 }
 
 .result {

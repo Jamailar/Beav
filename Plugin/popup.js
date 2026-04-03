@@ -46,14 +46,16 @@ async function init() {
     action: 'save-page-link',
     label: '保存当前页面链接到知识库',
     description: '当前页面可作为链接收藏保存到知识库。',
+    primaryEnabled: true,
   };
   primaryActionType = pageInfo.action || 'save-page-link';
 
   buttons.primary.textContent = pageInfo.label || '保存到知识库';
+  buttons.pageLink.textContent = '仅保存链接到知识库';
   ensureCaptureTypeElement();
   captureTypeEl.textContent = pageInfo.description || '';
 
-  actionSupport.primary = Boolean(activeTab?.id);
+  actionSupport.primary = Boolean(activeTab?.id) && pageInfo.primaryEnabled !== false;
   actionSupport.pageLink = Boolean(activeTab?.id);
 
   applyButtonState(buttons.primary, actionSupport.primary);
@@ -80,6 +82,7 @@ function inferPageInfoFromUrl(rawUrl) {
       action: 'save-page-link',
       label: '保存公众号文章到知识库',
       description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
+      primaryEnabled: true,
     };
   }
 
@@ -91,16 +94,18 @@ function inferPageInfoFromUrl(rawUrl) {
         action: 'save-youtube',
         label: '保存youtube视频到知识库',
         description: '当前页面已识别为 YouTube 视频页。',
+        primaryEnabled: true,
       };
     }
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
     return {
-      kind: 'xhs-generic',
+      kind: 'xhs-pending',
       action: 'save-xhs',
-      label: '保存小红书图文到知识库',
-      description: '当前页面已识别为小红书内容页。',
+      label: '未检测到有效内容请刷新',
+      description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+      primaryEnabled: false,
     };
   }
 

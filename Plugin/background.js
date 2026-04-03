@@ -1,4 +1,5 @@
 const API_ROOT = 'http://127.0.0.1:23456/api';
+const pageStateCache = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -11,6 +12,16 @@ chrome.runtime.onInstalled.addListener(() => {
     title: '保存当前页面链接到 RedBox',
     contexts: ['page'],
   });
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  pageStateCache.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading' || typeof changeInfo.url === 'string') {
+    pageStateCache.delete(tabId);
+  }
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -43,6 +54,15 @@ async function handleMessage(message, sender) {
   const tabId = Number(message?.tabId || sender?.tab?.id || 0);
 
   switch (message?.type) {
+    case 'page-state:update':
+      if (sender?.tab?.id) {
+        pageStateCache.set(sender.tab.id, {
+          pageInfo: message.pageInfo || null,
+          url: String(message.url || sender.tab.url || ''),
+          updatedAt: Date.now(),
+        });
+      }
+      return { success: true };
     case 'healthcheck':
       return await checkDesktopServer();
     case 'inspect-page':
@@ -61,20 +81,44 @@ async function handleMessage(message, sender) {
 }
 
 async function inspectPage(tabId) {
-  const pageInfo = await runExtraction(tabId, detectCaptureTarget).catch(async () => {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      return detectCaptureTargetFromUrl(String(tab?.url || ''));
-    } catch {
-      return null;
+  let pageInfo = null;
+  const cached = pageStateCache.get(tabId);
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const currentUrl = String(tab?.url || '');
+    if (cached && cached.url === currentUrl && cached.pageInfo) {
+      pageInfo = cached.pageInfo;
+    } else {
+      const contentResponse = await chrome.tabs.sendMessage(tabId, { type: 'page-state:get' }).catch(() => null);
+      if (contentResponse?.success && contentResponse?.pageInfo) {
+        pageInfo = contentResponse.pageInfo;
+        pageStateCache.set(tabId, {
+          pageInfo,
+          url: currentUrl,
+          updatedAt: Date.now(),
+        });
+      }
     }
-  });
+    if (!pageInfo) {
+      pageInfo = await runExtraction(tabId, detectCaptureTarget).catch(() => detectCaptureTargetFromUrl(currentUrl));
+    }
+  } catch {
+    pageInfo = await runExtraction(tabId, detectCaptureTarget).catch(async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        return detectCaptureTargetFromUrl(String(tab?.url || ''));
+      } catch {
+        return null;
+      }
+    });
+  }
   return {
     success: true,
     pageInfo: pageInfo || {
       kind: 'generic',
       label: '保存当前页面链接',
       description: '当前页面可作为链接收藏保存到知识库。',
+      primaryEnabled: true,
     },
   };
 }
@@ -113,10 +157,11 @@ function detectCaptureTargetFromUrl(rawUrl) {
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
     return {
-      kind: 'xhs-generic',
+      kind: 'xhs-pending',
       action: 'save-xhs',
-      label: '保存小红书图文到知识库',
-      description: '当前页面已识别为小红书内容页。',
+      label: '未检测到有效内容请刷新',
+      description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+      primaryEnabled: false,
     };
   }
 

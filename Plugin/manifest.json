@@ -21,6 +21,18 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.xiaohongshu.com/*",
+        "*://mp.weixin.qq.com/*",
+        "*://*.youtube.com/*",
+        "*://youtu.be/*"
+      ],
+      "js": ["pageObserver.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_title": "RedBox Capture",
     "default_popup": "popup.html",
