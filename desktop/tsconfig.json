@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/vite-env.d.ts",
+    "src/types.d.ts",
+    "src/types/**/*.d.ts"
+  ],
+  "exclude": [
+    "src/main.ts",
+    "src/pages/Advisors.tsx",
+    "src/pages/Archives.tsx",
+    "src/pages/Chat.tsx",
+    "src/pages/CoverStudio.tsx",
+    "src/pages/CreativeChat.tsx",
+    "src/pages/ImageGen.tsx",
+    "src/pages/Knowledge.tsx",
+    "src/pages/Manuscripts.tsx",
+    "src/pages/MediaLibrary.tsx",
+    "src/pages/RedClaw.tsx",
+    "src/pages/Settings.tsx",
+    "src/pages/Skills.tsx",
+    "src/pages/Wander.tsx",
+    "src/runtime/**/*",
+    "src/bridge/**/*"
+  ]
+}

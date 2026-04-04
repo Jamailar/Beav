@@ -1,0 +1,158 @@
+.chat-message-row {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-message-row-ai {
+  align-items: stretch;
+}
+
+.chat-message-row-user {
+  align-items: stretch;
+}
+
+.chat-ai-shell {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 740px;
+}
+
+.chat-ai-shell-streaming {
+  animation: chat-ai-shell-enter 180ms ease-out;
+}
+
+.chat-ai-content {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-ai-content-streaming .chat-markdown-body {
+  animation: chat-ai-content-enter 220ms ease-out;
+}
+
+.chat-layout-wide .chat-ai-content {
+  max-width: 100%;
+}
+
+.chat-layout-narrow .chat-ai-shell {
+  max-width: 660px;
+}
+
+.chat-layout-narrow .chat-user-bubble {
+  max-width: min(100%, 660px);
+}
+
+.chat-ai-actions {
+  margin-top: 6px;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.chat-user-bubble {
+  align-self: flex-end;
+  width: auto;
+  min-width: 0;
+  display: inline-block;
+  max-width: min(100%, 740px);
+  border-radius: 12px 4px 12px 12px;
+  background-color: var(--accent-primary, #2563eb);
+  background-image: linear-gradient(
+    165deg,
+    var(--accent-primary, #2563eb),
+    color-mix(in srgb, var(--accent-primary, #2563eb) 72%, #2563eb 28%)
+  );
+}
+
+.chat-markdown-body {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  font-size: 14px;
+  line-height: 1.62;
+  letter-spacing: 0.005em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.chat-markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown-body p {
+  margin-top: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+
+.chat-markdown-body ul,
+.chat-markdown-body ol {
+  margin-top: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.chat-markdown-body li + li {
+  margin-top: 0.16rem;
+}
+
+.chat-markdown-body p,
+.chat-markdown-body li,
+.chat-markdown-body blockquote,
+.chat-markdown-body pre,
+.chat-markdown-body table {
+  max-width: 100%;
+}
+
+.chat-markdown-body pre,
+.chat-markdown-body code {
+  white-space: pre-wrap;
+}
+
+@keyframes chat-ai-shell-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-ai-content-enter {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 767px) {
+  .chat-message-row {
+    gap: 7px;
+  }
+
+  .chat-user-bubble {
+    max-width: 100%;
+  }
+
+  .chat-markdown-body {
+    font-size: 16px;
+    line-height: 1.58;
+  }
+}

@@ -1,0 +1,338 @@
+[
+    {
+        "id": "openai-gpt-5-family",
+        "vendor": "openai",
+        "displayName": "OpenAI GPT-5 family",
+        "matchers": [
+            "\\bgpt-5\\b",
+            "\\bgpt-5-mini\\b",
+            "\\bgpt-5-nano\\b",
+            "\\bgpt-5\\.1\\b",
+            "\\bgpt-5\\.2\\b",
+            "\\bgpt-5-codex\\b",
+            "\\bgpt-5\\.1-codex\\b",
+            "\\bgpt-5\\.2-codex\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Current GPT-5 family pages advertise text/image input and file-search/file workflows; audio/video input is not assumed for the base family."
+    },
+    {
+        "id": "openai-gpt-4o-family",
+        "vendor": "openai",
+        "displayName": "OpenAI GPT-4o family",
+        "matchers": [
+            "\\bgpt-4o\\b",
+            "\\bgpt-4o-mini\\b",
+            "\\bchatgpt-4o\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Text + image understanding. PDF/file support is handled conservatively as file input."
+    },
+    {
+        "id": "openai-gpt-4.1-family",
+        "vendor": "openai",
+        "displayName": "OpenAI GPT-4.1 family",
+        "matchers": [
+            "\\bgpt-4\\.1\\b",
+            "\\bgpt-4\\.1-mini\\b",
+            "\\bgpt-4\\.1-nano\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Text + image understanding. PDF/file support is handled conservatively as file input."
+    },
+    {
+        "id": "openai-reasoning-family",
+        "vendor": "openai",
+        "displayName": "OpenAI reasoning models",
+        "matchers": [
+            "\\bo1\\b",
+            "\\bo1-mini\\b",
+            "\\bo3\\b",
+            "\\bo4-mini\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Reasoning models with image/file understanding where documented through OpenAI multimodal APIs."
+    },
+    {
+        "id": "openai-audio-chat-family",
+        "vendor": "openai",
+        "displayName": "OpenAI audio chat family",
+        "matchers": [
+            "\\bgpt-audio\\b",
+            "\\bgpt-audio-mini\\b",
+            "\\bgpt-4o-audio\\b",
+            "\\bgpt-4o-mini-audio\\b"
+        ],
+        "capabilities": ["chat", "audio"],
+        "inputCapabilities": ["audio"],
+        "notes": "Audio chat family with audio input/output support."
+    },
+    {
+        "id": "openai-realtime-family",
+        "vendor": "openai",
+        "displayName": "OpenAI realtime models",
+        "matchers": [
+            "\\bgpt-realtime\\b",
+            "\\brealtime\\b"
+        ],
+        "capabilities": ["chat", "audio"],
+        "inputCapabilities": ["image", "audio"],
+        "notes": "Realtime family supports live audio; image support included, video not assumed."
+    },
+    {
+        "id": "openai-transcription-family",
+        "vendor": "openai",
+        "displayName": "OpenAI transcription models",
+        "matchers": [
+            "\\bwhisper\\b",
+            "\\bgpt-4o-transcribe\\b",
+            "\\bgpt-4o-mini-transcribe\\b",
+            "\\btranscribe\\b",
+            "\\btranscription\\b"
+        ],
+        "capabilities": ["transcription"],
+        "inputCapabilities": ["audio"],
+        "notes": "Speech-to-text family."
+    },
+    {
+        "id": "anthropic-claude-4-family",
+        "vendor": "anthropic",
+        "displayName": "Claude 4 family",
+        "matchers": [
+            "\\bclaude-4\\b",
+            "\\bclaude-sonnet-4\\b",
+            "\\bclaude-opus-4\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Vision plus document/file understanding. Audio/video input not assumed."
+    },
+    {
+        "id": "anthropic-claude-3.5-3.7-family",
+        "vendor": "anthropic",
+        "displayName": "Claude 3.5 / 3.7 family",
+        "matchers": [
+            "\\bclaude-3\\.5\\b",
+            "\\bclaude-3\\.7\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "Vision plus document/file understanding. Audio/video input not assumed."
+    },
+    {
+        "id": "anthropic-claude-3-family",
+        "vendor": "anthropic",
+        "displayName": "Claude 3 family",
+        "matchers": [
+            "\\bclaude-3\\b",
+            "\\bhaiku\\b",
+            "\\bsonnet\\b",
+            "\\bopus\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image"],
+        "notes": "Conservative fallback for older Claude 3 naming. File support is not assumed here unless versioned."
+    },
+    {
+        "id": "google-gemini-2-family",
+        "vendor": "google",
+        "displayName": "Gemini 2.x family",
+        "matchers": [
+            "\\bgemini-2\\b",
+            "\\bgemini-2\\.0\\b",
+            "\\bgemini-2\\.5\\b",
+            "\\bgemini\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "audio", "video", "file"],
+        "notes": "Gemini multimodal family with text, image, audio, video, and file/doc inputs."
+    },
+    {
+        "id": "moonshot-kimi-k2.5-family",
+        "vendor": "moonshot",
+        "displayName": "Kimi K2.5 family",
+        "matchers": [
+            "\\bkimi-k2\\.5\\b",
+            "\\bmoonshot-k2\\.5\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image"],
+        "notes": "Official docs highlight visual understanding. Audio/video/file direct input is not assumed."
+    },
+    {
+        "id": "moonshot-kimi-text-family",
+        "vendor": "moonshot",
+        "displayName": "Kimi text family",
+        "matchers": [
+            "\\bkimi\\b",
+            "\\bmoonshot\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Conservative text-first fallback for Kimi models without explicit visual suffixes."
+    },
+    {
+        "id": "minimax-m2.5-family",
+        "vendor": "minimax",
+        "displayName": "MiniMax M2.5 family",
+        "matchers": [
+            "\\bm2\\.5\\b",
+            "\\bminimax-m2\\.5\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Current official compatibility doc does not advertise image input support."
+    },
+    {
+        "id": "minimax-m2.1-family",
+        "vendor": "minimax",
+        "displayName": "MiniMax M2.1 family",
+        "matchers": [
+            "\\bm2\\.1\\b",
+            "\\bminimax-m2\\.1\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Current official compatibility doc does not advertise image input support."
+    },
+    {
+        "id": "qwen-3.5-chat-multimodal",
+        "vendor": "qwen",
+        "displayName": "Qwen 3.5 multimodal chat",
+        "matchers": [
+            "\\bqwen3\\.5\\b",
+            "\\bqwen3\\.5-plus\\b",
+            "\\bqwen-3\\.5\\b",
+            "\\bqwen[-_ ]3\\.5\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "video", "file"],
+        "notes": "Per current app policy: supports text/file, image, and video input; audio not enabled."
+    },
+    {
+        "id": "qwen-text-family",
+        "vendor": "qwen",
+        "displayName": "Qwen text family",
+        "matchers": [
+            "\\bqwen-max\\b",
+            "\\bqwen-plus\\b",
+            "\\bqwen-turbo\\b",
+            "\\bqwen3\\b",
+            "\\bqwen2\\.5\\b",
+            "\\bqwen2\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Text-centric Qwen chat models."
+    },
+    {
+        "id": "qwen-vl-family",
+        "vendor": "qwen",
+        "displayName": "Qwen VL / visual family",
+        "matchers": [
+            "\\bqwen.*vl\\b",
+            "\\bqvq\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "video"],
+        "notes": "Visual understanding models for images and video."
+    },
+    {
+        "id": "qwen-omni-family",
+        "vendor": "qwen",
+        "displayName": "Qwen Omni family",
+        "matchers": [
+            "\\bqwen-omni\\b"
+        ],
+        "capabilities": ["chat", "audio"],
+        "inputCapabilities": ["image", "audio", "video"],
+        "notes": "Omni family can reason over text plus one additional modality; file support not assumed."
+    },
+    {
+        "id": "glm-5-family",
+        "vendor": "glm",
+        "displayName": "GLM-5 family",
+        "matchers": [
+            "\\bglm-5\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Text-first GLM family."
+    },
+    {
+        "id": "glm-4.7-family",
+        "vendor": "glm",
+        "displayName": "GLM-4.7 family",
+        "matchers": [
+            "\\bglm-4\\.7\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": [],
+        "notes": "Text-first GLM family."
+    },
+    {
+        "id": "glm-4.6v-family",
+        "vendor": "glm",
+        "displayName": "GLM vision family",
+        "matchers": [
+            "\\bglm-4\\.6v\\b",
+            "\\bglm-4v\\b",
+            "\\bglm-5v\\b",
+            "\\bglm-5v-turbo\\b",
+            "\\bglm-4\\.5v\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "video", "file"],
+        "notes": "Vision family with image, video, and document/file understanding."
+    },
+    {
+        "id": "glm-4-voice-family",
+        "vendor": "glm",
+        "displayName": "GLM voice family",
+        "matchers": [
+            "\\bglm-4-voice\\b"
+        ],
+        "capabilities": ["chat", "audio"],
+        "inputCapabilities": ["audio"],
+        "notes": "Voice family with audio understanding."
+    },
+    {
+        "id": "seedance-video",
+        "vendor": "bytedance",
+        "displayName": "Seedance video models",
+        "matchers": [
+            "\\bseedance\\b"
+        ],
+        "capabilities": ["video"],
+        "inputCapabilities": [],
+        "notes": "Video generation family."
+    },
+    {
+        "id": "seedream-image",
+        "vendor": "bytedance",
+        "displayName": "Seedream image models",
+        "matchers": [
+            "\\bseedream\\b"
+        ],
+        "capabilities": ["image"],
+        "inputCapabilities": [],
+        "notes": "Image generation family."
+    },
+    {
+        "id": "banana-image",
+        "vendor": "google",
+        "displayName": "Nano Banana image models",
+        "matchers": [
+            "\\bnano[-_ ]?banana(?:pro)?\\b",
+            "\\bnanobanana(?:pro)?\\b",
+            "banana"
+        ],
+        "capabilities": ["image"],
+        "inputCapabilities": [],
+        "notes": "Image generation family."
+    }
+]
