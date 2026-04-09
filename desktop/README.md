@@ -1,41 +1,56 @@
 # LexBox
 
-`LexBox/` 是把现有 `desktop/` 应用迁移为 Rust 驱动桌面宿主的工作区。
+`LexBox/` 是 RedConvert 桌面端迁移到 Tauri v2 + Rust 宿主的独立工作区。
 
-当前阶段目标不是重新做一个 UI，而是优先把宿主层重建出来：
+## Boundaries
 
-- 复用 `desktop/src/components/Layout.tsx`
-- 复用 `desktop/src/pages/Subjects.tsx`
-- 复用 `desktop/src/pages/Workboard.tsx`
-- 用 Rust 接管设置、空间、主体库和基础 IPC 兼容层
-- 为后续 `chat / manuscripts / knowledge / redclaw` 迁移保留稳定接口
+- 只在 `LexBox/` 内开发、运行和构建。
+- `desktop/` 只作为只读参考源，不参与 `LexBox` 运行时与构建。
+- 前端源码在 `LexBox/src/` 独立维护。
+- 宿主源码在 `LexBox/src-tauri/` 独立维护。
+- 前端兼容面仍暴露 `window.ipcRenderer`，内部统一路由到 Tauri command/event。
 
-## 当前命令
+## Commands
 
 - `pnpm install`
+- `pnpm build`
 - `pnpm tauri:dev`
 - `pnpm tauri:build`
 - `pnpm ipc:inventory`
 
-## 当前状态
+## Current Status
 
-- 已建立 Tauri v2 + React/Vite 工程
-- 已建立 Electron 风格 `window.ipcRenderer` 兼容桥
-- 已在 Rust 侧实现：
-  - `db:*`
-  - `spaces:*`
-  - `subjects:*`
-  - `app:get-version`
-  - `app:open-release-page`
-  - `clipboard:*`
-  - `indexing:get-stats`
-  - `work:list`
-- 尚未迁移：
-  - Chat 流式事件与工具确认链路
-  - Manuscripts 文件树与布局存储
-  - Knowledge 索引与导入流水线
-  - RedClaw 长周期后台执行器
+- 前端 IPC channel 已全量有 Rust host 路由。
+- Tauri debug build 已通过。
+- macOS `.app` bundle 已启用。
+- `LexBox/src-tauri/src/main.rs` 目前承载 Rust host 内核：
+  - app / settings / spaces / subjects
+  - manuscripts / media / cover / knowledge
+  - chat / runtime / sessions / tasks / background
+  - assistant daemon / RedClaw / MCP / skills / diagnostics
+  - Advisors / YouTube / yt-dlp
+  - WeChat official local binding and draft flow
+  - embedding / similarity / wander
 
-## 备注
+## External Integrations
 
-当前环境中 `cargo` / `rustc` 不在 PATH，仓库已经落好了 Rust 工程文件，但本轮无法本地编译验证。
+很多外部能力现在已经有真实执行路径，但仍取决于本机配置和第三方账号：
+
+- AI chat / image / video / transcription / embedding 需要可用 endpoint、model 和 key。
+- WeChat official draft publishing 需要公众号 AppID/Secret、有效 access token，以及封面素材 `thumb_media_id` 或可上传封面图。
+- Weixin sidecar 需要用户配置可执行的 `sidecarCommand`、args、cwd、env，并由该 sidecar 产出可读取的登录状态 JSON。
+- YouTube 字幕下载需要本机 `yt-dlp` 可用。
+- MCP stdio / SSE / streamable-http 需要对应 server 可启动或可访问。
+
+## Verification
+
+已验证的基础链路：
+
+- `cargo fmt --check && cargo check`
+- `pnpm build`
+- `pnpm tauri build --debug`
+- 调试产物短时启动 smoke
+
+当前调试产物：
+
+- `LexBox/src-tauri/target/debug/lexbox`

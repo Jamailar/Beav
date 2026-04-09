@@ -261,12 +261,12 @@ export const normalizeAiModelDescriptors = (
     | string
     | null
     | undefined
-    | { id?: string; capabilities?: Array<ModelCapability | string | null | undefined> }
+    | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> }
   >,
 ): AiModelDescriptor[] => {
   const merged = new Map<string, AiModelDescriptor>();
   for (const raw of models) {
-    const descriptor = toAiModelDescriptor(raw as string | { id?: string; capabilities?: Array<ModelCapability | string | null | undefined> });
+    const descriptor = toAiModelDescriptor(raw as string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> });
     if (!descriptor) continue;
     const previous = merged.get(descriptor.id);
     merged.set(descriptor.id, {
@@ -1097,7 +1097,7 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
         const model = String(item.model || item.modelName || '');
         const modelsMeta = normalizeAiModelDescriptors(
           Array.isArray(item.modelsMeta)
-            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as { id?: string; capabilities?: Array<ModelCapability | string | null | undefined> } : null))
+            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> } : null))
             : [],
         );
         const models = Array.isArray(item.models)
@@ -1346,7 +1346,7 @@ export const filterOfficialModelsByCapability = (
 };
 
 export const toAiModelDescriptor = (
-  model: string | { id?: string; capabilities?: Array<ModelCapability | string | null | undefined> },
+  model: string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> },
 ): AiModelDescriptor | null => {
   if (typeof model === 'string') {
     const id = model.trim();
@@ -1362,8 +1362,12 @@ export const toAiModelDescriptor = (
   const id = String(model?.id || '').trim();
   if (!id) return null;
   const forcedCapabilities = getForcedModelCapabilities(id);
-  const capabilities = Array.isArray(model?.capabilities) && model.capabilities.length > 0
-    ? normalizeModelCapabilities(model.capabilities)
+  const explicitCapabilities = [
+    ...(Array.isArray(model?.capabilities) ? model.capabilities : []),
+    model?.capability,
+  ];
+  const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
+    ? normalizeModelCapabilities(explicitCapabilities)
     : inferModelCapabilities(id);
   return {
     id,

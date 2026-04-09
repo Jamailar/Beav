@@ -115,7 +115,7 @@ interface ChatSettingsSnapshot {
   default_ai_source_id?: string;
 }
 
-function modelSupportsChat(model: string | { id?: unknown; capabilities?: unknown }): boolean {
+function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
   if (typeof model === 'string') {
     const forced = getForcedModelCapabilities(model);
     const resolved = forced.length ? forced : inferModelCapabilities(model);
@@ -124,8 +124,16 @@ function modelSupportsChat(model: string | { id?: unknown; capabilities?: unknow
   const id = String(model?.id || '').trim();
   if (!id) return false;
   const forced = getForcedModelCapabilities(id);
-  const capabilities = Array.isArray((model as { capabilities?: unknown[] }).capabilities)
-    ? normalizeModelCapabilities((model as { capabilities?: Array<ModelCapability | string | null | undefined> }).capabilities || [])
+  const explicitCapabilities = [
+    ...(
+      Array.isArray((model as { capabilities?: unknown[] }).capabilities)
+        ? ((model as { capabilities?: Array<ModelCapability | string | null | undefined> }).capabilities || [])
+        : []
+    ),
+    (model as { capability?: ModelCapability | string | null | undefined }).capability,
+  ];
+  const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
+    ? normalizeModelCapabilities(explicitCapabilities)
     : [];
   const resolved = forced.length ? forced : (capabilities.length ? capabilities : inferModelCapabilities(id));
   return resolved.includes('chat');
@@ -302,7 +310,7 @@ function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatMode
         const baseURL = String(item.baseURL || item.baseUrl || '').trim();
         const apiKey = String(item.apiKey || item.key || '').trim();
         const explicitModelsMeta = Array.isArray(item.modelsMeta)
-          ? item.modelsMeta.filter((value): value is { id?: unknown; capabilities?: unknown } => Boolean(value && typeof value === 'object'))
+          ? item.modelsMeta.filter((value): value is { id?: unknown; capability?: unknown; capabilities?: unknown } => Boolean(value && typeof value === 'object'))
           : [];
         const chatModelIdsFromMeta = explicitModelsMeta
           .filter((value) => modelSupportsChat(value))
@@ -642,6 +650,27 @@ export function Chat({
     };
   }, [currentSessionId]);
 
+  const dispatchChatSend = useCallback((payload: {
+    sessionId?: string;
+    message: string;
+    displayContent: string;
+    attachment?: Message['attachment'];
+    modelConfig?: {
+      apiKey?: string;
+      baseURL?: string;
+      modelName?: string;
+    };
+    taskHints?: unknown;
+  }) => {
+    const schedule = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame.bind(window)
+      : (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0);
+
+    schedule(() => {
+      window.ipcRenderer.chat.send(payload);
+    });
+  }, []);
+
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
     // 已处理过或正在处理中，跳过
@@ -718,7 +747,7 @@ export function Chat({
       shouldAutoScrollRef.current = true;
 
       // 发送给后端 - 传递 displayContent 和 attachment 用于持久化
-      window.ipcRenderer.chat.send({
+      dispatchChatSend({
         sessionId: sessionId,
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
@@ -736,7 +765,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline]);
+  }, [pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
 
   const loadSessions = async () => {
     try {
@@ -1691,7 +1720,7 @@ export function Chat({
     setPendingAttachment(null);
     setIsProcessing(true);
 
-    window.ipcRenderer.chat.send({
+    dispatchChatSend({
       sessionId: currentSessionId || undefined,
       message: normalizedContent || displayText,
       displayContent: displayText,

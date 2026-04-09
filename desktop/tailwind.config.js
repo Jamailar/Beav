@@ -4,8 +4,7 @@ const semanticColor = (name) => `rgb(var(${name}) / <alpha-value>)`;
 export default {
   content: [
     './index.html',
-    './src/**/*.{js,ts,jsx,tsx}',
-    '../desktop/src/**/*.{js,ts,jsx,tsx}'
+    './src/**/*.{js,ts,jsx,tsx}'
   ],
   darkMode: 'class',
   theme: {
@@ -15,6 +14,7 @@ export default {
         surface: {
           primary: semanticColor('--color-surface-primary'),
           secondary: semanticColor('--color-surface-secondary'),
+          tertiary: semanticColor('--color-surface-tertiary'),
           elevated: semanticColor('--color-surface-elevated')
         },
         border: semanticColor('--color-border'),
@@ -38,6 +38,10 @@ export default {
           red: semanticColor('--color-brand-red'),
           'red-text': semanticColor('--color-brand-red-text')
         }
+      },
+      fontFamily: {
+        sans: ['"SF Pro Text"', '"PingFang SC"', '"Noto Sans SC"', '"Segoe UI"', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
       }
     }
   },

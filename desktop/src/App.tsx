@@ -21,8 +21,9 @@ const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workbo
 
 export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
 
-const PINNED_VIEWS: ViewType[] = ['manuscripts'];
+const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw'];
 const MAX_CACHED_VIEWS = 5;
+const NON_CACHEABLE_VIEWS = new Set<ViewType>(['settings']);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 
 // 待发送的聊天消息（用于跨页面传递）
@@ -49,7 +50,7 @@ export interface PendingChatMessage {
   };
 }
 
-const CLIPBOARD_POLL_INTERVAL_MS = 1600;
+const CLIPBOARD_POLL_INTERVAL_MS = 3200;
 
 interface YouTubeClipboardCandidate {
   videoId: string;
@@ -134,13 +135,16 @@ function computeMountedViews(history: ViewType[]): Set<ViewType> {
   const next = new Set<ViewType>(PINNED_VIEWS);
   const recent = history.slice(-MAX_CACHED_VIEWS);
   for (const view of recent) {
-    next.add(view);
+    if (!NON_CACHEABLE_VIEWS.has(view)) {
+      next.add(view);
+    }
   }
   return next;
 }
 
 function App() {
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
+  const [isImmersiveEditor, setIsImmersiveEditor] = useState(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
@@ -154,11 +158,29 @@ function App() {
   const clipboardPollingRef = useRef(false);
   const capturedYouTubeSetRef = useRef<Set<string>>(new Set());
   const viewHistoryRef = useRef<ViewType[]>(['manuscripts']);
+  const capturePromptOpenRef = useRef(false);
+  const captureStatusRef = useRef<'idle' | 'saving' | 'success' | 'error'>('idle');
 
   useEffect(() => {
     viewHistoryRef.current = [...viewHistoryRef.current.filter((item) => item !== currentView), currentView];
-    setMountedViews(computeMountedViews(viewHistoryRef.current));
+    const nextMounted = computeMountedViews(viewHistoryRef.current);
+    nextMounted.add(currentView);
+    setMountedViews(nextMounted);
   }, [currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'manuscripts' && isImmersiveEditor) {
+      setIsImmersiveEditor(false);
+    }
+  }, [currentView, isImmersiveEditor]);
+
+  useEffect(() => {
+    capturePromptOpenRef.current = isCapturePromptOpen;
+  }, [isCapturePromptOpen]);
+
+  useEffect(() => {
+    captureStatusRef.current = captureStatus;
+  }, [captureStatus]);
 
   // 导航到 Chat 页面并发送消息
   const navigateToChat = (message: PendingChatMessage) => {
@@ -257,8 +279,9 @@ function App() {
       intervalId = window.setInterval(() => {
         void (async () => {
           if (clipboardPollingRef.current) return;
-          if (isCapturePromptOpen || captureStatus === 'saving') return;
+          if (capturePromptOpenRef.current || captureStatusRef.current === 'saving') return;
           if (document.visibilityState !== 'visible') return;
+          if (!document.hasFocus()) return;
 
           clipboardPollingRef.current = true;
           try {
@@ -290,11 +313,11 @@ function App() {
         window.clearInterval(intervalId);
       }
     };
-  }, [captureStatus, isCapturePromptOpen]);
+  }, []);
 
   return (
     <>
-      <Layout currentView={currentView} onNavigate={setCurrentView}>
+      <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={isImmersiveEditor}>
         {mountedViews.has('chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
@@ -340,7 +363,7 @@ function App() {
         {mountedViews.has('settings') && (
           <div className={currentView === 'settings' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
-              <SettingsPage />
+              <SettingsPage isActive={currentView === 'settings'} />
             </Suspense>
           </div>
         )}
@@ -352,6 +375,7 @@ function App() {
                 onFileConsumed={clearPendingManuscriptFile}
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'manuscripts'}
+                onImmersiveModeChange={setIsImmersiveEditor}
               />
             </Suspense>
           </div>
@@ -380,6 +404,7 @@ function App() {
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
                 onNavigateWorkboard={() => setCurrentView('workboard')}
+                isActive={currentView === 'redclaw'}
               />
             </Suspense>
           </div>
@@ -408,7 +433,7 @@ function App() {
         {mountedViews.has('workboard') && (
           <div className={currentView === 'workboard' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'workboard' ? <ViewLoadingFallback /> : null}>
-              <WorkboardPage />
+              <WorkboardPage isActive={currentView === 'workboard'} />
             </Suspense>
           </div>
         )}

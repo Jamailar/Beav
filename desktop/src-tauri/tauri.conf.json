@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LexBox",
+  "productName": "RedBox",
   "version": "0.1.0",
-  "identifier": "com.redconvert.lexbox",
+  "identifier": "com.redconvert.redbox",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LexBox",
+        "title": "RedBox",
         "width": 1440,
         "height": 920,
         "minWidth": 1180,
@@ -21,10 +21,24 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.redbox/**",
+          "$HOME/.redconvert/**",
+          "$HOME/.redconvert.migrated-*/**",
+          "$APPDATA/LexBox/**",
+          "$APPDATA/RedBox/**",
+          "$HOME/Library/Application Support/LexBox/**",
+          "$HOME/Library/Application Support/RedBox/**"
+        ]
+      }
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["app", "dmg", "nsis"],
+    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

@@ -12,6 +12,7 @@ interface LayoutProps {
   children: ReactNode;
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
+  immersiveMode?: boolean;
 }
 
 const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
@@ -59,7 +60,7 @@ function readInitialThemeMode(): ThemeMode {
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function Layout({ children, currentView, onNavigate }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false }: LayoutProps) {
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -138,11 +139,12 @@ export function Layout({ children, currentView, onNavigate }: LayoutProps) {
   }, [isSpaceMenuOpen]);
 
   useEffect(() => {
+    const effectiveTheme = immersiveMode ? 'dark' : themeMode;
     const root = document.documentElement;
-    root.setAttribute('data-theme', themeMode);
-    root.classList.toggle('dark', themeMode === 'dark');
+    root.setAttribute('data-theme', effectiveTheme);
+    root.classList.toggle('dark', effectiveTheme === 'dark');
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
+  }, [immersiveMode, themeMode]);
 
   useEffect(() => {
     const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
@@ -278,8 +280,9 @@ export function Layout({ children, currentView, onNavigate }: LayoutProps) {
   }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
 
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden text-text-primary">
+    <div className={clsx('flex h-screen w-full overflow-hidden text-text-primary', immersiveMode ? 'bg-[#0f0f0f]' : 'bg-background')}>
       {/* Sidebar */}
+      {!immersiveMode && (
       <aside className="app-sidebar-shell w-[13.5rem] bg-surface-secondary/85 border-r border-border flex flex-col">
         {/* App Title */}
         <div className="h-11 flex items-center px-4 border-b border-border/50">
@@ -402,9 +405,10 @@ export function Layout({ children, currentView, onNavigate }: LayoutProps) {
           </div>
         </div>
       </aside>
+      )}
 
       {/* Main Content */}
-      <main className="app-main-shell flex-1 flex flex-col min-w-0 bg-surface-primary relative">
+      <main className={clsx('app-main-shell flex-1 flex flex-col min-w-0 relative', immersiveMode ? 'bg-[#0f0f0f]' : 'bg-surface-primary')}>
         {/* Content */}
         <div
           className={clsx(

@@ -180,6 +180,7 @@ interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
     onNavigateWorkboard?: () => void;
+    isActive?: boolean;
 }
 
 const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
@@ -354,7 +355,7 @@ function resultTone(result?: RunnerResult): string {
     return 'text-text-tertiary';
 }
 
-export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWorkboard }: RedClawProps) {
+export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWorkboard, isActive = true }: RedClawProps) {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [activeSpaceName, setActiveSpaceName] = useState<string>('默认空间');
@@ -476,12 +477,14 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     }, []);
 
     useEffect(() => {
+        if (!isActive) return;
         void initSession();
         void loadRunnerStatus(true);
         void loadProjects();
-    }, [initSession, loadProjects, loadRunnerStatus]);
+    }, [initSession, isActive, loadProjects, loadRunnerStatus]);
 
     useEffect(() => {
+        if (!isActive) return;
         const onSpaceChanged = () => {
             void initSession();
             void loadRunnerStatus(true);
@@ -492,14 +495,16 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
         return () => {
             window.ipcRenderer.off('space:changed', onSpaceChanged);
         };
-    }, [initSession, loadProjects, loadRunnerStatus, loadSkills]);
+    }, [initSession, isActive, loadProjects, loadRunnerStatus, loadSkills]);
 
     useEffect(() => {
+        if (!isActive) return;
         if (sidebarTab !== 'skills') return;
         void loadSkills();
-    }, [sidebarTab, loadSkills]);
+    }, [sidebarTab, loadSkills, isActive]);
 
     useEffect(() => {
+        if (!isActive) return;
         const onRunnerStatus = (_event: unknown, status: RunnerStatus) => {
             if (!status || typeof status !== 'object') return;
             setRunnerStatus(status);
@@ -508,7 +513,7 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
         return () => {
             window.ipcRenderer.off('redclaw:runner-status', onRunnerStatus);
         };
-    }, []);
+    }, [isActive]);
 
     useEffect(() => {
         if (!chatActionMessage) return;

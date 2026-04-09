@@ -1,0 +1,190 @@
+.redbox-editable-timeline {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    background: #121212;
+}
+
+.redbox-editable-timeline__toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.redbox-editable-timeline__toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+}
+
+.redbox-editable-timeline__toolbar-label {
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.36);
+}
+
+.redbox-editable-timeline__toolbar-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.38);
+}
+
+.redbox-editable-timeline__toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.redbox-editable-timeline__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 12px;
+}
+
+.redbox-editable-timeline__button:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.redbox-editable-timeline__button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.redbox-editable-timeline__body {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.redbox-editable-timeline__body--dragging {
+    box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+.redbox-editable-timeline .timeline-editor {
+    width: 100% !important;
+    height: 100% !important;
+    background: #121212;
+}
+
+.redbox-editable-timeline .timeline-editor-time-area {
+    height: 40px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: #101010;
+}
+
+.redbox-editable-timeline .timeline-editor-time-unit {
+    border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+.redbox-editable-timeline .timeline-editor-time-unit-scale {
+    color: rgba(255, 255, 255, 0.34);
+    font-size: 11px;
+}
+
+.redbox-editable-timeline .timeline-editor-edit-area {
+    margin-top: 0;
+}
+
+.redbox-editable-timeline .timeline-editor-action {
+    border-radius: 16px;
+    background: transparent;
+    box-shadow: none;
+}
+
+.redbox-editable-timeline__clip {
+    height: 100%;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(59, 130, 246, 0.14));
+    color: white;
+    overflow: hidden;
+}
+
+.redbox-editable-timeline__clip--video {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(37, 99, 235, 0.18));
+}
+
+.redbox-editable-timeline__clip--audio {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.32), rgba(5, 150, 105, 0.18));
+}
+
+.redbox-editable-timeline__clip--image {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.26), rgba(236, 72, 153, 0.14));
+}
+
+.redbox-editable-timeline__clip--selected {
+    border-color: rgba(255, 255, 255, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.redbox-editable-timeline__clip-title {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.redbox-editable-timeline__clip-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.58);
+}
+
+.redbox-editable-timeline__scale-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.34);
+}
+
+.redbox-editable-timeline__empty {
+    position: absolute;
+    inset: 40px 14px 14px 60px;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.01);
+    text-align: center;
+}
+
+.redbox-editable-timeline__empty-title {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.redbox-editable-timeline__empty-subtitle {
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.34);
+}

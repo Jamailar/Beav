@@ -265,7 +265,7 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
   return String(Math.floor(parsed));
 };
 
-export function Settings() {
+export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [activeTab, setActiveTab] = useState<'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental'>('ai');
   const { flags, updateFlag } = useFeatureFlags();
   const [formData, setFormData] = useState({
@@ -827,6 +827,7 @@ export function Settings() {
   }, []);
 
   useEffect(() => {
+    if (!isActive) return;
     loadSettings();
     checkTools();
     loadBrowserPluginStatus();
@@ -841,9 +842,12 @@ export function Settings() {
     return () => {
       window.ipcRenderer.off('youtube:install-progress', handleProgress);
     };
-  }, []);
+  }, [isActive]);
 
   useEffect(() => {
+    if (!isActive) {
+      return;
+    }
     if (activeTab !== 'general') {
       return;
     }
@@ -886,9 +890,12 @@ export function Settings() {
       }
       assistantDaemonLogBufferRef.current = [];
     };
-  }, [activeTab, assistantDaemonBusy, assistantDaemonDraftDirty]);
+  }, [activeTab, assistantDaemonBusy, assistantDaemonDraftDirty, isActive]);
 
   useEffect(() => {
+    if (!isActive) {
+      return;
+    }
     let memoryPollTimer: number | null = null;
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
@@ -924,9 +931,10 @@ export function Settings() {
         window.clearInterval(backgroundTaskPollTimer);
       }
     };
-  }, [activeTab, formData.developer_mode_enabled]);
+  }, [activeTab, formData.developer_mode_enabled, isActive]);
 
   useEffect(() => {
+    if (!isActive) return;
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
     const onBackgroundTaskUpdated = (_event: unknown, task: BackgroundTaskItem) => {
       if (!task?.id) return;
@@ -946,7 +954,7 @@ export function Settings() {
     return () => {
       window.ipcRenderer.off('background:task-updated', onBackgroundTaskUpdated);
     };
-  }, [activeTab, formData.developer_mode_enabled]);
+  }, [activeTab, formData.developer_mode_enabled, isActive]);
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;

@@ -1130,6 +1130,7 @@ declare global {
         }> }>;
         save: (servers: unknown[]) => Promise<{ success: boolean; servers?: unknown[]; error?: string }>;
         test: (server: unknown) => Promise<{ success: boolean; message: string; detail?: string }>;
+        call: (server: unknown, method: string, params?: unknown) => Promise<{ success: boolean; response?: unknown; error?: string }>;
         discoverLocal: () => Promise<{ success: boolean; items: Array<{ sourcePath: string; count: number; servers: unknown[] }>; error?: string }>;
         importLocal: () => Promise<{ success: boolean; imported?: number; total?: number; sources?: string[]; servers?: unknown[]; error?: string }>;
         oauthStatus: (serverId: string) => Promise<{ success: boolean; connected?: boolean; tokenPath?: string; error?: string }>;

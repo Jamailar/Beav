@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the LexBox desktop window",
+  "description": "Default capability for the RedBox desktop window",
   "windows": ["main"],
   "permissions": [
     "core:default",

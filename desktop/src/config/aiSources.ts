@@ -1,3 +1,5 @@
+import { REDBOX_OFFICIAL_VIDEO_BASE_URL } from '../../shared/redboxVideo';
+
 export interface AiSourcePreset {
   id: string;
   label: string;
@@ -25,6 +27,7 @@ export const DEFAULT_AI_PRESET_ID = 'openai';
 
 // Presets aligned with common OpenAI-compatible providers (referencing AionUi design).
 export const AI_SOURCE_PRESETS: AiSourcePreset[] = [
+  { id: 'redbox-official', label: 'RedBox Official', baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL, protocol: 'openai' },
   { id: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1', protocol: 'openai' },
   { id: 'anthropic', label: 'Anthropic', baseURL: 'https://api.anthropic.com', protocol: 'anthropic' },
   { id: 'gemini', label: 'Gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', protocol: 'gemini' },

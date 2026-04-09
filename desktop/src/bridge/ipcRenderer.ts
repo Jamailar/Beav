@@ -14,20 +14,77 @@ async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
   try {
     return await invoke('ipc_invoke', { channel, payload: payload ?? null });
   } catch (error) {
-    console.warn(`[LexBox] invoke failed for ${channel}:`, error);
+    console.warn(`[RedBox] invoke failed for ${channel}:`, error);
     return buildFallbackResponse(channel, error);
   }
 }
 
 function sendChannel(channel: string, payload?: unknown): void {
   void invoke('ipc_send', { channel, payload: payload ?? null }).catch((error) => {
-    console.warn(`[LexBox] send failed for ${channel}:`, error);
+    console.warn(`[RedBox] send failed for ${channel}:`, error);
   });
 }
 
 function buildFallbackResponse(channel: string, error: unknown): any {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (channel === 'media:list') {
+    return { success: true, assets: [] };
+  }
+  if (channel === 'cover:list') {
+    return { success: true, assets: [] };
+  }
+  if (channel === 'knowledge:list' || channel === 'knowledge:list-youtube' || channel === 'knowledge:docs:list') {
+    return [];
+  }
+  if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
+    return [];
+  }
+  if (channel === 'chat:get-messages') {
+    return [];
+  }
+  if (channel === 'chat:get-runtime-state') {
+    return {
+      success: true,
+      isProcessing: false,
+      partialResponse: '',
+      updatedAt: Date.now(),
+    };
+  }
+  if (channel === 'chat:get-context-usage') {
+    return {
+      success: true,
+      estimatedTotalTokens: 0,
+      compactThreshold: 0,
+      compactRatio: 0,
+      compactRounds: 0,
+      compactUpdatedAt: null,
+    };
+  }
+  if (channel === 'chat:pick-attachment') {
+    return { success: true, canceled: true };
+  }
+  if (channel === 'chat:transcribe-audio') {
+    return { success: false, error: `RedBox audio transcription failed: ${message}` };
+  }
+  if (channel === 'file:show-in-folder' || channel === 'file:copy-image') {
+    return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
+  }
+  if (channel === 'youtube:check-ytdlp') {
+    return { success: false, installed: false, error: `RedBox yt-dlp check failed: ${message}` };
+  }
+  if (channel === 'youtube:install' || channel === 'youtube:update') {
+    return { success: false, error: `RedBox yt-dlp action failed: ${message}` };
+  }
+  if (channel === 'plugin:browser-extension-status') {
+    return {
+      success: true,
+      bundled: false,
+      exported: false,
+      exportPath: '',
+      bundledPath: '',
+    };
+  }
   if (channel === 'indexing:get-stats') {
     return { totalStats: { vectors: 0, documents: 0 }, queue: [] };
   }
@@ -62,7 +119,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
 
   return {
     success: false,
-    error: `LexBox router has not implemented "${channel}" yet: ${message}`
+    error: `RedBox host request failed for "${channel}": ${message}`
   };
 }
 
@@ -273,6 +330,7 @@ function createIpcRenderer() {
       list: () => invokeChannel('mcp:list'),
       save: (servers: unknown[]) => invokeChannel('mcp:save', { servers }),
       test: (server: unknown) => invokeChannel('mcp:test', { server }),
+      call: (server: unknown, method: string, params?: unknown) => invokeChannel('mcp:call', { server, method, params: params ?? {} }),
       discoverLocal: () => invokeChannel('mcp:discover-local'),
       importLocal: () => invokeChannel('mcp:import-local'),
       oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })

@@ -99,7 +99,7 @@ function resolveColumnKey(item: WorkItem): WorkColumnKey {
     return 'blocked';
 }
 
-export function Workboard() {
+export function Workboard({ isActive = true }: { isActive?: boolean }) {
     const [items, setItems] = useState<WorkItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -124,8 +124,9 @@ export function Workboard() {
     }, []);
 
     useEffect(() => {
+        if (!isActive) return;
         void load();
-    }, [load]);
+    }, [isActive, load]);
 
     const grouped = useMemo(() => {
         const map = new Map<WorkColumnKey, WorkItem[]>();
