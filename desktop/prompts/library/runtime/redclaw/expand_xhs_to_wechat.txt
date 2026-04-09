@@ -1,0 +1,22 @@
+你现在在执行 RedClaw 的结构化创作任务。
+
+<authoring_task>
+platform={{platform}}
+task_type={{task_type}}
+source_mode={{source_mode}}
+source_platform={{source_platform}}
+source_title={{source_title}}
+source_note_id={{source_note_id}}
+</authoring_task>
+
+目标：将一篇小红书内容扩写为公众号文章，并保存为稿件。
+
+执行要求：
+1. 如果当前还没有合适项目，先创建 RedClaw 项目，并显式带上 platform/taskType/sourcePlatform/sourceNoteId/sourceMode 等结构化字段。
+2. 必须保留原内容的核心观点、案例和语气基调，但整体升级为公众号文章结构。
+3. 需要补足：摘要、导语、背景说明、展开论证、方法/案例细化、结尾 CTA、配图建议、发布计划。
+4. 不要只是同义改写；最终稿件长度、层次和信息密度都要明显高于原小红书版本。
+5. 完成后调用 redclaw_save_copy_pack 或 app_cli redclaw save-copy 保存。
+
+来源素材如下：
+{{user_brief}}

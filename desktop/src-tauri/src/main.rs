@@ -1,8 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod runtime;
+
 use arboard::Clipboard;
 use base64::Engine;
 use dirs::config_dir;
+use runtime::{
+    build_runtime_task_artifact_content, infer_protocol, next_memory_maintenance_at_ms,
+    normalize_runtime_intent_name, normalize_runtime_role_id, resolve_chat_config,
+    resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_direct_route,
+    runtime_graph_for_route, runtime_required_capabilities, runtime_subagent_role_spec,
+    runtime_task_value, runtime_warm_settings_fingerprint, session_title_from_message,
+    set_runtime_graph_node, ChatExecutionResult, InteractiveToolCall, McpServerRecord,
+    RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime,
+    RedclawScheduledTaskRecord, RedclawStateRecord, RuntimeHookRecord, RuntimeTaskRecord,
+    RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord,
+    SessionToolResultRecord, SessionTranscriptRecord, SkillRecord, RUNTIME_INTENT_NAMES,
+    RUNTIME_ROLE_IDS,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -249,42 +264,6 @@ struct AppStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct McpServerRecord {
-    id: String,
-    name: String,
-    enabled: bool,
-    transport: String,
-    command: Option<String>,
-    args: Option<Vec<String>>,
-    env: Option<std::collections::HashMap<String, String>>,
-    url: Option<String>,
-    oauth: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeHookRecord {
-    id: String,
-    event: String,
-    r#type: String,
-    matcher: Option<String>,
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SkillRecord {
-    name: String,
-    description: String,
-    location: String,
-    body: String,
-    source_scope: Option<String>,
-    is_builtin: Option<bool>,
-    disabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct AssistantStateRecord {
     enabled: bool,
     auto_start: bool,
@@ -349,120 +328,6 @@ impl Default for AssistantStateRecord {
                 "stateDir": "",
                 "availableAccountIds": []
             }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RedclawScheduledTaskRecord {
-    id: String,
-    name: String,
-    enabled: bool,
-    mode: String,
-    prompt: String,
-    project_id: Option<String>,
-    interval_minutes: Option<i64>,
-    time: Option<String>,
-    weekdays: Option<Vec<i64>>,
-    run_at: Option<String>,
-    created_at: String,
-    updated_at: String,
-    last_run_at: Option<String>,
-    last_result: Option<String>,
-    last_error: Option<String>,
-    next_run_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RedclawLongCycleTaskRecord {
-    id: String,
-    name: String,
-    enabled: bool,
-    status: String,
-    objective: String,
-    step_prompt: String,
-    project_id: Option<String>,
-    interval_minutes: i64,
-    total_rounds: i64,
-    completed_rounds: i64,
-    created_at: String,
-    updated_at: String,
-    last_run_at: Option<String>,
-    last_result: Option<String>,
-    last_error: Option<String>,
-    next_run_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RedclawProjectRecord {
-    id: String,
-    goal: String,
-    platform: Option<String>,
-    task_type: Option<String>,
-    status: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RedclawStateRecord {
-    enabled: bool,
-    lock_state: String,
-    blocked_by: Option<String>,
-    interval_minutes: i64,
-    keep_alive_when_no_window: bool,
-    max_projects_per_tick: i64,
-    max_automation_per_tick: i64,
-    is_ticking: bool,
-    current_project_id: Option<String>,
-    current_automation_task_id: Option<String>,
-    next_automation_fire_at: Option<String>,
-    in_flight_task_ids: Vec<String>,
-    in_flight_long_cycle_task_ids: Vec<String>,
-    heartbeat_in_flight: bool,
-    last_tick_at: Option<String>,
-    next_tick_at: Option<String>,
-    next_maintenance_at: Option<String>,
-    last_error: Option<String>,
-    heartbeat: Value,
-    scheduled_tasks: Vec<RedclawScheduledTaskRecord>,
-    long_cycle_tasks: Vec<RedclawLongCycleTaskRecord>,
-    projects: Vec<RedclawProjectRecord>,
-}
-
-impl Default for RedclawStateRecord {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            lock_state: "owner".to_string(),
-            blocked_by: None,
-            interval_minutes: 20,
-            keep_alive_when_no_window: true,
-            max_projects_per_tick: 1,
-            max_automation_per_tick: 2,
-            is_ticking: false,
-            current_project_id: None,
-            current_automation_task_id: None,
-            next_automation_fire_at: None,
-            in_flight_task_ids: Vec::new(),
-            in_flight_long_cycle_task_ids: Vec::new(),
-            heartbeat_in_flight: false,
-            last_tick_at: None,
-            next_tick_at: None,
-            next_maintenance_at: None,
-            last_error: Some("RedClaw runner is idle.".to_string()),
-            heartbeat: json!({
-                "enabled": true,
-                "intervalMinutes": 30,
-                "suppressEmptyReport": true,
-                "reportToMainSession": true
-            }),
-            scheduled_tasks: Vec::new(),
-            long_cycle_tasks: Vec::new(),
-            projects: Vec::new(),
         }
     }
 }
@@ -582,84 +447,6 @@ struct DocumentKnowledgeSourceRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionTranscriptRecord {
-    id: String,
-    session_id: String,
-    record_type: String,
-    role: String,
-    content: String,
-    payload: Option<Value>,
-    created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionCheckpointRecord {
-    id: String,
-    session_id: String,
-    checkpoint_type: String,
-    summary: String,
-    payload: Option<Value>,
-    created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionToolResultRecord {
-    id: String,
-    session_id: String,
-    call_id: String,
-    tool_name: String,
-    command: Option<String>,
-    success: bool,
-    result_text: Option<String>,
-    summary_text: Option<String>,
-    prompt_text: Option<String>,
-    original_chars: Option<i64>,
-    prompt_chars: Option<i64>,
-    truncated: bool,
-    payload: Option<Value>,
-    created_at: i64,
-    updated_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeTaskRecord {
-    id: String,
-    task_type: String,
-    status: String,
-    runtime_mode: String,
-    owner_session_id: Option<String>,
-    intent: Option<String>,
-    role_id: Option<String>,
-    goal: Option<String>,
-    current_node: Option<String>,
-    route: Option<Value>,
-    graph: Vec<Value>,
-    artifacts: Vec<Value>,
-    checkpoints: Vec<Value>,
-    metadata: Option<Value>,
-    last_error: Option<String>,
-    created_at: i64,
-    updated_at: i64,
-    started_at: Option<i64>,
-    completed_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeTaskTraceRecord {
-    id: i64,
-    task_id: String,
-    node_id: Option<String>,
-    event_type: String,
-    payload: Option<Value>,
-    created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct MediaAssetRecord {
     id: String,
     source: String,
@@ -759,6 +546,7 @@ struct AppState {
     assistant_runtime: Mutex<Option<AssistantRuntime>>,
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
+    runtime_warm: Mutex<RuntimeWarmState>,
 }
 
 struct AssistantRuntime {
@@ -771,11 +559,6 @@ struct AssistantRuntime {
 struct AssistantSidecarRuntime {
     child: std::process::Child,
     pid: u32,
-}
-
-struct RedclawRuntime {
-    stop: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -869,6 +652,74 @@ fn build_store_path() -> PathBuf {
 
     let _ = fs::create_dir_all(&redbox_dir);
     redbox_path
+}
+
+fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Result<(), String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
+    let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
+    let mut warmed_entries = Vec::new();
+    for mode in modes {
+        let entry = RuntimeWarmEntry {
+            mode: (*mode).to_string(),
+            system_prompt: interactive_runtime_system_prompt(state, mode),
+            model_config: if *mode == "wander" {
+                Some(resolve_wander_model_config(&settings_snapshot))
+            } else {
+                None
+            },
+            long_term_context: if *mode == "wander" {
+                Some(build_wander_long_term_context(state))
+            } else {
+                None
+            },
+            warmed_at: now_i64(),
+        };
+        warmed_entries.push(entry);
+    }
+    let mut runtime_warm = state
+        .runtime_warm
+        .lock()
+        .map_err(|error| error.to_string())?;
+    runtime_warm.settings_fingerprint = fingerprint;
+    runtime_warm.last_warmed_at = now_i64();
+    for entry in warmed_entries {
+        runtime_warm.entries.insert(entry.mode.clone(), entry);
+    }
+    Ok(())
+}
+
+fn ensure_runtime_warm_entry(
+    state: &State<'_, AppState>,
+    mode: &str,
+) -> Result<RuntimeWarmEntry, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
+    let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
+    let cached = {
+        let runtime_warm = state
+            .runtime_warm
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if runtime_warm.settings_fingerprint == fingerprint {
+            runtime_warm.entries.get(mode).cloned()
+        } else {
+            None
+        }
+    };
+    if let Some(entry) = cached {
+        return Ok(entry);
+    }
+    refresh_runtime_warm_state(state, &[mode])?;
+    let runtime_warm = state
+        .runtime_warm
+        .lock()
+        .map_err(|error| error.to_string())?;
+    runtime_warm
+        .entries
+        .get(mode)
+        .cloned()
+        .ok_or_else(|| format!("未找到预热的 runtime: {mode}"))
 }
 
 fn default_store() -> AppStore {
@@ -1178,6 +1029,206 @@ fn manuscripts_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = workspace_root(state)?.join("manuscripts");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
+}
+
+fn collect_text_files_recursive(root: &Path, max_depth: usize, out: &mut Vec<PathBuf>) {
+    if max_depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if ["node_modules", ".git", "dist", "dist-electron"].contains(&name.as_str()) {
+                continue;
+            }
+            collect_text_files_recursive(&path, max_depth - 1, out);
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ["md", "txt", "json"].contains(&ext.as_str()) {
+            out.push(path);
+        }
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        value.to_string()
+    } else {
+        let mut out = value
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        out.push('…');
+        out
+    }
+}
+
+fn build_excerpt_around(content: &str, max_chars: usize) -> String {
+    let normalized = content.replace('\0', "").replace("\r\n", "\n");
+    truncate_chars(normalized.trim(), max_chars)
+}
+
+fn load_advisor_existing_context(store: &AppStore, advisor_id: &str) -> String {
+    let Some(advisor) = store.advisors.iter().find(|item| item.id == advisor_id) else {
+        return "(无已有智囊团成员档案)".to_string();
+    };
+    format!(
+        "Advisor ID: {}\nName: {}\nPersonality: {}\nExisting System Prompt:\n{}",
+        advisor.id,
+        advisor.name,
+        advisor.personality,
+        truncate_chars(&advisor.system_prompt, 6000)
+    )
+}
+
+fn render_named_corpus(label: &str, items: &[(String, String)], empty_text: &str) -> String {
+    if items.is_empty() {
+        return empty_text.to_string();
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, (file, excerpt))| {
+            format!(
+                "{label} {}\nFile: {}\nExcerpt:\n{}",
+                index + 1,
+                file,
+                excerpt
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn collect_advisor_knowledge_evidence(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let knowledge_dir = advisor_knowledge_dir(state, advisor_id)?;
+    let mut files = Vec::new();
+    collect_text_files_recursive(&knowledge_dir, 3, &mut files);
+    files.sort();
+    let mut items = Vec::new();
+    for file_path in files.into_iter().take(12) {
+        let content = fs::read_to_string(&file_path).unwrap_or_default();
+        if content.trim().is_empty() {
+            continue;
+        }
+        let relative = file_path
+            .strip_prefix(&knowledge_dir)
+            .unwrap_or(&file_path)
+            .display()
+            .to_string();
+        items.push((relative, build_excerpt_around(&content, 3200)));
+    }
+    Ok(items)
+}
+
+fn collect_related_manuscript_evidence(
+    state: &State<'_, AppState>,
+    subject_names: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let root = manuscripts_root(state)?;
+    let mut files = Vec::new();
+    collect_text_files_recursive(&root, 6, &mut files);
+    files.sort();
+    let lowered_needles = subject_names
+        .iter()
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let mut items = Vec::<(String, String, usize)>::new();
+    for file_path in files {
+        let content = fs::read_to_string(&file_path).unwrap_or_default();
+        let lowered = content.to_lowercase();
+        let score = lowered_needles
+            .iter()
+            .filter(|needle| lowered.contains(needle.as_str()))
+            .count();
+        if score == 0 {
+            continue;
+        }
+        let relative = file_path
+            .strip_prefix(&root)
+            .unwrap_or(&file_path)
+            .display()
+            .to_string();
+        items.push((relative, build_excerpt_around(&content, 2200), score));
+    }
+    items.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    Ok(items
+        .into_iter()
+        .take(8)
+        .map(|(file, excerpt, _)| (file, excerpt))
+        .collect())
+}
+
+fn load_skill_bundle_sections(skill_name: &str) -> (String, String, String, String) {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let candidates = [
+        home.join(".codex").join("skills").join(skill_name),
+        home.join(".agents").join("skills").join(skill_name),
+    ];
+    for root in candidates {
+        let skill_path = root.join("SKILL.md");
+        if !skill_path.exists() {
+            continue;
+        }
+        let body = fs::read_to_string(&skill_path).unwrap_or_default();
+        let references = root.join("references");
+        let scripts = root.join("scripts");
+        let mut refs_parts = Vec::new();
+        let mut script_parts = Vec::new();
+        if let Ok(entries) = fs::read_dir(&references) {
+            for entry in entries.flatten().take(8) {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("reference");
+                refs_parts.push(format!("## {}\n{}", name, content));
+            }
+        }
+        if let Ok(entries) = fs::read_dir(&scripts) {
+            for entry in entries.flatten().take(8) {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("script");
+                script_parts.push(format!("## {}\n{}", name, content));
+            }
+        }
+        return (
+            skill_name.to_string(),
+            body,
+            refs_parts.join("\n\n"),
+            script_parts.join("\n\n"),
+        );
+    }
+    (
+        skill_name.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+    )
 }
 
 fn media_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -4226,6 +4277,532 @@ fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) 
     });
 }
 
+fn log_timing_event(
+    state: &State<'_, AppState>,
+    scope: &str,
+    request_id: &str,
+    stage: &str,
+    started_at_ms: u128,
+    extra: Option<String>,
+) {
+    let elapsed = now_ms().saturating_sub(started_at_ms);
+    let mut line = format!(
+        "[timing][{}][{}] {} elapsed={}ms",
+        scope, request_id, stage, elapsed
+    );
+    if let Some(extra_text) = extra.filter(|value| !value.trim().is_empty()) {
+        line.push_str(" | ");
+        line.push_str(&extra_text);
+    }
+    eprintln!("{}", line);
+    append_debug_log_state(state, line);
+}
+
+fn build_memory_maintenance_prompt(store: &AppStore) -> String {
+    let template =
+        load_redbox_prompt("runtime/memory/maintenance_manager.txt").unwrap_or_else(|| {
+            "You are a memory maintenance manager. Output strict JSON only.".to_string()
+        });
+    let active_memories: Vec<Value> = store
+        .memories
+        .iter()
+        .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
+        .cloned()
+        .map(|item| json!(item))
+        .collect();
+    let archived_memories: Vec<Value> = store
+        .memories
+        .iter()
+        .filter(|item| item.status.as_deref() == Some("archived"))
+        .cloned()
+        .map(|item| json!(item))
+        .collect();
+    let history: Vec<Value> = store
+        .memory_history
+        .iter()
+        .cloned()
+        .map(|item| json!(item))
+        .collect();
+    let recent_conversations: Vec<Value> = store
+        .chat_sessions
+        .iter()
+        .take(5)
+        .map(|session| {
+            let metadata = session.metadata.clone().unwrap_or_else(|| json!({}));
+            let messages = store
+                .chat_messages
+                .iter()
+                .filter(|item| item.session_id == session.id)
+                .take(12)
+                .map(|item| {
+                    json!({
+                        "role": item.role,
+                        "content": truncate_chars(&item.content, 280),
+                        "timestamp": item.created_at,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "sessionId": session.id,
+                "title": session.title,
+                "updatedAt": session.updated_at,
+                "contextType": metadata.get("contextType").cloned().unwrap_or_else(|| json!("unknown")),
+                "messageCount": messages.len(),
+                "messages": messages,
+            })
+        })
+        .collect();
+    render_redbox_prompt(
+        &template,
+        &[
+            ("trigger_reason", "manual".to_string()),
+            ("current_date", now_iso()),
+            ("pending_mutation_count", "0".to_string()),
+            ("active_memory_count", active_memories.len().to_string()),
+            ("archived_memory_count", archived_memories.len().to_string()),
+            ("history_count", history.len().to_string()),
+            ("recent_conversations_count", "0".to_string()),
+            (
+                "active_memories_json",
+                serde_json::to_string_pretty(&active_memories).unwrap_or_else(|_| "[]".to_string()),
+            ),
+            (
+                "archived_memories_json",
+                serde_json::to_string_pretty(&archived_memories)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+            (
+                "history_json",
+                serde_json::to_string_pretty(&history).unwrap_or_else(|_| "[]".to_string()),
+            ),
+            (
+                "recent_conversations_json",
+                serde_json::to_string_pretty(&recent_conversations)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+        ],
+    )
+}
+
+fn bump_memory_maintenance_mutation(store: &mut AppStore, reason: &str) {
+    let current = memory_maintenance_status_from_settings(&store.settings)
+        .unwrap_or_else(default_memory_maintenance_status);
+    let pending = current
+        .get("pendingMutations")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0)
+        + 1;
+    let next_delay_ms = if pending >= 5 {
+        15 * 60 * 1000
+    } else {
+        90 * 60 * 1000
+    };
+    let status = json!({
+        "started": true,
+        "running": false,
+        "lockState": current.get("lockState").cloned().unwrap_or_else(|| json!("owner")),
+        "blockedBy": current.get("blockedBy").cloned().unwrap_or(Value::Null),
+        "pendingMutations": pending,
+        "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
+        "lastScanAt": current.get("lastScanAt").cloned().unwrap_or(Value::Null),
+        "lastReason": reason,
+        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
+        "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
+        "nextScheduledAt": now_i64() + next_delay_ms,
+    });
+    let mut settings = store.settings.clone();
+    write_memory_maintenance_status(&mut settings, &status);
+    store.settings = settings;
+    store.redclaw_state.next_maintenance_at = value_to_i64_string(status.get("nextScheduledAt"));
+}
+
+fn run_memory_maintenance_with_reason(
+    state: &State<'_, AppState>,
+    reason: &str,
+) -> Result<Value, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let prompt = with_store(state, |store| Ok(build_memory_maintenance_prompt(&store)))?;
+    let system_prompt =
+        "You are the background long-term memory maintenance manager for RedBox. Output strict JSON only.";
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        None,
+        system_prompt,
+        &prompt,
+        true,
+    )?;
+    let parsed = parse_json_value_from_text(&raw).unwrap_or_else(|| {
+        json!({
+            "summary": "memory-maintenance:no-parse",
+            "actions": [{ "type": "noop", "reason": "parse-failed" }]
+        })
+    });
+    let actions = parsed
+        .get("actions")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut applied = 0_i64;
+    let mut archived = 0_i64;
+    let mut deleted = 0_i64;
+    with_store_mut(state, |store| {
+        for action in actions {
+            let action_type = payload_string(&action, "type").unwrap_or_default();
+            match action_type.as_str() {
+                "create" => {
+                    let content = payload_string(&action, "content").unwrap_or_default();
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    let memory_type = payload_string(&action, "memoryType")
+                        .unwrap_or_else(|| "general".to_string());
+                    let tags = action
+                        .get("tags")
+                        .and_then(|value| value.as_array())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(ToString::to_string))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let record = UserMemoryRecord {
+                        id: make_id("memory"),
+                        content,
+                        r#type: memory_type,
+                        tags,
+                        created_at: now_i64(),
+                        updated_at: Some(now_i64()),
+                        last_accessed: None,
+                        status: Some("active".to_string()),
+                        archived_at: None,
+                        archive_reason: None,
+                        origin_id: None,
+                        canonical_key: None,
+                        revision: Some(1),
+                        last_conflict_at: None,
+                    };
+                    store.memories.push(record.clone());
+                    store.memory_history.push(MemoryHistoryRecord {
+                        id: make_id("memory-history"),
+                        memory_id: record.id.clone(),
+                        origin_id: record.id.clone(),
+                        action: "create".to_string(),
+                        reason: payload_string(&action, "reason"),
+                        timestamp: now_i64(),
+                        before: None,
+                        after: Some(json!(record)),
+                        archived_memory_id: None,
+                    });
+                    applied += 1;
+                }
+                "update" => {
+                    let target_id = payload_string(&action, "targetMemoryId").unwrap_or_default();
+                    let content = payload_string(&action, "content").unwrap_or_default();
+                    if let Some(item) = store
+                        .memories
+                        .iter_mut()
+                        .find(|entry| entry.id == target_id)
+                    {
+                        let before = json!(item.clone());
+                        if !content.trim().is_empty() {
+                            item.content = content;
+                        }
+                        if let Some(memory_type) = payload_string(&action, "memoryType") {
+                            item.r#type = memory_type;
+                        }
+                        if let Some(tags) = action.get("tags").and_then(|value| value.as_array()) {
+                            item.tags = tags
+                                .iter()
+                                .filter_map(|entry| entry.as_str().map(ToString::to_string))
+                                .collect();
+                        }
+                        item.updated_at = Some(now_i64());
+                        let after = json!(item.clone());
+                        store.memory_history.push(MemoryHistoryRecord {
+                            id: make_id("memory-history"),
+                            memory_id: item.id.clone(),
+                            origin_id: item.origin_id.clone().unwrap_or_else(|| item.id.clone()),
+                            action: "update".to_string(),
+                            reason: payload_string(&action, "reason"),
+                            timestamp: now_i64(),
+                            before: Some(before),
+                            after: Some(after),
+                            archived_memory_id: None,
+                        });
+                        applied += 1;
+                    }
+                }
+                "archive" => {
+                    let target_id = payload_string(&action, "targetMemoryId").unwrap_or_default();
+                    if let Some(item) = store
+                        .memories
+                        .iter_mut()
+                        .find(|entry| entry.id == target_id)
+                    {
+                        let before = json!(item.clone());
+                        item.status = Some("archived".to_string());
+                        item.archived_at = Some(now_i64());
+                        item.archive_reason = payload_string(&action, "reason");
+                        let after = json!(item.clone());
+                        store.memory_history.push(MemoryHistoryRecord {
+                            id: make_id("memory-history"),
+                            memory_id: item.id.clone(),
+                            origin_id: item.origin_id.clone().unwrap_or_else(|| item.id.clone()),
+                            action: "archive".to_string(),
+                            reason: payload_string(&action, "reason"),
+                            timestamp: now_i64(),
+                            before: Some(before),
+                            after: Some(after),
+                            archived_memory_id: Some(item.id.clone()),
+                        });
+                        archived += 1;
+                    }
+                }
+                "delete" => {
+                    let target_id = payload_string(&action, "targetMemoryId").unwrap_or_default();
+                    if let Some(index) = store
+                        .memories
+                        .iter()
+                        .position(|entry| entry.id == target_id)
+                    {
+                        let before = json!(store.memories[index].clone());
+                        let removed = store.memories.remove(index);
+                        store.memory_history.push(MemoryHistoryRecord {
+                            id: make_id("memory-history"),
+                            memory_id: target_id.clone(),
+                            origin_id: removed
+                                .origin_id
+                                .clone()
+                                .unwrap_or_else(|| removed.id.clone()),
+                            action: "delete".to_string(),
+                            reason: payload_string(&action, "reason"),
+                            timestamp: now_i64(),
+                            before: Some(before),
+                            after: None,
+                            archived_memory_id: None,
+                        });
+                        deleted += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    })?;
+    let next_scheduled = match reason {
+        "query-after" => now_i64() + 5 * 60 * 1000,
+        "periodic" => now_i64() + 30 * 60 * 1000,
+        _ => now_i64() + 20 * 60 * 1000,
+    };
+    let status = json!({
+        "started": true,
+        "running": false,
+        "lockState": "owner",
+        "blockedBy": Value::Null,
+        "pendingMutations": 0,
+        "lastRunAt": now_i64(),
+        "lastScanAt": now_i64(),
+        "lastReason": reason,
+        "lastSummary": parsed.get("summary").and_then(|value| value.as_str()).unwrap_or("RedBox memory maintenance completed."),
+        "lastError": Value::Null,
+        "nextScheduledAt": next_scheduled,
+        "raw": parsed,
+        "applied": applied,
+        "archived": archived,
+        "deleted": deleted
+    });
+    let _ = with_store_mut(state, |store| {
+        let mut settings = store.settings.clone();
+        write_memory_maintenance_status(&mut settings, &status);
+        store.settings = settings;
+        store.redclaw_state.next_maintenance_at =
+            value_to_i64_string(status.get("nextScheduledAt"));
+        Ok(())
+    });
+    Ok(status)
+}
+
+fn url_encode_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            b' ' => out.push_str("%20"),
+            other => out.push_str(&format!("%{:02X}", other)),
+        }
+    }
+    out
+}
+
+fn normalize_search_provider(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("duckduckgo").trim().to_lowercase().as_str() {
+        "tavily" => "tavily",
+        "searxng" => "searxng",
+        _ => "duckduckgo",
+    }
+}
+
+fn parse_duckduckgo_results(html: &str, count: usize) -> Vec<Value> {
+    let mut results = Vec::new();
+    let mut rest = html;
+    while results.len() < count {
+        let Some(anchor_idx) = rest.find("result__a") else {
+            break;
+        };
+        let anchor_slice = &rest[anchor_idx..];
+        let Some(href_idx) = anchor_slice.find("href=\"") else {
+            rest = &anchor_slice["result__a".len()..];
+            continue;
+        };
+        let href_slice = &anchor_slice[href_idx + 6..];
+        let Some(href_end) = href_slice.find('"') else {
+            break;
+        };
+        let url = href_slice[..href_end].trim().to_string();
+        let Some(tag_close) = href_slice[href_end..].find('>') else {
+            break;
+        };
+        let title_slice = &href_slice[href_end + tag_close + 1..];
+        let Some(title_end) = title_slice.find("</a>") else {
+            break;
+        };
+        let title = title_slice[..title_end]
+            .replace("<b>", "")
+            .replace("</b>", "")
+            .replace("&amp;", "&")
+            .replace("&#x27;", "'")
+            .trim()
+            .to_string();
+        let snippet = if let Some(snippet_idx) = title_slice.find("result__snippet") {
+            let snippet_slice = &title_slice[snippet_idx..];
+            if let Some(start) = snippet_slice.find('>') {
+                if let Some(end) = snippet_slice[start + 1..].find("</a>") {
+                    snippet_slice[start + 1..start + 1 + end]
+                        .replace("<b>", "")
+                        .replace("</b>", "")
+                        .replace("&amp;", "&")
+                        .replace("&#x27;", "'")
+                        .replace('\n', " ")
+                        .trim()
+                        .to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        if !title.is_empty() && !url.is_empty() && !url.contains("duckduckgo.com") {
+            results.push(json!({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+            }));
+        }
+        rest = &title_slice[title_end..];
+    }
+    results
+}
+
+fn search_web_with_settings(
+    settings: &Value,
+    query: &str,
+    count: usize,
+) -> Result<Vec<Value>, String> {
+    let provider =
+        normalize_search_provider(payload_string(settings, "search_provider").as_deref());
+    let endpoint = payload_string(settings, "search_endpoint").unwrap_or_default();
+    let api_key = payload_string(settings, "search_api_key").unwrap_or_default();
+    match provider {
+        "tavily" => {
+            if api_key.trim().is_empty() {
+                return Err("Tavily 搜索需要先配置 API Key".to_string());
+            }
+            let base = if endpoint.trim().is_empty() {
+                "https://api.tavily.com".to_string()
+            } else {
+                normalize_base_url(&endpoint)
+            };
+            let response = run_curl_json(
+                "POST",
+                &format!("{}/search", base),
+                None,
+                &[("Content-Type", "application/json".to_string())],
+                Some(json!({
+                    "api_key": api_key,
+                    "query": query,
+                    "max_results": count,
+                    "search_depth": "basic",
+                    "include_answer": false,
+                    "include_images": false
+                })),
+            )?;
+            Ok(response
+                .get("results")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default())
+        }
+        "searxng" => {
+            let base = normalize_base_url(&endpoint);
+            if base.is_empty() {
+                return Err("SearXNG 搜索需要先配置 endpoint".to_string());
+            }
+            let url = format!(
+                "{}/search?q={}&format=json&language=zh-CN",
+                base,
+                url_encode_component(query)
+            );
+            let mut headers = Vec::new();
+            if !api_key.trim().is_empty() {
+                headers.push(("Authorization", format!("Bearer {}", api_key.trim())));
+            }
+            let response = run_curl_json("GET", &url, None, &headers, None)?;
+            Ok(response
+                .get("results")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default())
+        }
+        _ => {
+            let url = format!(
+                "https://html.duckduckgo.com/html/?q={}",
+                url_encode_component(query)
+            );
+            let html = run_curl_text(
+                "GET",
+                &url,
+                &[(
+                    "User-Agent",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36".to_string(),
+                )],
+                None,
+            )?;
+            Ok(parse_duckduckgo_results(&html, count))
+        }
+    }
+}
+
+fn memory_maintenance_status_from_settings(settings: &Value) -> Option<Value> {
+    payload_string(settings, "redbox_memory_maintenance_status_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object())
+}
+
+fn write_memory_maintenance_status(settings: &mut Value, status: &Value) {
+    if let Some(object) = settings.as_object_mut() {
+        object.insert(
+            "redbox_memory_maintenance_status_json".to_string(),
+            json!(serde_json::to_string(status).unwrap_or_else(|_| "{}".to_string())),
+        );
+    }
+}
+
 fn default_memory_maintenance_status() -> Value {
     json!({
         "started": true,
@@ -4239,6 +4816,14 @@ fn default_memory_maintenance_status() -> Value {
         "lastSummary": "RedBox memory maintenance has not run yet.",
         "lastError": Value::Null,
         "nextScheduledAt": Value::Null,
+    })
+}
+
+fn value_to_i64_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(|item| {
+        item.as_i64()
+            .map(|number| number.to_string())
+            .or_else(|| item.as_str().map(ToString::to_string))
     })
 }
 
@@ -4782,27 +5367,108 @@ fn read_text_file_or_empty(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
-fn runtime_task_value(task: &RuntimeTaskRecord) -> Value {
+fn route_runtime_intent_with_settings(
+    settings: &Value,
+    runtime_mode: &str,
+    user_input: &str,
+    metadata: Option<&Value>,
+) -> Value {
+    let fallback = runtime_direct_route(runtime_mode, user_input, metadata);
+    let Some(system_template) = load_redbox_prompt("runtime/ai/route_intent_system.txt") else {
+        return fallback;
+    };
+    let Some(user_template) = load_redbox_prompt("runtime/ai/route_intent_user.txt") else {
+        return fallback;
+    };
+    let user_prompt = render_redbox_prompt(
+        &user_template,
+        &[
+            ("runtime_mode", runtime_mode.to_string()),
+            ("user_input", user_input.to_string()),
+            (
+                "context_type",
+                metadata
+                    .and_then(|value| payload_field(value, "contextType"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            (
+                "context_id",
+                metadata
+                    .and_then(|value| payload_field(value, "contextId"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            (
+                "associated_file_path",
+                metadata
+                    .and_then(|value| payload_field(value, "associatedFilePath"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+            (
+                "fallback_intent",
+                payload_string(&fallback, "intent").unwrap_or_default(),
+            ),
+            (
+                "fallback_role",
+                payload_string(&fallback, "recommendedRole").unwrap_or_default(),
+            ),
+            (
+                "fallback_reasoning",
+                payload_string(&fallback, "reasoning").unwrap_or_default(),
+            ),
+            ("intent_names", RUNTIME_INTENT_NAMES.join(", ")),
+            ("role_ids", RUNTIME_ROLE_IDS.join(", ")),
+        ],
+    );
+    let raw = generate_structured_response_with_settings(
+        settings,
+        None,
+        &system_template,
+        &user_prompt,
+        true,
+    );
+    let Ok(content) = raw else {
+        return fallback;
+    };
+    let Some(parsed) = parse_json_value_from_text(&content) else {
+        return fallback;
+    };
+    let intent = normalize_runtime_intent_name(
+        parsed
+            .get("primary_intent")
+            .or_else(|| parsed.get("intent"))
+            .and_then(|value| value.as_str()),
+    );
+    let recommended_role = normalize_runtime_role_id(
+        parsed
+            .get("recommended_role")
+            .or_else(|| parsed.get("role_id"))
+            .and_then(|value| value.as_str()),
+    );
+    let (Some(intent), Some(role)) = (intent, recommended_role) else {
+        return fallback;
+    };
     json!({
-        "id": task.id,
-        "taskType": task.task_type,
-        "status": task.status,
-        "runtimeMode": task.runtime_mode,
-        "ownerSessionId": task.owner_session_id,
-        "intent": task.intent,
-        "roleId": task.role_id,
-        "goal": task.goal,
-        "currentNode": task.current_node,
-        "route": task.route,
-        "graph": task.graph,
-        "artifacts": task.artifacts,
-        "checkpoints": task.checkpoints,
-        "metadata": task.metadata,
-        "lastError": task.last_error,
-        "createdAt": task.created_at,
-        "updatedAt": task.updated_at,
-        "startedAt": task.started_at,
-        "completedAt": task.completed_at,
+        "intent": intent,
+        "secondaryIntents": parsed.get("secondary_intents").cloned().unwrap_or_else(|| json!([])),
+        "goal": parsed.get("goal").and_then(|value| value.as_str()).unwrap_or(user_input).to_string(),
+        "deliverables": parsed.get("deliverables").cloned().unwrap_or_else(|| json!([])),
+        "requiredCapabilities": parsed
+            .get("required_capabilities")
+            .cloned()
+            .unwrap_or_else(|| json!(runtime_required_capabilities(&intent))),
+        "recommendedRole": role,
+        "requiresLongRunningTask": parsed.get("requires_long_running_task").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresLongRunningTask").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "requiresMultiAgent": parsed.get("requires_multi_agent").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresMultiAgent").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "requiresHumanApproval": parsed.get("requires_human_approval").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresHumanApproval").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "confidence": parsed.get("confidence").and_then(|value| value.as_f64()).unwrap_or_else(|| fallback.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.82)),
+        "reasoning": parsed.get("reasoning").and_then(|value| value.as_str()).unwrap_or("llm-route").to_string(),
+        "source": "llm",
     })
 }
 
@@ -5360,6 +6026,27 @@ fn lexbox_project_root() -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn redbox_prompt_library_root() -> PathBuf {
+    lexbox_project_root().join("prompts").join("library")
+}
+
+fn load_redbox_prompt(relative_path: &str) -> Option<String> {
+    let full_path = redbox_prompt_library_root().join(relative_path);
+    fs::read_to_string(full_path)
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+}
+
+fn render_redbox_prompt(template: &str, vars: &[(&str, String)]) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in vars {
+        rendered = rendered.replace(&format!("{{{{{key}}}}}"), value);
+        rendered = rendered.replace(&format!("{{{key}}}"), value);
+    }
+    rendered
 }
 
 fn render_remotion_video(config: &Value, output_path: &Path) -> Result<Value, String> {
@@ -5924,15 +6611,19 @@ fn infer_protocol(base_url: &str, preset_id: Option<&str>, explicit: Option<&str
     "openai".to_string()
 }
 
-fn run_curl_json(
+fn run_curl_json_with_timeout(
     method: &str,
     url: &str,
     api_key: Option<&str>,
     extra_headers: &[(&str, String)],
     body: Option<Value>,
+    max_time_seconds: Option<u64>,
 ) -> Result<Value, String> {
     let mut command = std::process::Command::new("curl");
     command.arg("-sS").arg("-X").arg(method).arg(url);
+    if let Some(seconds) = max_time_seconds.filter(|value| *value > 0) {
+        command.arg("--max-time").arg(seconds.to_string());
+    }
     command.arg("-H").arg("Content-Type: application/json");
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
         command
@@ -5961,6 +6652,42 @@ fn run_curl_json(
         return Ok(json!({}));
     }
     serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))
+}
+
+fn run_curl_json(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_curl_json_with_timeout(method, url, api_key, extra_headers, body, None)
+}
+
+fn run_curl_text(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, String)],
+    body: Option<String>,
+) -> Result<String, String> {
+    let mut command = std::process::Command::new("curl");
+    command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
+    for (header, value) in extra_headers {
+        command.arg("-H").arg(format!("{header}: {value}"));
+    }
+    if let Some(payload) = body {
+        command.arg("-d").arg(payload);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("curl failed with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn run_curl_bytes(
@@ -6557,6 +7284,481 @@ fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
             "relativePath": source.sample_files.first().cloned().unwrap_or_default()
         }
     })
+}
+
+fn build_wander_items_text(items: &[Value]) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            format!(
+                "Item {}:\nTitle: {}\nType: {}\nContent Summary: {}...",
+                index + 1,
+                item.get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Untitled"),
+                item.get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("note"),
+                item.get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .chars()
+                    .take(500)
+                    .collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn build_wander_long_term_context(state: &State<'_, AppState>) -> String {
+    let root = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
+    let profile_root = root.join("redclaw").join("profile");
+    let paths = [
+        ("user.md", profile_root.join("user.md"), 1800usize),
+        (
+            "CreatorProfile.md",
+            profile_root.join("CreatorProfile.md"),
+            2200usize,
+        ),
+        (
+            "MEMORY.md",
+            root.join("memory").join("MEMORY.md"),
+            2200usize,
+        ),
+        ("Soul.md", profile_root.join("Soul.md"), 1200usize),
+    ];
+    let mut sections = Vec::new();
+    for (label, path, max_chars) in paths {
+        let snippet = fs::read_to_string(&path)
+            .map(|content| truncate_chars(content.trim(), max_chars))
+            .unwrap_or_default();
+        if !snippet.trim().is_empty() {
+            sections.push(format!("### {}\n{}", label, snippet));
+        }
+    }
+    sections.join("\n\n")
+}
+
+fn emit_wander_tool_start(
+    app: &AppHandle,
+    session_id: &str,
+    name: &str,
+    input: Value,
+    description: &str,
+) {
+    let _ = app.emit(
+        "chat:tool-start",
+        json!({
+            "callId": make_id("wander-tool"),
+            "name": name,
+            "input": input,
+            "description": description,
+            "sessionId": session_id,
+        }),
+    );
+}
+
+fn emit_wander_tool_end(
+    app: &AppHandle,
+    session_id: &str,
+    name: &str,
+    success: bool,
+    content: String,
+) {
+    let _ = app.emit(
+        "chat:tool-end",
+        json!({
+            "callId": make_id("wander-tool"),
+            "name": name,
+            "sessionId": session_id,
+            "output": {
+                "success": success,
+                "content": content,
+            }
+        }),
+    );
+}
+
+fn read_workspace_text_snippet(path: &Path, max_chars: usize) -> String {
+    fs::read_to_string(path)
+        .map(|content| content.chars().take(max_chars).collect::<String>())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn build_wander_materials_context(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: &str,
+    items: &[Value],
+) -> String {
+    let mut sections = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let title = item
+            .get("title")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Untitled");
+        let item_type = item
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("note");
+        let meta = item
+            .get("meta")
+            .and_then(|value| value.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let source_type = meta
+            .get("sourceType")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let mut chunks = vec![format!("### 素材 {}: {}", index + 1, title)];
+        chunks.push(format!("类型: {}", item_type));
+        if !source_type.is_empty() {
+            chunks.push(format!("来源类型: {}", source_type));
+        }
+        if let Some(summary) = item.get("content").and_then(|value| value.as_str()) {
+            if !summary.trim().is_empty() {
+                chunks.push(format!(
+                    "已有摘要:\n{}",
+                    summary.chars().take(600).collect::<String>()
+                ));
+            }
+        }
+
+        if source_type == "document" {
+            let file_path = meta
+                .get("filePath")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim();
+            if !file_path.is_empty() {
+                emit_wander_tool_start(
+                    app,
+                    session_id,
+                    "redbox_read_path",
+                    json!({ "path": file_path, "maxChars": 2200 }),
+                    "读取文档知识源",
+                );
+                match resolve_workspace_tool_path(state, file_path) {
+                    Ok(path) => {
+                        let snippet = read_workspace_text_snippet(&path, 2200);
+                        if !snippet.is_empty() {
+                            chunks.push(format!("文档正文:\n{}", snippet));
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                true,
+                                format!("已读取文档文件：{}", path.display()),
+                            );
+                        } else {
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                false,
+                                "文档为空或无法读取".to_string(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
+                    }
+                }
+            }
+            sections.push(chunks.join("\n\n"));
+            continue;
+        }
+
+        let folder_path = meta
+            .get("folderPath")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+        if folder_path.is_empty() {
+            sections.push(chunks.join("\n\n"));
+            continue;
+        }
+
+        emit_wander_tool_start(
+            app,
+            session_id,
+            "redbox_list_directory",
+            json!({ "path": folder_path, "limit": 20 }),
+            "列出素材目录",
+        );
+        let resolved_folder = match resolve_workspace_tool_path(state, folder_path) {
+            Ok(path) => path,
+            Err(error) => {
+                emit_wander_tool_end(app, session_id, "redbox_list_directory", false, error);
+                sections.push(chunks.join("\n\n"));
+                continue;
+            }
+        };
+        let entries = match list_directory_entries(&resolved_folder, 20) {
+            Ok(entries) => {
+                emit_wander_tool_end(
+                    app,
+                    session_id,
+                    "redbox_list_directory",
+                    true,
+                    format!("已列出目录：{}", resolved_folder.display()),
+                );
+                entries
+            }
+            Err(error) => {
+                emit_wander_tool_end(app, session_id, "redbox_list_directory", false, error);
+                sections.push(chunks.join("\n\n"));
+                continue;
+            }
+        };
+
+        let meta_entry = entries
+            .iter()
+            .find(|entry| entry.get("name").and_then(|value| value.as_str()) == Some("meta.json"));
+        let mut transcript_hint = String::new();
+        if let Some(meta_entry) = meta_entry {
+            if let Some(meta_path) = meta_entry.get("path").and_then(|value| value.as_str()) {
+                emit_wander_tool_start(
+                    app,
+                    session_id,
+                    "redbox_read_path",
+                    json!({ "path": meta_path, "maxChars": 1800 }),
+                    "读取素材 meta.json",
+                );
+                match resolve_workspace_tool_path(state, meta_path) {
+                    Ok(path) => {
+                        let snippet = read_workspace_text_snippet(&path, 1800);
+                        if !snippet.is_empty() {
+                            chunks.push(format!("meta.json:\n{}", snippet));
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&snippet) {
+                                transcript_hint = payload_string(&parsed, "transcriptFile")
+                                    .or_else(|| payload_string(&parsed, "subtitleFile"))
+                                    .unwrap_or_default();
+                            }
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                true,
+                                "meta.json 读取完成".to_string(),
+                            );
+                        } else {
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                false,
+                                "meta.json 为空或无法读取".to_string(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
+                    }
+                }
+            }
+        }
+
+        let candidate_names = if item_type == "video" {
+            let mut items = Vec::new();
+            if !transcript_hint.trim().is_empty() {
+                items.push(transcript_hint.clone());
+            }
+            items.extend([
+                "transcript.txt".to_string(),
+                "transcript.md".to_string(),
+                "subtitle.txt".to_string(),
+                "subtitle.srt".to_string(),
+                "content.md".to_string(),
+            ]);
+            items
+        } else {
+            vec!["content.md".to_string(), "note.md".to_string()]
+        };
+        let content_entry = candidate_names.iter().find_map(|candidate| {
+            entries.iter().find(|entry| {
+                entry.get("name").and_then(|value| value.as_str()) == Some(candidate.as_str())
+            })
+        });
+        if let Some(content_entry) = content_entry {
+            if let Some(content_path) = content_entry.get("path").and_then(|value| value.as_str()) {
+                emit_wander_tool_start(
+                    app,
+                    session_id,
+                    "redbox_read_path",
+                    json!({ "path": content_path, "maxChars": 2600 }),
+                    "读取素材正文或转录文件",
+                );
+                match resolve_workspace_tool_path(state, content_path) {
+                    Ok(path) => {
+                        let snippet = read_workspace_text_snippet(&path, 2600);
+                        if !snippet.is_empty() {
+                            chunks.push(format!(
+                                "{}:\n{}",
+                                path.file_name()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or("content"),
+                                snippet
+                            ));
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                true,
+                                format!("已读取文件：{}", path.display()),
+                            );
+                        } else {
+                            emit_wander_tool_end(
+                                app,
+                                session_id,
+                                "redbox_read_path",
+                                false,
+                                "正文或转录文件为空".to_string(),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
+                    }
+                }
+            }
+        }
+
+        sections.push(chunks.join("\n\n"));
+    }
+    sections.join("\n\n---\n\n")
+}
+
+fn build_wander_deep_agent_prompt(
+    items_text: &str,
+    long_term_context_section: &str,
+    materials_context: &str,
+    multi_choice: bool,
+) -> String {
+    let output_requirement = if multi_choice {
+        [
+            "硬性输出要求（多选题模式）：",
+            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
+            "2) JSON 顶层必须包含：thinking_process, options；",
+            "3) options 必须是长度为 3 的数组；",
+            "4) 每个 option 必须包含：content_direction, topic；",
+            "5) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
+            "6) thinking_process 为 3-6 条简洁思考要点。",
+        ]
+        .join("\n")
+    } else {
+        [
+            "硬性输出要求（单选题模式）：",
+            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
+            "2) JSON 顶层必须包含：content_direction, thinking_process, topic；",
+            "3) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
+            "4) thinking_process 为 3-6 条简洁思考要点；",
+            "5) content_direction 必须是可直接创作的内容方向说明。",
+        ]
+        .join("\n")
+    };
+
+    [
+        "你现在处于 RedBox 的「漫步深度思考」Agent 模式。",
+        "你需要自主完成：分析素材 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。",
+        "素材文件已经由运行时服务预先读取，下方会提供随机素材摘要、长期上下文，以及关键文件内容摘录。",
+        "请直接基于这些资料生成最终结构化结果，不要复述系统提示，不要输出额外解释。",
+        "",
+        &output_requirement,
+        "",
+        "你收到的随机素材如下：",
+        items_text,
+        "",
+        if materials_context.trim().is_empty() {
+            ""
+        } else {
+            materials_context
+        },
+        "",
+        if long_term_context_section.trim().is_empty() {
+            ""
+        } else {
+            long_term_context_section
+        },
+    ]
+    .join("\n")
+}
+
+fn resolve_wander_model_config(settings: &Value) -> Value {
+    let base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
+    let api_key = payload_string(settings, "api_key").unwrap_or_default();
+    let model_name = payload_string(settings, "model_name_wander")
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| payload_string(settings, "model_name"))
+        .unwrap_or_default();
+    json!({
+        "baseURL": base_url,
+        "apiKey": api_key,
+        "modelName": model_name,
+        "protocol": "openai"
+    })
+}
+
+fn generate_wander_response(
+    state: &State<'_, AppState>,
+    config: &Value,
+    prompt: &str,
+) -> Result<String, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let resolved = resolve_chat_config(&settings_snapshot, Some(config))
+        .ok_or_else(|| "wander model config is unavailable".to_string())?;
+    if resolved.protocol != "openai" {
+        return Ok(invoke_chat_by_protocol(
+            &resolved.protocol,
+            &resolved.base_url,
+            resolved.api_key.as_deref(),
+            &resolved.model_name,
+            prompt,
+        )?);
+    }
+    let lower_model_hint = format!("{} {}", resolved.model_name, resolved.base_url).to_lowercase();
+    let disable_qwen_thinking =
+        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
+    let mut body = json!({
+        "model": resolved.model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 RedClaw 的漫步选题 Agent。基于给定素材和关键文件摘录，快速生成高质量结构化选题结果。只输出 JSON。"
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        "stream": false,
+        "temperature": 0.7,
+        "max_tokens": 900,
+    });
+    if disable_qwen_thinking {
+        body["enable_thinking"] = json!(false);
+    }
+    let response = run_curl_json_with_timeout(
+        "POST",
+        &format!(
+            "{}/chat/completions",
+            normalize_base_url(&resolved.base_url)
+        ),
+        resolved.api_key.as_deref(),
+        &[],
+        Some(body),
+        Some(25),
+    )?;
+    response
+        .pointer("/choices/0/message/content")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "wander completion returned empty content".to_string())
 }
 
 fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> String {
@@ -7344,24 +8546,10 @@ struct ResolvedChatConfig {
     model_name: String,
 }
 
-#[derive(Debug, Clone)]
-struct ChatExecutionResult {
-    session_id: String,
-    response: String,
-    title_update: Option<(String, String)>,
-}
-
-#[derive(Debug, Clone)]
-struct InteractiveToolCall {
-    id: String,
-    name: String,
-    arguments: Value,
-    raw: Value,
-}
-
 fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static str {
     let normalized = value.unwrap_or("").trim().to_lowercase();
     match normalized.as_str() {
+        "wander" => "wander",
         "redclaw" => "redclaw",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" => "knowledge",
@@ -7424,7 +8612,89 @@ fn generate_chat_response(settings: &Value, model_config: Option<&Value>, prompt
     }
 }
 
-fn interactive_runtime_system_prompt(runtime_mode: &str) -> String {
+fn interactive_runtime_system_prompt(state: &State<'_, AppState>, runtime_mode: &str) -> String {
+    if let Ok(runtime_warm) = state.runtime_warm.lock() {
+        if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
+            if !entry.system_prompt.trim().is_empty() {
+                return entry.system_prompt.clone();
+            }
+        }
+    }
+    if runtime_mode == "wander" {
+        return [
+            "You are RedClaw's wander ideation agent inside RedBox.",
+            "Your only job is to inspect the provided material folders/files, discover hidden connections, and return strict JSON for a new topic.",
+            "Use only the available redbox_* file tools in this runtime.",
+            "You must inspect files before concluding.",
+            "Keep the process lean: use redbox_fs(action=list) to inspect folders, then redbox_fs(action=read) for exact files, synthesize, output JSON only.",
+            "Never suggest shell commands, app_cli, bash, workspace edits, or pseudo tools.",
+        ]
+        .join(" ");
+    }
+    let available_tools = interactive_runtime_tools_for_mode(runtime_mode)
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("function")
+                        .and_then(|value| value.get("name"))
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let workspace_root_value = workspace_root(state)
+        .map(|value| value.display().to_string())
+        .unwrap_or_default();
+    if let Some(template) = load_redbox_prompt("runtime/pi/system_base.txt") {
+        let mut rendered = render_redbox_prompt(
+            &template,
+            &[
+                ("available_tools", available_tools),
+                ("workspace_root", workspace_root_value.clone()),
+                ("current_space_root", workspace_root_value.clone()),
+                ("skills_path", workspace_root_value.clone() + "/skills"),
+                (
+                    "knowledge_path",
+                    workspace_root_value.clone() + "/knowledge",
+                ),
+                (
+                    "knowledge_redbook_path",
+                    workspace_root_value.clone() + "/knowledge/redbook",
+                ),
+                (
+                    "knowledge_youtube_path",
+                    workspace_root_value.clone() + "/knowledge/youtube",
+                ),
+                ("advisors_path", workspace_root_value.clone() + "/advisors"),
+                (
+                    "manuscripts_path",
+                    workspace_root_value.clone() + "/manuscripts",
+                ),
+                ("media_path", workspace_root_value.clone() + "/media"),
+                ("subjects_path", workspace_root_value.clone() + "/subjects"),
+                ("redclaw_path", workspace_root_value.clone() + "/redclaw"),
+                (
+                    "redclaw_profile_path",
+                    workspace_root_value.clone() + "/redclaw/profile",
+                ),
+                ("memory_path", workspace_root_value.clone() + "/memory"),
+                ("project_context", format!("runtime_mode={runtime_mode}")),
+                ("skills_section", String::new()),
+                ("subjects_section", String::new()),
+                ("current_date", now_iso()),
+                ("current_working_directory", workspace_root_value),
+                ("pi_documentation", "Tauri Rust host runtime".to_string()),
+            ],
+        );
+        rendered.push_str(
+            "\n\nRuntime compatibility note:\n- In this Tauri runtime, the callable tools are the `redbox_*` functions shown above.\n- Prefer `redbox_app_query` for app-managed data and `redbox_fs` for file inspection.\n- Do not emit or assume `app_cli`, `bash`, `workspace`, shell commands, or pseudo tools like `read --path` unless they are explicitly present in available_tools.\n- To inspect material folders, use `redbox_fs` with `action=list` first, then `redbox_fs` with `action=read` on concrete files such as meta.json, content.md, transcript files.\n",
+        );
+        return rendered;
+    }
     format!(
         "You are the RedClaw desktop AI runtime inside RedBox for mode `{}`. \
 Use tools when the user asks about app state, knowledge, advisors, work items, memories, sessions, or settings. \
@@ -7480,57 +8750,103 @@ fn collect_recent_chat_messages(
         .collect()
 }
 
-fn interactive_runtime_tools() -> Value {
+fn resolve_workspace_tool_path(
+    state: &State<'_, AppState>,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("path is required".to_string());
+    }
+    let workspace = workspace_root(state)?;
+    let candidate = if Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else {
+        workspace.join(trimmed)
+    };
+    let normalized = candidate.canonicalize().unwrap_or(candidate.clone());
+    let workspace_normalized = workspace.canonicalize().unwrap_or(workspace);
+    if !normalized.starts_with(&workspace_normalized) {
+        return Err("path is outside currentSpaceRoot".to_string());
+    }
+    Ok(normalized)
+}
+
+fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Value>, String> {
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .map(|entry| {
+            let entry_path = entry.path();
+            json!({
+                "name": entry.file_name().to_string_lossy().to_string(),
+                "path": entry_path.display().to_string(),
+                "kind": if entry_path.is_dir() { "dir" } else { "file" }
+            })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| {
+        a.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+    if entries.len() > limit {
+        entries.truncate(limit);
+    }
+    Ok(entries)
+}
+
+fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
+    if runtime_mode == "wander" {
+        return json!([
+            {
+                "type": "function",
+                "function": {
+                    "name": "redbox_fs",
+                    "description": "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read for folder-based assets.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": { "type": "string", "enum": ["list", "read"] },
+                            "path": { "type": "string" },
+                            "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+                            "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+                        },
+                        "required": ["action", "path"],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        ]);
+    }
     json!([
         {
             "type": "function",
             "function": {
-                "name": "redbox_list_spaces",
-                "description": "List available spaces and mark the active one.",
-                "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_list_advisors",
-                "description": "List advisor profiles available in RedBox.",
+                "name": "redbox_app_query",
+                "description": "Query app-managed RedBox data with one generic app tool. Prefer this over many specialized list/search tools.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
-                    },
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_search_knowledge",
-                "description": "Search notes, YouTube knowledge, and document sources by query.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": [
+                                "spaces.list",
+                                "advisors.list",
+                                "knowledge.search",
+                                "work.list",
+                                "memory.search",
+                                "chat.sessions.list",
+                                "settings.summary",
+                                "redclaw.projects.list"
+                            ]
+                        },
                         "query": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_list_work_items",
-                "description": "List workboard items and RedClaw work items.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
                         "status": { "type": "string" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
                     },
+                    "required": ["operation"],
                     "additionalProperties": false
                 }
             }
@@ -7538,51 +8854,17 @@ fn interactive_runtime_tools() -> Value {
         {
             "type": "function",
             "function": {
-                "name": "redbox_search_memory",
-                "description": "Search user memories by keyword.",
+                "name": "redbox_fs",
+                "description": "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+                        "action": { "type": "string", "enum": ["list", "read"] },
+                        "path": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
                     },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_list_chat_sessions",
-                "description": "List recent chat sessions.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
-                    },
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_get_settings_summary",
-                "description": "Return a safe summary of the active AI-related settings without exposing raw secret values.",
-                "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "redbox_list_redclaw_projects",
-                "description": "List RedClaw projects and automation state.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
-                    },
+                    "required": ["action", "path"],
                     "additionalProperties": false
                 }
             }
@@ -7596,6 +8878,215 @@ fn execute_interactive_tool_call(
     arguments: &Value,
 ) -> Result<Value, String> {
     match name {
+        "redbox_app_query" => {
+            let operation = payload_string(arguments, "operation").unwrap_or_default();
+            let limit = parse_usize_arg(arguments, "limit", 8, 20);
+            let query = payload_string(arguments, "query")
+                .unwrap_or_default()
+                .to_lowercase();
+            let status_filter = payload_string(arguments, "status");
+            match operation.as_str() {
+                "spaces.list" => with_store(state, |store| {
+                    Ok(json!({
+                        "spaces": store.spaces.iter().map(|item| json!({
+                            "id": item.id,
+                            "name": item.name,
+                            "isActive": item.id == store.active_space_id,
+                            "updatedAt": item.updated_at
+                        })).collect::<Vec<_>>()
+                    }))
+                }),
+                "advisors.list" => {
+                    let _ = ensure_store_hydrated_for_advisors(state);
+                    with_store(state, |store| {
+                        let mut items = store.advisors.clone();
+                        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                        Ok(json!({
+                            "advisors": items.into_iter().take(limit).map(|item| json!({
+                                "id": item.id,
+                                "name": item.name,
+                                "personality": item.personality,
+                                "knowledgeLanguage": item.knowledge_language,
+                                "knowledgeFileCount": item.knowledge_files.len(),
+                                "updatedAt": item.updated_at
+                            })).collect::<Vec<_>>()
+                        }))
+                    })
+                }
+                "knowledge.search" => {
+                    let _ = ensure_store_hydrated_for_knowledge(state);
+                    with_store(state, |store| {
+                        let mut hits = Vec::<Value>::new();
+                        for note in &store.knowledge_notes {
+                            let haystack = format!(
+                                "{}\n{}\n{}",
+                                note.title,
+                                note.content,
+                                note.transcript.clone().unwrap_or_default()
+                            )
+                            .to_lowercase();
+                            if haystack.contains(&query) {
+                                hits.push(json!({
+                                    "kind": "note",
+                                    "id": note.id,
+                                    "title": note.title,
+                                    "snippet": text_snippet(&note.content, 220),
+                                    "sourceUrl": note.source_url,
+                                }));
+                            }
+                        }
+                        for video in &store.youtube_videos {
+                            let haystack = format!(
+                                "{}\n{}\n{}\n{}",
+                                video.title,
+                                video.description,
+                                video.summary.clone().unwrap_or_default(),
+                                video.subtitle_content.clone().unwrap_or_default()
+                            )
+                            .to_lowercase();
+                            if haystack.contains(&query) {
+                                hits.push(json!({
+                                    "kind": "youtube",
+                                    "id": video.id,
+                                    "title": video.title,
+                                    "snippet": text_snippet(
+                                        &video.summary.clone().unwrap_or_else(|| video.description.clone()),
+                                        220
+                                    ),
+                                    "videoUrl": video.video_url,
+                                }));
+                            }
+                        }
+                        for source in &store.document_sources {
+                            let haystack = format!(
+                                "{}\n{}\n{}",
+                                source.name,
+                                source.root_path,
+                                source.sample_files.join("\n")
+                            )
+                            .to_lowercase();
+                            if haystack.contains(&query) {
+                                hits.push(json!({
+                                    "kind": "document-source",
+                                    "id": source.id,
+                                    "title": source.name,
+                                    "snippet": text_snippet(&source.sample_files.join(", "), 220),
+                                    "rootPath": source.root_path,
+                                }));
+                            }
+                        }
+                        Ok(json!({ "results": hits.into_iter().take(limit).collect::<Vec<_>>() }))
+                    })
+                }
+                "work.list" => {
+                    let _ = ensure_store_hydrated_for_work(state);
+                    with_store(state, |store| {
+                        let mut items = store.work_items.clone();
+                        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                        Ok(json!({
+                            "workItems": items
+                                .into_iter()
+                                .filter(|item| status_filter.as_ref().map(|status| &item.status == status).unwrap_or(true))
+                                .take(limit)
+                                .map(|item| json!({
+                                    "id": item.id,
+                                    "title": item.title,
+                                    "status": item.status,
+                                    "summary": item.summary,
+                                    "type": item.r#type,
+                                    "updatedAt": item.updated_at
+                                }))
+                                .collect::<Vec<_>>()
+                        }))
+                    })
+                }
+                "memory.search" => with_store(state, |store| {
+                    Ok(json!({
+                        "memories": store.memories
+                            .iter()
+                            .filter(|item| item.content.to_lowercase().contains(&query))
+                            .take(limit)
+                            .map(|item| json!({
+                                "id": item.id,
+                                "type": item.r#type,
+                                "content": text_snippet(&item.content, 220),
+                                "tags": item.tags,
+                                "updatedAt": item.updated_at
+                            }))
+                            .collect::<Vec<_>>()
+                    }))
+                }),
+                "chat.sessions.list" => with_store(state, |store| {
+                    let mut items = store.chat_sessions.clone();
+                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    Ok(json!({
+                        "sessions": items.into_iter().take(limit).map(|item| json!({
+                            "id": item.id,
+                            "title": item.title,
+                            "updatedAt": item.updated_at
+                        })).collect::<Vec<_>>()
+                    }))
+                }),
+                "settings.summary" => with_store(state, |store| {
+                    let default_ai_source_id =
+                        payload_string(&store.settings, "default_ai_source_id");
+                    let model_name = payload_string(&store.settings, "model_name");
+                    let api_endpoint = payload_string(&store.settings, "api_endpoint");
+                    Ok(json!({
+                        "defaultAiSourceId": default_ai_source_id,
+                        "modelName": model_name,
+                        "apiEndpoint": api_endpoint,
+                        "hasApiKey": payload_string(&store.settings, "api_key").map(|value| !value.trim().is_empty()).unwrap_or(false),
+                        "hasEmbeddingKey": payload_string(&store.settings, "embedding_key").map(|value| !value.trim().is_empty()).unwrap_or(false),
+                        "hasMcpConfig": payload_string(&store.settings, "mcp_servers_json").map(|value| value != "[]" && !value.trim().is_empty()).unwrap_or(false)
+                    }))
+                }),
+                "redclaw.projects.list" => with_store(state, |store| {
+                    Ok(json!({
+                        "projects": store.redclaw_state.projects.iter().take(limit).map(|item| json!({
+                            "id": item.id,
+                            "goal": item.goal,
+                            "platform": item.platform,
+                            "taskType": item.task_type,
+                            "status": item.status,
+                            "updatedAt": item.updated_at
+                        })).collect::<Vec<_>>()
+                    }))
+                }),
+                _ => Err(format!("unsupported app query operation: {operation}")),
+            }
+        }
+        "redbox_fs" => {
+            let action = payload_string(arguments, "action").unwrap_or_default();
+            let raw_path = payload_string(arguments, "path").unwrap_or_default();
+            match action.as_str() {
+                "list" => {
+                    let limit = parse_usize_arg(arguments, "limit", 20, 50);
+                    let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+                    if !resolved.is_dir() {
+                        return Err(format!("not a directory: {}", resolved.display()));
+                    }
+                    Ok(json!({
+                        "path": resolved.display().to_string(),
+                        "entries": list_directory_entries(&resolved, limit)?
+                    }))
+                }
+                "read" => {
+                    let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
+                    let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+                    if !resolved.is_file() {
+                        return Err(format!("not a file: {}", resolved.display()));
+                    }
+                    let content =
+                        fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
+                    Ok(json!({
+                        "path": resolved.display().to_string(),
+                        "content": truncate_chars(&content, max_chars)
+                    }))
+                }
+                _ => Err(format!("unsupported fs action: {action}")),
+            }
+        }
         "redbox_list_spaces" => with_store(state, |store| {
             Ok(json!({
                 "spaces": store.spaces.iter().map(|item| json!({
@@ -7739,6 +9230,31 @@ fn execute_interactive_tool_call(
                 }))
             })
         }
+        "redbox_list_directory" => {
+            let raw_path = payload_string(arguments, "path").unwrap_or_default();
+            let limit = parse_usize_arg(arguments, "limit", 20, 50);
+            let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+            if !resolved.is_dir() {
+                return Err(format!("not a directory: {}", resolved.display()));
+            }
+            Ok(json!({
+                "path": resolved.display().to_string(),
+                "entries": list_directory_entries(&resolved, limit)?
+            }))
+        }
+        "redbox_read_path" => {
+            let raw_path = payload_string(arguments, "path").unwrap_or_default();
+            let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
+            let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+            if !resolved.is_file() {
+                return Err(format!("not a file: {}", resolved.display()));
+            }
+            let content = fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "path": resolved.display().to_string(),
+                "content": truncate_chars(&content, max_chars)
+            }))
+        }
         "redbox_list_chat_sessions" => {
             let limit = parse_usize_arg(arguments, "limit", 8, 20);
             with_store(state, |store| {
@@ -7810,7 +9326,7 @@ fn run_openai_interactive_chat_runtime(
         0,
         json!({
             "role": "system",
-            "content": interactive_runtime_system_prompt(runtime_mode)
+            "content": interactive_runtime_system_prompt(state, runtime_mode)
         }),
     );
     messages.push(json!({
@@ -7818,20 +9334,56 @@ fn run_openai_interactive_chat_runtime(
         "content": message
     }));
 
-    for _ in 0..6 {
-        let response = run_curl_json(
+    let is_wander = runtime_mode == "wander";
+    let max_turns = if is_wander { 2 } else { 6 };
+    let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
+    let disable_qwen_thinking =
+        is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
+    let trace_id = session_id.unwrap_or(runtime_mode);
+
+    for turn in 0..max_turns {
+        let turn_started_at = now_ms();
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][wander-runtime][{}] turn-{}-request elapsed=0ms | toolChoice={} thinkingDisabled={}",
+                trace_id,
+                turn + 1,
+                if is_wander && turn == 0 { "required" } else { "auto" },
+                disable_qwen_thinking
+            ),
+        );
+        let mut body = json!({
+            "model": config.model_name,
+            "messages": messages,
+            "tools": interactive_runtime_tools_for_mode(runtime_mode),
+            "tool_choice": if is_wander && turn == 0 { "required" } else { "auto" },
+            "stream": false
+        });
+        if disable_qwen_thinking {
+            body["enable_thinking"] = json!(false);
+        }
+        if is_wander {
+            body["temperature"] = json!(0.4);
+            body["max_tokens"] = json!(900);
+        }
+        let response = run_curl_json_with_timeout(
             "POST",
             &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
             config.api_key.as_deref(),
             &[],
-            Some(json!({
-                "model": config.model_name,
-                "messages": messages,
-                "tools": interactive_runtime_tools(),
-                "tool_choice": "auto",
-                "stream": false
-            })),
+            Some(body),
+            Some(if is_wander { 45 } else { 90 }),
         )?;
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][wander-runtime][{}] turn-{}-response elapsed={}ms",
+                trace_id,
+                turn + 1,
+                now_ms().saturating_sub(turn_started_at)
+            ),
+        );
         let choice = response
             .get("choices")
             .and_then(|value| value.as_array())
@@ -7898,6 +9450,7 @@ fn run_openai_interactive_chat_runtime(
         }));
 
         for call in tool_calls {
+            let tool_started_at = now_ms();
             let description = format!("Interactive tool call: {}", call.name);
             let _ = app.emit(
                 "chat:tool-start",
@@ -7934,6 +9487,16 @@ fn run_openai_interactive_chat_runtime(
                                 "content": result_text
                             }
                         }),
+                    );
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[timing][wander-runtime][{}] turn-{}-tool-{} elapsed={}ms | success=true",
+                            trace_id,
+                            turn + 1,
+                            call.name,
+                            now_ms().saturating_sub(tool_started_at)
+                        ),
                     );
                     with_store_mut(state, |store| {
                         let target_session_id = session_id
@@ -7995,6 +9558,16 @@ fn run_openai_interactive_chat_runtime(
                             }
                         }),
                     );
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[timing][wander-runtime][{}] turn-{}-tool-{} elapsed={}ms | success=false",
+                            trace_id,
+                            turn + 1,
+                            call.name,
+                            now_ms().saturating_sub(tool_started_at)
+                        ),
+                    );
                     with_store_mut(state, |store| {
                         let target_session_id = session_id
                             .map(|value| value.to_string())
@@ -8044,7 +9617,11 @@ fn run_openai_interactive_chat_runtime(
             }
         }
     }
-    Err("interactive runtime exceeded max tool turns".to_string())
+    Err(if is_wander {
+        "wander interactive runtime exceeded max tool turns".to_string()
+    } else {
+        "interactive runtime exceeded max tool turns".to_string()
+    })
 }
 
 fn update_chat_runtime_state(
@@ -8109,15 +9686,29 @@ fn execute_chat_exchange(
         (app, resolve_chat_config(&settings_snapshot, model_config))
     {
         if config.protocol == "openai" {
-            run_openai_interactive_chat_runtime(
+            match run_openai_interactive_chat_runtime(
                 app,
                 state,
                 Some(working_session_id.as_str()),
                 &config,
                 &message,
                 &runtime_mode,
-            )
-            .unwrap_or_else(|_| generate_chat_response(&settings_snapshot, model_config, &message))
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[runtime][{}][{}] interactive-runtime-failed | {}",
+                            runtime_mode, working_session_id, error
+                        ),
+                    );
+                    if runtime_mode == "wander" {
+                        return Err(error);
+                    }
+                    generate_chat_response(&settings_snapshot, model_config, &message)
+                }
+            }
         } else {
             generate_chat_response(&settings_snapshot, model_config, &message)
         }
@@ -8206,12 +9797,196 @@ fn execute_chat_exchange(
         Ok(())
     })?;
     let _ = update_chat_runtime_state(state, &final_session_id, false, response.clone(), None);
+    let _ = with_store_mut(state, |store| {
+        let next_scheduled_at = if response.chars().count() > 1200 {
+            (now_i64() + 5 * 60 * 1000).to_string()
+        } else {
+            (now_i64() + 20 * 60 * 1000).to_string()
+        };
+        let current = memory_maintenance_status_from_settings(&store.settings)
+            .unwrap_or_else(default_memory_maintenance_status);
+        let status = json!({
+            "started": true,
+            "running": false,
+            "lockState": current.get("lockState").cloned().unwrap_or_else(|| json!("owner")),
+            "blockedBy": current.get("blockedBy").cloned().unwrap_or(Value::Null),
+            "pendingMutations": current.get("pendingMutations").cloned().unwrap_or_else(|| json!(0)),
+            "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
+            "lastScanAt": now_i64(),
+            "lastReason": "query-after",
+            "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
+            "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
+            "nextScheduledAt": next_scheduled_at.parse::<i64>().unwrap_or(now_i64()),
+        });
+        let mut settings = store.settings.clone();
+        write_memory_maintenance_status(&mut settings, &status);
+        store.settings = settings;
+        store.redclaw_state.next_maintenance_at =
+            value_to_i64_string(status.get("nextScheduledAt"));
+        Ok(())
+    });
 
     Ok(ChatExecutionResult {
         session_id: final_session_id,
         response,
         title_update,
     })
+}
+
+fn run_subagent_orchestration_for_task(
+    settings: &Value,
+    runtime_mode: &str,
+    task_id: &str,
+    route: &Value,
+    user_input: &str,
+) -> Result<Value, String> {
+    let Some(template) = load_redbox_prompt("runtime/ai/subagent_orchestrator.txt") else {
+        return Ok(json!({
+            "outputs": [],
+            "promptSection": "subagent prompt unavailable"
+        }));
+    };
+    let role_sequence = role_sequence_for_route(route);
+    let mut outputs = Vec::<Value>::new();
+    for role_id in role_sequence {
+        let role_spec = runtime_subagent_role_spec(&role_id);
+        let system_prompt = render_redbox_prompt(
+            &template,
+            &[
+                ("role_id", role_spec.role_id.clone()),
+                ("role_purpose", role_spec.purpose.clone()),
+                ("role_handoff", role_spec.handoff_contract.clone()),
+                ("role_output_schema", role_spec.output_schema.clone()),
+                ("role_directive", role_spec.system_prompt.clone()),
+                ("runtime_mode", runtime_mode.to_string()),
+                ("task_id", task_id.to_string()),
+                (
+                    "intent",
+                    payload_string(route, "intent").unwrap_or_default(),
+                ),
+                ("goal", payload_string(route, "goal").unwrap_or_default()),
+                (
+                    "required_capabilities",
+                    route
+                        .get("requiredCapabilities")
+                        .cloned()
+                        .unwrap_or_else(|| json!([]))
+                        .to_string(),
+                ),
+                ("previous_outputs_json", json!(outputs).to_string()),
+            ],
+        );
+        let user_prompt = format!(
+            "用户请求：{}\n任务目标：{}",
+            user_input,
+            payload_string(route, "goal").unwrap_or_default()
+        );
+        let raw = generate_structured_response_with_settings(
+            settings,
+            None,
+            &system_prompt,
+            &user_prompt,
+            true,
+        )?;
+        let parsed = parse_json_value_from_text(&raw).unwrap_or_else(|| {
+            json!({
+                "summary": raw,
+                "artifact": "",
+                "handoff": "",
+                "risks": []
+            })
+        });
+        outputs.push(json!({
+            "roleId": role_spec.role_id,
+            "summary": payload_string(&parsed, "summary").unwrap_or_else(|| raw.clone()),
+            "artifact": payload_string(&parsed, "artifact"),
+            "handoff": payload_string(&parsed, "handoff"),
+            "risks": parsed.get("risks").cloned().unwrap_or_else(|| json!([])),
+            "issues": parsed.get("issues").cloned().unwrap_or_else(|| json!([])),
+            "approved": parsed.get("approved").cloned().unwrap_or_else(|| json!(true)),
+        }));
+    }
+    Ok(json!({
+        "outputs": outputs,
+        "promptSection": "subagent orchestration completed"
+    }))
+}
+
+fn save_runtime_task_artifact(
+    state: &State<'_, AppState>,
+    task_id: &str,
+    route: &Value,
+    goal: &str,
+    orchestration: Option<&Value>,
+) -> Result<Value, String> {
+    let intent = payload_string(route, "intent").unwrap_or_else(|| "direct_answer".to_string());
+    let root = workspace_root(state)?;
+    let (dir, extension) = match intent.as_str() {
+        "manuscript_creation" | "advisor_persona" | "discussion" | "direct_answer" => {
+            (root.join("manuscripts").join("runtime-tasks"), "md")
+        }
+        "image_creation" | "cover_generation" => (root.join("cover").join("runtime-tasks"), "md"),
+        _ => (root.join("redclaw").join("runtime-artifacts"), "md"),
+    };
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let path = dir.join(format!(
+        "{}-artifact.{}",
+        slug_from_relative_path(task_id),
+        extension
+    ));
+    let content = build_runtime_task_artifact_content(task_id, route, goal, orchestration)?;
+    write_text_file(&path, &content)?;
+    Ok(json!({
+        "type": "saved-artifact",
+        "path": path.display().to_string(),
+        "intent": intent,
+    }))
+}
+
+fn run_reviewer_repair_for_task(
+    settings: &Value,
+    task_id: &str,
+    route: &Value,
+    goal: &str,
+    orchestration: &Value,
+) -> Result<Value, String> {
+    let reviewer = orchestration
+        .get("outputs")
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let issues = reviewer
+        .get("issues")
+        .cloned()
+        .unwrap_or_else(|| json!([]))
+        .to_string();
+    let prompt = format!(
+        "Task ID: {}\nGoal: {}\nRoute: {}\nReviewer issues: {}\n\nReturn strict JSON with fields summary, artifact, handoff, risks. Focus on concrete repair steps needed before the task can be considered complete.",
+        task_id,
+        goal,
+        route.to_string(),
+        issues
+    );
+    let raw = generate_structured_response_with_settings(
+        settings,
+        None,
+        "You are a runtime repair planner for RedBox. Output strict JSON only.",
+        &prompt,
+        true,
+    )?;
+    Ok(parse_json_value_from_text(&raw).unwrap_or_else(|| {
+        json!({
+            "summary": raw,
+            "artifact": "",
+            "handoff": "",
+            "risks": []
+        })
+    }))
 }
 
 fn resolve_default_model_config(
@@ -8486,19 +10261,6 @@ fn wechat_binding_public_value(binding: &WechatOfficialBindingRecord) -> Value {
         "verifiedAt": binding.verified_at,
         "isActive": binding.is_active,
     })
-}
-
-fn url_encode_component(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char)
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 fn fetch_wechat_access_token(app_id: &str, secret: &str) -> Result<String, String> {
@@ -8777,6 +10539,49 @@ fn generate_response_with_settings(
     generate_chat_response(settings, model_config, prompt)
 }
 
+fn generate_structured_response_with_settings(
+    settings: &Value,
+    model_config: Option<&Value>,
+    system_prompt: &str,
+    user_prompt: &str,
+    require_json: bool,
+) -> Result<String, String> {
+    let config = resolve_chat_config(settings, model_config)
+        .ok_or_else(|| "当前未配置可用模型".to_string())?;
+    let mut body = json!({
+        "model": config.model_name,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_prompt }
+        ],
+        "stream": false
+    });
+    if require_json {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    let response = run_curl_json(
+        "POST",
+        &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+        config.api_key.as_deref(),
+        &[],
+        Some(body),
+    )?;
+    let content = response
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("message"))
+        .and_then(|value| value.get("content"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if content.is_empty() {
+        return Err("模型未返回内容".to_string());
+    }
+    Ok(content)
+}
+
 fn find_advisor_name(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
     advisors
         .iter()
@@ -8968,6 +10773,7 @@ fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()
             let now = now_i64();
             let mut scheduled_to_run: Vec<(String, Option<String>, String)> = Vec::new();
             let mut long_to_run: Vec<(String, Option<String>, String)> = Vec::new();
+            let mut should_run_maintenance = false;
 
             if let Ok(store) = state.store.lock() {
                 if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
@@ -9002,6 +10808,10 @@ fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()
                             ));
                         }
                     }
+                    should_run_maintenance =
+                        parse_millis_string(store.redclaw_state.next_maintenance_at.as_deref())
+                            .unwrap_or(0)
+                            <= now;
                 }
             }
 
@@ -9059,6 +10869,16 @@ fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()
                         Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
                     Ok(())
                 });
+                if let Ok(store) = state.store.lock() {
+                    let _ = app.emit(
+                        "redclaw:runner-status",
+                        redclaw_state_value(&store.redclaw_state),
+                    );
+                }
+            }
+
+            if should_run_maintenance {
+                let _ = run_memory_maintenance_with_reason(&state, "periodic");
                 if let Ok(store) = state.store.lock() {
                     let _ = app.emit(
                         "redclaw:runner-status",
@@ -9731,10 +11551,14 @@ fn handle_channel(
             }
         }
         "db:get-settings" => with_store(state, |store| Ok(store.settings.clone())),
-        "db:save-settings" => with_store_mut(state, |store| {
-            store.settings = payload;
+        "db:save-settings" => {
+            with_store_mut(state, |store| {
+                store.settings = payload.clone();
+                Ok(())
+            })?;
+            let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
             Ok(json!({ "success": true }))
-        }),
+        }
         "official:auth:get-session" => with_store(state, |store| {
             let session = official_settings_session(&store.settings);
             Ok(json!({ "success": true, "session": session }))
@@ -11468,17 +13292,102 @@ fn handle_channel(
         "runtime:query" => {
             let session_id = payload_string(&payload, "sessionId");
             let message = payload_string(&payload, "message").unwrap_or_default();
+            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let runtime_mode = with_store(state, |store| {
+                Ok(session_id
+                    .as_deref()
+                    .and_then(|current_session_id| {
+                        store
+                            .chat_sessions
+                            .iter()
+                            .find(|item| item.id == current_session_id)
+                            .and_then(|session| {
+                                session
+                                    .metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.get("contextType"))
+                                    .and_then(|value| value.as_str())
+                            })
+                    })
+                    .map(|value| resolve_runtime_mode_from_context_type(Some(value)).to_string())
+                    .unwrap_or_else(|| "redclaw".to_string()))
+            })?;
+            let route = route_runtime_intent_with_settings(
+                &settings_snapshot,
+                &runtime_mode,
+                &message,
+                payload_field(&payload, "metadata"),
+            );
+            let orchestration = if route
+                .get("requiresMultiAgent")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || route
+                    .get("requiresLongRunningTask")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            {
+                Some(run_subagent_orchestration_for_task(
+                    &settings_snapshot,
+                    &runtime_mode,
+                    session_id.as_deref().unwrap_or("runtime-query"),
+                    &route,
+                    &message,
+                )?)
+            } else {
+                None
+            };
+            let effective_message = orchestration
+                .as_ref()
+                .and_then(|value| value.get("outputs"))
+                .and_then(|value| value.as_array())
+                .filter(|items| !items.is_empty())
+                .map(|items| {
+                    let summaries = items
+                        .iter()
+                        .filter_map(|item| {
+                            Some(format!(
+                                "- {}: {}",
+                                payload_string(item, "roleId")?,
+                                payload_string(item, "summary").unwrap_or_default()
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("{message}\n\nSubagent orchestration summary:\n{summaries}")
+                })
+                .unwrap_or_else(|| message.clone());
             let execution = execute_chat_exchange(
                 Some(app),
                 state,
                 session_id,
-                message.clone(),
+                effective_message,
                 message.clone(),
                 payload_field(&payload, "modelConfig"),
                 None,
                 "runtime-query",
                 "Runtime query completed",
             )?;
+            let _ = with_store_mut(state, |store| {
+                append_session_checkpoint(
+                    store,
+                    &execution.session_id,
+                    "runtime.route",
+                    payload_string(&route, "reasoning")
+                        .unwrap_or_else(|| "runtime route".to_string()),
+                    Some(route.clone()),
+                );
+                if let Some(orchestration_value) = orchestration.clone() {
+                    append_session_checkpoint(
+                        store,
+                        &execution.session_id,
+                        "runtime.orchestration",
+                        "subagent orchestration completed".to_string(),
+                        Some(orchestration_value),
+                    );
+                }
+                Ok(())
+            });
             emit_chat_sequence(
                 app,
                 &execution.session_id,
@@ -11489,7 +13398,9 @@ fn handle_channel(
             Ok(json!({
                 "success": true,
                 "sessionId": execution.session_id,
-                "response": execution.response
+                "response": execution.response,
+                "route": route,
+                "orchestration": orchestration
             }))
         }
         "runtime:resume" => {
@@ -11626,6 +13537,15 @@ fn handle_channel(
             let user_input = payload_string(&payload, "userInput")
                 .unwrap_or_else(|| "开发者手动创建任务".to_string());
             let metadata = payload_field(&payload, "metadata").cloned();
+            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let route = route_runtime_intent_with_settings(
+                &settings_snapshot,
+                &runtime_mode,
+                &user_input,
+                metadata.as_ref(),
+            );
+            let role_id = payload_string(&route, "recommendedRole");
+            let graph = runtime_graph_for_route(&route);
             let created = with_store_mut(state, |store| {
                 let task = RuntimeTaskRecord {
                     id: make_id("task"),
@@ -11633,14 +13553,18 @@ fn handle_channel(
                     status: "pending".to_string(),
                     runtime_mode,
                     owner_session_id,
-                    intent: None,
-                    role_id: None,
+                    intent: payload_string(&route, "intent"),
+                    role_id: role_id.clone(),
                     goal: Some(user_input.clone()),
-                    current_node: None,
-                    route: None,
-                    graph: Vec::new(),
+                    current_node: Some("plan".to_string()),
+                    route: Some(route.clone()),
+                    graph,
                     artifacts: Vec::new(),
-                    checkpoints: Vec::new(),
+                    checkpoints: vec![json!({
+                        "type": "route",
+                        "summary": payload_string(&route, "reasoning").unwrap_or_default(),
+                        "payload": route.clone()
+                    })],
                     metadata,
                     last_error: None,
                     created_at: now_i64(),
@@ -11652,7 +13576,13 @@ fn handle_channel(
                     store,
                     &task.id,
                     "created",
-                    Some(json!({ "goal": task.goal.clone(), "runtimeMode": task.runtime_mode })),
+                    Some(json!({
+                        "goal": task.goal.clone(),
+                        "runtimeMode": task.runtime_mode,
+                        "intent": task.intent,
+                        "roleId": task.role_id,
+                        "route": task.route
+                    })),
                 );
                 store.runtime_tasks.push(task.clone());
                 Ok(task)
@@ -11677,6 +13607,147 @@ fn handle_channel(
         }
         "tasks:resume" => {
             let task_id = payload_string(&payload, "taskId").unwrap_or_default();
+            let task_snapshot = with_store_mut(state, |store| {
+                let Some(task) = store
+                    .runtime_tasks
+                    .iter_mut()
+                    .find(|item| item.id == task_id)
+                else {
+                    return Ok(None);
+                };
+                task.status = "running".to_string();
+                task.updated_at = now_i64();
+                task.started_at.get_or_insert(now_i64());
+                task.current_node = Some("plan".to_string());
+                set_runtime_graph_node(
+                    &mut task.graph,
+                    "plan",
+                    "running",
+                    Some("route and execution plan resumed".to_string()),
+                    None,
+                );
+                Ok(Some(task.clone()))
+            })?;
+            let Some(task_snapshot) = task_snapshot else {
+                return Ok(json!({ "success": false, "error": "任务不存在" }));
+            };
+            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let route = task_snapshot.route.clone().unwrap_or_else(|| {
+                runtime_direct_route(
+                    &task_snapshot.runtime_mode,
+                    task_snapshot.goal.as_deref().unwrap_or(""),
+                    task_snapshot.metadata.as_ref(),
+                )
+            });
+            let orchestration = if route
+                .get("requiresMultiAgent")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || task_snapshot.runtime_mode == "background-maintenance"
+            {
+                Some(run_subagent_orchestration_for_task(
+                    &settings_snapshot,
+                    &task_snapshot.runtime_mode,
+                    &task_snapshot.id,
+                    &route,
+                    task_snapshot.goal.as_deref().unwrap_or(""),
+                )?)
+            } else {
+                None
+            };
+            let reviewer_rejected = orchestration
+                .as_ref()
+                .and_then(|value| value.get("outputs"))
+                .and_then(|value| value.as_array())
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
+                    })
+                })
+                .map(|review| {
+                    let approved = review
+                        .get("approved")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(true);
+                    let issue_count = review
+                        .get("issues")
+                        .and_then(|value| value.as_array())
+                        .map(|items| items.len())
+                        .unwrap_or(0);
+                    !approved || issue_count > 0
+                })
+                .unwrap_or(false);
+            let repair_plan = if reviewer_rejected {
+                orchestration
+                    .as_ref()
+                    .map(|value| {
+                        run_reviewer_repair_for_task(
+                            &settings_snapshot,
+                            &task_snapshot.id,
+                            &route,
+                            task_snapshot.goal.as_deref().unwrap_or(""),
+                            value,
+                        )
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            let repair_orchestration = if reviewer_rejected {
+                repair_plan
+                    .as_ref()
+                    .map(|repair| {
+                        let repair_goal = format!(
+                            "{}\n\nRepair instructions:\n{}",
+                            task_snapshot.goal.as_deref().unwrap_or(""),
+                            payload_string(repair, "summary").unwrap_or_else(|| repair.to_string())
+                        );
+                        run_subagent_orchestration_for_task(
+                            &settings_snapshot,
+                            &task_snapshot.runtime_mode,
+                            &format!("{}-repair", task_snapshot.id),
+                            &route,
+                            &repair_goal,
+                        )
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            let repair_pass_failed = repair_orchestration
+                .as_ref()
+                .and_then(|value| value.get("outputs"))
+                .and_then(|value| value.as_array())
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
+                    })
+                })
+                .map(|review| {
+                    let approved = review
+                        .get("approved")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(true);
+                    let issue_count = review
+                        .get("issues")
+                        .and_then(|value| value.as_array())
+                        .map(|items| items.len())
+                        .unwrap_or(0);
+                    !approved || issue_count > 0
+                })
+                .unwrap_or(reviewer_rejected);
+            let final_orchestration = repair_orchestration.as_ref().or(orchestration.as_ref());
+            let saved_artifact = if reviewer_rejected && repair_pass_failed {
+                None
+            } else {
+                Some(save_runtime_task_artifact(
+                    state,
+                    &task_snapshot.id,
+                    &route,
+                    task_snapshot.goal.as_deref().unwrap_or(""),
+                    final_orchestration,
+                )?)
+            };
             let result = with_store_mut(state, |store| {
                 let Some(task) = store
                     .runtime_tasks
@@ -11685,11 +13756,227 @@ fn handle_channel(
                 else {
                     return Ok(json!({ "success": false, "error": "任务不存在" }));
                 };
-                task.status = "running".to_string();
+                task.intent = payload_string(&route, "intent");
+                task.role_id = payload_string(&route, "recommendedRole");
+                task.route = Some(route.clone());
+                task.current_node = Some("execute_tools".to_string());
+                set_runtime_graph_node(
+                    &mut task.graph,
+                    "plan",
+                    "completed",
+                    Some(
+                        payload_string(&route, "reasoning")
+                            .unwrap_or_else(|| "route resolved".to_string()),
+                    ),
+                    None,
+                );
+                set_runtime_graph_node(
+                    &mut task.graph,
+                    "retrieve",
+                    "completed",
+                    Some("runtime context prepared".to_string()),
+                    None,
+                );
+                if let Some(orchestration_value) = orchestration.clone() {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "spawn_agents",
+                        "completed",
+                        Some("subagent orchestration completed".to_string()),
+                        None,
+                    );
+                    task.artifacts.push(json!({
+                        "type": "subagent-orchestration",
+                        "payload": orchestration_value.clone(),
+                        "createdAt": now_i64()
+                    }));
+                    task.checkpoints.push(json!({
+                        "type": "orchestration",
+                        "summary": "subagent orchestration completed",
+                        "payload": orchestration_value
+                    }));
+                }
+                if let Some(repair_value) = repair_plan.clone() {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "review",
+                        "failed",
+                        Some("reviewer requested repair".to_string()),
+                        Some("reviewer rejected execution".to_string()),
+                    );
+                    task.artifacts.push(json!({
+                        "type": "repair-plan",
+                        "payload": repair_value.clone(),
+                        "createdAt": now_i64()
+                    }));
+                    task.checkpoints.push(json!({
+                        "type": "repair",
+                        "summary": payload_string(&repair_value, "summary").unwrap_or_else(|| "review repair plan generated".to_string()),
+                        "payload": repair_value.clone()
+                    }));
+                }
+                if let Some(repair_value) = repair_orchestration.clone() {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "handoff",
+                        "completed",
+                        Some("repair pass completed".to_string()),
+                        None,
+                    );
+                    task.artifacts.push(json!({
+                        "type": "repair-pass",
+                        "payload": repair_value.clone(),
+                        "createdAt": now_i64()
+                    }));
+                    task.checkpoints.push(json!({
+                        "type": "repair_pass",
+                        "summary": "repair pass completed",
+                        "payload": repair_value
+                    }));
+                }
+                if let Some(artifact) = saved_artifact.clone() {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "save_artifact",
+                        "completed",
+                        Some("artifact saved".to_string()),
+                        None,
+                    );
+                    task.artifacts.push(artifact.clone());
+                    task.checkpoints.push(json!({
+                        "type": "save_artifact",
+                        "summary": "artifact saved",
+                        "payload": artifact
+                    }));
+                    let mut work_item = create_work_item(
+                        "runtime-artifact",
+                        format!(
+                            "Runtime Artifact · {}",
+                            payload_string(&route, "intent").unwrap_or_else(|| "task".to_string())
+                        ),
+                        Some(payload_string(&route, "goal").unwrap_or_default()),
+                        Some(
+                            saved_artifact
+                                .as_ref()
+                                .and_then(|value| payload_string(value, "path"))
+                                .unwrap_or_default(),
+                        ),
+                        Some(json!({
+                            "taskId": task_id,
+                            "sessionId": task.owner_session_id.clone(),
+                            "intent": payload_string(&route, "intent"),
+                            "artifact": saved_artifact.clone(),
+                        })),
+                        2,
+                    );
+                    work_item.refs.task_ids.push(task_id.clone());
+                    if let Some(session_id) = task.owner_session_id.clone() {
+                        work_item.refs.session_ids.push(session_id);
+                    }
+                    store.work_items.push(work_item);
+                }
+                if reviewer_rejected && repair_pass_failed {
+                    task.status = "failed".to_string();
+                    task.last_error = Some("reviewer rejected execution".to_string());
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "execute_tools",
+                        "failed",
+                        Some("execution blocked by reviewer".to_string()),
+                        Some("reviewer rejected execution".to_string()),
+                    );
+                    if let Some(repair_value) = repair_plan.clone() {
+                        let mut work_item = create_work_item(
+                            "runtime-repair",
+                            format!(
+                                "Runtime Repair · {}",
+                                payload_string(&route, "intent")
+                                    .unwrap_or_else(|| "task".to_string())
+                            ),
+                            Some(
+                                payload_string(&repair_value, "summary")
+                                    .unwrap_or_else(|| "reviewer repair required".to_string()),
+                            ),
+                            Some(payload_string(&route, "goal").unwrap_or_default()),
+                            Some(json!({
+                                "taskId": task_id,
+                                "sessionId": task.owner_session_id.clone(),
+                                "intent": payload_string(&route, "intent"),
+                                "repair": repair_value,
+                            })),
+                            1,
+                        );
+                        work_item.refs.task_ids.push(task_id.clone());
+                        if let Some(session_id) = task.owner_session_id.clone() {
+                            work_item.refs.session_ids.push(session_id);
+                        }
+                        store.work_items.push(work_item);
+                    }
+                } else {
+                    task.status = "completed".to_string();
+                    task.last_error = None;
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "review",
+                        "completed",
+                        Some("reviewer approved execution".to_string()),
+                        None,
+                    );
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "execute_tools",
+                        "completed",
+                        Some("execution completed".to_string()),
+                        None,
+                    );
+                }
+                task.completed_at = Some(now_i64());
                 task.updated_at = now_i64();
-                task.started_at.get_or_insert(now_i64());
-                append_runtime_task_trace(store, &task_id, "resumed", None);
-                Ok(json!({ "success": true, "taskId": task_id }))
+                append_runtime_task_trace(
+                    store,
+                    &task_id,
+                    "resumed",
+                    Some(json!({ "route": route.clone() })),
+                );
+                if let Some(orchestration_value) = orchestration.clone() {
+                    append_runtime_task_trace(
+                        store,
+                        &task_id,
+                        "subagent.completed",
+                        Some(orchestration_value),
+                    );
+                }
+                if let Some(repair_value) = repair_plan.clone() {
+                    append_runtime_task_trace(
+                        store,
+                        &task_id,
+                        "repair.generated",
+                        Some(repair_value),
+                    );
+                }
+                if let Some(repair_value) = repair_orchestration.clone() {
+                    append_runtime_task_trace(
+                        store,
+                        &task_id,
+                        "repair.pass_completed",
+                        Some(repair_value),
+                    );
+                }
+                append_runtime_task_trace(
+                    store,
+                    &task_id,
+                    if reviewer_rejected && repair_pass_failed {
+                        "failed"
+                    } else {
+                        "completed"
+                    },
+                    None,
+                );
+                Ok(json!({
+                    "success": !(reviewer_rejected && repair_pass_failed),
+                    "taskId": task_id,
+                    "error": if reviewer_rejected && repair_pass_failed { Value::String("reviewer rejected execution".to_string()) } else { Value::Null }
+                }))
             })?;
             Ok(result)
         }
@@ -12063,7 +14350,8 @@ fn handle_channel(
             Ok(json!(selected))
         }),
         "wander:brainstorm" => {
-            let items = payload
+            let request_started_at = now_ms();
+            let mut items = payload
                 .as_array()
                 .cloned()
                 .or_else(|| {
@@ -12078,45 +14366,364 @@ fn handle_channel(
                 .unwrap_or_else(|| json!({}));
             let request_id =
                 payload_string(&options, "requestId").unwrap_or_else(|| make_id("wander-request"));
-            let _ = app.emit(
-                "wander:progress",
-                json!({ "requestId": request_id, "status": "正在读取素材..." }),
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "request-received",
+                request_started_at,
+                Some(format!("inputItems={}", items.len())),
             );
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-            let material_text = items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    format!(
-                        "{}. {}\n{}",
-                        index + 1,
-                        item.get("title")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("Untitled"),
-                        item.get("content")
+            if items.is_empty() {
+                let select_started_at = now_ms();
+                items = with_store(state, |store| {
+                    let mut collected = Vec::new();
+                    for note in store.knowledge_notes.iter().take(12) {
+                        collected.push(wander_item_from_note(note));
+                    }
+                    for video in store.youtube_videos.iter().take(12) {
+                        collected.push(wander_item_from_youtube(video));
+                    }
+                    for source in store.document_sources.iter().take(12) {
+                        collected.push(wander_item_from_doc(source));
+                    }
+                    collected.sort_by_key(|item| {
+                        item.get("id")
                             .and_then(|value| value.as_str())
                             .unwrap_or("")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n");
+                            .to_string()
+                    });
+                    let offset = (now_ms() as usize) % collected.len().max(1);
+                    let mut selected = Vec::new();
+                    for index in 0..collected.len().min(3) {
+                        selected.push(collected[(offset + index) % collected.len()].clone());
+                    }
+                    Ok(selected)
+                })?;
+                log_timing_event(
+                    state,
+                    "wander",
+                    &request_id,
+                    "select-random-items",
+                    select_started_at,
+                    Some(format!("selectedItems={}", items.len())),
+                );
+            }
+            let settings_started_at = now_ms();
+            let warm_wander = ensure_runtime_warm_entry(state, "wander")?;
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "load-settings",
+                settings_started_at,
+                Some(format!("warmedAt={}", warm_wander.warmed_at)),
+            );
+            let route_started_at = now_ms();
+            let route = runtime_direct_route(
+                "wander",
+                "基于随机知识素材生成新选题",
+                Some(&json!({
+                    "intent": "manuscript_creation",
+                    "contextType": "wander",
+                    "contextId": request_id.clone(),
+                    "preferredRole": "copywriter",
+                    "forceMultiAgent": false,
+                    "forceLongRunningTask": false
+                })),
+            );
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "route-ready",
+                route_started_at,
+                Some(format!(
+                    "intent={} role={}",
+                    payload_string(&route, "intent").unwrap_or_default(),
+                    payload_string(&route, "recommendedRole").unwrap_or_default()
+                )),
+            );
+            let task_started_at = now_ms();
+            let task_id = with_store_mut(state, |store| {
+                let task = RuntimeTaskRecord {
+                    id: make_id("task"),
+                    task_type: "wander".to_string(),
+                    status: "running".to_string(),
+                    runtime_mode: "wander".to_string(),
+                    owner_session_id: Some(format!(
+                        "context-session:wander:{}",
+                        slug_from_relative_path(&request_id)
+                    )),
+                    intent: payload_string(&route, "intent"),
+                    role_id: payload_string(&route, "recommendedRole"),
+                    goal: Some("漫步生成新选题".to_string()),
+                    current_node: Some("plan".to_string()),
+                    route: Some(route.clone()),
+                    graph: runtime_graph_for_route(&route),
+                    artifacts: Vec::new(),
+                    checkpoints: vec![json!({
+                        "type": "route",
+                        "summary": payload_string(&route, "reasoning").unwrap_or_else(|| "wander route".to_string()),
+                        "payload": route.clone()
+                    })],
+                    metadata: Some(json!({
+                        "requestId": request_id.clone(),
+                        "contextType": "wander",
+                    })),
+                    last_error: None,
+                    created_at: now_i64(),
+                    updated_at: now_i64(),
+                    started_at: Some(now_i64()),
+                    completed_at: None,
+                };
+                store.runtime_tasks.push(task.clone());
+                append_runtime_task_trace(
+                    store,
+                    &task.id,
+                    "wander.started",
+                    Some(json!({ "requestId": request_id.clone() })),
+                );
+                Ok(task.id)
+            })?;
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "task-created",
+                task_started_at,
+                Some(format!("taskId={}", task_id)),
+            );
+            let _ = app.emit(
+                "wander:progress",
+                json!({
+                    "requestId": request_id,
+                    "taskId": task_id,
+                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
+                    "phase": "collect",
+                    "stepIndex": 1,
+                    "totalSteps": 4,
+                    "title": "选择随机素材",
+                    "status": "completed",
+                    "detail": "已从知识库中选出本轮用于漫步的 3 条随机素材。",
+                }),
+            );
+            let _ = with_store_mut(state, |store| {
+                if let Some(task) = store
+                    .runtime_tasks
+                    .iter_mut()
+                    .find(|item| item.id == task_id)
+                {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "plan",
+                        "completed",
+                        Some("漫步素材已读取".to_string()),
+                        None,
+                    );
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "retrieve",
+                        "running",
+                        Some("正在整理素材摘要".to_string()),
+                        None,
+                    );
+                    task.current_node = Some("retrieve".to_string());
+                    task.updated_at = now_i64();
+                }
+                append_runtime_task_trace(store, &task_id, "wander.collect.completed", None);
+                Ok(())
+            });
             let multi_choice = payload_field(&options, "multiChoice")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
-            let prompt = format!(
-                "请基于以下随机素材生成一个内容选题脑暴结果。必须输出 JSON，字段为 content_direction、thinking_process、topic。topic 包含 title 和 connections 数字数组。{} \n\n素材：\n{}",
-                if multi_choice {
-                    "如果可能，额外输出 options 数组，给出 3 个候选。"
-                } else {
-                    ""
-                },
-                material_text
+            let _ = app.emit(
+                "wander:progress",
+                json!({
+                    "requestId": request_id,
+                    "taskId": task_id,
+                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
+                    "phase": "analyze",
+                    "stepIndex": 2,
+                    "totalSteps": 4,
+                    "title": "构建上下文",
+                    "status": "running",
+                    "detail": format!("已装载 {} 条随机素材，正在整理素材摘要、长期上下文与已读取文件内容...", items.len()),
+                }),
+            );
+            let context_started_at = now_ms();
+            let long_term_context = warm_wander
+                .long_term_context
+                .clone()
+                .unwrap_or_else(|| build_wander_long_term_context(state));
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "long-term-context-ready",
+                context_started_at,
+                Some(format!(
+                    "profileChars={}",
+                    long_term_context.chars().count(),
+                )),
+            );
+            let wander_session_id =
+                format!("session_wander_{}", slug_from_relative_path(&request_id));
+            let materials_context_started_at = now_ms();
+            let materials_context =
+                build_wander_materials_context(app, state, &wander_session_id, &items);
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "materials-context-ready",
+                materials_context_started_at,
+                Some(format!(
+                    "materialsChars={}",
+                    materials_context.chars().count()
+                )),
             );
             let _ = app.emit(
                 "wander:progress",
-                json!({ "requestId": request_id, "status": "正在生成选题..." }),
+                json!({
+                    "requestId": request_id,
+                    "taskId": task_id,
+                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
+                    "phase": "analyze",
+                    "stepIndex": 2,
+                    "totalSteps": 4,
+                    "title": "构建上下文",
+                    "status": "completed",
+                    "detail": "随机素材摘要与长期上下文已准备完成��Agent 将继续自行读取关键文件。",
+                }),
             );
-            let model_result = generate_response_with_settings(&settings_snapshot, None, &prompt);
+            let items_text = build_wander_items_text(&items);
+            let long_term_context_section = if long_term_context.trim().is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
+                    long_term_context
+                )
+            };
+            let prompt = build_wander_deep_agent_prompt(
+                &items_text,
+                &long_term_context_section,
+                &materials_context,
+                multi_choice,
+            );
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "prompt-ready",
+                context_started_at,
+                Some(format!("promptChars={}", prompt.chars().count())),
+            );
+            let session_started_at = now_ms();
+            let _ = with_store_mut(state, |store| {
+                let (session, _) = ensure_chat_session(
+                    &mut store.chat_sessions,
+                    Some(wander_session_id.clone()),
+                    Some("Wander Deep Think".to_string()),
+                );
+                session.metadata = Some(json!({
+                    "contextId": format!("wander:{}", request_id),
+                    "contextType": "wander",
+                    "contextContent": items_text,
+                    "isContextBound": true,
+                }));
+                session.updated_at = now_iso();
+                Ok(())
+            });
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "session-ready",
+                session_started_at,
+                Some(format!("sessionId={}", wander_session_id)),
+            );
+            let _ = app.emit(
+                "wander:progress",
+                json!({
+                    "requestId": request_id,
+                    "taskId": task_id,
+                    "sessionId": wander_session_id,
+                    "phase": "generate",
+                    "stepIndex": 3,
+                    "totalSteps": 3,
+                    "title": "生成选题",
+                    "status": "running",
+                    "detail": "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。",
+                }),
+            );
+            let _ = app.emit(
+                "chat:phase-start",
+                json!({
+                    "name": "responding",
+                    "sessionId": wander_session_id,
+                }),
+            );
+            let _ = app.emit(
+                "chat:thought-delta",
+                json!({
+                    "content": "正在综合随机素材、长期上下文与关键文件内容，收敛最终选题方向。",
+                    "sessionId": wander_session_id,
+                }),
+            );
+            let execution_started_at = now_ms();
+            let model_result = generate_wander_response(
+                state,
+                warm_wander
+                    .model_config
+                    .as_ref()
+                    .ok_or_else(|| "wander model config missing".to_string())?,
+                &prompt,
+            )
+            .map(|response| {
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[runtime][wander][{}] single-pass-succeeded",
+                        wander_session_id
+                    ),
+                );
+                response
+            })
+            .unwrap_or_else(|error| {
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[runtime][wander][{}] fallback-local-json | {}",
+                        wander_session_id, error
+                    ),
+                );
+                let first_title = items
+                    .first()
+                    .and_then(|item| item.get("title"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("随机素材");
+                json!({
+                    "content_direction": "围绕这组素材提炼一个更聚焦、可直接创作的小红书选题。",
+                    "thinking_process": ["观察随机素材", "提取共同主题", "形成可执行选题"],
+                    "topic": {
+                        "title": format!("从{}延展出的内容选题", first_title),
+                        "connections": [1, 2, 3]
+                    },
+                    "selected_index": 0
+                })
+                .to_string()
+            });
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "execution-finished",
+                execution_started_at,
+                Some(format!("responseChars={}", model_result.chars().count())),
+            );
+            let parse_started_at = now_ms();
             let result_value = serde_json::from_str::<Value>(&model_result).unwrap_or_else(|_| {
                 let first_title = items
                     .first()
@@ -12125,7 +14732,7 @@ fn handle_channel(
                     .unwrap_or("随机素材");
                 json!({
                     "content_direction": model_result,
-                    "thinking_process": ["读取随机素材", "提取共同主题", "形成可执行选题"],
+                    "thinking_process": ["观察随机素材", "提取共同主题", "形成可执行选题"],
                     "topic": {
                         "title": format!("从{}延展出的内容选题", first_title),
                         "connections": [1, 2, 3]
@@ -12133,23 +14740,145 @@ fn handle_channel(
                     "selected_index": 0
                 })
             });
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "result-parsed",
+                parse_started_at,
+                None,
+            );
             let result_text =
                 serde_json::to_string(&result_value).map_err(|error| error.to_string())?;
             let history_id = make_id("wander");
+            let history_started_at = now_ms();
             with_store_mut(state, |store| {
+                store.chat_messages.push(ChatMessageRecord {
+                    id: make_id("message"),
+                    session_id: wander_session_id.clone(),
+                    role: "user".to_string(),
+                    content: prompt.clone(),
+                    display_content: None,
+                    attachment: None,
+                    created_at: now_iso(),
+                });
+                store.chat_messages.push(ChatMessageRecord {
+                    id: make_id("message"),
+                    session_id: wander_session_id.clone(),
+                    role: "assistant".to_string(),
+                    content: model_result.clone(),
+                    display_content: None,
+                    attachment: None,
+                    created_at: now_iso(),
+                });
+                append_session_transcript(
+                    store,
+                    &wander_session_id,
+                    "message",
+                    "user",
+                    prompt.clone(),
+                    Some(json!({ "source": "wander" })),
+                );
+                append_session_transcript(
+                    store,
+                    &wander_session_id,
+                    "message",
+                    "assistant",
+                    model_result.clone(),
+                    Some(json!({ "source": "wander" })),
+                );
+                append_session_checkpoint(
+                    store,
+                    &wander_session_id,
+                    "wander-brainstorm",
+                    "Wander brainstorm completed".to_string(),
+                    Some(json!({ "responsePreview": text_snippet(&model_result, 160) })),
+                );
                 store.wander_history.push(WanderHistoryRecord {
                     id: history_id.clone(),
                     items: serde_json::to_string(&items).map_err(|error| error.to_string())?,
                     result: result_text.clone(),
                     created_at: now_i64(),
                 });
+                if let Some(task) = store
+                    .runtime_tasks
+                    .iter_mut()
+                    .find(|item| item.id == task_id)
+                {
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "retrieve",
+                        "completed",
+                        Some("素材关联分析完成".to_string()),
+                        None,
+                    );
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "execute_tools",
+                        "completed",
+                        Some("选题生成完成".to_string()),
+                        None,
+                    );
+                    set_runtime_graph_node(
+                        &mut task.graph,
+                        "save_artifact",
+                        "completed",
+                        Some("漫步结果已保存到历史".to_string()),
+                        None,
+                    );
+                    task.current_node = Some("save_artifact".to_string());
+                    task.status = "completed".to_string();
+                    task.completed_at = Some(now_i64());
+                    task.updated_at = now_i64();
+                    task.artifacts.push(json!({
+                        "type": "wander-result",
+                        "label": "漫步结果",
+                        "payload": result_value.clone(),
+                        "historyId": history_id.clone(),
+                    }));
+                }
+                append_runtime_task_trace(
+                    store,
+                    &task_id,
+                    "wander.completed",
+                    Some(json!({ "historyId": history_id.clone() })),
+                );
                 Ok(())
             })?;
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "history-saved",
+                history_started_at,
+                Some(format!("historyId={}", history_id)),
+            );
             let _ = app.emit(
                 "wander:progress",
-                json!({ "requestId": request_id, "status": "漫步完成" }),
+                json!({
+                    "requestId": request_id,
+                    "taskId": task_id,
+                    "sessionId": wander_session_id,
+                    "phase": "complete",
+                    "stepIndex": 3,
+                    "totalSteps": 3,
+                    "title": "保存结果",
+                    "status": "completed",
+                    "detail": "漫步完成，结果已写入历史记录。",
+                }),
             );
-            Ok(json!({ "result": result_text, "historyId": history_id }))
+            log_timing_event(
+                state,
+                "wander",
+                &request_id,
+                "request-complete",
+                request_started_at,
+                Some(format!(
+                    "taskId={} sessionId={}",
+                    task_id, wander_session_id
+                )),
+            );
+            Ok(json!({ "result": result_text, "historyId": history_id, "items": items }))
         }
         "youtube:save-note" => {
             let input: YoutubeSavePayload = serde_json::from_value(payload)
@@ -13354,20 +16083,11 @@ fn handle_channel(
             items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
             Ok(json!(items))
         }),
-        "memory:maintenance-status" => Ok(default_memory_maintenance_status()),
-        "memory:maintenance-run" => Ok(json!({
-            "started": true,
-            "running": false,
-            "lockState": "owner",
-            "blockedBy": Value::Null,
-            "pendingMutations": 0,
-            "lastRunAt": now_iso(),
-            "lastScanAt": now_iso(),
-            "lastReason": "manual",
-            "lastSummary": "RedBox memory maintenance completed.",
-            "lastError": Value::Null,
-            "nextScheduledAt": Value::Null,
-        })),
+        "memory:maintenance-status" => with_store(state, |store| {
+            Ok(memory_maintenance_status_from_settings(&store.settings)
+                .unwrap_or_else(default_memory_maintenance_status))
+        }),
+        "memory:maintenance-run" => run_memory_maintenance_with_reason(state, "manual"),
         "memory:search" => {
             let query = payload_string(&payload, "query")
                 .unwrap_or_default()
@@ -13431,8 +16151,21 @@ fn handle_channel(
                     after: Some(json!(item.clone())),
                     archived_memory_id: None,
                 });
+                bump_memory_maintenance_mutation(store, "mutation");
                 Ok(item)
             })?;
+            let _ = with_store(state, |store| {
+                let pending = memory_maintenance_status_from_settings(&store.settings)
+                    .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
+                    .unwrap_or(0);
+                Ok(pending)
+            })
+            .and_then(|pending| {
+                if pending >= 5 {
+                    let _ = run_memory_maintenance_with_reason(state, "mutation");
+                }
+                Ok(())
+            });
             Ok(json!(memory))
         }
         "memory:delete" => {
@@ -13453,9 +16186,23 @@ fn handle_channel(
                         after: Some(json!(item.clone())),
                         archived_memory_id: Some(item.id.clone()),
                     });
+                    bump_memory_maintenance_mutation(store, "mutation");
                 }
                 Ok(json!({ "success": true }))
+            })?;
+            let _ = with_store(state, |store| {
+                let pending = memory_maintenance_status_from_settings(&store.settings)
+                    .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
+                    .unwrap_or(0);
+                Ok(pending)
             })
+            .and_then(|pending| {
+                if pending >= 5 {
+                    let _ = run_memory_maintenance_with_reason(state, "mutation");
+                }
+                Ok(())
+            });
+            Ok(json!({ "success": true }))
         }
         "skills:list" => with_store(state, |store| Ok(json!(store.skills.clone()))),
         "skills:create" => {
@@ -14392,11 +17139,18 @@ fn handle_channel(
         "advisors:optimize-prompt" => {
             let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
             let info = payload_string(&payload, "info").unwrap_or_default();
-            let prompt = format!(
-                "请把下面的角色设定整理成一段更清晰、更可执行的系统提示词，保留中文，直接输出提示词正文。\n\n{}",
-                info
-            );
-            let optimized = generate_response_with_settings(&settings_snapshot, None, &prompt);
+            let system_prompt = load_redbox_prompt("runtime/advisors/optimize_system.txt")
+                .unwrap_or_else(|| {
+                    "你是一个专业��� Prompt 工程师，直接返回优化后的系统提示词正文。".to_string()
+                });
+            let optimized = generate_structured_response_with_settings(
+                &settings_snapshot,
+                None,
+                &system_prompt,
+                &info,
+                false,
+            )
+            .unwrap_or_else(|_| generate_response_with_settings(&settings_snapshot, None, &info));
             Ok(json!({ "success": true, "prompt": optimized }))
         }
         "advisors:optimize-prompt-deep" => {
@@ -14404,15 +17158,27 @@ fn handle_channel(
             let name = payload_string(&payload, "name").unwrap_or_else(|| "智囊团成员".to_string());
             let personality = payload_string(&payload, "personality").unwrap_or_default();
             let current_prompt = payload_string(&payload, "currentPrompt").unwrap_or_default();
-            let prompt = format!(
-                "请为名为“{}”的智囊团成员重写一版更强的系统提示词。人格描述：{}。\n\n当前提示词：\n{}\n\n要求：\n1. 保持中文\n2. 结构清晰\n3. 更偏执行与分析\n4. 直接输出最终系统提示词正文",
+            let system_prompt = load_redbox_prompt("runtime/advisors/optimize_deep_system.txt")
+                .unwrap_or_else(|| "你是一位专业的 AI 角色设计师和 Prompt 工程师。".to_string());
+            let user_prompt = format!(
+                "成员名称：{}\n人格描述：{}\n\n当前提示词：\n{}",
                 name, personality, current_prompt
             );
-            let optimized = generate_response_with_settings(&settings_snapshot, None, &prompt);
+            let optimized = generate_structured_response_with_settings(
+                &settings_snapshot,
+                None,
+                &system_prompt,
+                &user_prompt,
+                false,
+            )
+            .unwrap_or_else(|_| {
+                generate_response_with_settings(&settings_snapshot, None, &user_prompt)
+            });
             Ok(json!({ "success": true, "prompt": optimized }))
         }
         "advisors:generate-persona" => {
             let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+            let advisor_id = payload_string(&payload, "advisorId").unwrap_or_default();
             let channel_name = payload_string(&payload, "channelName")
                 .unwrap_or_else(|| "YouTube 频道".to_string());
             let channel_description =
@@ -14427,25 +17193,220 @@ fn handle_channel(
                         .join(" / ")
                 })
                 .unwrap_or_default();
-            let persona_prompt = format!(
-                "请为一个基于 YouTube 频道创建的智囊团成员生成：\n1. 一句中文 personality\n2. 一段完整中文 system prompt\n\n频道名：{}\n频道简介：{}\n近期视频标题：{}\n\n请输出 JSON，键为 personality 和 prompt。",
-                channel_name, channel_description, video_titles
+            let knowledge_language =
+                payload_string(&payload, "knowledgeLanguage").unwrap_or_else(|| "中文".to_string());
+            let subject_names = vec![channel_name.clone()];
+            let existing_context = with_store(state, |store| {
+                Ok(load_advisor_existing_context(&store, &advisor_id))
+            })?;
+            let advisor_knowledge = collect_advisor_knowledge_evidence(state, &advisor_id)?;
+            let manuscript_evidence = collect_related_manuscript_evidence(state, &subject_names)?;
+            let search_results = search_web_with_settings(
+                &settings_snapshot,
+                &format!("{channel_name} YouTube 博主 创作者 频道定位 内容风格"),
+                6,
+            )
+            .unwrap_or_default();
+            let (skill_name, skill_body, skill_references, skill_scripts) =
+                load_skill_bundle_sections("agent-persona-creator");
+            let search_summary = if search_results.is_empty() {
+                "(无外部搜索结果)".to_string()
+            } else {
+                search_results
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        format!(
+                            "Result {}\nTitle: {}\nURL: {}\nSnippet: {}",
+                            index + 1,
+                            item.get("title")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(""),
+                            item.get("url")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(""),
+                            item.get("snippet")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(""),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            };
+            let research_system_prompt =
+                load_redbox_prompt("runtime/advisors/generate_persona_research_system.txt")
+                    .map(|template| {
+                        render_redbox_prompt(
+                            &template,
+                            &[
+                                ("skill_name", skill_name.clone()),
+                                ("skill_body", skill_body.clone()),
+                                ("skill_references", skill_references.clone()),
+                                ("skill_scripts", skill_scripts.clone()),
+                            ],
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "你是 RedBox 内部的智囊团角色研究代理，负责做角色研究并输出严格 JSON。"
+                            .to_string()
+                    });
+            let research_user_template =
+                load_redbox_prompt("runtime/advisors/generate_persona_research_user.txt")
+                    .unwrap_or_else(|| "请根据证据做角色研究并输出严格 JSON。".to_string());
+            let research_user_prompt = render_redbox_prompt(
+                &research_user_template,
+                &[
+                    ("channel_name", channel_name.clone()),
+                    ("knowledge_language", knowledge_language.clone()),
+                    (
+                        "channel_description",
+                        if channel_description.trim().is_empty() {
+                            "(无频道描述)".to_string()
+                        } else {
+                            channel_description.clone()
+                        },
+                    ),
+                    (
+                        "video_titles",
+                        if video_titles.trim().is_empty() {
+                            "(无视频标题)".to_string()
+                        } else {
+                            video_titles
+                                .split(" / ")
+                                .enumerate()
+                                .map(|(index, title)| format!("{}. {}", index + 1, title))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        },
+                    ),
+                    ("search_summary", search_summary.clone()),
+                    ("existing_context", existing_context),
+                    (
+                        "advisor_knowledge_corpus",
+                        render_named_corpus(
+                            "Knowledge Evidence",
+                            &advisor_knowledge,
+                            "(无 advisor 知识文件)",
+                        ),
+                    ),
+                    (
+                        "manuscript_corpus",
+                        render_named_corpus(
+                            "Manuscript Evidence",
+                            &manuscript_evidence,
+                            "(无关联稿件命中)",
+                        ),
+                    ),
+                ],
             );
-            let raw = generate_response_with_settings(&settings_snapshot, None, &persona_prompt);
-            let parsed = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({}));
-            let prompt = parsed
+            let research_raw = generate_structured_response_with_settings(
+                &settings_snapshot,
+                None,
+                &research_system_prompt,
+                &research_user_prompt,
+                true,
+            )
+            .unwrap_or_else(|_| {
+                generate_response_with_settings(
+                    &settings_snapshot,
+                    None,
+                    &format!(
+                        "请为一个基于 YouTube 频道创建的智囊团成员生成研究 JSON。频道名：{}，频道简介：{}，视频标题：{}",
+                        channel_name, channel_description, video_titles
+                    ),
+                )
+            });
+            let research = parse_json_value_from_text(&research_raw).unwrap_or_else(|| json!({}));
+            let final_system_prompt =
+                load_redbox_prompt("runtime/advisors/generate_persona_final_system.txt")
+                    .map(|template| {
+                        render_redbox_prompt(
+                            &template,
+                            &[
+                                ("skill_name", skill_name),
+                                ("skill_body", skill_body),
+                                ("skill_references", skill_references),
+                                ("skill_scripts", skill_scripts),
+                            ],
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "你是 RedBox 内部的智囊团角色文档生成代理，只输出最终 Markdown 文档。"
+                            .to_string()
+                    });
+            let final_user_template =
+                load_redbox_prompt("runtime/advisors/generate_persona_final_user.txt")
+                    .unwrap_or_else(|| "请根据研究结果输出最终智囊团角色文档。".to_string());
+            let final_user_prompt = render_redbox_prompt(
+                &final_user_template,
+                &[
+                    ("channel_name", channel_name.clone()),
+                    ("knowledge_language", knowledge_language),
+                    (
+                        "research_json",
+                        serde_json::to_string_pretty(&research)
+                            .unwrap_or_else(|_| "{}".to_string()),
+                    ),
+                    ("search_summary", search_summary),
+                    (
+                        "advisor_knowledge_corpus",
+                        render_named_corpus(
+                            "Knowledge Evidence",
+                            &advisor_knowledge,
+                            "(无 advisor 知识文件)",
+                        ),
+                    ),
+                    (
+                        "manuscript_corpus",
+                        render_named_corpus(
+                            "Manuscript Evidence",
+                            &manuscript_evidence,
+                            "(无关联稿件命中)",
+                        ),
+                    ),
+                ],
+            );
+            let final_markdown = generate_structured_response_with_settings(
+                &settings_snapshot,
+                None,
+                &final_system_prompt,
+                &final_user_prompt,
+                false,
+            )
+            .unwrap_or_else(|_| {
+                generate_response_with_settings(&settings_snapshot, None, &final_user_prompt)
+            });
+            let prompt = research
                 .get("prompt")
                 .and_then(|value| value.as_str())
                 .map(|value| value.to_string())
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| raw.clone());
-            let personality = parsed
+                .or_else(|| {
+                    research
+                        .get("description")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| final_markdown.clone());
+            let personality = research
                 .get("personality")
                 .and_then(|value| value.as_str())
                 .map(|value| value.to_string())
                 .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    research
+                        .get("personality_summary")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
                 .unwrap_or_else(|| format!("模仿 {} 的内容风格与表达方式", channel_name));
-            Ok(json!({ "success": true, "prompt": prompt, "personality": personality }))
+            Ok(json!({
+                "success": true,
+                "prompt": final_markdown,
+                "personality": personality,
+                "research": research,
+                "systemPrompt": prompt
+            }))
         }
         "advisors:select-avatar" => {
             let selected = pick_files_native("选择成员头像图片", false, false)?;
@@ -15065,6 +18026,10 @@ fn handle_channel(
                 store.redclaw_state.is_ticking = true;
                 store.redclaw_state.last_tick_at = Some(now_iso());
                 store.redclaw_state.next_tick_at = Some(now_iso());
+                if store.redclaw_state.next_maintenance_at.is_none() {
+                    store.redclaw_state.next_maintenance_at =
+                        Some((now_i64() + 10 * 60 * 1000).to_string());
+                }
                 if let Some(interval) =
                     payload_field(&payload, "intervalMinutes").and_then(|v| v.as_i64())
                 {
@@ -15659,13 +18624,53 @@ fn ipc_send(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let payload = payload.unwrap_or(Value::Null);
-    if channel == "chat:send-message" || channel == "ai:start-chat" {
+    if channel == "chat:send-message"
+        || channel == "ai:start-chat"
+        || channel == "wander:brainstorm"
+    {
         let app_handle = app.clone();
         let channel_name = channel.clone();
         let payload_value = payload.clone();
         tauri::async_runtime::spawn(async move {
             let managed_state = app_handle.state::<AppState>();
-            if let Err(error) = handle_send_channel(
+            if channel_name == "wander:brainstorm" {
+                match handle_channel(
+                    &app_handle,
+                    &channel_name,
+                    payload_value.clone(),
+                    &managed_state,
+                ) {
+                    Ok(result) => {
+                        let request_id = payload_field(&payload_value, "options")
+                            .and_then(|value| payload_field(value, "requestId"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let _ = app_handle.emit(
+                            "wander:result",
+                            json!({
+                                "requestId": request_id,
+                                "result": result.get("result").cloned().unwrap_or(Value::Null),
+                                "historyId": result.get("historyId").cloned().unwrap_or(Value::Null),
+                            }),
+                        );
+                    }
+                    Err(error) => {
+                        let request_id = payload_field(&payload_value, "options")
+                            .and_then(|value| payload_field(value, "requestId"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let _ = app_handle.emit(
+                            "wander:result",
+                            json!({
+                                "requestId": request_id,
+                                "error": error,
+                            }),
+                        );
+                    }
+                }
+            } else if let Err(error) = handle_send_channel(
                 &app_handle,
                 &channel_name,
                 payload_value.clone(),
@@ -15706,10 +18711,17 @@ fn main() {
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),
+            runtime_warm: Mutex::new(RuntimeWarmState::default()),
         })
         .invoke_handler(tauri::generate_handler![ipc_invoke, ipc_send])
         .setup(|app| {
             let _ = app.emit("indexing:status", default_indexing_stats());
+            let state = app.state::<AppState>();
+            if let Err(error) =
+                refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
+            {
+                eprintln!("[RedBox runtime warmup] {error}");
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { RefreshCw, Sparkles, History, X, Trash2, PenLine, Dices, Lightbulb, FileText, Play } from 'lucide-react';
 import { clsx } from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
+import { usePageRefresh } from '../hooks/usePageRefresh';
 
 interface WanderItem {
   id: string;
@@ -31,7 +32,17 @@ interface WanderHistoryRecord {
   created_at: number;
 }
 
+interface WanderProgressCard {
+  phase: string;
+  title: string;
+  detail: string;
+  status: 'pending' | 'running' | 'completed' | 'error';
+  stepIndex?: number;
+  totalSteps?: number;
+}
+
 interface WanderProps {
+  isActive?: boolean;
   onNavigateToManuscript?: (filePath: string) => void;
   onNavigateToRedClaw?: (payload: {
     content: string;
@@ -52,7 +63,7 @@ interface WanderProps {
   }) => void;
 }
 
-export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
+export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
@@ -66,7 +77,38 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
   const [historyList, setHistoryList] = useState<WanderHistoryRecord[]>([]);
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState('');
+  const [progressCards, setProgressCards] = useState<WanderProgressCard[]>([]);
   const activeRequestIdRef = useRef('');
+  const activeSessionIdRef = useRef('');
+
+  const upsertProgressCard = useCallback((next: WanderProgressCard) => {
+    setProgressCards((prev) => {
+      const index = prev.findIndex((item) => item.phase === next.phase);
+      const merged = index === -1
+        ? [...prev, next]
+        : (() => {
+            const cloned = [...prev];
+            cloned[index] = { ...cloned[index], ...next };
+            return cloned;
+          })();
+      const normalized = merged.map((item) => {
+        if (
+          next.stepIndex &&
+          item.phase !== next.phase &&
+          item.status === 'running' &&
+          (item.stepIndex || 0) < next.stepIndex
+        ) {
+          return { ...item, status: 'completed' as const };
+        }
+        return item;
+      });
+      return normalized.sort((a, b) => {
+        const aStep = a.stepIndex ?? Number.MAX_SAFE_INTEGER;
+        const bStep = b.stepIndex ?? Number.MAX_SAFE_INTEGER;
+        return aStep - bStep;
+      });
+    });
+  }, []);
 
   const toStableTwoLineText = (raw: string) => {
     const normalized = String(raw || '')
@@ -335,30 +377,45 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
     }
   };
 
-  // 初始化：加载最新的历史记录
-  useEffect(() => {
-    (async () => {
-      try {
-        const settings = await window.ipcRenderer.getSettings();
-        setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
-      } catch (error) {
-        console.error('Failed to load wander mode setting:', error);
-      }
+  const refreshPage = useCallback(async () => {
+    if (phase === 'running' || loading) {
+      return;
+    }
+    try {
+      const settings = await window.ipcRenderer.getSettings();
+      setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
+    } catch (error) {
+      console.error('Failed to load wander mode setting:', error);
+    }
 
-      const list = await loadHistoryList();
-      if (list.length > 0) {
-        loadHistory(list[0]);
-      } else {
-        // 没有历史时强制回到初始态，避免状态残留导致无法开始第一次漫步
-        setPhase('idle');
-        setShowFinal(false);
-        setParsedResult(null);
-        setParseError(null);
-        setItems([]);
-        setCurrentHistoryId(null);
+    const list = await loadHistoryList();
+    if (list.length > 0 && currentHistoryId) {
+      const currentRecord = list.find((item) => item.id === currentHistoryId);
+      if (currentRecord) {
+        loadHistory(currentRecord);
+        return;
       }
-    })();
-  }, []);
+    }
+    if (list.length > 0 && parsedResult) {
+      return;
+    }
+    if (list.length > 0) {
+      loadHistory(list[0]);
+    } else {
+      setPhase('idle');
+      setShowFinal(false);
+      setParsedResult(null);
+      setParseError(null);
+      setItems([]);
+      setCurrentHistoryId(null);
+    }
+  }, [currentHistoryId, loading, parsedResult, phase]);
+
+  usePageRefresh({
+    isActive,
+    refresh: refreshPage,
+    triggerOnSettingsChange: true,
+  });
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -371,12 +428,164 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
       if (status) {
         setLiveStatus(toStableTwoLineText(status));
       }
+      const phase = String(data.phase || '').trim();
+      const title = String(data.title || '').trim();
+      const detail = String(data.detail || status || '').trim();
+      const cardStatus = String(data.status || '').trim();
+      const sessionId = String(data.sessionId || '').trim();
+      if (sessionId) {
+        activeSessionIdRef.current = sessionId;
+      }
+      if (phase && title) {
+        upsertProgressCard({
+          phase,
+          title,
+          detail,
+          status: cardStatus === 'completed' ? 'completed' : cardStatus === 'error' ? 'error' : 'running',
+          stepIndex: Number.isFinite(Number(data.stepIndex)) ? Number(data.stepIndex) : undefined,
+          totalSteps: Number.isFinite(Number(data.totalSteps)) ? Number(data.totalSteps) : undefined,
+        });
+      }
     };
     window.ipcRenderer.on('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
     return () => {
       window.ipcRenderer.off('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
     };
+  }, [upsertProgressCard]);
+
+  useEffect(() => {
+    const handleWanderResult = (_event: unknown, payload?: unknown) => {
+      const data = (payload || {}) as Record<string, unknown>;
+      const requestId = String(data.requestId || '').trim();
+      if (!activeRequestIdRef.current || requestId !== activeRequestIdRef.current) {
+        return;
+      }
+      const error = String(data.error || '').trim();
+      if (error) {
+        setProgressCards((prev) => prev.map((item, index) => index === prev.length - 1 ? { ...item, status: 'error', detail: error } : item));
+        setParsedResult(null);
+        setParseError(error);
+        setLiveStatus(toStableTwoLineText('漫步失败'));
+        setPhase('done');
+        setShowFinal(true);
+        setLoading(false);
+        activeRequestIdRef.current = '';
+        activeSessionIdRef.current = '';
+        return;
+      }
+      const itemsPayload = Array.isArray(data.items) ? data.items as WanderItem[] : null;
+      if (itemsPayload && itemsPayload.length > 0) {
+        setItems(itemsPayload);
+      }
+      const resultText = String(data.result || '').trim();
+      const historyId = String(data.historyId || '').trim();
+      const parsed = parseJsonPayload<WanderResult>(resultText);
+      if (parsed && parsed.topic) {
+        const repaired = repairWanderResult(parsed);
+        setParsedResult(repaired);
+        setSelectedOptionIndex(
+          Number.isFinite(Number(repaired.selected_index)) ? Math.max(0, Number(repaired.selected_index)) : 0
+        );
+        setLiveStatus(toStableTwoLineText('漫步完成'));
+        if (historyId) {
+          setCurrentHistoryId(historyId);
+          void loadHistoryList();
+        }
+      } else {
+        setParsedResult(null);
+        setParseError('结果解析失败');
+      }
+      setPhase('done');
+      setShowFinal(true);
+      setLoading(false);
+      activeRequestIdRef.current = '';
+      activeSessionIdRef.current = '';
+    };
+    window.ipcRenderer.on('wander:result', handleWanderResult as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('wander:result', handleWanderResult as (...args: unknown[]) => void);
+    };
   }, []);
+
+  useEffect(() => {
+    const handlePhaseStart = (_event: unknown, payload?: unknown) => {
+      const data = (payload || {}) as Record<string, unknown>;
+      if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
+      const name = String(data.name || '').trim();
+      if (!name) return;
+      if (name === 'thinking') {
+        upsertProgressCard({
+          phase: 'planner',
+          title: '规划读取步骤',
+          detail: 'Agent 正在决定先读取哪些素材文件。',
+          status: 'running',
+          stepIndex: undefined,
+          totalSteps: undefined,
+        });
+      }
+      if (name === 'responding') {
+        upsertProgressCard({
+          phase: 'generate',
+          title: '生成选题',
+          detail: 'Agent 已完成读取，正在组织最终选题结果。',
+          status: 'running',
+          stepIndex: 3,
+          totalSteps: 4,
+        });
+      }
+    };
+    const handleThoughtDelta = (_event: unknown, payload?: unknown) => {
+      const data = (payload || {}) as Record<string, unknown>;
+      if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
+      const content = String(data.content || '').trim();
+      if (!content) return;
+      upsertProgressCard({
+        phase: 'thinking',
+        title: 'AI 思考中',
+        detail: toStableTwoLineText(content),
+        status: 'running',
+        stepIndex: undefined,
+        totalSteps: undefined,
+      });
+    };
+      const handleToolStart = (_event: unknown, payload?: unknown) => {
+        const data = (payload || {}) as Record<string, unknown>;
+        if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
+        const name = String(data.name || '').trim();
+        upsertProgressCard({
+          phase: 'tool',
+          title: `读取具体文件${name ? ` · ${name}` : ''}`,
+          detail: 'Agent 正在调用工具列目录并读取 meta.json、正文或转录文件。',
+          status: 'running',
+          stepIndex: undefined,
+          totalSteps: undefined,
+        });
+      };
+      const handleToolEnd = (_event: unknown, payload?: unknown) => {
+        const data = (payload || {}) as Record<string, unknown>;
+        if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
+        const output = (data.output || {}) as Record<string, unknown>;
+        const success = Boolean(output.success);
+        upsertProgressCard({
+          phase: 'tool',
+          title: '读取具体文件',
+          detail: success ? '素材目录和关键文件读取完成。' : String(output.content || '素材读取失败'),
+          status: success ? 'completed' : 'error',
+          stepIndex: undefined,
+          totalSteps: undefined,
+        });
+      };
+    window.ipcRenderer.on('chat:phase-start', handlePhaseStart as (...args: unknown[]) => void);
+    window.ipcRenderer.on('chat:thought-delta', handleThoughtDelta as (...args: unknown[]) => void);
+    window.ipcRenderer.on('chat:tool-start', handleToolStart as (...args: unknown[]) => void);
+    window.ipcRenderer.on('chat:tool-end', handleToolEnd as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('chat:phase-start', handlePhaseStart as (...args: unknown[]) => void);
+      window.ipcRenderer.off('chat:thought-delta', handleThoughtDelta as (...args: unknown[]) => void);
+      window.ipcRenderer.off('chat:tool-start', handleToolStart as (...args: unknown[]) => void);
+      window.ipcRenderer.off('chat:tool-end', handleToolEnd as (...args: unknown[]) => void);
+    };
+  }, [upsertProgressCard]);
 
   const handleToggleMultiChoice = async () => {
     if (isSavingMode || loading) return;
@@ -426,50 +635,22 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
     activeRequestIdRef.current = requestId;
     setPhase('running');
     setLoading(true);
-      setLiveStatus(toStableTwoLineText('正在初始化漫步...'));
+    setLiveStatus(toStableTwoLineText('正在初始化漫步...'));
+    setProgressCards([]);
     setParsedResult(null);
     setSelectedOptionIndex(0);
     setParseError(null);
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
+    activeSessionIdRef.current = '';
     try {
-      const randomItems = await window.ipcRenderer.invoke('wander:get-random') as WanderItem[];
-      setItems(randomItems);
-      if (randomItems.length === 0) {
-        setParseError('暂无足够内容，请先收集一些笔记或视频。');
-        setPhase('done');
-        setShowFinal(true);
-        return;
-      }
-      const response = await window.ipcRenderer.invoke('wander:brainstorm', randomItems, {
-        multiChoice: multiChoiceEnabled,
-        requestId,
-      }) as { result: string; historyId?: string; error?: string };
-      if (response.error) {
-        setParsedResult(null);
-        setParseError(response.error);
-        setLiveStatus(toStableTwoLineText('漫步失败'));
-      } else {
-        const parsed = parseJsonPayload<WanderResult>(response.result);
-        if (parsed && parsed.topic) {
-          const repaired = repairWanderResult(parsed);
-          setParsedResult(repaired);
-          setSelectedOptionIndex(
-            Number.isFinite(Number(repaired.selected_index)) ? Math.max(0, Number(repaired.selected_index)) : 0
-          );
-          setLiveStatus(toStableTwoLineText('漫步完成'));
-          if (response.historyId) {
-            setCurrentHistoryId(response.historyId);
-            loadHistoryList();
-          }
-        } else {
-          setParsedResult(null);
-          setParseError('结果解析失败');
-        }
-      }
-      setPhase('done');
-      setShowFinal(true);
+      window.ipcRenderer.send('wander:brainstorm', {
+        options: {
+          multiChoice: multiChoiceEnabled,
+          requestId,
+        },
+      });
     } catch (error) {
       console.error('Brainstorm failed:', error);
       setParsedResult(null);
@@ -477,9 +658,6 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
       setLiveStatus(toStableTwoLineText('漫步失败'));
       setPhase('done');
       setShowFinal(true);
-    } finally {
-      setLoading(false);
-      activeRequestIdRef.current = '';
     }
   };
 
@@ -594,6 +772,36 @@ export function Wander({ onNavigateToManuscript, onNavigateToRedClaw }: WanderPr
                         {liveStatus || '正在漫步并寻找灵感...'}
                       </div>
                     </div>
+                    {progressCards.length > 0 && (
+                      <div className="mt-4 grid gap-3">
+                        {progressCards.map((card) => (
+                          <div key={card.phase} className="rounded-xl border border-border bg-surface-primary px-4 py-3 shadow-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-text-primary">
+                                  {card.stepIndex ? `${card.stepIndex}. ` : ''}{card.title}
+                                </div>
+                                <div className="mt-1 text-xs text-text-tertiary whitespace-pre-line">
+                                  {card.detail}
+                                </div>
+                              </div>
+                              <span
+                                className={clsx(
+                                  'shrink-0 text-[10px] px-2 py-1 rounded-full',
+                                  card.status === 'completed'
+                                    ? 'bg-emerald-50 text-emerald-600'
+                                    : card.status === 'error'
+                                      ? 'bg-red-50 text-red-600'
+                                      : 'bg-amber-50 text-amber-700'
+                                )}
+                              >
+                                {card.status === 'completed' ? '完成' : card.status === 'error' ? '失败' : '进行中'}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

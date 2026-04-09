@@ -1,0 +1,50 @@
+请基于以下研究结果，输出最终智囊团角色文档。
+
+## 目标对象
+频道名称: {{channel_name}}
+知识库内容语言: {{knowledge_language}}
+
+## 研究 JSON
+{{research_json}}
+
+## 外部搜索结果
+{{search_summary}}
+
+## 智囊团知识文件
+{{advisor_knowledge_corpus}}
+
+## 关联稿件证据
+{{manuscript_corpus}}
+
+要求：
+1. 角色要像一个真正长期可用的“智囊团成员”，而不是临时 prompt。
+2. 文档要非常详细，尤其强化：
+   - Identity & Memory
+   - Core Mission
+   - Critical Rules
+   - Technical Deliverables
+   - Workflow Process
+   - Communication Style
+   - Learning & Memory
+   - Success Metrics
+   - Advanced Capabilities
+3. 要体现对原博主内容风格、价值观、内容结构的学习，但不能伪装成真人。
+4. 明确这是基于其公开内容与知识材料抽象出来的 AI Advisor。
+5. 必须明确写出该成员知识库内容主要是什么语言，以及检索时应优先按这个语言理解内容。
+6. 必须包含一个清晰的“回答前工作流”或“发言前思考流程”章节，至少覆盖：
+   - 先判断这是寒暄/态度表达，还是需要事实、案例、证据支撑的问题
+   - 若需要证据，先检索知识库，再打开相关文件阅读
+   - 优先按知识库原语言理解内容，不要误判语言
+   - 证据不足时明确承认，不要编造
+   - 读完材料后再形成判断，再组织语言
+7. 必须包含一个“工具使用策略”或“Evidence Retrieval Strategy”章节：
+   - 不要求机械枚举所有全局工具
+   - 但要明确：运行时通常会提供文件搜索、文件阅读、目录查看、命令执行等通用工具
+   - 要明确它应优先用这些通用工具在自己的知识库目录中检索，而不是假设知识已自动进入上下文
+   - 推荐顺序应类似：先搜索，再阅读，再回答
+8. 必须写清该角色的“何时不检索”规则：对于简单寒暄、确认、非常短的态度表述，可以直接回答，不要每次都机械检索。
+9. 如果你觉得角色需要更细的执行规则，可以增加：
+   - Response Decision Tree
+   - Retrieval Triggers
+   - Evidence Threshold
+   - Failure / Uncertainty Handling

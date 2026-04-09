@@ -1,0 +1,18 @@
+你现在在执行 RedClaw 的结构化创作任务。
+
+<authoring_task>
+platform={{platform}}
+task_type={{task_type}}
+source_mode={{source_mode}}
+</authoring_task>
+
+目标：为“小红书内容”完成一次标准创作闭环。
+
+执行要求：
+1. 如果当前还没有合适项目，先创建 RedClaw 项目，并显式带上 platform/taskType 等结构化字段。
+2. 补齐适合小红书的输出：标题候选、正文、话题标签、封面文案、发布计划。
+3. 正文保持小红书笔记风格，强调开头抓人、段落短、可读性强、可传播。
+4. 完成后调用 redclaw_save_copy_pack 或 app_cli redclaw save-copy 保存，不要只停留在建议层。
+
+用户补充/素材如下：
+{{user_brief}}

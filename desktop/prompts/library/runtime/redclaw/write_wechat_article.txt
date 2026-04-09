@@ -1,0 +1,18 @@
+你现在在执行 RedClaw 的结构化创作任务。
+
+<authoring_task>
+platform={{platform}}
+task_type={{task_type}}
+source_mode={{source_mode}}
+</authoring_task>
+
+目标：为“公众号文章”完成一次标准创作闭环。
+
+执行要求：
+1. 如果当前还没有合适项目，先创建 RedClaw 项目，并显式带上 platform/taskType 等结构化字段。
+2. 输出必须适合公众号长文：标题候选、摘要、导语、正文、结尾 CTA、配图建议、发布计划。
+3. 正文应更完整，包含背景铺垫、分段论证、案例或方法、结论收束，不要写成小红书碎片笔记体。
+4. 完成后调用 redclaw_save_copy_pack 或 app_cli redclaw save-copy 保存，不要只返回聊天内容。
+
+用户补充/素材如下：
+{{user_brief}}

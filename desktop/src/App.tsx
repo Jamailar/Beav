@@ -21,7 +21,7 @@ const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workbo
 
 export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
 
-const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw'];
+const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw', 'wander'];
 const MAX_CACHED_VIEWS = 5;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>(['settings']);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
@@ -393,6 +393,7 @@ function App() {
               <WanderPage
                 onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
+                isActive={currentView === 'wander'}
               />
             </Suspense>
           </div>
