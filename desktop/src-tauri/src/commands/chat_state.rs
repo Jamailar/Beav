@@ -25,9 +25,44 @@ pub fn update_chat_runtime_state(
             partial_response,
             updated_at: now_ms(),
             error,
+            cancel_requested: false,
         },
     );
     Ok(())
+}
+
+pub fn request_chat_runtime_cancel(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(), String> {
+    let mut guard = state
+        .chat_runtime_states
+        .lock()
+        .map_err(|_| "chat runtime state lock 已损坏".to_string())?;
+    let entry = guard
+        .entry(session_id.to_string())
+        .or_insert(ChatRuntimeStateRecord {
+            session_id: session_id.to_string(),
+            is_processing: false,
+            partial_response: String::new(),
+            updated_at: now_ms(),
+            error: None,
+            cancel_requested: false,
+        });
+    entry.is_processing = false;
+    entry.cancel_requested = true;
+    entry.error = Some("cancelled".to_string());
+    entry.updated_at = now_ms();
+    Ok(())
+}
+
+pub fn is_chat_runtime_cancel_requested(state: &State<'_, AppState>, session_id: &str) -> bool {
+    state
+        .chat_runtime_states
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(session_id).map(|entry| entry.cancel_requested))
+        .unwrap_or(false)
 }
 
 pub fn ensure_chat_session<'a>(
@@ -105,18 +140,22 @@ pub fn build_session_metadata_from_session_id(session_id: &str) -> Option<Value>
 }
 
 pub fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> String {
-    let context_type_from_metadata = store
+    let session_metadata = store
         .chat_sessions
         .iter()
         .find(|item| item.id == session_id)
-        .and_then(|session| {
-            session
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("contextType"))
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
-        });
+        .and_then(|session| session.metadata.as_ref());
+    if let Some(agent_profile) = session_metadata
+        .and_then(|metadata| metadata.get("agentProfile"))
+        .and_then(|value| value.as_str())
+        .filter(|value| matches!(*value, "video-editor" | "audio-editor"))
+    {
+        return agent_profile.to_string();
+    }
+    let context_type_from_metadata = session_metadata
+        .and_then(|metadata| metadata.get("contextType"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
     let context_type = context_type_from_metadata
         .or_else(|| infer_context_type_from_session_id(session_id))
         .unwrap_or_else(|| "chat".to_string());

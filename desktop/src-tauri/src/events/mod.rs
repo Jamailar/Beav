@@ -151,11 +151,7 @@ fn emit_legacy_chat_compat_event(
     }
 }
 
-fn emit_legacy_creative_chat_compat_event(
-    app: &AppHandle,
-    checkpoint_type: &str,
-    payload: &Value,
-) {
+fn emit_legacy_creative_chat_compat_event(app: &AppHandle, checkpoint_type: &str, payload: &Value) {
     let Some(event_name) = (match checkpoint_type {
         "creative_chat.user_message" => Some("creative-chat:user-message"),
         "creative_chat.advisor_start" => Some("creative-chat:advisor-start"),

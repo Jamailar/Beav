@@ -2,9 +2,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::commands::chat_state::{
-    ensure_chat_session, infer_context_type_from_session_id, is_first_assistant_turn_for_session,
-    resolve_runtime_mode_for_session, should_handle_redclaw_onboarding_for_session,
-    update_chat_runtime_state,
+    ensure_chat_session, infer_context_type_from_session_id, is_chat_runtime_cancel_requested,
+    is_first_assistant_turn_for_session, resolve_runtime_mode_for_session,
+    should_handle_redclaw_onboarding_for_session, update_chat_runtime_state,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{append_session_checkpoint, ChatExecutionResult};
@@ -13,7 +13,8 @@ use crate::{
     ensure_redclaw_onboarding_completed_with_defaults, generate_chat_response,
     handle_redclaw_onboarding_turn, make_id, memory_maintenance_status_from_settings,
     next_memory_maintenance_at_ms, now_i64, now_iso, resolve_chat_config,
-    resolve_runtime_mode_from_context_type, run_openai_interactive_chat_runtime,
+    resolve_runtime_mode_from_context_type, run_anthropic_interactive_chat_runtime,
+    run_gemini_interactive_chat_runtime, run_openai_interactive_chat_runtime,
     session_title_from_message, value_to_i64_string, write_memory_maintenance_status, AppState,
     ChatMessageRecord,
 };
@@ -52,22 +53,45 @@ pub fn execute_chat_exchange(
     } else {
         None
     };
+    let mut emitted_live_events = false;
     let response = if let Some((local_response, _completed)) = onboarding_response {
         local_response
     } else if let (Some(app), Some(config)) =
         (app, resolve_chat_config(&settings_snapshot, model_config))
     {
-        if config.protocol == "openai" {
-            match run_openai_interactive_chat_runtime(
-                app,
-                state,
-                Some(working_session_id.as_str()),
-                &config,
-                &message,
-                &runtime_mode,
-            ) {
+        if matches!(config.protocol.as_str(), "openai" | "anthropic" | "gemini") {
+            emitted_live_events = runtime_mode != "wander";
+            let interactive_result = match config.protocol.as_str() {
+                "openai" => run_openai_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(working_session_id.as_str()),
+                    &config,
+                    &message,
+                    &runtime_mode,
+                ),
+                "anthropic" => run_anthropic_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(working_session_id.as_str()),
+                    &config,
+                    &message,
+                    &runtime_mode,
+                ),
+                "gemini" => run_gemini_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(working_session_id.as_str()),
+                    &config,
+                    &message,
+                    &runtime_mode,
+                ),
+                _ => unreachable!(),
+            };
+            match interactive_result {
                 Ok(response) => response,
                 Err(error) => {
+                    emitted_live_events = false;
                     append_debug_log_state(
                         state,
                         format!(
@@ -87,6 +111,16 @@ pub fn execute_chat_exchange(
     } else {
         generate_chat_response(&settings_snapshot, model_config, &message)
     };
+    if is_chat_runtime_cancel_requested(state, &working_session_id) {
+        let _ = update_chat_runtime_state(
+            state,
+            &working_session_id,
+            false,
+            String::new(),
+            Some("cancelled".to_string()),
+        );
+        return Err("chat generation cancelled".to_string());
+    }
     let title_hint = Some(session_title_from_message(&display_content));
     let mut title_update: Option<(String, String)> = None;
     let mut final_session_id = String::new();
@@ -104,7 +138,25 @@ pub fn execute_chat_exchange(
             title_update = Some((session.id.clone(), next_title));
         }
         session.updated_at = now_iso();
-        let context_type = session
+        let runtime_mode = session
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentProfile"))
+            .and_then(|value| value.as_str())
+            .filter(|value| matches!(*value, "video-editor" | "audio-editor"))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                let context_type = session
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("contextType"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| infer_context_type_from_session_id(&session.id))
+                    .unwrap_or_else(|| "chat".to_string());
+                resolve_runtime_mode_from_context_type(Some(&context_type)).to_string()
+            });
+        let _context_type = session
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.get("contextType"))
@@ -112,7 +164,6 @@ pub fn execute_chat_exchange(
             .map(ToString::to_string)
             .or_else(|| infer_context_type_from_session_id(&session.id))
             .unwrap_or_else(|| "chat".to_string());
-        let runtime_mode = resolve_runtime_mode_from_context_type(Some(&context_type)).to_string();
 
         store.chat_messages.push(ChatMessageRecord {
             id: make_id("message"),
@@ -200,5 +251,6 @@ pub fn execute_chat_exchange(
         session_id: final_session_id,
         response,
         title_update,
+        emitted_live_events,
     })
 }

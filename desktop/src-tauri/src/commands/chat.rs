@@ -2,9 +2,13 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::chat_runtime::execute_chat_exchange;
-use crate::commands::chat_state::{latest_session_id, resolve_runtime_mode_for_session};
+use crate::commands::chat_state::{
+    latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
+};
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
-use crate::events::{emit_chat_sequence, emit_runtime_tool_result};
+use crate::events::{
+    emit_chat_sequence, emit_runtime_task_checkpoint_saved, emit_runtime_tool_result,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
 use crate::{create_work_item, make_id, now_i64, payload_field, payload_string, AppState};
@@ -82,14 +86,27 @@ pub fn handle_send_channel(
                 ))
             })?;
 
-            emit_chat_sequence(
-                app,
-                &execution.session_id,
-                &execution.response,
-                "正在分析输入并生成回答。",
-                &runtime_mode,
-                execution.title_update,
-            );
+            if execution.emitted_live_events {
+                if let Some((sid, title)) = execution.title_update.clone() {
+                    emit_runtime_task_checkpoint_saved(
+                        app,
+                        None,
+                        Some(&sid),
+                        "chat.session_title_updated",
+                        "session title updated",
+                        Some(json!({ "sessionId": sid, "title": title })),
+                    );
+                }
+            } else {
+                emit_chat_sequence(
+                    app,
+                    &execution.session_id,
+                    &execution.response,
+                    "正在分析输入并生成回答。",
+                    &runtime_mode,
+                    execution.title_update,
+                );
+            }
             if is_redclaw_session {
                 let _ = app.emit(
                     "redclaw:runner-message",
@@ -102,7 +119,30 @@ pub fn handle_send_channel(
             }
             Ok(())
         }
-        "chat:cancel" | "ai:cancel" => Ok(()),
+        "chat:cancel" | "ai:cancel" => {
+            let session_id = payload_string(&payload, "sessionId")
+                .or_else(|| payload.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| {
+                    with_store(state, |store| Ok(latest_session_id(&store))).unwrap_or_default()
+                });
+            request_chat_runtime_cancel(state, &session_id)?;
+            if let Ok(guard) = state.active_chat_requests.lock() {
+                if let Some(child) = guard.get(&session_id) {
+                    if let Ok(mut child_guard) = child.lock() {
+                        let _ = child_guard.kill();
+                    }
+                }
+            }
+            emit_runtime_task_checkpoint_saved(
+                app,
+                None,
+                Some(&session_id),
+                "chat.cancelled",
+                "chat generation cancelled",
+                Some(json!({ "sessionId": session_id, "cancelled": true })),
+            );
+            Ok(())
+        }
         "chat:confirm-tool" | "ai:confirm-tool" => {
             let call_id = payload_string(&payload, "callId").unwrap_or_else(|| make_id("call"));
             let confirmed = payload_field(&payload, "confirmed")

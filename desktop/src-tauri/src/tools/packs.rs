@@ -5,6 +5,7 @@ pub enum ToolPack {
     Knowledge,
     Redclaw,
     BackgroundMaintenance,
+    Editor,
     Diagnostics,
 }
 
@@ -13,6 +14,7 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
         "wander" => ToolPack::Wander,
         "knowledge" => ToolPack::Knowledge,
         "redclaw" => ToolPack::Redclaw,
+        "video-editor" | "audio-editor" => ToolPack::Editor,
         "background-maintenance" => ToolPack::BackgroundMaintenance,
         "diagnostics" => ToolPack::Diagnostics,
         _ => ToolPack::Chatroom,
@@ -51,6 +53,12 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
             "redbox_mcp",
             "redbox_runtime_control",
         ],
+        ToolPack::Editor => &[
+            "redbox_app_query",
+            "redbox_fs",
+            "redbox_editor",
+            "redbox_runtime_control",
+        ],
         ToolPack::Diagnostics => &[
             "redbox_app_query",
             "redbox_fs",
@@ -58,6 +66,7 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
             "redbox_mcp",
             "redbox_skill",
             "redbox_runtime_control",
+            "redbox_editor",
         ],
     }
 }

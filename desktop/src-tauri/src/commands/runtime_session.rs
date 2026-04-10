@@ -48,6 +48,7 @@ pub fn handle_runtime_session_channel(
                         "partialResponse": current.partial_response,
                         "updatedAt": current.updated_at,
                         "error": current.error,
+                        "cancelRequested": current.cancel_requested,
                     }))
                 } else {
                     Ok(json!({
@@ -56,6 +57,7 @@ pub fn handle_runtime_session_channel(
                         "isProcessing": false,
                         "partialResponse": "",
                         "updatedAt": now_ms(),
+                        "cancelRequested": false,
                     }))
                 }
             }

@@ -23,7 +23,8 @@ mod tools;
 mod workspace_loaders;
 
 use commands::chat_state::{
-    ensure_chat_session, latest_session_id, resolve_runtime_mode_for_session,
+    ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
+    resolve_runtime_mode_for_session,
 };
 use commands::redclaw_runtime::execute_redclaw_run;
 use events::{
@@ -33,8 +34,8 @@ use events::{
 };
 use persistence::{
     build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_knowledge,
-    ensure_store_hydrated_for_work,
-    hydrate_store_from_workspace_files, load_store, persist_store, with_store, with_store_mut,
+    ensure_store_hydrated_for_work, hydrate_store_from_workspace_files, load_store, persist_store,
+    with_store, with_store_mut,
 };
 use runtime::{
     append_runtime_task_trace, append_session_checkpoint, infer_protocol,
@@ -53,8 +54,11 @@ use scheduler::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -580,12 +584,14 @@ struct ChatRuntimeStateRecord {
     partial_response: String,
     updated_at: u128,
     error: Option<String>,
+    cancel_requested: bool,
 }
 
 struct AppState {
     store_path: PathBuf,
     store: Mutex<AppStore>,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
+    active_chat_requests: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
     assistant_runtime: Mutex<Option<AssistantRuntime>>,
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
@@ -2278,10 +2284,49 @@ fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
     interactive_runtime_shared::interactive_runtime_tools_for_mode(runtime_mode)
 }
 
+fn resolve_editor_tool_file_path(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    arguments: &Value,
+) -> Result<String, String> {
+    if let Some(file_path) = payload_string(arguments, "filePath") {
+        return Ok(file_path);
+    }
+    let Some(session_id) = session_id else {
+        return Err(
+            "filePath is required for editor tool calls outside a bound session".to_string(),
+        );
+    };
+    with_store(state, |store| {
+        store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref())
+            .and_then(|metadata| {
+                payload_string(metadata, "associatedFilePath")
+                    .or_else(|| payload_string(metadata, "contextId"))
+            })
+            .ok_or_else(|| "editor session is not bound to a manuscript package".to_string())
+    })
+}
+
+fn editor_tool_payload(file_path: String, arguments: &Value, keys: &[&str]) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("filePath".to_string(), json!(file_path));
+    for key in keys {
+        if let Some(value) = payload_field(arguments, key) {
+            object.insert((*key).to_string(), value.clone());
+        }
+    }
+    Value::Object(object)
+}
+
 fn execute_interactive_tool_call(
     app: &AppHandle,
     state: &State<'_, AppState>,
     runtime_mode: &str,
+    session_id: Option<&str>,
     name: &str,
     arguments: &Value,
 ) -> Result<Value, String> {
@@ -2305,8 +2350,70 @@ fn execute_interactive_tool_call(
         commands::bridge::handle_bridge_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("Bridge channel not handled: {channel}")))
     };
+    let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
+        commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
+            .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
+    };
 
     match name {
+        "redbox_editor" => {
+            let action = payload_string(arguments, "action").unwrap_or_default();
+            let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
+            match action.as_str() {
+                "timeline_read" | "clips" => {
+                    call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
+                }
+                "track_add" | "track-add" => call_manuscript_channel(
+                    "manuscripts:add-package-track",
+                    editor_tool_payload(file_path, arguments, &["kind"]),
+                ),
+                "clip_add" | "clip-add" => call_manuscript_channel(
+                    "manuscripts:add-package-clip",
+                    editor_tool_payload(
+                        file_path,
+                        arguments,
+                        &["assetId", "track", "order", "durationMs"],
+                    ),
+                ),
+                "clip_update" | "clip-update" => call_manuscript_channel(
+                    "manuscripts:update-package-clip",
+                    editor_tool_payload(
+                        file_path,
+                        arguments,
+                        &[
+                            "clipId",
+                            "track",
+                            "order",
+                            "durationMs",
+                            "trimInMs",
+                            "trimOutMs",
+                            "enabled",
+                        ],
+                    ),
+                ),
+                "clip_delete" | "clip-delete" => call_manuscript_channel(
+                    "manuscripts:delete-package-clip",
+                    editor_tool_payload(file_path, arguments, &["clipId"]),
+                ),
+                "clip_split" | "clip-split" => call_manuscript_channel(
+                    "manuscripts:split-package-clip",
+                    editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"]),
+                ),
+                "remotion_generate" | "remotion-generate" => call_manuscript_channel(
+                    "manuscripts:generate-remotion-scene",
+                    editor_tool_payload(file_path, arguments, &["instructions"]),
+                ),
+                "remotion_save" | "remotion-save" => call_manuscript_channel(
+                    "manuscripts:save-remotion-scene",
+                    editor_tool_payload(file_path, arguments, &["scene"]),
+                ),
+                "export" => call_manuscript_channel(
+                    "manuscripts:render-remotion-video",
+                    editor_tool_payload(file_path, arguments, &[]),
+                ),
+                _ => Err(format!("unsupported redbox_editor action: {action}")),
+            }
+        }
         "redbox_mcp" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
             match action.as_str() {
@@ -2436,11 +2543,15 @@ fn execute_interactive_tool_call(
                 ),
                 "tasks_create" => call_runtime_channel(
                     "tasks:create",
-                    payload_field(arguments, "payload").cloned().unwrap_or_else(|| json!({})),
+                    payload_field(arguments, "payload")
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
                 ),
                 "tasks_list" => call_runtime_channel(
                     "tasks:list",
-                    payload_field(arguments, "payload").cloned().unwrap_or_else(|| json!({})),
+                    payload_field(arguments, "payload")
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
                 ),
                 "tasks_get" => call_runtime_channel(
                     "tasks:get",
@@ -2454,9 +2565,7 @@ fn execute_interactive_tool_call(
                     "tasks:cancel",
                     json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
                 ),
-                "background_tasks_list" => {
-                    call_bridge_channel("background-tasks:list", json!({}))
-                }
+                "background_tasks_list" => call_bridge_channel("background-tasks:list", json!({})),
                 "background_tasks_get" => call_bridge_channel(
                     "background-tasks:get",
                     json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
@@ -2785,6 +2894,1303 @@ fn execute_interactive_tool_call(
     }
 }
 
+fn editor_session_prompt_context(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+) -> String {
+    if !matches!(runtime_mode, "video-editor" | "audio-editor") {
+        return String::new();
+    }
+    let Some(session_id) = session_id else {
+        return String::new();
+    };
+    let metadata = with_store(state, |store| {
+        Ok(store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.clone()))
+    })
+    .ok()
+    .flatten();
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    let file_path = payload_string(&metadata, "associatedFilePath")
+        .or_else(|| payload_string(&metadata, "contextId"))
+        .unwrap_or_default();
+    let title = payload_string(&metadata, "associatedPackageTitle").unwrap_or_default();
+    let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
+    let clips = metadata
+        .get("associatedPackageClips")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let track_names = metadata
+        .get("associatedPackageTrackNames")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    format!(
+        "\n\n## 当前剪辑工程上下文\n\
+runtime_mode: {runtime_mode}\n\
+filePath: {file_path}\n\
+title: {title}\n\
+packageKind: {package_kind}\n\
+trackNames: {}\n\
+clips: {}\n\
+\n\
+工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；再按需使用 clip_add / clip_update / clip_delete / clip_split / track_add / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
+        serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
+        serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
+    )
+}
+
+#[derive(Default)]
+struct StreamingToolDelta {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Default)]
+struct StreamingChatCompletion {
+    content: String,
+    tool_calls: Vec<InteractiveToolCall>,
+}
+
+fn interactive_runtime_message_bundle(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+    message: &str,
+) -> Result<(String, Vec<Value>), String> {
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode);
+    system_prompt.push_str(&editor_session_prompt_context(
+        state,
+        session_id,
+        runtime_mode,
+    ));
+    let mut messages = with_store(state, |store| {
+        Ok(collect_recent_chat_messages(&store, session_id, 10))
+    })?;
+    messages.push(json!({
+        "role": "user",
+        "content": message
+    }));
+    Ok((system_prompt, messages))
+}
+
+fn anthropic_tools_for_runtime_mode(runtime_mode: &str) -> Vec<Value> {
+    interactive_runtime_tools_for_mode(runtime_mode)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|schema| {
+            let function = schema.get("function")?;
+            Some(json!({
+                "name": function.get("name").and_then(|value| value.as_str()).unwrap_or("tool"),
+                "description": function.get("description").and_then(|value| value.as_str()).unwrap_or(""),
+                "input_schema": function.get("parameters").cloned().unwrap_or_else(|| json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                })),
+            }))
+        })
+        .collect()
+}
+
+fn gemini_tools_for_runtime_mode(runtime_mode: &str) -> Vec<Value> {
+    let declarations = interactive_runtime_tools_for_mode(runtime_mode)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|schema| schema.get("function").cloned())
+        .collect::<Vec<_>>();
+    if declarations.is_empty() {
+        Vec::new()
+    } else {
+        vec![json!({
+            "functionDeclarations": declarations
+        })]
+    }
+}
+
+fn run_openai_streaming_chat_completion(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+    config: &ResolvedChatConfig,
+    body: &Value,
+    max_time_seconds: Option<u64>,
+) -> Result<StreamingChatCompletion, String> {
+    let mut child = spawn_curl_json_process(
+        "POST",
+        &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+        config.api_key.as_deref(),
+        &[],
+        Some(body),
+        max_time_seconds,
+        true,
+    )?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "streaming curl stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "streaming curl stderr unavailable".to_string())?;
+    let child = Arc::new(Mutex::new(child));
+
+    if let Some(session_id) = session_id {
+        if let Ok(mut guard) = state.active_chat_requests.lock() {
+            guard.insert(session_id.to_string(), Arc::clone(&child));
+        }
+    }
+
+    let stderr_handle = std::thread::spawn(move || {
+        let mut stderr_text = String::new();
+        let mut reader = BufReader::new(stderr);
+        let _ = reader.read_to_string(&mut stderr_text);
+        stderr_text
+    });
+
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    let mut event_data_lines = Vec::<String>::new();
+    let mut result = StreamingChatCompletion::default();
+    let mut tool_deltas = Vec::<StreamingToolDelta>::new();
+    let mut saw_tool_calls = false;
+    let mut responding_started = false;
+    let mut thought_closed = false;
+
+    let finalize_thought_phase = |app: &AppHandle, session_id: &str| {
+        emit_runtime_task_checkpoint_saved(
+            app,
+            None,
+            Some(session_id),
+            "chat.thought_end",
+            "thought stream completed",
+            None,
+        );
+    };
+
+    let mut process_event = |data: &str| -> Result<bool, String> {
+        let trimmed = data.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        if trimmed == "[DONE]" {
+            return Ok(true);
+        }
+        let payload = serde_json::from_str::<Value>(trimmed)
+            .map_err(|error| format!("Invalid SSE JSON: {error}"))?;
+        let choice = payload
+            .get("choices")
+            .and_then(|value| value.as_array())
+            .and_then(|items| items.first())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let delta = choice
+            .get("delta")
+            .cloned()
+            .or_else(|| choice.get("message").cloned())
+            .unwrap_or_else(|| json!({}));
+
+        if let Some(items) = delta.get("tool_calls").and_then(|value| value.as_array()) {
+            saw_tool_calls = true;
+            for item in items {
+                let index = item
+                    .get("index")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(tool_deltas.len() as u64) as usize;
+                while tool_deltas.len() <= index {
+                    tool_deltas.push(StreamingToolDelta::default());
+                }
+                let entry = &mut tool_deltas[index];
+                if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
+                    entry.id = id.to_string();
+                }
+                if let Some(function) = item.get("function") {
+                    if let Some(name_piece) = function.get("name").and_then(|value| value.as_str())
+                    {
+                        entry.name.push_str(name_piece);
+                    }
+                    if let Some(arguments_piece) =
+                        function.get("arguments").and_then(|value| value.as_str())
+                    {
+                        entry.arguments.push_str(arguments_piece);
+                    }
+                }
+            }
+        }
+
+        if let Some(content_piece) = delta.get("content").and_then(|value| value.as_str()) {
+            if !content_piece.is_empty() {
+                result.content.push_str(content_piece);
+                if let Some(session_id) = session_id {
+                    let _ = commands::chat_state::update_chat_runtime_state(
+                        state,
+                        session_id,
+                        true,
+                        result.content.clone(),
+                        None,
+                    );
+                }
+                if !saw_tool_calls {
+                    if let Some(session_id) = session_id {
+                        if !thought_closed {
+                            finalize_thought_phase(app, session_id);
+                            thought_closed = true;
+                        }
+                        if !responding_started {
+                            emit_runtime_stream_start(
+                                app,
+                                session_id,
+                                "responding",
+                                Some(runtime_mode),
+                            );
+                            responding_started = true;
+                        }
+                        emit_runtime_text_delta(app, session_id, "response", content_piece);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    };
+
+    loop {
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            if let Ok(mut child_guard) = child.lock() {
+                let _ = child_guard.kill();
+            }
+        }
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            if !event_data_lines.is_empty() {
+                let should_stop = process_event(&event_data_lines.join("\n"))?;
+                event_data_lines.clear();
+                if should_stop {
+                    break;
+                }
+            }
+            break;
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            if !event_data_lines.is_empty() {
+                let should_stop = process_event(&event_data_lines.join("\n"))?;
+                event_data_lines.clear();
+                if should_stop {
+                    break;
+                }
+            }
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("data:") {
+            event_data_lines.push(value.trim().to_string());
+        }
+    }
+
+    if let Some(session_id) = session_id {
+        if let Ok(mut guard) = state.active_chat_requests.lock() {
+            guard.remove(session_id);
+        }
+    }
+
+    let status = {
+        let mut child_guard = child
+            .lock()
+            .map_err(|_| "streaming curl child lock 已损坏".to_string())?;
+        child_guard.wait().map_err(|error| error.to_string())?
+    };
+    let stderr_text = stderr_handle.join().unwrap_or_default().trim().to_string();
+
+    if session_id
+        .map(|value| is_chat_runtime_cancel_requested(state, value))
+        .unwrap_or(false)
+    {
+        return Err("chat generation cancelled".to_string());
+    }
+
+    if !status.success() {
+        return Err(if stderr_text.is_empty() {
+            format!("curl failed with status {status}")
+        } else {
+            stderr_text
+        });
+    }
+
+    if saw_tool_calls && !thought_closed {
+        if let Some(session_id) = session_id {
+            if !result.content.trim().is_empty() {
+                emit_runtime_text_delta(app, session_id, "thought", &result.content);
+            }
+            finalize_thought_phase(app, session_id);
+        }
+    }
+
+    result.tool_calls = tool_deltas
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            if item.name.trim().is_empty() {
+                return None;
+            }
+            let tool_name = item.name.clone();
+            let raw_arguments = item.arguments.trim().to_string();
+            let parsed_arguments =
+                serde_json::from_str::<Value>(&raw_arguments).unwrap_or_else(|_| json!({}));
+            let call_id = if item.id.trim().is_empty() {
+                format!("call-{}-{}", session_id.unwrap_or(runtime_mode), index + 1)
+            } else {
+                item.id
+            };
+            Some(InteractiveToolCall {
+                id: call_id.clone(),
+                name: tool_name.clone(),
+                arguments: parsed_arguments,
+                raw: json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": raw_arguments,
+                    }
+                }),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(result)
+}
+
+fn run_anthropic_interactive_chat_runtime(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    config: &ResolvedChatConfig,
+    message: &str,
+    runtime_mode: &str,
+) -> Result<String, String> {
+    use std::process::Stdio;
+
+    let (system_prompt, openai_messages) =
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+    let mut messages = openai_messages
+        .into_iter()
+        .map(|item| {
+            json!({
+                "role": item.get("role").and_then(|value| value.as_str()).unwrap_or("user"),
+                "content": item.get("content").and_then(|value| value.as_str()).unwrap_or("").to_string()
+            })
+        })
+        .collect::<Vec<_>>();
+    let tools = anthropic_tools_for_runtime_mode(runtime_mode);
+    let is_wander = runtime_mode == "wander";
+    let max_turns = if is_wander { 2 } else { 6 };
+    let trace_id = session_id.unwrap_or(runtime_mode);
+    if let Some(current_session_id) = session_id {
+        emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+    }
+
+    for turn in 0..max_turns {
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
+        let turn_started_at = now_ms();
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][anthropic-runtime][{}] turn-{}-request elapsed=0ms",
+                trace_id,
+                turn + 1
+            ),
+        );
+
+        let mut body = json!({
+            "model": config.model_name,
+            "system": system_prompt,
+            "messages": messages,
+            "max_tokens": if is_wander { 900 } else { 2048 },
+            "stream": true
+        });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools.clone());
+            if is_wander && turn == 0 {
+                body["tool_choice"] = json!({ "type": "any" });
+            }
+        }
+
+        let mut command = std::process::Command::new("curl");
+        command
+            .arg("-sS")
+            .arg("-N")
+            .arg("-X")
+            .arg("POST")
+            .arg(format!("{}/messages", normalize_base_url(&config.base_url)))
+            .arg("--max-time")
+            .arg(if is_wander { "45" } else { "90" })
+            .arg("-H")
+            .arg("Content-Type: application/json")
+            .arg("-H")
+            .arg(format!(
+                "x-api-key: {}",
+                config.api_key.clone().unwrap_or_default()
+            ))
+            .arg("-H")
+            .arg("anthropic-version: 2023-06-01")
+            .arg("-d")
+            .arg(serde_json::to_string(&body).map_err(|error| error.to_string())?)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "streaming curl stdout unavailable".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "streaming curl stderr unavailable".to_string())?;
+        let child = Arc::new(Mutex::new(child));
+        if let Some(session_id) = session_id {
+            if let Ok(mut guard) = state.active_chat_requests.lock() {
+                guard.insert(session_id.to_string(), Arc::clone(&child));
+            }
+        }
+        let stderr_handle = std::thread::spawn(move || {
+            let mut stderr_text = String::new();
+            let mut reader = BufReader::new(stderr);
+            let _ = reader.read_to_string(&mut stderr_text);
+            stderr_text
+        });
+
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let mut event_data_lines = Vec::<String>::new();
+        let mut assistant_text = String::new();
+        let mut tool_deltas = Vec::<StreamingToolDelta>::new();
+        let mut saw_tool_calls = false;
+        let mut responding_started = false;
+
+        loop {
+            if session_id
+                .map(|value| is_chat_runtime_cancel_requested(state, value))
+                .unwrap_or(false)
+            {
+                if let Ok(mut child_guard) = child.lock() {
+                    let _ = child_guard.kill();
+                }
+            }
+
+            line.clear();
+            let read = reader
+                .read_line(&mut line)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                if event_data_lines.is_empty() {
+                    continue;
+                }
+                let data = event_data_lines.join("\n");
+                event_data_lines.clear();
+                let payload = serde_json::from_str::<Value>(data.trim())
+                    .map_err(|error| format!("Invalid Anthropic SSE JSON: {error}"))?;
+                let event_type = payload
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                if event_type == "message_stop" {
+                    break;
+                }
+                if event_type == "content_block_start" {
+                    let index = payload
+                        .get("index")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(tool_deltas.len() as u64)
+                        as usize;
+                    if let Some(content_block) = payload.get("content_block") {
+                        if content_block.get("type").and_then(|value| value.as_str())
+                            == Some("tool_use")
+                        {
+                            saw_tool_calls = true;
+                            while tool_deltas.len() <= index {
+                                tool_deltas.push(StreamingToolDelta::default());
+                            }
+                            let entry = &mut tool_deltas[index];
+                            entry.id = content_block
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            entry.name = content_block
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if let Some(input) = content_block.get("input") {
+                                entry.arguments = input.to_string();
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if event_type == "content_block_delta" {
+                    let index = payload
+                        .get("index")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as usize;
+                    if let Some(delta) = payload.get("delta") {
+                        match delta
+                            .get("type")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                        {
+                            "text_delta" => {
+                                let content_piece = delta
+                                    .get("text")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("");
+                                if !content_piece.is_empty() {
+                                    assistant_text.push_str(content_piece);
+                                    if let Some(session_id) = session_id {
+                                        let _ = commands::chat_state::update_chat_runtime_state(
+                                            state,
+                                            session_id,
+                                            true,
+                                            assistant_text.clone(),
+                                            None,
+                                        );
+                                        if !saw_tool_calls {
+                                            emit_runtime_task_checkpoint_saved(
+                                                app,
+                                                None,
+                                                Some(session_id),
+                                                "chat.thought_end",
+                                                "thought stream completed",
+                                                None,
+                                            );
+                                            if !responding_started {
+                                                emit_runtime_stream_start(
+                                                    app,
+                                                    session_id,
+                                                    "responding",
+                                                    Some(runtime_mode),
+                                                );
+                                                responding_started = true;
+                                            }
+                                            emit_runtime_text_delta(
+                                                app,
+                                                session_id,
+                                                "response",
+                                                content_piece,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            "input_json_delta" => {
+                                saw_tool_calls = true;
+                                while tool_deltas.len() <= index {
+                                    tool_deltas.push(StreamingToolDelta::default());
+                                }
+                                let partial = delta
+                                    .get("partial_json")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("");
+                                tool_deltas[index].arguments.push_str(partial);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("data:") {
+                event_data_lines.push(value.trim().to_string());
+            }
+        }
+
+        if let Some(session_id) = session_id {
+            if let Ok(mut guard) = state.active_chat_requests.lock() {
+                guard.remove(session_id);
+            }
+        }
+        let status = {
+            let mut child_guard = child
+                .lock()
+                .map_err(|_| "streaming curl child lock 已损坏".to_string())?;
+            child_guard.wait().map_err(|error| error.to_string())?
+        };
+        let stderr_text = stderr_handle.join().unwrap_or_default().trim().to_string();
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
+        if !status.success() {
+            return Err(if stderr_text.is_empty() {
+                format!("curl failed with status {status}")
+            } else {
+                stderr_text
+            });
+        }
+
+        let tool_calls = tool_deltas
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                if item.name.trim().is_empty() {
+                    return None;
+                }
+                let raw_arguments = item.arguments.trim().to_string();
+                let parsed_arguments =
+                    serde_json::from_str::<Value>(&raw_arguments).unwrap_or_else(|_| json!({}));
+                let call_id = if item.id.trim().is_empty() {
+                    format!("call-{}-{}", session_id.unwrap_or(runtime_mode), index + 1)
+                } else {
+                    item.id
+                };
+                Some(InteractiveToolCall {
+                    id: call_id.clone(),
+                    name: item.name.clone(),
+                    arguments: parsed_arguments,
+                    raw: json!({
+                        "id": call_id,
+                        "type": "tool_use",
+                        "name": item.name,
+                        "input": raw_arguments,
+                    }),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][anthropic-runtime][{}] turn-{}-response elapsed={}ms",
+                trace_id,
+                turn + 1,
+                now_ms().saturating_sub(turn_started_at)
+            ),
+        );
+
+        if tool_calls.is_empty() {
+            if assistant_text.trim().is_empty() {
+                return Err("interactive runtime returned an empty final response".to_string());
+            }
+            if let Some(current_session_id) = session_id {
+                emit_runtime_task_checkpoint_saved(
+                    app,
+                    None,
+                    Some(current_session_id),
+                    "chat.response_end",
+                    "chat response completed",
+                    Some(json!({ "content": assistant_text })),
+                );
+            }
+            return Ok(assistant_text);
+        }
+
+        if !assistant_text.trim().is_empty() {
+            emit_runtime_text_delta(
+                app,
+                session_id.unwrap_or_default(),
+                "thought",
+                &assistant_text,
+            );
+        }
+        if let Some(current_session_id) = session_id {
+            emit_runtime_task_checkpoint_saved(
+                app,
+                None,
+                Some(current_session_id),
+                "chat.thought_end",
+                "thought stream completed",
+                None,
+            );
+        }
+
+        let mut assistant_blocks = Vec::<Value>::new();
+        if !assistant_text.trim().is_empty() {
+            assistant_blocks.push(json!({
+                "type": "text",
+                "text": assistant_text
+            }));
+        }
+        for call in &tool_calls {
+            assistant_blocks.push(json!({
+                "type": "tool_use",
+                "id": call.id,
+                "name": call.name,
+                "input": call.arguments
+            }));
+        }
+        messages.push(json!({
+            "role": "assistant",
+            "content": assistant_blocks
+        }));
+
+        for call in tool_calls {
+            let description = format!("Interactive tool call: {}", call.name);
+            emit_runtime_tool_request(
+                app,
+                session_id,
+                &call.id,
+                &call.name,
+                call.arguments.clone(),
+                Some(&description),
+            );
+            let tool_started_at = now_ms();
+            let result = execute_interactive_tool_call(
+                app,
+                state,
+                runtime_mode,
+                session_id,
+                &call.name,
+                &call.arguments,
+            );
+            match result {
+                Ok(result_value) => {
+                    let raw_result_text = serde_json::to_string_pretty(&result_value)
+                        .unwrap_or_else(|_| result_value.to_string());
+                    let (result_text, result_truncated) = tools::guards::apply_output_budget(
+                        runtime_mode,
+                        &call.name,
+                        &raw_result_text,
+                    );
+                    let partial = text_snippet(&result_text, 1200);
+                    emit_runtime_tool_partial(app, session_id, &call.id, &call.name, &partial);
+                    emit_runtime_tool_result(
+                        app,
+                        session_id,
+                        &call.id,
+                        &call.name,
+                        true,
+                        &result_text,
+                    );
+                    messages.push(json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": call.id,
+                            "content": result_text
+                        }]
+                    }));
+                    if let Some(session_id) = session_id {
+                        let _ = with_store_mut(state, |store| {
+                            store.session_tool_results.push(SessionToolResultRecord {
+                                id: make_id("tool-result"),
+                                session_id: session_id.to_string(),
+                                call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                command: None,
+                                success: true,
+                                result_text: Some(result_text.clone()),
+                                summary_text: Some(partial),
+                                prompt_text: None,
+                                original_chars: Some(raw_result_text.chars().count() as i64),
+                                prompt_chars: Some(result_text.chars().count() as i64),
+                                truncated: result_truncated,
+                                payload: Some(result_value),
+                                created_at: now_i64(),
+                                updated_at: now_i64(),
+                            });
+                            Ok(())
+                        });
+                    }
+                }
+                Err(error) => {
+                    emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    messages.push(json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": call.id,
+                            "content": error.clone(),
+                            "is_error": true
+                        }]
+                    }));
+                }
+            }
+            append_debug_log_state(
+                state,
+                format!(
+                    "[timing][anthropic-runtime][{}] turn-{}-tool-{} elapsed={}ms",
+                    trace_id,
+                    turn + 1,
+                    call.name,
+                    now_ms().saturating_sub(tool_started_at)
+                ),
+            );
+        }
+    }
+
+    Err("interactive runtime exceeded max turns".to_string())
+}
+
+fn run_gemini_interactive_chat_runtime(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    config: &ResolvedChatConfig,
+    message: &str,
+    runtime_mode: &str,
+) -> Result<String, String> {
+    use std::process::Stdio;
+
+    let (system_prompt, openai_messages) =
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+    let mut contents = openai_messages
+        .into_iter()
+        .filter_map(|item| {
+            let role = item
+                .get("role")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let text = item
+                .get("content")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "role": if role == "assistant" { "model" } else { "user" },
+                "parts": [{ "text": text }]
+            }))
+        })
+        .collect::<Vec<_>>();
+    let tools = gemini_tools_for_runtime_mode(runtime_mode);
+    let is_wander = runtime_mode == "wander";
+    let max_turns = if is_wander { 2 } else { 6 };
+    let trace_id = session_id.unwrap_or(runtime_mode);
+    if let Some(current_session_id) = session_id {
+        emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+    }
+
+    for turn in 0..max_turns {
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
+        let turn_started_at = now_ms();
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][gemini-runtime][{}] turn-{}-request elapsed=0ms",
+                trace_id,
+                turn + 1
+            ),
+        );
+
+        let mut body = json!({
+            "system_instruction": {
+                "parts": [{ "text": system_prompt }]
+            },
+            "contents": contents
+        });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools.clone());
+            if is_wander && turn == 0 {
+                body["toolConfig"] = json!({
+                    "functionCallingConfig": { "mode": "ANY" }
+                });
+            }
+        }
+
+        let mut endpoint = gemini_url(
+            &config.base_url,
+            &format!("/models/{}:streamGenerateContent", config.model_name),
+            config.api_key.as_deref(),
+        );
+        if endpoint.contains('?') {
+            endpoint.push_str("&alt=sse");
+        } else {
+            endpoint.push_str("?alt=sse");
+        }
+        let mut command = std::process::Command::new("curl");
+        command
+            .arg("-sS")
+            .arg("-N")
+            .arg("-X")
+            .arg("POST")
+            .arg(endpoint)
+            .arg("--max-time")
+            .arg(if is_wander { "45" } else { "90" })
+            .arg("-H")
+            .arg("Content-Type: application/json")
+            .arg("-d")
+            .arg(serde_json::to_string(&body).map_err(|error| error.to_string())?)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "streaming curl stdout unavailable".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "streaming curl stderr unavailable".to_string())?;
+        let child = Arc::new(Mutex::new(child));
+        if let Some(session_id) = session_id {
+            if let Ok(mut guard) = state.active_chat_requests.lock() {
+                guard.insert(session_id.to_string(), Arc::clone(&child));
+            }
+        }
+        let stderr_handle = std::thread::spawn(move || {
+            let mut stderr_text = String::new();
+            let mut reader = BufReader::new(stderr);
+            let _ = reader.read_to_string(&mut stderr_text);
+            stderr_text
+        });
+
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let mut event_data_lines = Vec::<String>::new();
+        let mut assistant_text = String::new();
+        let mut tool_calls = Vec::<InteractiveToolCall>::new();
+        let mut saw_tool_calls = false;
+        let mut responding_started = false;
+
+        loop {
+            if session_id
+                .map(|value| is_chat_runtime_cancel_requested(state, value))
+                .unwrap_or(false)
+            {
+                if let Ok(mut child_guard) = child.lock() {
+                    let _ = child_guard.kill();
+                }
+            }
+
+            line.clear();
+            let read = reader
+                .read_line(&mut line)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                if event_data_lines.is_empty() {
+                    continue;
+                }
+                let data = event_data_lines.join("\n");
+                event_data_lines.clear();
+                let trimmed_data = data.trim();
+                if trimmed_data == "[DONE]" {
+                    break;
+                }
+                let payload = serde_json::from_str::<Value>(trimmed_data)
+                    .map_err(|error| format!("Invalid Gemini SSE JSON: {error}"))?;
+                if let Some(parts) = payload
+                    .get("candidates")
+                    .and_then(|value| value.as_array())
+                    .and_then(|items| items.first())
+                    .and_then(|candidate| candidate.get("content"))
+                    .and_then(|content| content.get("parts"))
+                    .and_then(|value| value.as_array())
+                {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(|value| value.as_str()) {
+                            if !text.is_empty() {
+                                assistant_text.push_str(text);
+                                if let Some(session_id) = session_id {
+                                    let _ = commands::chat_state::update_chat_runtime_state(
+                                        state,
+                                        session_id,
+                                        true,
+                                        assistant_text.clone(),
+                                        None,
+                                    );
+                                    if !saw_tool_calls {
+                                        emit_runtime_task_checkpoint_saved(
+                                            app,
+                                            None,
+                                            Some(session_id),
+                                            "chat.thought_end",
+                                            "thought stream completed",
+                                            None,
+                                        );
+                                        if !responding_started {
+                                            emit_runtime_stream_start(
+                                                app,
+                                                session_id,
+                                                "responding",
+                                                Some(runtime_mode),
+                                            );
+                                            responding_started = true;
+                                        }
+                                        emit_runtime_text_delta(app, session_id, "response", text);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(function_call) = part.get("functionCall") {
+                            saw_tool_calls = true;
+                            let name = function_call
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if name.trim().is_empty() {
+                                continue;
+                            }
+                            let call_id = function_call
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .filter(|value| !value.trim().is_empty())
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "call-{}-{}",
+                                        session_id.unwrap_or(runtime_mode),
+                                        tool_calls.len() + 1
+                                    )
+                                });
+                            let args = function_call
+                                .get("args")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            if !tool_calls.iter().any(|item| item.id == call_id) {
+                                tool_calls.push(InteractiveToolCall {
+                                    id: call_id.clone(),
+                                    name: name.clone(),
+                                    arguments: args.clone(),
+                                    raw: json!({
+                                        "id": call_id,
+                                        "functionCall": {
+                                            "id": function_call.get("id").cloned().unwrap_or(Value::Null),
+                                            "name": name,
+                                            "args": args
+                                        }
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("data:") {
+                event_data_lines.push(value.trim().to_string());
+            }
+        }
+
+        if let Some(session_id) = session_id {
+            if let Ok(mut guard) = state.active_chat_requests.lock() {
+                guard.remove(session_id);
+            }
+        }
+        let status = {
+            let mut child_guard = child
+                .lock()
+                .map_err(|_| "streaming curl child lock 已损坏".to_string())?;
+            child_guard.wait().map_err(|error| error.to_string())?
+        };
+        let stderr_text = stderr_handle.join().unwrap_or_default().trim().to_string();
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
+        if !status.success() {
+            return Err(if stderr_text.is_empty() {
+                format!("curl failed with status {status}")
+            } else {
+                stderr_text
+            });
+        }
+
+        append_debug_log_state(
+            state,
+            format!(
+                "[timing][gemini-runtime][{}] turn-{}-response elapsed={}ms",
+                trace_id,
+                turn + 1,
+                now_ms().saturating_sub(turn_started_at)
+            ),
+        );
+
+        if tool_calls.is_empty() {
+            if assistant_text.trim().is_empty() {
+                return Err("interactive runtime returned an empty final response".to_string());
+            }
+            if let Some(current_session_id) = session_id {
+                emit_runtime_task_checkpoint_saved(
+                    app,
+                    None,
+                    Some(current_session_id),
+                    "chat.response_end",
+                    "chat response completed",
+                    Some(json!({ "content": assistant_text })),
+                );
+            }
+            return Ok(assistant_text);
+        }
+
+        if !assistant_text.trim().is_empty() {
+            emit_runtime_text_delta(
+                app,
+                session_id.unwrap_or_default(),
+                "thought",
+                &assistant_text,
+            );
+        }
+        if let Some(current_session_id) = session_id {
+            emit_runtime_task_checkpoint_saved(
+                app,
+                None,
+                Some(current_session_id),
+                "chat.thought_end",
+                "thought stream completed",
+                None,
+            );
+        }
+
+        let mut assistant_parts = Vec::<Value>::new();
+        if !assistant_text.trim().is_empty() {
+            assistant_parts.push(json!({ "text": assistant_text }));
+        }
+        for call in &tool_calls {
+            assistant_parts.push(json!({
+                "functionCall": {
+                    "id": call.id,
+                    "name": call.name,
+                    "args": call.arguments
+                }
+            }));
+        }
+        contents.push(json!({
+            "role": "model",
+            "parts": assistant_parts
+        }));
+
+        let mut response_parts = Vec::<Value>::new();
+        for call in tool_calls {
+            let description = format!("Interactive tool call: {}", call.name);
+            emit_runtime_tool_request(
+                app,
+                session_id,
+                &call.id,
+                &call.name,
+                call.arguments.clone(),
+                Some(&description),
+            );
+            let tool_started_at = now_ms();
+            let result = execute_interactive_tool_call(
+                app,
+                state,
+                runtime_mode,
+                session_id,
+                &call.name,
+                &call.arguments,
+            );
+            match result {
+                Ok(result_value) => {
+                    let raw_result_text = serde_json::to_string_pretty(&result_value)
+                        .unwrap_or_else(|_| result_value.to_string());
+                    let (result_text, result_truncated) = tools::guards::apply_output_budget(
+                        runtime_mode,
+                        &call.name,
+                        &raw_result_text,
+                    );
+                    let partial = text_snippet(&result_text, 1200);
+                    emit_runtime_tool_partial(app, session_id, &call.id, &call.name, &partial);
+                    emit_runtime_tool_result(
+                        app,
+                        session_id,
+                        &call.id,
+                        &call.name,
+                        true,
+                        &result_text,
+                    );
+                    response_parts.push(json!({
+                        "functionResponse": {
+                            "id": call.id,
+                            "name": call.name,
+                            "response": if result_value.is_object() { result_value.clone() } else { json!({ "result": result_value }) }
+                        }
+                    }));
+                    if let Some(session_id) = session_id {
+                        let _ = with_store_mut(state, |store| {
+                            store.session_tool_results.push(SessionToolResultRecord {
+                                id: make_id("tool-result"),
+                                session_id: session_id.to_string(),
+                                call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                command: None,
+                                success: true,
+                                result_text: Some(result_text.clone()),
+                                summary_text: Some(partial),
+                                prompt_text: None,
+                                original_chars: Some(raw_result_text.chars().count() as i64),
+                                prompt_chars: Some(result_text.chars().count() as i64),
+                                truncated: result_truncated,
+                                payload: Some(result_value),
+                                created_at: now_i64(),
+                                updated_at: now_i64(),
+                            });
+                            Ok(())
+                        });
+                    }
+                }
+                Err(error) => {
+                    emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    response_parts.push(json!({
+                        "functionResponse": {
+                            "id": call.id,
+                            "name": call.name,
+                            "response": { "error": error }
+                        }
+                    }));
+                }
+            }
+            append_debug_log_state(
+                state,
+                format!(
+                    "[timing][gemini-runtime][{}] turn-{}-tool-{} elapsed={}ms",
+                    trace_id,
+                    turn + 1,
+                    call.name,
+                    now_ms().saturating_sub(tool_started_at)
+                ),
+            );
+        }
+        contents.push(json!({
+            "role": "user",
+            "parts": response_parts
+        }));
+    }
+
+    Err("interactive runtime exceeded max turns".to_string())
+}
+
 fn run_openai_interactive_chat_runtime(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -2793,6 +4199,12 @@ fn run_openai_interactive_chat_runtime(
     message: &str,
     runtime_mode: &str,
 ) -> Result<String, String> {
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode);
+    system_prompt.push_str(&editor_session_prompt_context(
+        state,
+        session_id,
+        runtime_mode,
+    ));
     let mut messages = with_store(state, |store| {
         Ok(collect_recent_chat_messages(&store, session_id, 10))
     })?;
@@ -2800,7 +4212,7 @@ fn run_openai_interactive_chat_runtime(
         0,
         json!({
             "role": "system",
-            "content": interactive_runtime_system_prompt(state, runtime_mode)
+            "content": system_prompt
         }),
     );
     messages.push(json!({
@@ -2819,6 +4231,12 @@ fn run_openai_interactive_chat_runtime(
     }
 
     for turn in 0..max_turns {
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
         let turn_started_at = now_ms();
         append_debug_log_state(
             state,
@@ -2835,7 +4253,7 @@ fn run_openai_interactive_chat_runtime(
             "messages": messages,
             "tools": interactive_runtime_tools_for_mode(runtime_mode),
             "tool_choice": if is_wander && turn == 0 { "required" } else { "auto" },
-            "stream": false
+            "stream": !is_wander
         });
         if disable_qwen_thinking {
             body["enable_thinking"] = json!(false);
@@ -2844,14 +4262,76 @@ fn run_openai_interactive_chat_runtime(
             body["temperature"] = json!(0.4);
             body["max_tokens"] = json!(900);
         }
-        let response = run_curl_json_with_timeout(
-            "POST",
-            &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
-            config.api_key.as_deref(),
-            &[],
-            Some(body),
-            Some(if is_wander { 45 } else { 90 }),
-        )?;
+        let streaming_enabled = !is_wander;
+        let (assistant_content, tool_calls) = if streaming_enabled {
+            let streamed = run_openai_streaming_chat_completion(
+                app,
+                state,
+                session_id,
+                runtime_mode,
+                config,
+                &body,
+                Some(if is_wander { 45 } else { 90 }),
+            )?;
+            (streamed.content, streamed.tool_calls)
+        } else {
+            let response = run_curl_json_with_timeout(
+                "POST",
+                &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+                config.api_key.as_deref(),
+                &[],
+                Some(body),
+                Some(if is_wander { 45 } else { 90 }),
+            )?;
+            let choice = response
+                .get("choices")
+                .and_then(|value| value.as_array())
+                .and_then(|items| items.first())
+                .cloned()
+                .ok_or_else(|| "interactive runtime returned no choices".to_string())?;
+            let assistant_message = choice
+                .get("message")
+                .cloned()
+                .ok_or_else(|| "interactive runtime returned no message".to_string())?;
+            let assistant_content = assistant_message
+                .get("content")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            let tool_calls = assistant_message
+                .get("tool_calls")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|raw| {
+                    let id = raw.get("id").and_then(|value| value.as_str())?.to_string();
+                    let function = raw.get("function")?;
+                    let name = function
+                        .get("name")
+                        .and_then(|value| value.as_str())?
+                        .to_string();
+                    let arguments = function
+                        .get("arguments")
+                        .and_then(|value| value.as_str())
+                        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                        .unwrap_or_else(|| json!({}));
+                    Some(InteractiveToolCall {
+                        id,
+                        name,
+                        arguments,
+                        raw,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (assistant_content, tool_calls)
+        };
+        if session_id
+            .map(|value| is_chat_runtime_cancel_requested(state, value))
+            .unwrap_or(false)
+        {
+            return Err("chat generation cancelled".to_string());
+        }
         append_debug_log_state(
             state,
             format!(
@@ -2861,51 +4341,23 @@ fn run_openai_interactive_chat_runtime(
                 now_ms().saturating_sub(turn_started_at)
             ),
         );
-        let choice = response
-            .get("choices")
-            .and_then(|value| value.as_array())
-            .and_then(|items| items.first())
-            .cloned()
-            .ok_or_else(|| "interactive runtime returned no choices".to_string())?;
-        let assistant_message = choice
-            .get("message")
-            .cloned()
-            .ok_or_else(|| "interactive runtime returned no message".to_string())?;
-        let assistant_content = assistant_message
-            .get("content")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let tool_calls = assistant_message
-            .get("tool_calls")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|raw| {
-                let id = raw.get("id").and_then(|value| value.as_str())?.to_string();
-                let function = raw.get("function")?;
-                let name = function
-                    .get("name")
-                    .and_then(|value| value.as_str())?
-                    .to_string();
-                let arguments = function
-                    .get("arguments")
-                    .and_then(|value| value.as_str())
-                    .and_then(|value| serde_json::from_str::<Value>(value).ok())
-                    .unwrap_or_else(|| json!({}));
-                Some(InteractiveToolCall {
-                    id,
-                    name,
-                    arguments,
-                    raw,
-                })
-            })
-            .collect::<Vec<_>>();
 
         if tool_calls.is_empty() {
             if assistant_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
+            }
+            if streaming_enabled {
+                if let Some(current_session_id) = session_id {
+                    let final_content = assistant_content.clone();
+                    emit_runtime_task_checkpoint_saved(
+                        app,
+                        None,
+                        Some(current_session_id),
+                        "chat.response_end",
+                        "chat response completed",
+                        Some(json!({ "content": final_content })),
+                    );
+                }
             }
             return Ok(assistant_content);
         }
@@ -2951,6 +4403,7 @@ fn run_openai_interactive_chat_runtime(
                 app,
                 state,
                 runtime_mode,
+                session_id,
                 effective_tool_name,
                 &effective_arguments,
             );
@@ -3694,6 +5147,9 @@ fn ipc_send(
                 payload_value.clone(),
                 &managed_state,
             ) {
+                if error == "chat generation cancelled" {
+                    return;
+                }
                 let session_id = payload_string(&payload_value, "sessionId");
                 emit_runtime_task_checkpoint_saved(
                     &app_handle,
@@ -3731,6 +5187,7 @@ fn main() {
             store_path,
             store: Mutex::new(store),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
+            active_chat_requests: Mutex::new(HashMap::new()),
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),

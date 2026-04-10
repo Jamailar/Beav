@@ -11,6 +11,7 @@ fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
         crate::tools::catalog::ToolKind::Mcp => "mcp",
         crate::tools::catalog::ToolKind::Skill => "skill",
         crate::tools::catalog::ToolKind::RuntimeControl => "runtime_control",
+        crate::tools::catalog::ToolKind::Editor => "editor",
     }
 }
 
@@ -67,6 +68,7 @@ pub fn diagnostics_tool_items() -> Vec<Value> {
         "redbox_mcp",
         "redbox_skill",
         "redbox_runtime_control",
+        "redbox_editor",
     ]
     .iter()
     .filter_map(|name| descriptor_by_name(name))

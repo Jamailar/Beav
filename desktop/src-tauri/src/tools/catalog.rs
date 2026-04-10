@@ -10,6 +10,7 @@ pub enum ToolKind {
     Mcp,
     Skill,
     RuntimeControl,
+    Editor,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +75,14 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 20_000,
+        }),
+        "redbox_editor" => Some(ToolDescriptor {
+            name: "redbox_editor",
+            description: "Inspect and edit the current video/audio manuscript package timeline.",
+            kind: ToolKind::Editor,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 24_000,
         }),
         _ => None,
     }
@@ -235,6 +244,55 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "taskId": { "type": "string" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
                         "payload": { "type": "object" }
+                    },
+                    "required": ["action"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "redbox_editor" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "redbox_editor",
+                "description": "Inspect and edit the bound RedBox video/audio manuscript package. Use timeline_read before mutating clips or tracks.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "timeline_read",
+                                "clips",
+                                "track_add",
+                                "track-add",
+                                "clip_add",
+                                "clip-add",
+                                "clip_update",
+                                "clip-update",
+                                "clip_delete",
+                                "clip-delete",
+                                "clip_split",
+                                "clip-split",
+                                "remotion_generate",
+                                "remotion-generate",
+                                "remotion_save",
+                                "remotion-save",
+                                "export"
+                            ]
+                        },
+                        "filePath": { "type": "string" },
+                        "kind": { "type": "string", "enum": ["video", "audio"] },
+                        "assetId": { "type": "string" },
+                        "clipId": { "type": "string" },
+                        "track": { "type": "string" },
+                        "order": { "type": "integer", "minimum": 0 },
+                        "durationMs": { "type": "integer", "minimum": 1 },
+                        "trimInMs": { "type": "integer", "minimum": 0 },
+                        "trimOutMs": { "type": "integer", "minimum": 0 },
+                        "enabled": { "type": "boolean" },
+                        "splitRatio": { "type": "number", "minimum": 0.1, "maximum": 0.9 },
+                        "instructions": { "type": "string" },
+                        "scene": { "type": "object" }
                     },
                     "required": ["action"],
                     "additionalProperties": false

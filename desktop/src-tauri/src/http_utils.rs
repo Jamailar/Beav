@@ -5,16 +5,20 @@ pub(crate) fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
 
-pub(crate) fn run_curl_json_with_timeout(
+fn build_curl_json_command(
     method: &str,
     url: &str,
     api_key: Option<&str>,
     extra_headers: &[(&str, String)],
-    body: Option<Value>,
+    body: Option<&Value>,
     max_time_seconds: Option<u64>,
-) -> Result<Value, String> {
+    no_buffer: bool,
+) -> Result<std::process::Command, String> {
     let mut command = std::process::Command::new("curl");
     command.arg("-sS").arg("-X").arg(method).arg(url);
+    if no_buffer {
+        command.arg("-N");
+    }
     if let Some(seconds) = max_time_seconds.filter(|value| *value > 0) {
         command.arg("--max-time").arg(seconds.to_string());
     }
@@ -30,8 +34,52 @@ pub(crate) fn run_curl_json_with_timeout(
     if let Some(payload) = body {
         command
             .arg("-d")
-            .arg(serde_json::to_string(&payload).map_err(|error| error.to_string())?);
+            .arg(serde_json::to_string(payload).map_err(|error| error.to_string())?);
     }
+    Ok(command)
+}
+
+pub(crate) fn spawn_curl_json_process(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<&Value>,
+    max_time_seconds: Option<u64>,
+    no_buffer: bool,
+) -> Result<std::process::Child, String> {
+    use std::process::Stdio;
+
+    let mut command = build_curl_json_command(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body,
+        max_time_seconds,
+        no_buffer,
+    )?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.spawn().map_err(|error| error.to_string())
+}
+
+pub(crate) fn run_curl_json_with_timeout(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+) -> Result<Value, String> {
+    let mut command = build_curl_json_command(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body.as_ref(),
+        max_time_seconds,
+        false,
+    )?;
     let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

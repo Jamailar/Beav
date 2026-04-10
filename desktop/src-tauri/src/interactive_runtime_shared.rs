@@ -3,11 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+use crate::tools::registry::{openai_schemas_for_runtime_mode, prompt_tool_lines_for_runtime_mode};
 use crate::{
     load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, render_redbox_prompt,
     truncate_chars, workspace_root, AppState, AppStore,
 };
-use crate::tools::registry::{openai_schemas_for_runtime_mode, prompt_tool_lines_for_runtime_mode};
 
 pub(crate) fn interactive_runtime_system_prompt(
     state: &State<'_, AppState>,

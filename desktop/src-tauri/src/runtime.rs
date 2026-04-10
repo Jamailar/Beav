@@ -332,6 +332,7 @@ pub struct ChatExecutionResult {
     pub session_id: String,
     pub response: String,
     pub title_update: Option<(String, String)>,
+    pub emitted_live_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -908,6 +909,8 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
     match normalized.as_str() {
         "wander" => "wander",
         "redclaw" => "redclaw",
+        "video-editor" | "video_editor" | "video-draft" | "redvideo" => "video-editor",
+        "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" => "knowledge",
         "advisor-discussion" => "advisor-discussion",
