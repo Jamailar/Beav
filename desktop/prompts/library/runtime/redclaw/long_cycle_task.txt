@@ -1,0 +1,3 @@
+目标：{{objective}}
+
+当前轮执行指令：{{step_prompt}}

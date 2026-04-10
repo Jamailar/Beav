@@ -132,11 +132,43 @@ fn emit_legacy_chat_compat_event(
                         }),
                     );
                 }
+                "chat.skill_activated" => {
+                    let _ = app.emit(
+                        "chat:skill-activated",
+                        json!({
+                            "name": payload_string(&checkpoint_payload, "name").unwrap_or_default(),
+                            "description": payload_string(&checkpoint_payload, "description").unwrap_or_default(),
+                        }),
+                    );
+                }
+                "chat.tool_confirm_request" => {
+                    let _ = app.emit("chat:tool-confirm-request", checkpoint_payload);
+                }
                 _ => {}
             }
         }
         _ => {}
     }
+}
+
+fn emit_legacy_creative_chat_compat_event(
+    app: &AppHandle,
+    checkpoint_type: &str,
+    payload: &Value,
+) {
+    let Some(event_name) = (match checkpoint_type {
+        "creative_chat.user_message" => Some("creative-chat:user-message"),
+        "creative_chat.advisor_start" => Some("creative-chat:advisor-start"),
+        "creative_chat.thinking" => Some("creative-chat:thinking"),
+        "creative_chat.rag" => Some("creative-chat:rag"),
+        "creative_chat.tool" => Some("creative-chat:tool"),
+        "creative_chat.stream" => Some("creative-chat:stream"),
+        "creative_chat.done" => Some("creative-chat:done"),
+        _ => None,
+    }) else {
+        return;
+    };
+    let _ = app.emit(event_name, payload.clone());
 }
 
 pub fn emit_runtime_event(
@@ -187,6 +219,81 @@ pub fn emit_runtime_text_delta(app: &AppHandle, session_id: &str, stream: &str, 
             "stream": stream,
             "content": content,
         }),
+    );
+}
+
+pub fn split_stream_chunks(content: &str, max_chars: usize) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut count = 0usize;
+    for ch in content.chars() {
+        current.push(ch);
+        count += 1;
+        let boundary = ch == '\n' || ch == '。' || ch == '！' || ch == '？';
+        if count >= max_chars && boundary {
+            chunks.push(current.clone());
+            current.clear();
+            count = 0;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+pub fn emit_chat_sequence(
+    app: &AppHandle,
+    session_id: &str,
+    response: &str,
+    thought: &str,
+    runtime_mode: &str,
+    title_update: Option<(String, String)>,
+) {
+    emit_runtime_stream_start(app, session_id, "thinking", Some(runtime_mode));
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.plan_updated",
+        "plan updated",
+        Some(json!({ "steps": [] })),
+    );
+    if !thought.trim().is_empty() {
+        emit_runtime_text_delta(app, session_id, "thought", thought);
+    }
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.thought_end",
+        "thought stream completed",
+        None,
+    );
+    emit_runtime_stream_start(app, session_id, "responding", Some(runtime_mode));
+    for chunk in split_stream_chunks(response, 160) {
+        emit_runtime_text_delta(app, session_id, "response", &chunk);
+    }
+    if let Some((sid, title)) = title_update {
+        emit_runtime_task_checkpoint_saved(
+            app,
+            None,
+            Some(&sid),
+            "chat.session_title_updated",
+            "session title updated",
+            Some(json!({ "sessionId": sid.clone(), "title": title.clone() })),
+        );
+    }
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.response_end",
+        "chat response completed",
+        Some(json!({ "content": response })),
     );
 }
 
@@ -321,4 +428,22 @@ pub fn emit_runtime_task_checkpoint_saved(
             "payload": payload,
         }),
     );
+}
+
+pub fn emit_creative_chat_checkpoint(
+    app: &AppHandle,
+    room_id: &str,
+    checkpoint_type: &str,
+    payload: Value,
+) {
+    let synthetic_session_id = format!("chatroom:{room_id}");
+    emit_runtime_task_checkpoint_saved(
+        app,
+        Some(room_id),
+        Some(&synthetic_session_id),
+        checkpoint_type,
+        checkpoint_type,
+        Some(payload.clone()),
+    );
+    emit_legacy_creative_chat_compat_event(app, checkpoint_type, &payload);
 }

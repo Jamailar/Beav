@@ -1,0 +1,197 @@
+use base64::Engine;
+use serde_json::{json, Value};
+
+pub(crate) fn normalize_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+pub(crate) fn run_curl_json_with_timeout(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+) -> Result<Value, String> {
+    let mut command = std::process::Command::new("curl");
+    command.arg("-sS").arg("-X").arg(method).arg(url);
+    if let Some(seconds) = max_time_seconds.filter(|value| *value > 0) {
+        command.arg("--max-time").arg(seconds.to_string());
+    }
+    command.arg("-H").arg("Content-Type: application/json");
+    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        command
+            .arg("-H")
+            .arg(format!("Authorization: Bearer {key}"));
+    }
+    for (header, value) in extra_headers {
+        command.arg("-H").arg(format!("{header}: {value}"));
+    }
+    if let Some(payload) = body {
+        command
+            .arg("-d")
+            .arg(serde_json::to_string(&payload).map_err(|error| error.to_string())?);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("curl failed with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))
+}
+
+pub(crate) fn run_curl_json(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_curl_json_with_timeout(method, url, api_key, extra_headers, body, None)
+}
+
+pub(crate) fn run_curl_text(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, String)],
+    body: Option<String>,
+) -> Result<String, String> {
+    let mut command = std::process::Command::new("curl");
+    command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
+    for (header, value) in extra_headers {
+        command.arg("-H").arg(format!("{header}: {value}"));
+    }
+    if let Some(payload) = body {
+        command.arg("-d").arg(payload);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("curl failed with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+pub(crate) fn run_curl_bytes(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+) -> Result<Vec<u8>, String> {
+    let mut command = std::process::Command::new("curl");
+    command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
+    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        command
+            .arg("-H")
+            .arg(format!("Authorization: Bearer {key}"));
+    }
+    for (header, value) in extra_headers {
+        command.arg("-H").arg(format!("{header}: {value}"));
+    }
+    if let Some(payload) = body {
+        command.arg("-H").arg("Content-Type: application/json");
+        command
+            .arg("-d")
+            .arg(serde_json::to_string(&payload).map_err(|error| error.to_string())?);
+    }
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("curl failed with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(output.stdout)
+}
+
+pub(crate) fn decode_base64_bytes(encoded: &str) -> Result<Vec<u8>, String> {
+    let normalized = encoded
+        .trim()
+        .replace('\n', "")
+        .replace('\r', "")
+        .replace(' ', "");
+    base64::engine::general_purpose::STANDARD
+        .decode(normalized.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(normalized.as_bytes()))
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_sse_endpoint_hint(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("data:") {
+            let data = value.trim();
+            if let Ok(json) = serde_json::from_str::<Value>(data) {
+                if let Some(url) = json
+                    .get("endpoint")
+                    .or_else(|| json.get("url"))
+                    .and_then(|item| item.as_str())
+                    .filter(|item| !item.trim().is_empty())
+                {
+                    return Some(url.to_string());
+                }
+            }
+            if data.starts_with("http://") || data.starts_with("https://") {
+                return Some(data.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn resolve_sse_post_url(url: &str) -> String {
+    let normalized = normalize_base_url(url);
+    if let Some(hint) = parse_sse_endpoint_hint(&String::from_utf8_lossy(
+        &run_curl_bytes(
+            "GET",
+            &normalized,
+            None,
+            &[("Accept", "text/event-stream".to_string())],
+            None,
+        )
+        .unwrap_or_default(),
+    )) {
+        return hint;
+    }
+    if normalized.ends_with("/sse") {
+        return format!("{}/message", normalized.trim_end_matches("/sse"));
+    }
+    if normalized.ends_with("/events") {
+        return format!("{}/message", normalized.trim_end_matches("/events"));
+    }
+    if normalized.ends_with("/stream") {
+        return format!("{}/message", normalized.trim_end_matches("/stream"));
+    }
+    format!("{normalized}/message")
+}
+
+pub(crate) fn run_sse_mcp_method(url: &str, method: &str, params: Value) -> Result<Value, String> {
+    let post_url = resolve_sse_post_url(url);
+    run_curl_json(
+        "POST",
+        &post_url,
+        None,
+        &[],
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params
+        })),
+    )
+}

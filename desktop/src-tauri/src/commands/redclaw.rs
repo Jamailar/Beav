@@ -5,16 +5,17 @@ use std::sync::{
 };
 use tauri::{AppHandle, Emitter, State};
 
+use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
     RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord,
 };
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
-    execute_redclaw_run, handle_redclaw_onboarding_turn, load_redclaw_onboarding_state,
+    handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, make_id, normalize_optional_string, now_i64, now_iso,
-    payload_field, payload_string, redclaw_state_value, run_redclaw_scheduler,
-    update_redclaw_profile_doc, AppState,
+    payload_field, payload_string, redclaw_state_value, render_redbox_prompt,
+    run_redclaw_scheduler, update_redclaw_profile_doc, AppState,
 };
 
 pub fn handle_redclaw_channel(
@@ -151,8 +152,21 @@ pub fn handle_redclaw_channel(
                 let project_id = project.as_ref().map(|item| item.id.clone());
                 let prompt = project
                     .as_ref()
-                    .map(|item| format!("请推进当前 RedClaw 项目：{}\n\n输出最小下一步行动、内容策略和执行建议。", item.goal))
-                    .unwrap_or_else(|| "请为当前空间执行一次 RedClaw 巡检，给出内容生产的下一步建议。".to_string());
+                    .map(|item| {
+                        render_redbox_prompt(
+                            &load_redbox_prompt_or_embedded(
+                                "runtime/redclaw/runner_run_now_with_project.txt",
+                                include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_with_project.txt"),
+                            ),
+                            &[("project_goal", item.goal.clone())],
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        load_redbox_prompt_or_embedded(
+                            "runtime/redclaw/runner_run_now_default.txt",
+                            include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_default.txt"),
+                        )
+                    });
                 Ok((project_id, prompt))
             })?;
             let run_result = execute_redclaw_run(app, state, prompt, project_id, "runner-run-now")?;
@@ -351,7 +365,14 @@ pub fn handle_redclaw_channel(
                 let prompt = task
                     .as_ref()
                     .map(|item| item.prompt.clone())
-                    .unwrap_or_else(|| "请执行一次 RedClaw 定时任务。".to_string());
+                    .unwrap_or_else(|| {
+                        load_redbox_prompt_or_embedded(
+                            "runtime/redclaw/scheduled_default.txt",
+                            include_str!(
+                                "../../../prompts/library/runtime/redclaw/scheduled_default.txt"
+                            ),
+                        )
+                    });
                 let project_id = task.and_then(|item| item.project_id);
                 Ok((project_id, prompt))
             })?;
@@ -471,53 +492,67 @@ pub fn handle_redclaw_channel(
                 Err(error) => Err(error),
             }
         }
-        "redclaw:runner-run-long-cycle-now" => (|| {
-            let task_id = payload_string(payload, "taskId").unwrap_or_default();
-            let (project_id, prompt) = with_store(state, |store| {
-                let task = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter()
-                    .find(|item| item.id == task_id)
-                    .cloned();
-                let prompt = task
+        "redclaw:runner-run-long-cycle-now" => {
+            (|| {
+                let task_id = payload_string(payload, "taskId").unwrap_or_default();
+                let (project_id, prompt) = with_store(state, |store| {
+                    let task = store
+                        .redclaw_state
+                        .long_cycle_tasks
+                        .iter()
+                        .find(|item| item.id == task_id)
+                        .cloned();
+                    let prompt = task
                     .as_ref()
                     .map(|item| {
-                        format!(
-                            "目标：{}\n\n当前轮执行指令：{}",
-                            item.objective, item.step_prompt
+                        render_redbox_prompt(
+                            &load_redbox_prompt_or_embedded(
+                                "runtime/redclaw/long_cycle_task.txt",
+                                include_str!("../../../prompts/library/runtime/redclaw/long_cycle_task.txt"),
+                            ),
+                            &[
+                                ("objective", item.objective.clone()),
+                                ("step_prompt", item.step_prompt.clone()),
+                            ],
                         )
                     })
-                    .unwrap_or_else(|| "请执行一次 RedClaw 长周期任务。".to_string());
-                let project_id = task.and_then(|item| item.project_id);
-                Ok((project_id, prompt))
-            })?;
-            let run_result =
-                execute_redclaw_run(app, state, prompt, project_id, "long-cycle-task")?;
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.completed_rounds += 1;
-                    task.last_run_at = Some(now_iso());
-                    task.last_result = Some("success".to_string());
-                    task.status = if task.completed_rounds >= task.total_rounds {
-                        "completed".to_string()
-                    } else {
-                        "running".to_string()
-                    };
-                    task.updated_at = now_iso();
-                }
-                sync_redclaw_job_definitions(store);
-                Ok(json!({ "success": true, "run": run_result }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        })(),
+                    .unwrap_or_else(|| {
+                        load_redbox_prompt_or_embedded(
+                            "runtime/redclaw/long_cycle_default.txt",
+                            include_str!("../../../prompts/library/runtime/redclaw/long_cycle_default.txt"),
+                        )
+                    });
+                    let project_id = task.and_then(|item| item.project_id);
+                    Ok((project_id, prompt))
+                })?;
+                let run_result =
+                    execute_redclaw_run(app, state, prompt, project_id, "long-cycle-task")?;
+                let result = with_store_mut(state, |store| {
+                    if let Some(task) = store
+                        .redclaw_state
+                        .long_cycle_tasks
+                        .iter_mut()
+                        .find(|item| item.id == task_id)
+                    {
+                        task.completed_rounds += 1;
+                        task.last_run_at = Some(now_iso());
+                        task.last_result = Some("success".to_string());
+                        task.status = if task.completed_rounds >= task.total_rounds {
+                            "completed".to_string()
+                        } else {
+                            "running".to_string()
+                        };
+                        task.updated_at = now_iso();
+                    }
+                    sync_redclaw_job_definitions(store);
+                    Ok(json!({ "success": true, "run": run_result }))
+                })?;
+                let status =
+                    with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
+                let _ = app.emit("redclaw:runner-status", status);
+                Ok(result)
+            })()
+        }
         _ => return None,
     };
     Some(result)

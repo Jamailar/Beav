@@ -2,16 +2,17 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::commands::chat_runtime::execute_chat_exchange;
-use crate::events::emit_runtime_task_checkpoint_saved;
+use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
+use crate::commands::runtime_routing::route_runtime_intent_with_settings;
+use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
     SessionTranscriptRecord,
 };
 use crate::{
-    emit_chat_sequence, make_id, now_iso, now_ms, payload_field, payload_string,
-    payload_value_as_string, resolve_runtime_mode_for_session, route_runtime_intent_with_settings,
-    run_subagent_orchestration_for_task, AppState, ChatSessionRecord,
+    make_id, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
+    resolve_runtime_mode_for_session, AppState, ChatSessionRecord,
 };
 
 pub fn handle_runtime_session_channel(

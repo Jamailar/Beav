@@ -2,14 +2,12 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::chat_runtime::execute_chat_exchange;
-use crate::events::emit_runtime_tool_result;
+use crate::commands::chat_state::{latest_session_id, resolve_runtime_mode_for_session};
+use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
+use crate::events::{emit_chat_sequence, emit_runtime_tool_result};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
-use crate::{
-    create_work_item, detect_redclaw_artifact_kind, emit_chat_sequence, latest_session_id, make_id,
-    now_i64, payload_field, payload_string, resolve_runtime_mode_for_session, save_redclaw_outputs,
-    AppState,
-};
+use crate::{create_work_item, make_id, now_i64, payload_field, payload_string, AppState};
 
 pub fn handle_send_channel(
     app: &AppHandle,

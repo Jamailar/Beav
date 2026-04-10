@@ -1,0 +1,1231 @@
+use serde_json::Value;
+use std::fs;
+use std::path::Path;
+
+use crate::{
+    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path, now_iso,
+    optional_asset_url_from_note_path, read_text_file_or_empty, slug_from_relative_path,
+    AdvisorRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
+    KnowledgeNoteStatsRecord, MediaAssetRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord,
+    RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
+    SubjectRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord,
+};
+
+pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+}
+
+pub(crate) fn list_files_relative(root: &Path, limit: usize) -> Vec<String> {
+    let mut items = Vec::new();
+    if !root.exists() {
+        return items;
+    }
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                items.push(format!("{name}/"));
+            } else {
+                items.push(name);
+            }
+            if items.len() >= limit {
+                break;
+            }
+        }
+    }
+    items
+}
+
+pub(crate) fn load_subject_categories_from_fs(subjects_root: &Path) -> Vec<SubjectCategory> {
+    read_json_file(&subjects_root.join("categories.json"))
+        .and_then(|value| {
+            value
+                .get("categories")
+                .and_then(|item| item.as_array())
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            Some(SubjectCategory {
+                id: item.get("id")?.as_str()?.to_string(),
+                name: item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名分类")
+                    .to_string(),
+                created_at: item
+                    .get("createdAt")
+                    .or_else(|| item.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> {
+    let catalog_items = read_json_file(&subjects_root.join("catalog.json"))
+        .and_then(|value| {
+            value
+                .get("subjects")
+                .and_then(|item| item.as_array())
+                .cloned()
+        })
+        .unwrap_or_default();
+    catalog_items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?.to_string();
+            let subject_dir = subjects_root.join(&id);
+            let image_paths = item
+                .get("imagePaths")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|x| x.as_str().map(ToString::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let absolute_image_paths = image_paths
+                .iter()
+                .map(|rel| {
+                    normalize_legacy_workspace_path(&subject_dir.join(rel))
+                        .display()
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            let preview_urls = absolute_image_paths
+                .iter()
+                .map(|abs| file_url_for_path(Path::new(abs)))
+                .collect::<Vec<_>>();
+            let voice_path = item
+                .get("voicePath")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let absolute_voice_path = voice_path.as_ref().map(|rel| {
+                normalize_legacy_workspace_path(&subject_dir.join(rel))
+                    .display()
+                    .to_string()
+            });
+            Some(SubjectRecord {
+                id,
+                name: item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名主体")
+                    .to_string(),
+                category_id: item
+                    .get("categoryId")
+                    .or_else(|| item.get("category_id"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                description: item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                tags: item
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                attributes: item
+                    .get("attributes")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| {
+                                Some(SubjectAttribute {
+                                    key: x.get("key")?.as_str()?.to_string(),
+                                    value: x
+                                        .get("value")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                image_paths,
+                voice_path,
+                voice_script: item
+                    .get("voiceScript")
+                    .or_else(|| item.get("voice_script"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                created_at: item
+                    .get("createdAt")
+                    .or_else(|| item.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                absolute_image_paths: absolute_image_paths.clone(),
+                preview_urls: preview_urls.clone(),
+                primary_preview_url: preview_urls.first().cloned(),
+                absolute_voice_path: absolute_voice_path.clone(),
+                voice_preview_url: absolute_voice_path
+                    .as_ref()
+                    .map(|abs| file_url_for_path(Path::new(abs))),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn load_advisors_from_fs(advisors_root: &Path) -> Vec<AdvisorRecord> {
+    let mut advisors = Vec::new();
+    let Ok(entries) = fs::read_dir(advisors_root) else {
+        return advisors;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(config) = read_json_file(&path.join("config.json")) else {
+            continue;
+        };
+        let advisor_id = entry.file_name().to_string_lossy().to_string();
+        let avatar_value = config
+            .get("avatar")
+            .and_then(|v| v.as_str())
+            .unwrap_or("🤖");
+        let avatar_path = normalize_legacy_workspace_path(&path.join(avatar_value));
+        let avatar = if avatar_value.contains('/') || avatar_path.exists() {
+            file_url_for_path(&avatar_path)
+        } else {
+            avatar_value.to_string()
+        };
+        let knowledge_dir = path.join("knowledge");
+        advisors.push(AdvisorRecord {
+            id: advisor_id,
+            name: config
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未命名智囊")
+                .to_string(),
+            avatar,
+            personality: config
+                .get("personality")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            system_prompt: config
+                .get("systemPrompt")
+                .or_else(|| config.get("system_prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            knowledge_language: config
+                .get("knowledgeLanguage")
+                .or_else(|| config.get("knowledge_language"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            knowledge_files: list_files_relative(&knowledge_dir, 20),
+            youtube_channel: config
+                .get("youtubeChannel")
+                .or_else(|| config.get("youtube_channel"))
+                .cloned(),
+            created_at: config
+                .get("createdAt")
+                .or_else(|| config.get("created_at"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            updated_at: config
+                .get("updatedAt")
+                .or_else(|| config.get("updated_at"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string(),
+        });
+    }
+    advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    advisors
+}
+
+pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetRecord> {
+    read_json_file(&media_root.join("catalog.json"))
+        .and_then(|value| {
+            value
+                .get("assets")
+                .and_then(|item| item.as_array())
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let relative_path = item
+                .get("relativePath")
+                .or_else(|| item.get("relative_path"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let absolute_path = relative_path.as_ref().map(|rel| {
+                normalize_legacy_workspace_path(&media_root.join(rel))
+                    .display()
+                    .to_string()
+            });
+            Some(MediaAssetRecord {
+                id: item.get("id")?.as_str()?.to_string(),
+                source: item
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("imported")
+                    .to_string(),
+                project_id: item
+                    .get("projectId")
+                    .or_else(|| item.get("project_id"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                title: item
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                prompt: item
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                provider: item
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                provider_template: item
+                    .get("providerTemplate")
+                    .or_else(|| item.get("provider_template"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                model: item
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                aspect_ratio: item
+                    .get("aspectRatio")
+                    .or_else(|| item.get("aspect_ratio"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                size: item
+                    .get("size")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                quality: item
+                    .get("quality")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                mime_type: item
+                    .get("mimeType")
+                    .or_else(|| item.get("mime_type"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                relative_path: relative_path.clone(),
+                bound_manuscript_path: item
+                    .get("boundManuscriptPath")
+                    .or_else(|| item.get("bound_manuscript_path"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                created_at: item
+                    .get("createdAt")
+                    .or_else(|| item.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                absolute_path: absolute_path.clone(),
+                preview_url: absolute_path
+                    .as_ref()
+                    .map(|abs| file_url_for_path(Path::new(abs))),
+                exists: absolute_path
+                    .as_ref()
+                    .is_some_and(|abs| Path::new(abs).exists()),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn load_cover_assets_from_fs(cover_root: &Path) -> Vec<CoverAssetRecord> {
+    read_json_file(&cover_root.join("catalog.json"))
+        .and_then(|value| {
+            value
+                .get("assets")
+                .and_then(|item| item.as_array())
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let relative_path = item
+                .get("relativePath")
+                .or_else(|| item.get("relative_path"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let absolute_path = relative_path.as_ref().map(|rel| {
+                normalize_legacy_workspace_path(&cover_root.join(rel))
+                    .display()
+                    .to_string()
+            });
+            Some(CoverAssetRecord {
+                id: item.get("id")?.as_str()?.to_string(),
+                title: item
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                template_name: item
+                    .get("templateName")
+                    .or_else(|| item.get("template_name"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                prompt: item
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                provider: item
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                provider_template: item
+                    .get("providerTemplate")
+                    .or_else(|| item.get("provider_template"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                model: item
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                aspect_ratio: item
+                    .get("aspectRatio")
+                    .or_else(|| item.get("aspect_ratio"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                size: item
+                    .get("size")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                quality: item
+                    .get("quality")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                relative_path: relative_path.clone(),
+                preview_url: absolute_path
+                    .as_ref()
+                    .map(|abs| file_url_for_path(Path::new(abs))),
+                exists: absolute_path
+                    .as_ref()
+                    .is_some_and(|abs| Path::new(abs).exists()),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<KnowledgeNoteRecord> {
+    let mut notes = Vec::new();
+    let redbook_root = knowledge_root.join("redbook");
+    if let Ok(entries) = fs::read_dir(&redbook_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(meta) = read_json_file(&path.join("meta.json")) else {
+                continue;
+            };
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+            let note_id = meta
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&entry_name)
+                .to_string();
+            let content_path = path.join("content.md");
+            let html_path = path.join("content.html");
+            let content_text = meta
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| read_text_file_or_empty(&content_path));
+            let image_urls = meta
+                .get("images")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| optional_asset_url_from_note_path(&path, Some(item)))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let cover_url = optional_asset_url_from_note_path(&path, meta.get("cover"))
+                .or_else(|| {
+                    let candidate = path.join("images").join("cover.jpg");
+                    if candidate.exists() {
+                        Some(file_url_for_path(&candidate))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| image_urls.first().cloned());
+            let tags = meta
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(ToString::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|arr| !arr.is_empty())
+                .or_else(|| {
+                    let extracted = extract_tags_from_text(&content_text);
+                    if extracted.is_empty() {
+                        None
+                    } else {
+                        Some(extracted)
+                    }
+                });
+            let note_type = meta
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let capture_kind = meta
+                .get("captureKind")
+                .or_else(|| meta.get("capture_kind"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    if note_type.as_deref() == Some("link-article") {
+                        Some("link-article".to_string())
+                    } else if !image_urls.is_empty() {
+                        Some("xhs-image".to_string())
+                    } else {
+                        None
+                    }
+                });
+            notes.push(KnowledgeNoteRecord {
+                id: note_id.clone(),
+                r#type: note_type,
+                source_url: meta
+                    .get("sourceUrl")
+                    .or_else(|| meta.get("source_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                title: meta
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&note_id)
+                    .to_string(),
+                author: meta
+                    .get("author")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("原文链接")
+                    .to_string(),
+                content: content_text,
+                excerpt: meta
+                    .get("excerpt")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                site_name: meta
+                    .get("siteName")
+                    .or_else(|| meta.get("site_name"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                capture_kind,
+                html_file: if html_path.exists() {
+                    Some(html_path.display().to_string())
+                } else {
+                    None
+                },
+                html_file_url: if html_path.exists() {
+                    Some(file_url_for_path(&html_path))
+                } else {
+                    None
+                },
+                images: image_urls,
+                tags,
+                cover: cover_url,
+                video: None,
+                video_url: None,
+                transcript: meta
+                    .get("transcript")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                transcription_status: meta
+                    .get("transcriptionStatus")
+                    .or_else(|| meta.get("transcription_status"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                stats: KnowledgeNoteStatsRecord {
+                    likes: meta.get("likes").and_then(|v| v.as_i64()).unwrap_or(0),
+                    collects: meta.get("collects").and_then(|v| v.as_i64()),
+                },
+                created_at: meta
+                    .get("createdAt")
+                    .or_else(|| meta.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                folder_path: Some(path.display().to_string()),
+            });
+        }
+    }
+    notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    notes
+}
+
+pub(crate) fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeVideoRecord> {
+    let mut videos = Vec::new();
+    let youtube_root = knowledge_root.join("youtube");
+    if let Ok(entries) = fs::read_dir(&youtube_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(meta) = read_json_file(&path.join("meta.json")) else {
+                continue;
+            };
+            let subtitle_file = meta
+                .get("subtitleFile")
+                .or_else(|| meta.get("subtitle_file"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            let subtitle_content = subtitle_file
+                .as_ref()
+                .map(|rel| read_text_file_or_empty(&path.join(rel)))
+                .filter(|text| !text.trim().is_empty());
+            videos.push(YoutubeVideoRecord {
+                id: {
+                    let entry_name = entry.file_name().to_string_lossy().to_string();
+                    meta.get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&entry_name)
+                        .to_string()
+                },
+                video_id: meta
+                    .get("videoId")
+                    .or_else(|| meta.get("video_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                video_url: meta
+                    .get("videoUrl")
+                    .or_else(|| meta.get("video_url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                title: meta
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("YouTube 视频")
+                    .to_string(),
+                original_title: meta
+                    .get("originalTitle")
+                    .or_else(|| meta.get("original_title"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                description: meta
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                summary: meta
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                thumbnail_url: meta
+                    .get("thumbnailUrl")
+                    .or_else(|| meta.get("thumbnail_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| {
+                        let thumb = path.join("thumbnail.jpg");
+                        if thumb.exists() {
+                            file_url_for_path(&thumb)
+                        } else {
+                            String::new()
+                        }
+                    }),
+                has_subtitle: meta
+                    .get("hasSubtitle")
+                    .or_else(|| meta.get("has_subtitle"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(subtitle_content.is_some()),
+                subtitle_content,
+                status: meta
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                created_at: meta
+                    .get("createdAt")
+                    .or_else(|| meta.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                folder_path: Some(path.display().to_string()),
+            });
+        }
+    }
+    videos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    videos
+}
+
+pub(crate) fn load_document_sources_from_fs(
+    knowledge_root: &Path,
+) -> Vec<DocumentKnowledgeSourceRecord> {
+    let docs_root = knowledge_root.join("docs");
+    let from_index = read_json_file(&docs_root.join("sources.json"))
+        .and_then(|value| {
+            value
+                .as_array()
+                .cloned()
+                .or_else(|| value.get("sources").and_then(|v| v.as_array()).cloned())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            Some(DocumentKnowledgeSourceRecord {
+                id: item.get("id")?.as_str()?.to_string(),
+                kind: item
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("docs")
+                    .to_string(),
+                name: item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("文档源")
+                    .to_string(),
+                root_path: item
+                    .get("rootPath")
+                    .or_else(|| item.get("root_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                locked: item
+                    .get("locked")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                indexing: item
+                    .get("indexing")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                index_error: item
+                    .get("indexError")
+                    .or_else(|| item.get("index_error"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                file_count: item
+                    .get("fileCount")
+                    .or_else(|| item.get("file_count"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+                sample_files: item
+                    .get("sampleFiles")
+                    .or_else(|| item.get("sample_files"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                created_at: item
+                    .get("createdAt")
+                    .or_else(|| item.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !from_index.is_empty() {
+        return from_index;
+    }
+    let imported_root = docs_root.join("imported");
+    let mut items = Vec::new();
+    if let Ok(entries) = fs::read_dir(&imported_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            items.push(DocumentKnowledgeSourceRecord {
+                id: slug_from_relative_path(&name),
+                kind: "docs".to_string(),
+                name: name.clone(),
+                root_path: path.display().to_string(),
+                locked: false,
+                indexing: false,
+                index_error: None,
+                file_count: fs::read_dir(&path)
+                    .ok()
+                    .map(|it| it.count() as i64)
+                    .unwrap_or(0),
+                sample_files: list_files_relative(&path, 8),
+                created_at: now_iso(),
+                updated_at: now_iso(),
+            });
+        }
+    }
+    items
+}
+
+pub(crate) fn load_redclaw_state_from_fs(redclaw_root: &Path) -> RedclawStateRecord {
+    let mut state = RedclawStateRecord::default();
+    if let Some(config) = read_json_file(&redclaw_root.join("background-runner.json")) {
+        state.enabled = config
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(state.enabled);
+        state.interval_minutes = config
+            .get("intervalMinutes")
+            .or_else(|| config.get("interval_minutes"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(state.interval_minutes);
+        state.keep_alive_when_no_window = config
+            .get("keepAliveWhenNoWindow")
+            .or_else(|| config.get("keep_alive_when_no_window"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(state.keep_alive_when_no_window);
+        state.max_projects_per_tick = config
+            .get("maxProjectsPerTick")
+            .or_else(|| config.get("max_projects_per_tick"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(state.max_projects_per_tick);
+        state.max_automation_per_tick = config
+            .get("maxAutomationPerTick")
+            .or_else(|| config.get("max_automation_per_tick"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(state.max_automation_per_tick);
+        state.heartbeat = config
+            .get("heartbeat")
+            .cloned()
+            .unwrap_or_else(|| state.heartbeat.clone());
+        state.last_tick_at = config
+            .get("lastTickAt")
+            .or_else(|| config.get("last_tick_at"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        state.next_tick_at = config
+            .get("nextTickAt")
+            .or_else(|| config.get("next_tick_at"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        state.scheduled_tasks = config
+            .get("scheduledTasks")
+            .or_else(|| config.get("scheduled_tasks"))
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.values()
+                    .filter_map(|item| {
+                        Some(RedclawScheduledTaskRecord {
+                            id: item.get("id")?.as_str()?.to_string(),
+                            name: item
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("未命名任务")
+                                .to_string(),
+                            enabled: item
+                                .get("enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true),
+                            mode: item
+                                .get("mode")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("interval")
+                                .to_string(),
+                            prompt: item
+                                .get("prompt")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            project_id: item
+                                .get("projectId")
+                                .or_else(|| item.get("project_id"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            interval_minutes: item
+                                .get("intervalMinutes")
+                                .or_else(|| item.get("interval_minutes"))
+                                .and_then(|v| v.as_i64()),
+                            time: item
+                                .get("time")
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            weekdays: item
+                                .get("weekdays")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect()),
+                            run_at: item
+                                .get("runAt")
+                                .or_else(|| item.get("run_at"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            created_at: item
+                                .get("createdAt")
+                                .or_else(|| item.get("created_at"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("0")
+                                .to_string(),
+                            updated_at: item
+                                .get("updatedAt")
+                                .or_else(|| item.get("updated_at"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("0")
+                                .to_string(),
+                            last_run_at: item
+                                .get("lastRunAt")
+                                .or_else(|| item.get("last_run_at"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            last_result: item
+                                .get("lastResult")
+                                .or_else(|| item.get("last_result"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            last_error: item
+                                .get("lastError")
+                                .or_else(|| item.get("last_error"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            next_run_at: item
+                                .get("nextRunAt")
+                                .or_else(|| item.get("next_run_at"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        state.long_cycle_tasks = config
+            .get("longCycleTasks")
+            .or_else(|| config.get("long_cycle_tasks"))
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.values()
+                    .filter_map(|item| {
+                        Some(RedclawLongCycleTaskRecord {
+                            id: item.get("id")?.as_str()?.to_string(),
+                            name: item
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("未命名长周期任务")
+                                .to_string(),
+                            enabled: item
+                                .get("enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true),
+                            status: item
+                                .get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("paused")
+                                .to_string(),
+                            objective: item
+                                .get("objective")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            step_prompt: item
+                                .get("stepPrompt")
+                                .or_else(|| item.get("step_prompt"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            project_id: item
+                                .get("projectId")
+                                .or_else(|| item.get("project_id"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            interval_minutes: item
+                                .get("intervalMinutes")
+                                .or_else(|| item.get("interval_minutes"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(1440),
+                            total_rounds: item
+                                .get("totalRounds")
+                                .or_else(|| item.get("total_rounds"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(1),
+                            completed_rounds: item
+                                .get("completedRounds")
+                                .or_else(|| item.get("completed_rounds"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                            created_at: item
+                                .get("createdAt")
+                                .or_else(|| item.get("created_at"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("0")
+                                .to_string(),
+                            updated_at: item
+                                .get("updatedAt")
+                                .or_else(|| item.get("updated_at"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("0")
+                                .to_string(),
+                            last_run_at: item
+                                .get("lastRunAt")
+                                .or_else(|| item.get("last_run_at"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            last_result: item
+                                .get("lastResult")
+                                .or_else(|| item.get("last_result"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            last_error: item
+                                .get("lastError")
+                                .or_else(|| item.get("last_error"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                            next_run_at: item
+                                .get("nextRunAt")
+                                .or_else(|| item.get("next_run_at"))
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    let projects_root = redclaw_root.join("projects");
+    let mut projects = Vec::new();
+    if let Ok(entries) = fs::read_dir(&projects_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(project) = read_json_file(&path.join("project.json")) else {
+                continue;
+            };
+            projects.push(RedclawProjectRecord {
+                id: {
+                    let entry_name = entry.file_name().to_string_lossy().to_string();
+                    project
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&entry_name)
+                        .to_string()
+                },
+                goal: project
+                    .get("goal")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名项目")
+                    .to_string(),
+                platform: project
+                    .get("platform")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                task_type: project
+                    .get("taskType")
+                    .or_else(|| project.get("task_type"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                status: project
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("planning")
+                    .to_string(),
+                updated_at: project
+                    .get("updatedAt")
+                    .or_else(|| project.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+            });
+        }
+    }
+    projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    state.projects = projects;
+    state
+}
+
+pub(crate) fn load_work_items_from_fs(redclaw_root: &Path) -> Vec<WorkItemRecord> {
+    let mut items = Vec::new();
+    let work_root = redclaw_root.join("work-items");
+    if let Ok(entries) = fs::read_dir(&work_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|v| v.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(item) = read_json_file(&path) else {
+                continue;
+            };
+            items.push(WorkItemRecord {
+                id: {
+                    let entry_name = entry.file_name().to_string_lossy().to_string();
+                    item.get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&entry_name)
+                        .to_string()
+                },
+                title: item
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名工作项")
+                    .to_string(),
+                description: item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                summary: item
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                status: item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pending")
+                    .to_string(),
+                effective_status: item
+                    .get("effectiveStatus")
+                    .or_else(|| item.get("effective_status"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| {
+                        item.get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("pending")
+                    })
+                    .to_string(),
+                priority: item.get("priority").and_then(|v| v.as_i64()).unwrap_or(0),
+                r#type: item
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("task")
+                    .to_string(),
+                blocked_by: item
+                    .get("dependsOn")
+                    .or_else(|| item.get("blockedBy"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                refs: WorkRefsRecord {
+                    project_ids: item
+                        .pointer("/refs/projectIds")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(ToString::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    session_ids: item
+                        .pointer("/refs/sessionIds")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(ToString::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    task_ids: item
+                        .pointer("/refs/taskIds")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(ToString::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
+                metadata: item.get("metadata").cloned(),
+                schedule: WorkScheduleRecord {
+                    mode: item
+                        .pointer("/schedule/mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("none")
+                        .to_string(),
+                    interval_minutes: item
+                        .pointer("/schedule/intervalMinutes")
+                        .or_else(|| item.pointer("/schedule/interval_minutes"))
+                        .and_then(|v| v.as_i64()),
+                    time: item
+                        .pointer("/schedule/time")
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string),
+                    weekdays: item
+                        .pointer("/schedule/weekdays")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect()),
+                    run_at: item
+                        .pointer("/schedule/runAt")
+                        .or_else(|| item.pointer("/schedule/run_at"))
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string),
+                    next_run_at: item
+                        .pointer("/schedule/nextRunAt")
+                        .or_else(|| item.pointer("/schedule/next_run_at"))
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string),
+                    completed_rounds: item
+                        .pointer("/schedule/completedRounds")
+                        .or_else(|| item.pointer("/schedule/completed_rounds"))
+                        .and_then(|v| v.as_i64()),
+                    total_rounds: item
+                        .pointer("/schedule/totalRounds")
+                        .or_else(|| item.pointer("/schedule/total_rounds"))
+                        .and_then(|v| v.as_i64()),
+                },
+                created_at: item
+                    .get("createdAt")
+                    .or_else(|| item.get("created_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: item
+                    .get("updatedAt")
+                    .or_else(|| item.get("updated_at"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                completed_at: item
+                    .get("completedAt")
+                    .or_else(|| item.get("completed_at"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+            });
+        }
+    }
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items
+}

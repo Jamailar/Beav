@@ -1,18 +1,21 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
+use crate::commands::chat_state::{
+    ensure_chat_session, infer_context_type_from_session_id, is_first_assistant_turn_for_session,
+    resolve_runtime_mode_for_session, should_handle_redclaw_onboarding_for_session,
+    update_chat_runtime_state,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{append_session_checkpoint, ChatExecutionResult};
 use crate::{
     append_debug_log_state, append_session_transcript, default_memory_maintenance_status,
-    ensure_chat_session, ensure_redclaw_onboarding_completed_with_defaults, generate_chat_response,
-    handle_redclaw_onboarding_turn, infer_context_type_from_session_id,
-    is_first_assistant_turn_for_session, make_id, memory_maintenance_status_from_settings,
+    ensure_redclaw_onboarding_completed_with_defaults, generate_chat_response,
+    handle_redclaw_onboarding_turn, make_id, memory_maintenance_status_from_settings,
     next_memory_maintenance_at_ms, now_i64, now_iso, resolve_chat_config,
-    resolve_runtime_mode_for_session, resolve_runtime_mode_from_context_type,
-    run_openai_interactive_chat_runtime, session_title_from_message,
-    should_handle_redclaw_onboarding_for_session, update_chat_runtime_state, value_to_i64_string,
-    write_memory_maintenance_status, AppState, ChatMessageRecord,
+    resolve_runtime_mode_from_context_type, run_openai_interactive_chat_runtime,
+    session_title_from_message, value_to_i64_string, write_memory_maintenance_status, AppState,
+    ChatMessageRecord,
 };
 
 pub fn execute_chat_exchange(

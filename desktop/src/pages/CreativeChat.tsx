@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 
 interface Advisor {
     id: string;
@@ -206,19 +207,10 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
         tools?: { name: string; status: 'running' | 'done'; result?: string }[];
     }>>({});
 
-    // Listen for streaming responses
+    // Listen for streaming responses from unified runtime:event channel
     useEffect(() => {
-        // Clean up any stale listeners first
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:stream');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:advisor-start');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:done');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:thinking');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:rag');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:tool');
-        (window.ipcRenderer as { removeAllListeners?: (channel: string) => void }).removeAllListeners?.('creative-chat:user-message');
-
         // 处理从其他页面发送的用户消息
-        const handleUserMessage = (_event: unknown, data: { roomId: string; message: ChatMessage }) => {
+        const handleUserMessage = (data: { roomId: string; message: ChatMessage }) => {
             // 如果当前选中的房间就是消息所属的房间，添加到消息列表
             if (selectedRoom?.id === data.roomId) {
                 setMessages(prev => {
@@ -240,7 +232,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             }
         };
 
-        const handleStream = (_event: unknown, data: { roomId?: string; advisorId: string; advisorName?: string; advisorAvatar?: string; content: string; done: boolean }) => {
+        const handleStream = (data: { roomId?: string; advisorId: string; advisorName?: string; advisorAvatar?: string; content: string; done: boolean }) => {
             if (data.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
             }
@@ -287,7 +279,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             }
         };
 
-        const handleNewAdvisor = (_event: unknown, data: { roomId?: string; advisorId: string; advisorName: string; advisorAvatar: string; phase?: string }) => {
+        const handleNewAdvisor = (data: { roomId?: string; advisorId: string; advisorName: string; advisorAvatar: string; phase?: string }) => {
             if (data.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
             }
@@ -321,7 +313,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             }));
         };
 
-        const handleThinking = (_event: unknown, data: { roomId?: string; advisorId: string; type: string; content: string }) => {
+        const handleThinking = (data: { roomId?: string; advisorId: string; type: string; content: string }) => {
             if (data?.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
             }
@@ -336,7 +328,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             }));
         };
 
-        const handleRag = (_event: unknown, data: { roomId?: string; advisorId: string; type: string; content?: string; sources?: string[] }) => {
+        const handleRag = (data: { roomId?: string; advisorId: string; type: string; content?: string; sources?: string[] }) => {
             if (data?.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
             }
@@ -351,7 +343,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             }));
         };
 
-        const handleTool = (_event: unknown, data: { roomId?: string; advisorId: string; type: string; tool: { name: string; result?: { success: boolean; content: string } } }) => {
+        const handleTool = (data: { roomId?: string; advisorId: string; type: string; tool: { name: string; result?: { success: boolean; content: string } } }) => {
             if (data?.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
             }
@@ -380,7 +372,7 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             });
         };
 
-        const handleDone = (_event: unknown, data?: { roomId?: string }) => {
+        const handleDone = (data?: { roomId?: string }) => {
             setIsSending(false);
             if (data?.roomId && selectedRoom?.id && data.roomId !== selectedRoom.id) {
                 return;
@@ -390,22 +382,64 @@ export function CreativeChat({ activeFile }: { activeFile?: { path: string; cont
             setThinkingState({});
         };
 
-        window.ipcRenderer.on('creative-chat:user-message', handleUserMessage);
-        window.ipcRenderer.on('creative-chat:stream', handleStream);
-        window.ipcRenderer.on('creative-chat:advisor-start', handleNewAdvisor);
-        window.ipcRenderer.on('creative-chat:thinking', handleThinking);
-        window.ipcRenderer.on('creative-chat:rag', handleRag);
-        window.ipcRenderer.on('creative-chat:tool', handleTool);
-        window.ipcRenderer.on('creative-chat:done', handleDone);
+        const disposeRuntimeEvents = subscribeRuntimeEventStream({
+            onCreativeChatUserMessage: ({ roomId, message }) => {
+                handleUserMessage({
+                    roomId,
+                    message: message as unknown as ChatMessage,
+                });
+            },
+            onCreativeChatStream: ({ roomId, advisorId, advisorName, advisorAvatar, content, done }) => {
+                handleStream({
+                    roomId,
+                    advisorId,
+                    advisorName,
+                    advisorAvatar,
+                    content,
+                    done,
+                });
+            },
+            onCreativeChatAdvisorStart: ({ roomId, advisorId, advisorName, advisorAvatar, phase }) => {
+                handleNewAdvisor({
+                    roomId,
+                    advisorId,
+                    advisorName,
+                    advisorAvatar,
+                    phase,
+                });
+            },
+            onCreativeChatThinking: ({ roomId, advisorId, thinkingType, content }) => {
+                handleThinking({
+                    roomId,
+                    advisorId,
+                    type: thinkingType,
+                    content,
+                });
+            },
+            onCreativeChatRag: ({ roomId, advisorId, ragType, content, sources }) => {
+                handleRag({
+                    roomId,
+                    advisorId,
+                    type: ragType,
+                    content,
+                    sources,
+                });
+            },
+            onCreativeChatTool: ({ roomId, advisorId, toolType, tool }) => {
+                handleTool({
+                    roomId,
+                    advisorId,
+                    type: toolType,
+                    tool: tool as unknown as { name: string; result?: { success: boolean; content: string } },
+                });
+            },
+            onCreativeChatDone: ({ roomId }) => {
+                handleDone({ roomId });
+            },
+        });
 
         return () => {
-            window.ipcRenderer.off('creative-chat:user-message', handleUserMessage);
-            window.ipcRenderer.off('creative-chat:stream', handleStream);
-            window.ipcRenderer.off('creative-chat:advisor-start', handleNewAdvisor);
-            window.ipcRenderer.off('creative-chat:thinking', handleThinking);
-            window.ipcRenderer.off('creative-chat:rag', handleRag);
-            window.ipcRenderer.off('creative-chat:tool', handleTool);
-            window.ipcRenderer.off('creative-chat:done', handleDone);
+            disposeRuntimeEvents();
         };
     }, [selectedRoom, rooms, loadRooms, loadMessages]);
 

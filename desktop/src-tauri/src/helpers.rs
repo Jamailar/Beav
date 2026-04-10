@@ -1,0 +1,315 @@
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tauri::State;
+
+use crate::{ensure_parent_dir, manuscripts_root, AppState, FileNode};
+
+pub(crate) fn normalize_relative_path(value: &str) -> String {
+    value
+        .replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+pub(crate) fn ensure_markdown_extension(value: &str) -> String {
+    let normalized = normalize_relative_path(value);
+    if normalized.ends_with(".md") {
+        normalized
+    } else if normalized.is_empty() {
+        "Untitled.md".to_string()
+    } else {
+        format!("{normalized}.md")
+    }
+}
+
+pub(crate) const ARTICLE_DRAFT_EXTENSION: &str = ".redarticle";
+pub(crate) const POST_DRAFT_EXTENSION: &str = ".redpost";
+pub(crate) const VIDEO_DRAFT_EXTENSION: &str = ".redvideo";
+pub(crate) const AUDIO_DRAFT_EXTENSION: &str = ".redaudio";
+
+pub(crate) fn is_manuscript_package_name(file_name: &str) -> bool {
+    file_name.ends_with(ARTICLE_DRAFT_EXTENSION)
+        || file_name.ends_with(POST_DRAFT_EXTENSION)
+        || file_name.ends_with(VIDEO_DRAFT_EXTENSION)
+        || file_name.ends_with(AUDIO_DRAFT_EXTENSION)
+}
+
+pub(crate) fn get_package_kind_from_file_name(file_name: &str) -> Option<&'static str> {
+    if file_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
+        Some("article")
+    } else if file_name.ends_with(POST_DRAFT_EXTENSION) {
+        Some("post")
+    } else if file_name.ends_with(VIDEO_DRAFT_EXTENSION) {
+        Some("video")
+    } else if file_name.ends_with(AUDIO_DRAFT_EXTENSION) {
+        Some("audio")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn get_draft_type_from_file_name(file_name: &str) -> &'static str {
+    match get_package_kind_from_file_name(file_name) {
+        Some("article") => "longform",
+        Some("post") => "richpost",
+        Some("video") => "video",
+        Some("audio") => "audio",
+        _ => "unknown",
+    }
+}
+
+pub(crate) fn get_default_package_entry(file_name: &str) -> &'static str {
+    match get_package_kind_from_file_name(file_name) {
+        Some("video") | Some("audio") => "script.md",
+        _ => "content.md",
+    }
+}
+
+pub(crate) fn ensure_manuscript_file_name(name: &str, fallback_extension: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.ends_with(".md")
+        || trimmed.ends_with(ARTICLE_DRAFT_EXTENSION)
+        || trimmed.ends_with(POST_DRAFT_EXTENSION)
+        || trimmed.ends_with(VIDEO_DRAFT_EXTENSION)
+        || trimmed.ends_with(AUDIO_DRAFT_EXTENSION)
+    {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}{fallback_extension}")
+    }
+}
+
+pub(crate) fn package_manifest_path(package_path: &Path) -> PathBuf {
+    package_path.join("manifest.json")
+}
+
+pub(crate) fn package_entry_path(
+    package_path: &Path,
+    file_name: &str,
+    manifest: Option<&Value>,
+) -> PathBuf {
+    let entry = manifest
+        .and_then(|value| value.get("entry"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| get_default_package_entry(file_name));
+    package_path.join(entry)
+}
+
+pub(crate) fn package_timeline_path(package_path: &Path) -> PathBuf {
+    package_path.join("timeline.otio.json")
+}
+
+pub(crate) fn package_assets_path(package_path: &Path) -> PathBuf {
+    package_path.join("assets.json")
+}
+
+pub(crate) fn package_cover_path(package_path: &Path) -> PathBuf {
+    package_path.join("cover.json")
+}
+
+pub(crate) fn package_images_path(package_path: &Path) -> PathBuf {
+    package_path.join("images.json")
+}
+
+pub(crate) fn package_remotion_path(package_path: &Path) -> PathBuf {
+    package_path.join("remotion.scene.json")
+}
+
+pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .unwrap_or(fallback)
+}
+
+pub(crate) fn write_json_value(path: &Path, value: &Value) -> Result<(), String> {
+    ensure_parent_dir(path)?;
+    fs::write(
+        path,
+        serde_json::to_string_pretty(value).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_json_value_from_text(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Some(value);
+    }
+    if let Some(start) = trimmed.find("```") {
+        let fenced = &trimmed[start + 3..];
+        let fenced = fenced
+            .strip_prefix("json")
+            .or_else(|| fenced.strip_prefix("JSON"))
+            .unwrap_or(fenced)
+            .trim_start_matches('\n');
+        if let Some(end) = fenced.find("```") {
+            let candidate = fenced[..end].trim();
+            if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+                return Some(value);
+            }
+        }
+    }
+    let first = trimmed.find('{')?;
+    let last = trimmed.rfind('}')?;
+    if last <= first {
+        return None;
+    }
+    serde_json::from_str::<Value>(&trimmed[first..=last]).ok()
+}
+
+pub(crate) fn lexbox_project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+pub(crate) fn redbox_prompt_library_root() -> PathBuf {
+    lexbox_project_root().join("prompts").join("library")
+}
+
+pub(crate) fn load_redbox_prompt(relative_path: &str) -> Option<String> {
+    let full_path = redbox_prompt_library_root().join(relative_path);
+    fs::read_to_string(full_path)
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+}
+
+pub(crate) fn load_redbox_prompt_or_embedded(relative_path: &str, embedded: &str) -> String {
+    load_redbox_prompt(relative_path).unwrap_or_else(|| embedded.trim().to_string())
+}
+
+pub(crate) fn render_redbox_prompt(template: &str, vars: &[(&str, String)]) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in vars {
+        rendered = rendered.replace(&format!("{{{{{key}}}}}"), value);
+        rendered = rendered.replace(&format!("{{{key}}}"), value);
+    }
+    rendered
+}
+
+pub(crate) fn join_relative(parent: &str, name: &str) -> String {
+    let parent = normalize_relative_path(parent);
+    let name = normalize_relative_path(name);
+    if parent.is_empty() {
+        name
+    } else if name.is_empty() {
+        parent
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
+pub(crate) fn slug_from_relative_path(path: &str) -> String {
+    let normalized = normalize_relative_path(path);
+    if normalized.is_empty() {
+        "root".to_string()
+    } else {
+        normalized.replace('/', "-").replace('.', "-")
+    }
+}
+
+pub(crate) fn title_from_relative_path(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Untitled")
+        .to_string()
+}
+
+pub(crate) fn resolve_manuscript_path(
+    state: &State<'_, AppState>,
+    relative: &str,
+) -> Result<PathBuf, String> {
+    let root = manuscripts_root(state)?;
+    let cleaned = normalize_relative_path(relative);
+    Ok(if cleaned.is_empty() {
+        root
+    } else {
+        root.join(cleaned)
+    })
+}
+
+pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, String> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut nodes = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let relative = normalize_relative_path(
+            path.strip_prefix(root)
+                .map_err(|error| error.to_string())?
+                .to_string_lossy()
+                .as_ref(),
+        );
+
+        if path.is_dir() && is_manuscript_package_name(&file_name) {
+            nodes.push(FileNode {
+                name: file_name,
+                path: relative,
+                is_directory: false,
+                children: None,
+            });
+        } else if path.is_dir() {
+            nodes.push(FileNode {
+                name: file_name,
+                path: relative,
+                is_directory: true,
+                children: Some(list_tree(root, &path)?),
+            });
+        } else if path.is_file() {
+            nodes.push(FileNode {
+                name: file_name,
+                path: relative,
+                is_directory: false,
+                children: None,
+            });
+        }
+    }
+
+    Ok(nodes)
+}
+
+pub(crate) fn markdown_to_html(title: &str, content: &str) -> String {
+    let mut html = String::from("<article>");
+    if !title.is_empty() {
+        html.push_str(&format!("<h1>{}</h1>", escape_html(title)));
+    }
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        html.push_str(&format!("<p>{}</p>", escape_html(trimmed)));
+    }
+    html.push_str("</article>");
+    html
+}
+
+pub(crate) fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+pub(crate) fn file_url_for_path(path: &Path) -> String {
+    format!("file://{}", path.display())
+}

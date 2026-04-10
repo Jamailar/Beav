@@ -7,6 +7,7 @@ import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 
 interface Session {
   id: string;
@@ -1214,18 +1215,6 @@ export function Chat({
       });
     };
 
-    // Legacy handler for compatibility if backend sends old event
-    const handleThinking = (_: unknown, { content }: { content: string }) => {
-        // Map to thought start/delta
-        // This is tricky because we don't know when it ends.
-        // Let's just update the "legacy" thinking field for now if it exists
-        setMessages(prev => {
-            const lastMsg = prev[prev.length - 1];
-            if (!lastMsg || lastMsg.role !== 'ai') return prev;
-            return [...prev.slice(0, -1), { ...lastMsg, thinking: mergeThoughtDelta(lastMsg.thinking || '', content) }];
-        });
-    };
-
   const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
       if (!content) return;
 
@@ -1492,165 +1481,6 @@ export function Chat({
       });
     };
 
-    const handleRuntimeEvent = (_: unknown, envelope?: unknown) => {
-      const event = (envelope || {}) as Record<string, unknown>;
-      const eventType = String(event.eventType || '').trim();
-      if (!eventType) return;
-      const sessionId = String(event.sessionId || '').trim();
-      const activeSessionId = currentSessionIdRef.current;
-      if (sessionId && activeSessionId && sessionId !== activeSessionId) return;
-      const payload = (event.payload || {}) as Record<string, unknown>;
-
-      if (eventType === 'stream_start') {
-        const phase = String(payload.phase || '').trim();
-        if (phase) {
-          handlePhaseStart(null, { name: phase });
-        }
-        if (phase === 'thinking') {
-          handleThoughtStart(null);
-        }
-        return;
-      }
-
-      if (eventType === 'text_delta') {
-        const stream = String(payload.stream || 'response').trim();
-        const content = String(payload.content || '');
-        if (!content) return;
-        if (stream === 'thought') {
-          handleThoughtDelta(null, { content });
-          handleThinking(null, { content });
-        } else {
-          handleResponseChunk(null, { content });
-        }
-        return;
-      }
-
-      if (eventType === 'tool_request') {
-        handleToolStart(null, {
-          callId: String(payload.callId || ''),
-          name: String(payload.name || ''),
-          input: payload.input,
-          description: String(payload.description || ''),
-        });
-        return;
-      }
-
-      if (eventType === 'tool_result') {
-        const output = (payload.output || {}) as Record<string, unknown>;
-        const callId = String(payload.callId || '');
-        const name = String(payload.name || '');
-        const content = String(output.content || '');
-        const isPartial = Boolean(output.partial);
-        if (isPartial) {
-          handleToolUpdate(null, {
-            callId,
-            name,
-            partial: content,
-          });
-        } else {
-          handleToolEnd(null, {
-            callId,
-            name,
-            output: {
-              success: Boolean(output.success),
-              content,
-            },
-          });
-        }
-        return;
-      }
-
-      if (eventType === 'task_node_changed') {
-        const taskId = String(event.taskId || '').trim();
-        const nodeId = String(payload.nodeId || '').trim() || 'node';
-        const status = String(payload.status || '').trim().toLowerCase();
-        const summary = String(payload.summary || '').trim();
-        const error = String(payload.error || '').trim();
-        const callId = `task-node:${taskId || 'session'}:${nodeId}`;
-        const name = `task_node:${nodeId}`;
-        if (status === 'running' || status === 'pending') {
-          handleToolStart(null, {
-            callId,
-            name,
-            input: {
-              taskId,
-              nodeId,
-              status,
-            },
-            description: summary || `任务节点 ${nodeId} 执行中`,
-          });
-          return;
-        }
-        const success = status !== 'failed';
-        handleToolEnd(null, {
-          callId,
-          name,
-          output: {
-            success,
-            content: error || summary || `任务节点 ${nodeId} ${success ? '已完成' : '执行失败'}`,
-          },
-        });
-        return;
-      }
-
-      if (eventType === 'subagent_spawned') {
-        const taskId = String(event.taskId || '').trim();
-        const roleId = String(payload.roleId || '').trim() || 'subagent';
-        const spawnedMode = String(payload.runtimeMode || '').trim() || 'unknown';
-        const callId = `subagent:${taskId || 'session'}:${roleId}:${Date.now()}`;
-        handleToolStart(null, {
-          callId,
-          name: `subagent:${roleId}`,
-          input: {
-            taskId,
-            roleId,
-            runtimeMode: spawnedMode,
-          },
-          description: `已启动子 Agent：${roleId}`,
-        });
-        handleToolEnd(null, {
-          callId,
-          name: `subagent:${roleId}`,
-          output: {
-            success: true,
-            content: `子 Agent 已启动（role=${roleId}, mode=${spawnedMode}）`,
-          },
-        });
-        return;
-      }
-
-      if (eventType === 'task_checkpoint_saved') {
-        const checkpointType = String(payload.checkpointType || '').trim();
-        const checkpointPayload = (payload.payload || {}) as Record<string, unknown>;
-        if (checkpointType === 'chat.plan_updated') {
-          const steps = Array.isArray(checkpointPayload.steps) ? checkpointPayload.steps : [];
-          handlePlanUpdated(null, { steps });
-          return;
-        }
-        if (checkpointType === 'chat.thought_end') {
-          handleThoughtEnd(null);
-          return;
-        }
-        if (checkpointType === 'chat.response_end') {
-          handleResponseEnd(null, { content: String(checkpointPayload.content || '') });
-          return;
-        }
-        if (checkpointType === 'chat.error') {
-          handleError(null, checkpointPayload as ChatErrorEventPayload);
-          return;
-        }
-        if (checkpointType === 'chat.session_title_updated') {
-          const sessionId = String(checkpointPayload.sessionId || '');
-          const title = String(checkpointPayload.title || '');
-          if (sessionId && title) {
-            handleSessionTitleUpdated(null, { sessionId, title });
-          }
-          return;
-        }
-        return;
-      }
-    };
-
     const handleError = (_: unknown, error: ChatErrorEventPayload | string) => {
       setIsProcessing(false);
       setConfirmRequest(null);
@@ -1684,15 +1514,102 @@ export function Chat({
       });
     };
 
-    // Register Listeners
-    window.ipcRenderer.on('chat:skill-activated', handleSkillActivated);
-    window.ipcRenderer.on('chat:tool-confirm-request', handleConfirmRequest);
-    window.ipcRenderer.on('runtime:event', handleRuntimeEvent);
+    const disposeRuntimeEvents = subscribeRuntimeEventStream({
+      getActiveSessionId: () => currentSessionIdRef.current,
+      onPhaseStart: ({ phase }) => {
+        handlePhaseStart(null, { name: phase });
+      },
+      onThoughtStart: () => {
+        handleThoughtStart(null);
+      },
+      onThoughtDelta: ({ content }) => {
+        handleThoughtDelta(null, { content });
+      },
+      onResponseDelta: ({ content }) => {
+        handleResponseChunk(null, { content });
+      },
+      onToolRequest: ({ callId, name, input, description }) => {
+        handleToolStart(null, { callId, name, input, description });
+      },
+      onToolResult: ({ callId, name, output }) => {
+        const content = String(output.content || '');
+        if (Boolean(output.partial)) {
+          handleToolUpdate(null, { callId, name, partial: content });
+          return;
+        }
+        handleToolEnd(null, {
+          callId,
+          name,
+          output: {
+            success: Boolean(output.success),
+            content,
+          },
+        });
+      },
+      onTaskNodeChanged: ({ taskId, nodeId, status, summary, error }) => {
+        const callId = `task-node:${taskId || 'session'}:${nodeId}`;
+        const name = `task_node:${nodeId}`;
+        if (status === 'running' || status === 'pending') {
+          handleToolStart(null, {
+            callId,
+            name,
+            input: { taskId, nodeId, status },
+            description: summary || `任务节点 ${nodeId} 执行中`,
+          });
+          return;
+        }
+        const success = status !== 'failed';
+        handleToolEnd(null, {
+          callId,
+          name,
+          output: {
+            success,
+            content: error || summary || `任务节点 ${nodeId} ${success ? '已完成' : '执行失败'}`,
+          },
+        });
+      },
+      onSubagentSpawned: ({ taskId, roleId, runtimeMode }) => {
+        const callId = `subagent:${taskId || 'session'}:${roleId}:${Date.now()}`;
+        handleToolStart(null, {
+          callId,
+          name: `subagent:${roleId}`,
+          input: { taskId, roleId, runtimeMode },
+          description: `已启动子 Agent：${roleId}`,
+        });
+        handleToolEnd(null, {
+          callId,
+          name: `subagent:${roleId}`,
+          output: {
+            success: true,
+            content: `子 Agent 已启动（role=${roleId}, mode=${runtimeMode}）`,
+          },
+        });
+      },
+      onChatPlanUpdated: ({ steps }) => {
+        handlePlanUpdated(null, { steps });
+      },
+      onChatThoughtEnd: () => {
+        handleThoughtEnd(null);
+      },
+      onChatResponseEnd: ({ content }) => {
+        handleResponseEnd(null, { content });
+      },
+      onChatError: ({ errorPayload }) => {
+        handleError(null, errorPayload as ChatErrorEventPayload);
+      },
+      onChatSessionTitleUpdated: ({ sessionId, title }) => {
+        handleSessionTitleUpdated(null, { sessionId, title });
+      },
+      onChatSkillActivated: ({ name, description }) => {
+        handleSkillActivated(null, { name, description });
+      },
+      onChatToolConfirmRequest: ({ request }) => {
+        handleConfirmRequest(null, request as unknown as ToolConfirmRequest);
+      },
+    });
 
     return () => {
-      window.ipcRenderer.off('chat:skill-activated', handleSkillActivated);
-      window.ipcRenderer.off('chat:tool-confirm-request', handleConfirmRequest);
-      window.ipcRenderer.off('runtime:event', handleRuntimeEvent);
+      disposeRuntimeEvents();
 
       // Cleanup timer
       if (updateTimerRef.current) {
