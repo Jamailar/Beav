@@ -508,8 +508,7 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
   }, []);
 
   useEffect(() => {
-    const handlePhaseStart = (_event: unknown, payload?: unknown) => {
-      const data = (payload || {}) as Record<string, unknown>;
+    const handlePhaseStart = (data: Record<string, unknown>) => {
       if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
       const name = String(data.name || '').trim();
       if (!name) return;
@@ -534,8 +533,7 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
         });
       }
     };
-    const handleThoughtDelta = (_event: unknown, payload?: unknown) => {
-      const data = (payload || {}) as Record<string, unknown>;
+    const handleThoughtDelta = (data: Record<string, unknown>) => {
       if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
       const content = String(data.content || '').trim();
       if (!content) return;
@@ -548,8 +546,7 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
         totalSteps: undefined,
       });
     };
-      const handleToolStart = (_event: unknown, payload?: unknown) => {
-        const data = (payload || {}) as Record<string, unknown>;
+      const handleToolStart = (data: Record<string, unknown>) => {
         if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
         const name = String(data.name || '').trim();
         upsertProgressCard({
@@ -561,10 +558,10 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
           totalSteps: undefined,
         });
       };
-      const handleToolEnd = (_event: unknown, payload?: unknown) => {
-        const data = (payload || {}) as Record<string, unknown>;
+      const handleToolEnd = (data: Record<string, unknown>) => {
         if (String(data.sessionId || '').trim() !== activeSessionIdRef.current) return;
         const output = (data.output || {}) as Record<string, unknown>;
+        if (Boolean(output.partial)) return;
         const success = Boolean(output.success);
         upsertProgressCard({
           phase: 'tool',
@@ -575,15 +572,75 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
           totalSteps: undefined,
         });
       };
-    window.ipcRenderer.on('chat:phase-start', handlePhaseStart as (...args: unknown[]) => void);
-    window.ipcRenderer.on('chat:thought-delta', handleThoughtDelta as (...args: unknown[]) => void);
-    window.ipcRenderer.on('chat:tool-start', handleToolStart as (...args: unknown[]) => void);
-    window.ipcRenderer.on('chat:tool-end', handleToolEnd as (...args: unknown[]) => void);
+
+    const handleRuntimeEvent = (_event: unknown, envelope?: unknown) => {
+      const event = (envelope || {}) as Record<string, unknown>;
+      const eventType = String(event.eventType || '').trim();
+      if (!eventType) return;
+      const sessionId = String(event.sessionId || '').trim();
+      if (sessionId !== activeSessionIdRef.current) return;
+      const payload = (event.payload || {}) as Record<string, unknown>;
+
+      if (eventType === 'stream_start') {
+        const phase = String(payload.phase || '').trim();
+        if (phase) {
+          handlePhaseStart({ sessionId, name: phase });
+        }
+        return;
+      }
+      if (eventType === 'text_delta') {
+        const stream = String(payload.stream || '').trim();
+        if (stream === 'thought') {
+          handleThoughtDelta({ sessionId, content: payload.content });
+        }
+        return;
+      }
+      if (eventType === 'tool_request') {
+        handleToolStart({
+          sessionId,
+          name: payload.name,
+        });
+        return;
+      }
+      if (eventType === 'tool_result') {
+        handleToolEnd({
+          sessionId,
+          output: payload.output,
+        });
+        return;
+      }
+      if (eventType === 'task_node_changed') {
+        const nodeId = String(payload.nodeId || '').trim() || 'node';
+        const status = String(payload.status || '').trim().toLowerCase();
+        const summary = String(payload.summary || '').trim();
+        const error = String(payload.error || '').trim();
+        upsertProgressCard({
+          phase: `task-node-${nodeId}`,
+          title: `任务节点 · ${nodeId}`,
+          detail: error || summary || `节点状态：${status || 'unknown'}`,
+          status: status === 'failed' ? 'error' : status === 'completed' ? 'completed' : 'running',
+          stepIndex: undefined,
+          totalSteps: undefined,
+        });
+        return;
+      }
+      if (eventType === 'subagent_spawned') {
+        const roleId = String(payload.roleId || '').trim() || 'subagent';
+        const runtimeMode = String(payload.runtimeMode || '').trim() || 'unknown';
+        upsertProgressCard({
+          phase: `subagent-${roleId}`,
+          title: `子 Agent · ${roleId}`,
+          detail: `已启动子 Agent（mode=${runtimeMode}）。`,
+          status: 'completed',
+          stepIndex: undefined,
+          totalSteps: undefined,
+        });
+      }
+    };
+
+    window.ipcRenderer.on('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
     return () => {
-      window.ipcRenderer.off('chat:phase-start', handlePhaseStart as (...args: unknown[]) => void);
-      window.ipcRenderer.off('chat:thought-delta', handleThoughtDelta as (...args: unknown[]) => void);
-      window.ipcRenderer.off('chat:tool-start', handleToolStart as (...args: unknown[]) => void);
-      window.ipcRenderer.off('chat:tool-end', handleToolEnd as (...args: unknown[]) => void);
+      window.ipcRenderer.off('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
     };
   }, [upsertProgressCard]);
 

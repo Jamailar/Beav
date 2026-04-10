@@ -1,22 +1,42 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+mod events;
+mod persistence;
 mod runtime;
+mod scheduler;
 
 use arboard::Clipboard;
 use base64::Engine;
-use dirs::config_dir;
+use events::{
+    emit_runtime_stream_start, emit_runtime_subagent_spawned, emit_runtime_task_checkpoint_saved,
+    emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
+    emit_runtime_tool_result,
+};
+use persistence::{
+    build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_cover,
+    ensure_store_hydrated_for_knowledge, ensure_store_hydrated_for_media,
+    ensure_store_hydrated_for_redclaw, ensure_store_hydrated_for_subjects,
+    ensure_store_hydrated_for_work, hydrate_store_from_workspace_files, load_store, persist_store,
+    with_store, with_store_mut,
+};
 use runtime::{
-    build_runtime_task_artifact_content, infer_protocol, next_memory_maintenance_at_ms,
-    normalize_runtime_intent_name, normalize_runtime_role_id, resolve_chat_config,
+    append_runtime_task_trace, append_session_checkpoint, build_runtime_task_artifact_content,
+    infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
     resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_direct_route,
-    runtime_graph_for_route, runtime_required_capabilities, runtime_subagent_role_spec,
-    runtime_task_value, runtime_warm_settings_fingerprint, session_title_from_message,
-    set_runtime_graph_node, ChatExecutionResult, InteractiveToolCall, McpServerRecord,
-    RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime,
-    RedclawScheduledTaskRecord, RedclawStateRecord, RuntimeHookRecord, RuntimeTaskRecord,
+    runtime_direct_route_record, runtime_graph_for_route, runtime_route_from_llm_parsed,
+    runtime_subagent_role_spec, runtime_warm_settings_fingerprint, session_title_from_message,
+    set_runtime_graph_node, InteractiveToolCall, McpServerRecord,
+    RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
+    RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord,
+    ResolvedChatConfig, RuntimeHookRecord, RuntimeRouteRecord, RuntimeTaskRecord,
     RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord,
     SessionToolResultRecord, SessionTranscriptRecord, SkillRecord, RUNTIME_INTENT_NAMES,
     RUNTIME_ROLE_IDS,
+};
+use scheduler::{
+    next_long_cycle_timestamp, next_scheduled_timestamp, parse_millis_string,
+    sync_redclaw_job_definitions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,7 +47,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, MutexGuard,
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -255,6 +275,8 @@ struct AppStore {
     skills: Vec<SkillRecord>,
     assistant_state: AssistantStateRecord,
     redclaw_state: RedclawStateRecord,
+    redclaw_job_definitions: Vec<RedclawJobDefinitionRecord>,
+    redclaw_job_executions: Vec<RedclawJobExecutionRecord>,
     media_assets: Vec<MediaAssetRecord>,
     cover_assets: Vec<CoverAssetRecord>,
     work_items: Vec<WorkItemRecord>,
@@ -633,27 +655,6 @@ fn make_id(prefix: &str) -> String {
     format!("{prefix}-{}", now_ms())
 }
 
-fn build_store_path() -> PathBuf {
-    let base = config_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let redbox_dir = base.join("RedBox");
-    let lexbox_dir = base.join("LexBox");
-    let redbox_path = redbox_dir.join("redbox-state.json");
-    let lexbox_path = lexbox_dir.join("lexbox-state.json");
-
-    if redbox_path.exists() {
-        let _ = fs::create_dir_all(&redbox_dir);
-        return redbox_path;
-    }
-    if lexbox_path.exists() {
-        let _ = fs::create_dir_all(&lexbox_dir);
-        return lexbox_path;
-    }
-
-    let _ = fs::create_dir_all(&redbox_dir);
-    redbox_path
-}
-
 fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Result<(), String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
@@ -720,180 +721,6 @@ fn ensure_runtime_warm_entry(
         .get(mode)
         .cloned()
         .ok_or_else(|| format!("未找到预热的 runtime: {mode}"))
-}
-
-fn default_store() -> AppStore {
-    let timestamp = now_iso();
-    AppStore {
-        settings: json!({}),
-        spaces: vec![SpaceRecord {
-            id: "default".to_string(),
-            name: "默认空间".to_string(),
-            created_at: timestamp.clone(),
-            updated_at: timestamp,
-        }],
-        active_space_id: "default".to_string(),
-        subjects: Vec::new(),
-        categories: Vec::new(),
-        advisors: Vec::new(),
-        advisor_videos: Vec::new(),
-        chat_rooms: Vec::new(),
-        chatroom_messages: Vec::new(),
-        wechat_official_bindings: Vec::new(),
-        embedding_cache: Vec::new(),
-        similarity_cache: Vec::new(),
-        wander_history: Vec::new(),
-        chat_sessions: Vec::new(),
-        chat_messages: Vec::new(),
-        youtube_videos: Vec::new(),
-        knowledge_notes: Vec::new(),
-        document_sources: Vec::new(),
-        session_transcript_records: Vec::new(),
-        session_checkpoints: Vec::new(),
-        session_tool_results: Vec::new(),
-        runtime_tasks: Vec::new(),
-        runtime_task_traces: Vec::new(),
-        debug_logs: Vec::new(),
-        archive_profiles: Vec::new(),
-        archive_samples: Vec::new(),
-        memories: Vec::new(),
-        memory_history: Vec::new(),
-        mcp_servers: Vec::new(),
-        runtime_hooks: Vec::new(),
-        skills: vec![
-            SkillRecord {
-                name: "redclaw-project".to_string(),
-                description: "RedClaw 项目编排技能".to_string(),
-                location: "redbox://skills/redclaw-project".to_string(),
-                body: "# RedClaw Project\n\n用于推进内容项目的内置技能。\n\n## 工作流\n\n1. 明确目标、平台和受众。\n2. 生成选题、文案、配图提示和复盘。\n3. 将产物保存到 RedClaw workspace，并同步生成 Workboard 工作项。\n4. 遇到 `save-copy`、`save-image`、`save-retro` 意图时，应优先落地对应文件。".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
-            SkillRecord {
-                name: "cover-builder".to_string(),
-                description: "封面生成辅助技能".to_string(),
-                location: "redbox://skills/cover-builder".to_string(),
-                body: "# Cover Builder\n\n用于把标题、平台调性和参考素材转成封面方案的内置技能。\n\n## 输出要求\n\n- 提供 3-5 个封面标题方案。\n- 标注主视觉、构图、色彩、字体建议。\n- 如果配置了图片生成 endpoint，优先生成真实封面资产；否则输出可执行的封面提示词。".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
-        ],
-        assistant_state: AssistantStateRecord {
-            enabled: false,
-            auto_start: true,
-            keep_alive_when_no_window: true,
-            host: "127.0.0.1".to_string(),
-            port: 31937,
-            listening: false,
-            lock_state: "passive".to_string(),
-            blocked_by: None,
-            last_error: Some("RedClaw assistant daemon is idle.".to_string()),
-            active_task_count: 0,
-            queued_peer_count: 0,
-            in_flight_keys: Vec::new(),
-            feishu: json!({
-                "enabled": false,
-                "receiveMode": "webhook",
-                "endpointPath": "/hooks/feishu/events",
-                "replyUsingChatId": true,
-                "webhookUrl": "",
-                "websocketRunning": false
-            }),
-            relay: json!({
-                "enabled": true,
-                "endpointPath": "/hooks/channel/relay",
-                "authToken": "",
-                "webhookUrl": ""
-            }),
-            weixin: json!({
-                "enabled": false,
-                "endpointPath": "/hooks/weixin/relay",
-                "authToken": "",
-                "accountId": "",
-                "autoStartSidecar": false,
-                "cursorFile": "",
-                "sidecarCommand": "",
-                "sidecarArgs": [],
-                "sidecarCwd": "",
-                "sidecarEnv": {},
-                "webhookUrl": "",
-                "sidecarRunning": false,
-                "connected": false,
-                "stateDir": "",
-                "availableAccountIds": []
-            }),
-        },
-        redclaw_state: RedclawStateRecord {
-            enabled: false,
-            lock_state: "owner".to_string(),
-            blocked_by: None,
-            interval_minutes: 20,
-            keep_alive_when_no_window: true,
-            max_projects_per_tick: 1,
-            max_automation_per_tick: 2,
-            is_ticking: false,
-            current_project_id: None,
-            current_automation_task_id: None,
-            next_automation_fire_at: None,
-            in_flight_task_ids: Vec::new(),
-            in_flight_long_cycle_task_ids: Vec::new(),
-            heartbeat_in_flight: false,
-            last_tick_at: None,
-            next_tick_at: None,
-            next_maintenance_at: None,
-            last_error: Some("RedClaw runner is idle.".to_string()),
-            heartbeat: json!({
-                "enabled": true,
-                "intervalMinutes": 30,
-                "suppressEmptyReport": true,
-                "reportToMainSession": true
-            }),
-            scheduled_tasks: Vec::new(),
-            long_cycle_tasks: Vec::new(),
-            projects: Vec::new(),
-        },
-        media_assets: Vec::new(),
-        cover_assets: Vec::new(),
-        work_items: Vec::new(),
-        legacy_imported_at: None,
-        legacy_import_source: None,
-    }
-}
-
-fn load_store(path: &PathBuf) -> AppStore {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(_) => return default_store(),
-    };
-    serde_json::from_str(&content).unwrap_or_else(|_| default_store())
-}
-
-fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
-    let serialized = serde_json::to_string_pretty(store).map_err(|error| error.to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(path, serialized).map_err(|error| error.to_string())
-}
-
-fn with_store_mut<T>(
-    state: &State<'_, AppState>,
-    mutator: impl FnOnce(&mut AppStore) -> Result<T, String>,
-) -> Result<T, String> {
-    let mut store = state.store.lock().map_err(|_| "状态锁已损坏".to_string())?;
-    let result = mutator(&mut store)?;
-    persist_store(&state.store_path, &store)?;
-    Ok(result)
-}
-
-fn with_store<T>(
-    state: &State<'_, AppState>,
-    reader: impl FnOnce(MutexGuard<'_, AppStore>) -> Result<T, String>,
-) -> Result<T, String> {
-    let store = state.store.lock().map_err(|_| "状态锁已损坏".to_string())?;
-    reader(store)
 }
 
 fn normalize_string(value: Option<&Value>) -> Option<String> {
@@ -1017,12 +844,658 @@ fn ensure_workspace_dirs(root: &Path) -> Result<(), String> {
         root.join("media"),
         root.join("cover"),
         root.join("redclaw"),
+        root.join("redclaw").join("profile"),
+        root.join("memory"),
         root.join("subjects"),
         root.join("chatrooms"),
     ] {
         fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+struct RedclawProfilePromptBundle {
+    profile_root: PathBuf,
+    agent: String,
+    soul: String,
+    identity: String,
+    user: String,
+    creator_profile: String,
+    bootstrap: String,
+    onboarding_state: Value,
+}
+
+fn redclaw_profile_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = workspace_root(state)?.join("redclaw").join("profile");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn ensure_file_if_missing(path: &Path, content: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, content).map_err(|error| error.to_string())
+}
+
+fn read_text_if_exists(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+fn build_default_agent_profile_doc() -> String {
+    [
+        "# Agent.md",
+        "",
+        "你是 RedClaw，服务于 RedBox 的多平台内容创作执行 Agent。",
+        "",
+        "## 启动顺序（每次会话）",
+        "1. 读取 Soul.md（你的行为风格）",
+        "2. 读取 user.md（用户画像和创作目标）",
+        "3. 读取 CreatorProfile.md（用户长期自媒体定位与策略档案）",
+        "4. 读取 identity.md（你的身份设定）",
+        "5. 读取 memory/MEMORY.md（长期记忆摘要）",
+        "",
+        "## RedClaw 规则",
+        "- 先执行再解释，优先给出可落地动作。",
+        "- 涉及本应用能力时优先调用 redbox_* 工具。",
+        "- 文件操作严格限制在 currentSpaceRoot。",
+        "- 对文件数量/列表/状态类事实，必须先工具验证。",
+        "",
+        "## 核心档案职责",
+        "- Soul.md：维护 RedClaw 的协作语气、反馈方式、执行风格。",
+        "- user.md：维护用户的稳定画像与长期事实。",
+        "- CreatorProfile.md：维护用户的长期自媒体定位、目标群体、风格、商业目标与运营边界。",
+        "- Agent.md：维护 RedClaw 的工作契约、流程和规则，不为一次性任务随意改写。",
+        "",
+        "## 创作流程",
+        "目标 -> 选题 -> 文案 -> 配图 -> 发布计划 -> 数据复盘 -> 下一轮假设",
+    ]
+    .join("\n")
+}
+
+fn build_default_soul_profile_doc() -> String {
+    [
+        "# Soul.md",
+        "",
+        "## 核心人格",
+        "- 行动导向，不空谈。",
+        "- 对结果负责：每一步都给验收标准。",
+        "- 风格务实、直接、尊重用户时间。",
+        "",
+        "## 表达风格",
+        "- 默认中文。",
+        "- 先结论后细节。",
+        "- 优先给 checklist、步骤和可执行命令。",
+        "",
+        "## 什么时候更新本文件",
+        "- 用户明确要求 RedClaw 改变沟通方式、反馈力度、协作氛围时更新。",
+        "- 临时任务中的一句话语气要求，不默认升格为长期人格设定。",
+    ]
+    .join("\n")
+}
+
+fn build_default_identity_profile_doc() -> String {
+    [
+        "# identity.md",
+        "",
+        "- Name: RedClaw",
+        "- Role: 多平台内容创作自动化 Agent",
+        "- Vibe: 执行型、结构化、结果导向",
+        "- Signature: 🦀",
+        &format!("- UpdatedAt: {}", now_iso()),
+    ]
+    .join("\n")
+}
+
+fn build_default_user_profile_doc() -> String {
+    [
+        "# user.md",
+        "",
+        "## 用户创作档案（持续更新）",
+        "- 称呼: （待填写）",
+        "- 核心创作目标: （待填写）",
+        "- 目标用户画像: （待填写）",
+        "- 内容赛道: （待填写）",
+        "- 文案风格偏好: （待填写）",
+        "- 发布节奏: （待填写）",
+        "- 成功指标: （待填写）",
+        "",
+        "## 备注",
+        "- 本文件用于长期个性化，不存放敏感密钥。",
+        "- 当用户长期目标、受众、节奏、赛道等稳定信息变化时更新本文件。",
+    ]
+    .join("\n")
+}
+
+fn build_default_creator_profile_doc() -> String {
+    [
+        "# CreatorProfile.md",
+        "",
+        "## 定位总览",
+        "- 自媒体定位: （待填写，可包含小红书 / 公众号等平台）",
+        "- 核心目标: （待填写）",
+        "- 商业目标: （待填写）",
+        "",
+        "## 目标群体",
+        "- 核心受众: （待填写）",
+        "- 主要痛点: （待填写）",
+        "- 愿意付费的原因: （待填写）",
+        "",
+        "## 内容风格",
+        "- 内容赛道: （待填写）",
+        "- 结构偏好: （待填写）",
+        "- 文案风格: （待填写）",
+        "- 封面/视觉倾向: （待填写）",
+        "",
+        "## 运营策略",
+        "- 发布节奏: （待填写）",
+        "- 成功指标: （待填写）",
+        "- 禁区与边界: （待填写）",
+        "",
+        "## 维护规则",
+        "- 本文档是用户长期自媒体策略档案，每次 RedClaw 会话都应优先参考。",
+        "- 当用户明确给出新的定位、目标群体、风格、边界、商业目标时，应更新本文件。",
+        "- 临时任务要求不直接改写长期定位，除非用户明确表示要长期变更。",
+        "- 不记录 API Key、Token、账号密码等敏感信息。",
+    ]
+    .join("\n")
+}
+
+fn build_default_bootstrap_profile_doc() -> String {
+    [
+        "# BOOTSTRAP.md",
+        "",
+        "这是 RedClaw 在当前空间的首次设定引导。",
+        "",
+        "目标：通过聊天收集用户偏好，完善以下文件：",
+        "- identity.md",
+        "- user.md",
+        "- Soul.md",
+        "- CreatorProfile.md",
+        "",
+        "完成后删除 BOOTSTRAP.md。",
+    ]
+    .join("\n")
+}
+
+fn default_onboarding_state_value() -> Value {
+    json!({
+        "version": 1,
+        "startedAt": Value::Null,
+        "updatedAt": now_iso(),
+        "askedFirstQuestion": false,
+        "stepIndex": 0,
+        "answers": {}
+    })
+}
+
+const REDCLAW_ONBOARDING_STEPS: [(&str, &str, &str); 5] = [
+    (
+        "assistant_style",
+        "1/5 先定一下我的协作风格。你希望 RedClaw 在对话里更偏向哪种风格？例如：高执行、强结构、温和陪跑、直接批判。",
+        "高执行 + 强结构 + 直接反馈",
+    ),
+    (
+        "creator_goal",
+        "2/5 你的核心创作目标是什么？例如：涨粉、获客、卖课、品牌影响力。可以写主目标 + 次目标。",
+        "主目标：稳定涨粉；次目标：建立可信个人品牌",
+    ),
+    (
+        "target_audience",
+        "3/5 你的目标用户是谁？请描述人群画像（年龄/职业/痛点/预算/期待）。",
+        "25-35岁的一线和新一线职场人，关注效率、成长和副业机会",
+    ),
+    (
+        "content_lane",
+        "4/5 你主要做哪些内容赛道？以及偏好的笔记结构（如：清单体、教程体、案例体、复盘体）。",
+        "AI效率工具 + 职场成长；偏好教程体和复盘体",
+    ),
+    (
+        "tone_and_constraints",
+        "5/5 最后确认表达风格和边界：你希望文案语气、禁用词、合规边界、发布频率、成功指标分别是什么？",
+        "语气真实克制；避免夸张承诺；每周3-5篇；成功指标看收藏率与私信转化",
+    ),
+];
+
+fn redclaw_onboarding_state_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(redclaw_profile_root(state)?.join("onboarding-state.json"))
+}
+
+fn load_redclaw_onboarding_state(state: &State<'_, AppState>) -> Result<Value, String> {
+    ensure_redclaw_profile_files(state)?;
+    let path = redclaw_onboarding_state_path(state)?;
+    Ok(fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(default_onboarding_state_value))
+}
+
+fn save_redclaw_onboarding_state(state: &State<'_, AppState>, data: &Value) -> Result<(), String> {
+    let mut next = data.clone();
+    if let Some(object) = next.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_iso()));
+    }
+    let raw = serde_json::to_string_pretty(&next).map_err(|error| error.to_string())?;
+    fs::write(redclaw_onboarding_state_path(state)?, raw).map_err(|error| error.to_string())
+}
+
+fn normalize_onboarding_answer(input: &str) -> String {
+    input.trim().to_string()
+}
+
+fn is_redclaw_onboarding_skip_command(input: &str) -> bool {
+    let normalized = normalize_onboarding_answer(input).to_lowercase();
+    ["跳过", "先跳过", "使用默认", "默认", "/skip", "skip"].contains(&normalized.as_str())
+}
+
+fn get_onboarding_answer(state_value: &Value, key: &str, fallback: &str) -> String {
+    state_value
+        .get("answers")
+        .and_then(|value| value.get(key))
+        .and_then(|value| value.as_str())
+        .map(normalize_onboarding_answer)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn finalize_redclaw_onboarding(
+    state: &State<'_, AppState>,
+    onboarding: &mut Value,
+) -> Result<(), String> {
+    let style = get_onboarding_answer(
+        onboarding,
+        REDCLAW_ONBOARDING_STEPS[0].0,
+        REDCLAW_ONBOARDING_STEPS[0].2,
+    );
+    let goal = get_onboarding_answer(
+        onboarding,
+        REDCLAW_ONBOARDING_STEPS[1].0,
+        REDCLAW_ONBOARDING_STEPS[1].2,
+    );
+    let audience = get_onboarding_answer(
+        onboarding,
+        REDCLAW_ONBOARDING_STEPS[2].0,
+        REDCLAW_ONBOARDING_STEPS[2].2,
+    );
+    let lane = get_onboarding_answer(
+        onboarding,
+        REDCLAW_ONBOARDING_STEPS[3].0,
+        REDCLAW_ONBOARDING_STEPS[3].2,
+    );
+    let constraints = get_onboarding_answer(
+        onboarding,
+        REDCLAW_ONBOARDING_STEPS[4].0,
+        REDCLAW_ONBOARDING_STEPS[4].2,
+    );
+
+    let identity = [
+        "# identity.md".to_string(),
+        "".to_string(),
+        "- Name: RedClaw".to_string(),
+        "- Role: 小红书创作自动化 Agent".to_string(),
+        format!("- Vibe: {style}"),
+        "- Signature: 🦀".to_string(),
+        format!("- UpdatedAt: {}", now_iso()),
+    ]
+    .join("\n");
+    let user = [
+        "# user.md".to_string(),
+        "".to_string(),
+        "## 用户创作档案".to_string(),
+        format!("- 核心创作目标: {goal}"),
+        format!("- 目标用户画像: {audience}"),
+        format!("- 内容赛道与结构偏好: {lane}"),
+        format!("- 语气/边界/节奏/指标: {constraints}"),
+        "".to_string(),
+        "## 更新原则".to_string(),
+        "- 当用户提出新的长期偏好时，及时覆盖旧偏好。".to_string(),
+        "- 当用户临时任务与长期偏好冲突，以用户最新明确指令优先。".to_string(),
+    ]
+    .join("\n");
+    let soul = [
+        "# Soul.md".to_string(),
+        "".to_string(),
+        "## 当前人格与协作偏好（来自首次设定）".to_string(),
+        format!("- 协作风格: {style}"),
+        "".to_string(),
+        "## 执行原则".to_string(),
+        "- 先明确目标，再拆解步骤。".to_string(),
+        "- 每一步要有“产物”和“下一步动作”。".to_string(),
+        "- 对小红书创作要关注内容价值、可传播性、合规性。".to_string(),
+        "- 不臆测文件状态；先工具验证再回答。".to_string(),
+    ]
+    .join("\n");
+    let creator_profile = [
+        "# CreatorProfile.md".to_string(),
+        "".to_string(),
+        "## 定位总览".to_string(),
+        "- 自媒体定位: 小红书创作与增长".to_string(),
+        format!("- 核心目标: {goal}"),
+        "- 商业目标: 建立可信个人品牌并逐步提升转化".to_string(),
+        "".to_string(),
+        "## 目标群体".to_string(),
+        format!("- 核心受众: {audience}"),
+        "- 主要痛点: 需要明确选题、结构化内容与持续更新节奏".to_string(),
+        "- 愿意付费的原因: 需要可执行的方法、模板和复盘体系".to_string(),
+        "".to_string(),
+        "## 内容风格".to_string(),
+        format!("- 内容赛道: {lane}"),
+        format!("- 文案风格: {style}"),
+        format!("- 执行边界: {constraints}"),
+        "- 封面/视觉倾向: 优先真实、清晰、可点击，不做廉价夸张风".to_string(),
+        "".to_string(),
+        "## 运营策略".to_string(),
+        "- 发布节奏: 以后续用户明确更新为准".to_string(),
+        "- 成功指标: 以收藏率、互动率、私信转化等业务指标为准".to_string(),
+        "- 禁区与边界: 不夸大、不虚假承诺、不违反平台合规".to_string(),
+        "".to_string(),
+        format!("- UpdatedAt: {}", now_iso()),
+    ]
+    .join("\n");
+
+    let profile_root = redclaw_profile_root(state)?;
+    fs::write(profile_root.join("identity.md"), identity).map_err(|error| error.to_string())?;
+    fs::write(profile_root.join("user.md"), user).map_err(|error| error.to_string())?;
+    fs::write(profile_root.join("Soul.md"), soul).map_err(|error| error.to_string())?;
+    fs::write(profile_root.join("CreatorProfile.md"), creator_profile)
+        .map_err(|error| error.to_string())?;
+    let _ = fs::remove_file(profile_root.join("BOOTSTRAP.md"));
+
+    if let Some(object) = onboarding.as_object_mut() {
+        object.insert(
+            "stepIndex".to_string(),
+            json!(REDCLAW_ONBOARDING_STEPS.len() as i64),
+        );
+        object.insert("completedAt".to_string(), json!(now_iso()));
+    }
+    save_redclaw_onboarding_state(state, onboarding)?;
+    Ok(())
+}
+
+fn handle_redclaw_onboarding_turn(
+    state: &State<'_, AppState>,
+    user_input: &str,
+) -> Result<Option<(String, bool)>, String> {
+    ensure_redclaw_profile_files(state)?;
+    let mut onboarding = load_redclaw_onboarding_state(state)?;
+    let completed = onboarding
+        .get("completedAt")
+        .and_then(|value| value.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if completed {
+        return Ok(None);
+    }
+
+    let asked_first_question = onboarding
+        .get("askedFirstQuestion")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let mut step_index = onboarding
+        .get("stepIndex")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0)
+        .clamp(0, REDCLAW_ONBOARDING_STEPS.len() as i64);
+    if !asked_first_question {
+        if let Some(object) = onboarding.as_object_mut() {
+            object.insert("askedFirstQuestion".to_string(), json!(true));
+            if object
+                .get("startedAt")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
+                object.insert("startedAt".to_string(), json!(now_iso()));
+            }
+            object.insert("stepIndex".to_string(), json!(0));
+        }
+        save_redclaw_onboarding_state(state, &onboarding)?;
+        return Ok(Some((
+            [
+                "在开始创作前，我们先做一次 RedClaw 个性化设定（只需 1-2 分钟）。",
+                REDCLAW_ONBOARDING_STEPS[0].1,
+                "",
+                "你也可以回复“跳过”使用默认配置，后续随时可再改。",
+            ]
+            .join("\n"),
+            false,
+        )));
+    }
+
+    let normalized = normalize_onboarding_answer(user_input);
+    if normalized.is_empty() {
+        let idx = step_index.clamp(0, REDCLAW_ONBOARDING_STEPS.len() as i64 - 1) as usize;
+        return Ok(Some((
+            format!(
+                "我需要你先回答这个设定问题：\n{}",
+                REDCLAW_ONBOARDING_STEPS[idx].1
+            ),
+            false,
+        )));
+    }
+
+    if is_redclaw_onboarding_skip_command(&normalized) {
+        if let Some(object) = onboarding.as_object_mut() {
+            let answers = object
+                .entry("answers".to_string())
+                .or_insert_with(|| json!({}));
+            if let Some(answers_obj) = answers.as_object_mut() {
+                for (key, _question, default_value) in REDCLAW_ONBOARDING_STEPS {
+                    let current = answers_obj
+                        .get(key)
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if current.is_empty() {
+                        answers_obj.insert(key.to_string(), json!(default_value));
+                    }
+                }
+            }
+            object.insert(
+                "stepIndex".to_string(),
+                json!(REDCLAW_ONBOARDING_STEPS.len() as i64),
+            );
+        }
+        finalize_redclaw_onboarding(state, &mut onboarding)?;
+        return Ok(Some((
+            "已按默认配置完成 RedClaw 设定，并写入当前空间档案。现在可以直接给我创作目标。"
+                .to_string(),
+            true,
+        )));
+    }
+
+    if let Some(object) = onboarding.as_object_mut() {
+        let answers = object
+            .entry("answers".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(answers_obj) = answers.as_object_mut() {
+            let idx = step_index.clamp(0, REDCLAW_ONBOARDING_STEPS.len() as i64 - 1) as usize;
+            let key = REDCLAW_ONBOARDING_STEPS[idx].0;
+            answers_obj.insert(key.to_string(), json!(normalized));
+        }
+        step_index = (step_index + 1).clamp(0, REDCLAW_ONBOARDING_STEPS.len() as i64);
+        object.insert("stepIndex".to_string(), json!(step_index));
+    }
+
+    if step_index >= REDCLAW_ONBOARDING_STEPS.len() as i64 {
+        finalize_redclaw_onboarding(state, &mut onboarding)?;
+        return Ok(Some((
+            "设定完成。我已经更新了 Agent/Soul/identity/user/CreatorProfile 档案。接下来直接告诉我你的创作目标即可。".to_string(),
+            true,
+        )));
+    }
+
+    save_redclaw_onboarding_state(state, &onboarding)?;
+    let next_idx = step_index as usize;
+    Ok(Some((
+        [
+            format!(
+                "已记录（{}/{})。",
+                step_index,
+                REDCLAW_ONBOARDING_STEPS.len()
+            ),
+            REDCLAW_ONBOARDING_STEPS[next_idx].1.to_string(),
+            "".to_string(),
+            "你也可以回复“跳过”直接使用默认配置。".to_string(),
+        ]
+        .join("\n"),
+        false,
+    )))
+}
+
+fn ensure_redclaw_onboarding_completed_with_defaults(
+    state: &State<'_, AppState>,
+) -> Result<bool, String> {
+    ensure_redclaw_profile_files(state)?;
+    let mut onboarding = load_redclaw_onboarding_state(state)?;
+    let completed = onboarding
+        .get("completedAt")
+        .and_then(|value| value.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if completed {
+        return Ok(false);
+    }
+
+    if let Some(object) = onboarding.as_object_mut() {
+        let answers = object
+            .entry("answers".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(answers_obj) = answers.as_object_mut() {
+            for (key, _question, default_value) in REDCLAW_ONBOARDING_STEPS {
+                let current = answers_obj
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if current.is_empty() {
+                    answers_obj.insert(key.to_string(), json!(default_value));
+                }
+            }
+        }
+        object.insert("askedFirstQuestion".to_string(), json!(true));
+        object.insert(
+            "stepIndex".to_string(),
+            json!(REDCLAW_ONBOARDING_STEPS.len() as i64),
+        );
+        object.insert("completedAt".to_string(), json!(now_iso()));
+    }
+
+    save_redclaw_onboarding_state(state, &onboarding)?;
+    let profile_root = redclaw_profile_root(state)?;
+    let _ = fs::remove_file(profile_root.join("BOOTSTRAP.md"));
+    Ok(true)
+}
+
+fn ensure_redclaw_profile_files(state: &State<'_, AppState>) -> Result<(), String> {
+    let profile_root = redclaw_profile_root(state)?;
+    let agent_path = profile_root.join("Agent.md");
+    let soul_path = profile_root.join("Soul.md");
+    let identity_path = profile_root.join("identity.md");
+    let user_path = profile_root.join("user.md");
+    let creator_path = profile_root.join("CreatorProfile.md");
+    let bootstrap_path = profile_root.join("BOOTSTRAP.md");
+    let onboarding_path = profile_root.join("onboarding-state.json");
+
+    ensure_file_if_missing(&agent_path, &build_default_agent_profile_doc())?;
+    ensure_file_if_missing(&soul_path, &build_default_soul_profile_doc())?;
+    ensure_file_if_missing(&identity_path, &build_default_identity_profile_doc())?;
+    ensure_file_if_missing(&user_path, &build_default_user_profile_doc())?;
+    ensure_file_if_missing(&creator_path, &build_default_creator_profile_doc())?;
+    ensure_file_if_missing(
+        &onboarding_path,
+        &serde_json::to_string_pretty(&default_onboarding_state_value())
+            .unwrap_or_else(|_| "{}".to_string()),
+    )?;
+
+    let onboarding_state = fs::read_to_string(&onboarding_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(default_onboarding_state_value);
+    let completed = onboarding_state
+        .get("completedAt")
+        .and_then(|value| value.as_str())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if completed {
+        let _ = fs::remove_file(&bootstrap_path);
+    } else {
+        ensure_file_if_missing(&bootstrap_path, &build_default_bootstrap_profile_doc())?;
+    }
+
+    Ok(())
+}
+
+fn load_redclaw_profile_prompt_bundle(
+    state: &State<'_, AppState>,
+) -> Result<RedclawProfilePromptBundle, String> {
+    ensure_redclaw_profile_files(state)?;
+    let profile_root = redclaw_profile_root(state)?;
+    let onboarding_state = fs::read_to_string(profile_root.join("onboarding-state.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(default_onboarding_state_value);
+
+    Ok(RedclawProfilePromptBundle {
+        profile_root: profile_root.clone(),
+        agent: read_text_if_exists(&profile_root.join("Agent.md")),
+        soul: read_text_if_exists(&profile_root.join("Soul.md")),
+        identity: read_text_if_exists(&profile_root.join("identity.md")),
+        user: read_text_if_exists(&profile_root.join("user.md")),
+        creator_profile: read_text_if_exists(&profile_root.join("CreatorProfile.md")),
+        bootstrap: read_text_if_exists(&profile_root.join("BOOTSTRAP.md")),
+        onboarding_state,
+    })
+}
+
+fn profile_doc_target(doc_type: &str) -> Option<(&'static str, &'static str)> {
+    match doc_type {
+        "agent" => Some(("Agent.md", "Agent.md")),
+        "soul" => Some(("Soul.md", "Soul.md")),
+        "user" => Some(("user.md", "user.md")),
+        "creator_profile" => Some(("CreatorProfile.md", "CreatorProfile.md")),
+        _ => None,
+    }
+}
+
+fn normalize_profile_doc_markdown(title: &str, markdown: &str) -> Result<String, String> {
+    let normalized = markdown.trim();
+    if normalized.is_empty() {
+        return Err(format!("{title} 文档不能为空"));
+    }
+    if normalized.starts_with('#') {
+        Ok(normalized.to_string())
+    } else {
+        Ok(format!("# {title}\n\n{normalized}"))
+    }
+}
+
+fn update_redclaw_profile_doc(
+    state: &State<'_, AppState>,
+    doc_type: &str,
+    markdown: &str,
+) -> Result<Value, String> {
+    let Some((file_name, title)) = profile_doc_target(doc_type) else {
+        return Err(format!("unsupported profile doc type: {doc_type}"));
+    };
+    ensure_redclaw_profile_files(state)?;
+    let profile_root = redclaw_profile_root(state)?;
+    let file_path = profile_root.join(file_name);
+    let content = normalize_profile_doc_markdown(title, markdown)?;
+    fs::write(&file_path, &content).map_err(|error| error.to_string())?;
+    Ok(json!({
+        "success": true,
+        "docType": doc_type,
+        "fileName": file_name,
+        "path": file_path.display().to_string(),
+        "content": content
+    }))
 }
 
 fn manuscripts_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -2758,93 +3231,6 @@ fn load_work_items_from_fs(redclaw_root: &Path) -> Vec<WorkItemRecord> {
     items
 }
 
-fn hydrate_store_from_workspace_files(
-    store: &mut AppStore,
-    store_path: &Path,
-) -> Result<(), String> {
-    let root = active_space_workspace_root_from_store(store, &store.active_space_id, store_path)?;
-    store.categories = load_subject_categories_from_fs(&root.join("subjects"));
-    store.subjects = load_subjects_from_fs(&root.join("subjects"));
-    store.advisors = load_advisors_from_fs(&root.join("advisors"));
-    store.media_assets = load_media_assets_from_fs(&root.join("media"));
-    store.cover_assets = load_cover_assets_from_fs(&root.join("cover"));
-    store.knowledge_notes = load_knowledge_notes_from_fs(&root.join("knowledge"));
-    store.youtube_videos = load_youtube_videos_from_fs(&root.join("knowledge"));
-    store.document_sources = load_document_sources_from_fs(&root.join("knowledge"));
-    store.redclaw_state = load_redclaw_state_from_fs(&root.join("redclaw"));
-    store.work_items = load_work_items_from_fs(&root.join("redclaw"));
-    Ok(())
-}
-
-fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.knowledge_notes.is_empty()
-            || store.youtube_videos.is_empty()
-            || store.document_sources.is_empty()
-        {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.subjects.is_empty() || store.categories.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_media(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.media_assets.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_cover(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.cover_assets.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_work(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.work_items.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.advisors.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
-fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.redclaw_state.projects.is_empty()
-            || store.redclaw_state.scheduled_tasks.is_empty()
-                && store.redclaw_state.long_cycle_tasks.is_empty()
-        {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
-        }
-        Ok(())
-    })
-}
-
 fn browser_plugin_bundled_root() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -4229,39 +4615,6 @@ fn append_session_transcript(
         });
 }
 
-fn append_session_checkpoint(
-    store: &mut AppStore,
-    session_id: &str,
-    checkpoint_type: &str,
-    summary: String,
-    payload: Option<Value>,
-) {
-    store.session_checkpoints.push(SessionCheckpointRecord {
-        id: make_id("checkpoint"),
-        session_id: session_id.to_string(),
-        checkpoint_type: checkpoint_type.to_string(),
-        summary,
-        payload,
-        created_at: now_i64(),
-    });
-}
-
-fn append_runtime_task_trace(
-    store: &mut AppStore,
-    task_id: &str,
-    event_type: &str,
-    payload: Option<Value>,
-) {
-    store.runtime_task_traces.push(RuntimeTaskTraceRecord {
-        id: now_i64(),
-        task_id: task_id.to_string(),
-        node_id: None,
-        event_type: event_type.to_string(),
-        payload,
-        created_at: now_i64(),
-    });
-}
-
 fn append_debug_log(store: &mut AppStore, line: String) {
     store.debug_logs.insert(0, line);
     if store.debug_logs.len() > 200 {
@@ -5372,8 +5725,8 @@ fn route_runtime_intent_with_settings(
     runtime_mode: &str,
     user_input: &str,
     metadata: Option<&Value>,
-) -> Value {
-    let fallback = runtime_direct_route(runtime_mode, user_input, metadata);
+) -> RuntimeRouteRecord {
+    let fallback = runtime_direct_route_record(runtime_mode, user_input, metadata);
     let Some(system_template) = load_redbox_prompt("runtime/ai/route_intent_system.txt") else {
         return fallback;
     };
@@ -5409,18 +5762,9 @@ fn route_runtime_intent_with_settings(
                     .unwrap_or("")
                     .to_string(),
             ),
-            (
-                "fallback_intent",
-                payload_string(&fallback, "intent").unwrap_or_default(),
-            ),
-            (
-                "fallback_role",
-                payload_string(&fallback, "recommendedRole").unwrap_or_default(),
-            ),
-            (
-                "fallback_reasoning",
-                payload_string(&fallback, "reasoning").unwrap_or_default(),
-            ),
+            ("fallback_intent", fallback.intent.clone()),
+            ("fallback_role", fallback.recommended_role.clone()),
+            ("fallback_reasoning", fallback.reasoning.clone()),
             ("intent_names", RUNTIME_INTENT_NAMES.join(", ")),
             ("role_ids", RUNTIME_ROLE_IDS.join(", ")),
         ],
@@ -5438,108 +5782,7 @@ fn route_runtime_intent_with_settings(
     let Some(parsed) = parse_json_value_from_text(&content) else {
         return fallback;
     };
-    let intent = normalize_runtime_intent_name(
-        parsed
-            .get("primary_intent")
-            .or_else(|| parsed.get("intent"))
-            .and_then(|value| value.as_str()),
-    );
-    let recommended_role = normalize_runtime_role_id(
-        parsed
-            .get("recommended_role")
-            .or_else(|| parsed.get("role_id"))
-            .and_then(|value| value.as_str()),
-    );
-    let (Some(intent), Some(role)) = (intent, recommended_role) else {
-        return fallback;
-    };
-    json!({
-        "intent": intent,
-        "secondaryIntents": parsed.get("secondary_intents").cloned().unwrap_or_else(|| json!([])),
-        "goal": parsed.get("goal").and_then(|value| value.as_str()).unwrap_or(user_input).to_string(),
-        "deliverables": parsed.get("deliverables").cloned().unwrap_or_else(|| json!([])),
-        "requiredCapabilities": parsed
-            .get("required_capabilities")
-            .cloned()
-            .unwrap_or_else(|| json!(runtime_required_capabilities(&intent))),
-        "recommendedRole": role,
-        "requiresLongRunningTask": parsed.get("requires_long_running_task").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresLongRunningTask").and_then(|v| v.as_bool()).unwrap_or(false)),
-        "requiresMultiAgent": parsed.get("requires_multi_agent").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresMultiAgent").and_then(|v| v.as_bool()).unwrap_or(false)),
-        "requiresHumanApproval": parsed.get("requires_human_approval").and_then(|value| value.as_bool()).unwrap_or_else(|| fallback.get("requiresHumanApproval").and_then(|v| v.as_bool()).unwrap_or(false)),
-        "confidence": parsed.get("confidence").and_then(|value| value.as_f64()).unwrap_or_else(|| fallback.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.82)),
-        "reasoning": parsed.get("reasoning").and_then(|value| value.as_str()).unwrap_or("llm-route").to_string(),
-        "source": "llm",
-    })
-}
-
-fn session_bridge_summary(session: &ChatSessionRecord, store: &AppStore) -> Value {
-    let updated_at = session.updated_at.parse::<i64>().unwrap_or(0);
-    let created_at = session.created_at.parse::<i64>().unwrap_or(0);
-    let owner_task_count = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session.id.as_str()))
-        .count() as i64;
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": updated_at,
-        "createdAt": created_at,
-        "contextType": "chat",
-        "runtimeMode": "default",
-        "isBackgroundSession": false,
-        "ownerTaskCount": owner_task_count,
-        "backgroundTaskCount": 0,
-    })
-}
-
-fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
-    let mut tasks = Vec::new();
-    for task in &store.redclaw_state.scheduled_tasks {
-        tasks.push(json!({
-            "id": task.id,
-            "kind": "scheduled-task",
-            "title": task.name,
-            "status": if task.enabled { "running" } else { "cancelled" },
-            "phase": if task.enabled { "thinking" } else { "cancelled" },
-            "sessionId": Value::Null,
-            "contextId": task.project_id,
-            "error": task.last_error,
-            "summary": task.prompt,
-            "latestText": task.prompt,
-            "attemptCount": 0,
-            "workerState": "idle",
-            "workerMode": "main-process",
-            "rollbackState": "not_required",
-            "createdAt": task.created_at,
-            "updatedAt": task.updated_at,
-            "completedAt": Value::Null,
-            "turns": []
-        }));
-    }
-    for task in &store.redclaw_state.long_cycle_tasks {
-        tasks.push(json!({
-            "id": task.id,
-            "kind": "long-cycle",
-            "title": task.name,
-            "status": task.status,
-            "phase": if task.status == "completed" { "completed" } else { "thinking" },
-            "sessionId": Value::Null,
-            "contextId": task.project_id,
-            "error": task.last_error,
-            "summary": task.objective,
-            "latestText": task.step_prompt,
-            "attemptCount": task.completed_rounds,
-            "workerState": "idle",
-            "workerMode": "main-process",
-            "rollbackState": "not_required",
-            "createdAt": task.created_at,
-            "updatedAt": task.updated_at,
-            "completedAt": Value::Null,
-            "turns": []
-        }));
-    }
-    tasks
+    runtime_route_from_llm_parsed(&fallback, &parsed, user_input).unwrap_or(fallback)
 }
 
 fn manuscript_layouts_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -6586,31 +6829,6 @@ fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
 
-fn infer_protocol(base_url: &str, preset_id: Option<&str>, explicit: Option<&str>) -> String {
-    if let Some(protocol) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        return protocol.to_string();
-    }
-    if let Some(preset) = preset_id.map(str::trim).filter(|value| !value.is_empty()) {
-        if preset.contains("anthropic") {
-            return "anthropic".to_string();
-        }
-        if preset.contains("gemini") {
-            return "gemini".to_string();
-        }
-    }
-    let lower = base_url.to_lowercase();
-    if lower.contains("anthropic") {
-        return "anthropic".to_string();
-    }
-    if lower.contains("gemini")
-        || lower.contains("googleapis.com")
-        || lower.contains("generativelanguage")
-    {
-        return "gemini".to_string();
-    }
-    "openai".to_string()
-}
-
 fn run_curl_json_with_timeout(
     method: &str,
     url: &str,
@@ -7313,9 +7531,11 @@ fn build_wander_items_text(items: &[Value]) -> String {
 }
 
 fn build_wander_long_term_context(state: &State<'_, AppState>) -> String {
+    let _ = ensure_redclaw_profile_files(state);
     let root = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
     let profile_root = root.join("redclaw").join("profile");
     let paths = [
+        ("Agent.md", profile_root.join("Agent.md"), 2200usize),
         ("user.md", profile_root.join("user.md"), 1800usize),
         (
             "CreatorProfile.md",
@@ -7348,15 +7568,14 @@ fn emit_wander_tool_start(
     input: Value,
     description: &str,
 ) {
-    let _ = app.emit(
-        "chat:tool-start",
-        json!({
-            "callId": make_id("wander-tool"),
-            "name": name,
-            "input": input,
-            "description": description,
-            "sessionId": session_id,
-        }),
+    let call_id = format!("wander:{}:{}", session_id, name);
+    emit_runtime_tool_request(
+        app,
+        Some(session_id),
+        &call_id,
+        name,
+        input.clone(),
+        Some(description),
     );
 }
 
@@ -7367,18 +7586,8 @@ fn emit_wander_tool_end(
     success: bool,
     content: String,
 ) {
-    let _ = app.emit(
-        "chat:tool-end",
-        json!({
-            "callId": make_id("wander-tool"),
-            "name": name,
-            "sessionId": session_id,
-            "output": {
-                "success": success,
-                "content": content,
-            }
-        }),
-    );
+    let call_id = format!("wander:{}:{}", session_id, name);
+    emit_runtime_tool_result(app, Some(session_id), &call_id, name, success, &content);
 }
 
 fn read_workspace_text_snippet(path: &Path, max_chars: usize) -> String {
@@ -8530,73 +8739,6 @@ fn write_placeholder_svg(
     fs::write(path, svg).map_err(|error| error.to_string())
 }
 
-fn session_title_from_message(message: &str) -> String {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return "New Chat".to_string();
-    }
-    trimmed.chars().take(24).collect()
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedChatConfig {
-    protocol: String,
-    base_url: String,
-    api_key: Option<String>,
-    model_name: String,
-}
-
-fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static str {
-    let normalized = value.unwrap_or("").trim().to_lowercase();
-    match normalized.as_str() {
-        "wander" => "wander",
-        "redclaw" => "redclaw",
-        "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
-        | "wechat-article" => "knowledge",
-        "advisor-discussion" => "advisor-discussion",
-        "background-maintenance" => "background-maintenance",
-        _ => "chatroom",
-    }
-}
-
-fn resolve_chat_config(
-    settings: &Value,
-    model_config: Option<&Value>,
-) -> Option<ResolvedChatConfig> {
-    let model_config = model_config.cloned().unwrap_or_else(|| json!({}));
-    let base_url = model_config
-        .get("baseURL")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .or_else(|| payload_string(settings, "api_endpoint"))
-        .unwrap_or_default();
-    let model_name = model_config
-        .get("modelName")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .or_else(|| payload_string(settings, "model_name"))
-        .unwrap_or_default();
-    if base_url.trim().is_empty() || model_name.trim().is_empty() {
-        return None;
-    }
-    let api_key = model_config
-        .get("apiKey")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .or_else(|| payload_string(settings, "api_key"));
-    let protocol = model_config
-        .get("protocol")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| infer_protocol(&base_url, None, None));
-    Some(ResolvedChatConfig {
-        protocol,
-        base_url,
-        api_key,
-        model_name,
-    })
-}
-
 fn generate_chat_response(settings: &Value, model_config: Option<&Value>, prompt: &str) -> String {
     if let Some(config) = resolve_chat_config(settings, model_config) {
         invoke_chat_by_protocol(
@@ -8690,8 +8832,63 @@ fn interactive_runtime_system_prompt(state: &State<'_, AppState>, runtime_mode: 
                 ("pi_documentation", "Tauri Rust host runtime".to_string()),
             ],
         );
+        if runtime_mode == "redclaw" {
+            if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
+                rendered.push_str("\n\n## RedClaw 个性化档案（空间隔离）\n");
+                rendered.push_str(&format!(
+                    "- ProfileRoot: {}\n",
+                    bundle.profile_root.display()
+                ));
+                rendered.push_str(
+                    "- 档案文件: Agent.md / Soul.md / identity.md / user.md / CreatorProfile.md\n",
+                );
+                rendered.push_str("<redclaw_agent_md>\n");
+                rendered.push_str(&truncate_chars(&bundle.agent, 6000));
+                rendered.push_str("\n</redclaw_agent_md>\n");
+                rendered.push_str("<redclaw_soul_md>\n");
+                rendered.push_str(&truncate_chars(&bundle.soul, 6000));
+                rendered.push_str("\n</redclaw_soul_md>\n");
+                rendered.push_str("<redclaw_identity_md>\n");
+                rendered.push_str(&truncate_chars(&bundle.identity, 4000));
+                rendered.push_str("\n</redclaw_identity_md>\n");
+                rendered.push_str("<redclaw_user_md>\n");
+                rendered.push_str(&truncate_chars(&bundle.user, 8000));
+                rendered.push_str("\n</redclaw_user_md>\n");
+                rendered.push_str("<redclaw_creator_profile_md>\n");
+                rendered.push_str(&truncate_chars(&bundle.creator_profile, 10000));
+                rendered.push_str("\n</redclaw_creator_profile_md>\n");
+                rendered.push_str("文档职责与更新规则：\n");
+                rendered.push_str("- Agent.md：RedClaw 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n");
+                rendered.push_str("- Soul.md：RedClaw 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n");
+                rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");
+                rendered.push_str("- CreatorProfile.md：长期自媒体定位与策略主档案（定位、目标群体、内容风格、商业目标、运营边界）。用户明确给出这类长期变化时更新。\n");
+                rendered.push_str("- 一次性任务、临时实验、单篇稿件偏好，不应改写这些长期文档。\n");
+
+                let onboarding_completed = bundle
+                    .onboarding_state
+                    .get("completedAt")
+                    .and_then(|value| value.as_str())
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false);
+                if !onboarding_completed && !bundle.bootstrap.trim().is_empty() {
+                    rendered.push_str("## RedClaw 首次设定引导状态\n");
+                    rendered.push_str("- completed: false\n");
+                    rendered.push_str(&format!(
+                        "- stepIndex: {}\n",
+                        bundle
+                            .onboarding_state
+                            .get("stepIndex")
+                            .and_then(|value| value.as_i64())
+                            .unwrap_or(0)
+                    ));
+                    rendered.push_str("<redclaw_bootstrap>\n");
+                    rendered.push_str(&truncate_chars(&bundle.bootstrap, 3000));
+                    rendered.push_str("\n</redclaw_bootstrap>\n");
+                }
+            }
+        }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- In this Tauri runtime, the callable tools are the `redbox_*` functions shown above.\n- Prefer `redbox_app_query` for app-managed data and `redbox_fs` for file inspection.\n- Do not emit or assume `app_cli`, `bash`, `workspace`, shell commands, or pseudo tools like `read --path` unless they are explicitly present in available_tools.\n- To inspect material folders, use `redbox_fs` with `action=list` first, then `redbox_fs` with `action=read` on concrete files such as meta.json, content.md, transcript files.\n",
+            "\n\nRuntime compatibility note:\n- In this Tauri runtime, the callable tools are the `redbox_*` functions shown above.\n- Prefer `redbox_app_query` for app-managed data and `redbox_fs` for file inspection.\n- Use `redbox_profile_doc` to read/update RedClaw long-term docs (Agent.md / Soul.md / user.md / CreatorProfile.md).\n- Do not emit or assume `app_cli`, `bash`, `workspace`, shell commands, or pseudo tools like `read --path` unless they are explicitly present in available_tools.\n- To inspect material folders, use `redbox_fs` with `action=list` first, then `redbox_fs` with `action=read` on concrete files such as meta.json, content.md, transcript files.\n",
         );
         return rendered;
     }
@@ -8839,7 +9036,9 @@ fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
                                 "memory.search",
                                 "chat.sessions.list",
                                 "settings.summary",
-                                "redclaw.projects.list"
+                                "redclaw.projects.list",
+                                "redclaw.profile.bundle",
+                                "redclaw.profile.onboarding"
                             ]
                         },
                         "query": { "type": "string" },
@@ -8865,6 +9064,24 @@ fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
                         "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
                     },
                     "required": ["action", "path"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "redbox_profile_doc",
+                "description": "Read or update RedClaw long-term profile docs (Agent.md, Soul.md, user.md, CreatorProfile.md). Update only when user requests durable profile changes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["bundle", "read", "update"] },
+                        "docType": { "type": "string", "enum": ["agent", "soul", "user", "creator_profile"] },
+                        "markdown": { "type": "string" },
+                        "reason": { "type": "string" }
+                    },
+                    "required": ["action"],
                     "additionalProperties": false
                 }
             }
@@ -9053,8 +9270,114 @@ fn execute_interactive_tool_call(
                         })).collect::<Vec<_>>()
                     }))
                 }),
+                "redclaw.profile.bundle" => {
+                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
+                    Ok(json!({
+                        "profileRoot": bundle.profile_root.display().to_string(),
+                        "docs": {
+                            "agent": {
+                                "path": bundle.profile_root.join("Agent.md").display().to_string(),
+                                "chars": bundle.agent.chars().count(),
+                                "preview": text_snippet(&bundle.agent, 240)
+                            },
+                            "soul": {
+                                "path": bundle.profile_root.join("Soul.md").display().to_string(),
+                                "chars": bundle.soul.chars().count(),
+                                "preview": text_snippet(&bundle.soul, 240)
+                            },
+                            "user": {
+                                "path": bundle.profile_root.join("user.md").display().to_string(),
+                                "chars": bundle.user.chars().count(),
+                                "preview": text_snippet(&bundle.user, 240)
+                            },
+                            "creatorProfile": {
+                                "path": bundle.profile_root.join("CreatorProfile.md").display().to_string(),
+                                "chars": bundle.creator_profile.chars().count(),
+                                "preview": text_snippet(&bundle.creator_profile, 240)
+                            }
+                        },
+                        "onboarding": bundle.onboarding_state
+                    }))
+                }
+                "redclaw.profile.onboarding" => {
+                    let onboarding_state = load_redclaw_onboarding_state(state)?;
+                    Ok(json!({
+                        "completed": onboarding_state
+                            .get("completedAt")
+                            .and_then(|value| value.as_str())
+                            .map(|value| !value.trim().is_empty())
+                            .unwrap_or(false),
+                        "state": onboarding_state
+                    }))
+                }
                 _ => Err(format!("unsupported app query operation: {operation}")),
             }
+        }
+        "redbox_profile_doc" => {
+            let action = payload_string(arguments, "action").unwrap_or_default();
+            match action.as_str() {
+                "bundle" => {
+                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
+                    Ok(json!({
+                        "profileRoot": bundle.profile_root.display().to_string(),
+                        "agent": bundle.agent,
+                        "soul": bundle.soul,
+                        "identity": bundle.identity,
+                        "user": bundle.user,
+                        "creatorProfile": bundle.creator_profile,
+                        "bootstrap": bundle.bootstrap,
+                        "onboardingState": bundle.onboarding_state
+                    }))
+                }
+                "read" => {
+                    let doc_type =
+                        payload_string(arguments, "docType").unwrap_or_else(|| "user".to_string());
+                    let Some((file_name, _title)) = profile_doc_target(&doc_type) else {
+                        return Err(format!("unsupported profile doc type: {doc_type}"));
+                    };
+                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
+                    let content = match doc_type.as_str() {
+                        "agent" => bundle.agent,
+                        "soul" => bundle.soul,
+                        "user" => bundle.user,
+                        "creator_profile" => bundle.creator_profile,
+                        _ => String::new(),
+                    };
+                    Ok(json!({
+                        "docType": doc_type,
+                        "fileName": file_name,
+                        "path": bundle.profile_root.join(file_name).display().to_string(),
+                        "content": content
+                    }))
+                }
+                "update" => {
+                    let doc_type = payload_string(arguments, "docType")
+                        .ok_or_else(|| "docType is required for update".to_string())?;
+                    let markdown = payload_string(arguments, "markdown")
+                        .ok_or_else(|| "markdown is required for update".to_string())?;
+                    let reason = payload_string(arguments, "reason");
+                    let mut result = update_redclaw_profile_doc(state, &doc_type, &markdown)?;
+                    if let Some(reason_text) = reason {
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert("reason".to_string(), json!(reason_text));
+                        }
+                    }
+                    Ok(result)
+                }
+                _ => Err(format!("unsupported redbox_profile_doc action: {action}")),
+            }
+        }
+        "redclaw_update_profile_doc" => {
+            let doc_type = payload_string(arguments, "docType")
+                .ok_or_else(|| "docType is required".to_string())?;
+            let markdown = payload_string(arguments, "markdown")
+                .ok_or_else(|| "markdown is required".to_string())?;
+            update_redclaw_profile_doc(state, &doc_type, &markdown)
+        }
+        "redclaw_update_creator_profile" => {
+            let markdown = payload_string(arguments, "markdown")
+                .ok_or_else(|| "markdown is required".to_string())?;
+            update_redclaw_profile_doc(state, "creator_profile", &markdown)
         }
         "redbox_fs" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
@@ -9340,6 +9663,9 @@ fn run_openai_interactive_chat_runtime(
     let disable_qwen_thinking =
         is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
     let trace_id = session_id.unwrap_or(runtime_mode);
+    if let Some(current_session_id) = session_id {
+        emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+    }
 
     for turn in 0..max_turns {
         let turn_started_at = now_ms();
@@ -9434,13 +9760,11 @@ fn run_openai_interactive_chat_runtime(
         }
 
         if !assistant_content.trim().is_empty() {
-            let _ = app.emit(
-                "chat:thought-delta",
-                json!({ "content": assistant_content, "sessionId": session_id }),
-            );
-            let _ = app.emit(
-                "chat:thinking",
-                json!({ "content": assistant_content, "sessionId": session_id }),
+            emit_runtime_text_delta(
+                app,
+                session_id.unwrap_or_default(),
+                "thought",
+                &assistant_content,
             );
         }
         messages.push(json!({
@@ -9452,41 +9776,28 @@ fn run_openai_interactive_chat_runtime(
         for call in tool_calls {
             let tool_started_at = now_ms();
             let description = format!("Interactive tool call: {}", call.name);
-            let _ = app.emit(
-                "chat:tool-start",
-                json!({
-                    "callId": call.id,
-                    "name": call.name,
-                    "input": call.arguments,
-                    "description": description,
-                    "sessionId": session_id,
-                }),
+            emit_runtime_tool_request(
+                app,
+                session_id,
+                &call.id,
+                &call.name,
+                call.arguments.clone(),
+                Some(&description),
             );
             let result = execute_interactive_tool_call(state, &call.name, &call.arguments);
             match result {
                 Ok(result_value) => {
                     let result_text = serde_json::to_string_pretty(&result_value)
                         .unwrap_or_else(|_| result_value.to_string());
-                    let _ = app.emit(
-                        "chat:tool-update",
-                        json!({
-                            "callId": call.id,
-                            "name": call.name,
-                            "partial": text_snippet(&result_text, 1200),
-                            "sessionId": session_id,
-                        }),
-                    );
-                    let _ = app.emit(
-                        "chat:tool-end",
-                        json!({
-                            "callId": call.id,
-                            "name": call.name,
-                            "sessionId": session_id,
-                            "output": {
-                                "success": true,
-                                "content": result_text
-                            }
-                        }),
+                    let partial = text_snippet(&result_text, 1200);
+                    emit_runtime_tool_partial(app, session_id, &call.id, &call.name, &partial);
+                    emit_runtime_tool_result(
+                        app,
+                        session_id,
+                        &call.id,
+                        &call.name,
+                        true,
+                        &result_text,
                     );
                     append_debug_log_state(
                         state,
@@ -9546,17 +9857,13 @@ fn run_openai_interactive_chat_runtime(
                 }
                 Err(error) => {
                     let failure_text = error.clone();
-                    let _ = app.emit(
-                        "chat:tool-end",
-                        json!({
-                            "callId": call.id,
-                            "name": call.name,
-                            "sessionId": session_id,
-                            "output": {
-                                "success": false,
-                                "content": failure_text
-                            }
-                        }),
+                    emit_runtime_tool_result(
+                        app,
+                        session_id,
+                        &call.id,
+                        &call.name,
+                        false,
+                        &failure_text,
                     );
                     append_debug_log_state(
                         state,
@@ -9648,196 +9955,13 @@ fn update_chat_runtime_state(
     Ok(())
 }
 
-fn execute_chat_exchange(
-    app: Option<&AppHandle>,
-    state: &State<'_, AppState>,
-    session_id: Option<String>,
-    message: String,
-    display_content: String,
-    model_config: Option<&Value>,
-    attachment: Option<Value>,
-    checkpoint_type: &str,
-    checkpoint_summary: &str,
-) -> Result<ChatExecutionResult, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let working_session_id = session_id.unwrap_or_else(|| make_id("session"));
-    let _ = update_chat_runtime_state(state, &working_session_id, true, String::new(), None);
-    let runtime_mode = with_store(state, |store| {
-        Ok(Some(working_session_id.as_str())
-            .as_ref()
-            .and_then(|current_session_id| {
-                store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| &item.id == current_session_id)
-                    .and_then(|session| {
-                        session
-                            .metadata
-                            .as_ref()
-                            .and_then(|metadata| metadata.get("contextType"))
-                            .and_then(|value| value.as_str())
-                    })
-            })
-            .map(|value| resolve_runtime_mode_from_context_type(Some(value)))
-            .unwrap_or("chatroom")
-            .to_string())
-    })?;
-    let response = if let (Some(app), Some(config)) =
-        (app, resolve_chat_config(&settings_snapshot, model_config))
-    {
-        if config.protocol == "openai" {
-            match run_openai_interactive_chat_runtime(
-                app,
-                state,
-                Some(working_session_id.as_str()),
-                &config,
-                &message,
-                &runtime_mode,
-            ) {
-                Ok(response) => response,
-                Err(error) => {
-                    append_debug_log_state(
-                        state,
-                        format!(
-                            "[runtime][{}][{}] interactive-runtime-failed | {}",
-                            runtime_mode, working_session_id, error
-                        ),
-                    );
-                    if runtime_mode == "wander" {
-                        return Err(error);
-                    }
-                    generate_chat_response(&settings_snapshot, model_config, &message)
-                }
-            }
-        } else {
-            generate_chat_response(&settings_snapshot, model_config, &message)
-        }
-    } else {
-        generate_chat_response(&settings_snapshot, model_config, &message)
-    };
-    let title_hint = Some(session_title_from_message(&display_content));
-    let mut title_update: Option<(String, String)> = None;
-    let mut final_session_id = String::new();
-
-    with_store_mut(state, |store| {
-        let (session, is_new) = ensure_chat_session(
-            &mut store.chat_sessions,
-            Some(working_session_id.clone()),
-            title_hint.clone(),
-        );
-        final_session_id = session.id.clone();
-        let next_title = title_hint.clone().unwrap_or_else(|| "New Chat".to_string());
-        if is_new || session.title == "New Chat" || session.title.trim().is_empty() {
-            session.title = next_title.clone();
-            title_update = Some((session.id.clone(), next_title));
-        }
-        session.updated_at = now_iso();
-        let runtime_mode = resolve_runtime_mode_from_context_type(
-            session
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("contextType"))
-                .and_then(|value| value.as_str()),
-        );
-
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session.id.clone(),
-            role: "user".to_string(),
-            content: message.clone(),
-            display_content: if display_content.trim().is_empty()
-                || display_content.trim() == message.trim()
-            {
-                None
-            } else {
-                Some(display_content.clone())
-            },
-            attachment: attachment.clone(),
-            created_at: now_iso(),
-        });
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session.id.clone(),
-            role: "assistant".to_string(),
-            content: response.clone(),
-            display_content: None,
-            attachment: None,
-            created_at: now_iso(),
-        });
-        append_session_transcript(
-            store,
-            &final_session_id,
-            "message",
-            "user",
-            message.clone(),
-            Some(json!({
-                "displayContent": display_content,
-                "attachment": attachment,
-                "runtimeMode": runtime_mode,
-            })),
-        );
-        append_session_transcript(
-            store,
-            &final_session_id,
-            "message",
-            "assistant",
-            response.clone(),
-            Some(json!({ "runtimeMode": runtime_mode })),
-        );
-        append_session_checkpoint(
-            store,
-            &final_session_id,
-            checkpoint_type,
-            checkpoint_summary.to_string(),
-            Some(json!({
-                "responsePreview": response.chars().take(80).collect::<String>(),
-                "runtimeMode": runtime_mode,
-            })),
-        );
-        Ok(())
-    })?;
-    let _ = update_chat_runtime_state(state, &final_session_id, false, response.clone(), None);
-    let _ = with_store_mut(state, |store| {
-        let next_scheduled_at = if response.chars().count() > 1200 {
-            (now_i64() + 5 * 60 * 1000).to_string()
-        } else {
-            (now_i64() + 20 * 60 * 1000).to_string()
-        };
-        let current = memory_maintenance_status_from_settings(&store.settings)
-            .unwrap_or_else(default_memory_maintenance_status);
-        let status = json!({
-            "started": true,
-            "running": false,
-            "lockState": current.get("lockState").cloned().unwrap_or_else(|| json!("owner")),
-            "blockedBy": current.get("blockedBy").cloned().unwrap_or(Value::Null),
-            "pendingMutations": current.get("pendingMutations").cloned().unwrap_or_else(|| json!(0)),
-            "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
-            "lastScanAt": now_i64(),
-            "lastReason": "query-after",
-            "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
-            "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
-            "nextScheduledAt": next_scheduled_at.parse::<i64>().unwrap_or(now_i64()),
-        });
-        let mut settings = store.settings.clone();
-        write_memory_maintenance_status(&mut settings, &status);
-        store.settings = settings;
-        store.redclaw_state.next_maintenance_at =
-            value_to_i64_string(status.get("nextScheduledAt"));
-        Ok(())
-    });
-
-    Ok(ChatExecutionResult {
-        session_id: final_session_id,
-        response,
-        title_update,
-    })
-}
-
 fn run_subagent_orchestration_for_task(
+    app: Option<&AppHandle>,
     settings: &Value,
     runtime_mode: &str,
     task_id: &str,
-    route: &Value,
+    session_id: Option<&str>,
+    route: &RuntimeRouteRecord,
     user_input: &str,
 ) -> Result<Value, String> {
     let Some(template) = load_redbox_prompt("runtime/ai/subagent_orchestrator.txt") else {
@@ -9846,9 +9970,19 @@ fn run_subagent_orchestration_for_task(
             "promptSection": "subagent prompt unavailable"
         }));
     };
-    let role_sequence = role_sequence_for_route(route);
+    let route_value = route.clone().into_value();
+    let role_sequence = role_sequence_for_route(&route_value);
     let mut outputs = Vec::<Value>::new();
     for role_id in role_sequence {
+        if let Some(handle) = app {
+            emit_runtime_subagent_spawned(
+                handle,
+                Some(task_id),
+                session_id,
+                &role_id,
+                runtime_mode,
+            );
+        }
         let role_spec = runtime_subagent_role_spec(&role_id);
         let system_prompt = render_redbox_prompt(
             &template,
@@ -9860,27 +9994,17 @@ fn run_subagent_orchestration_for_task(
                 ("role_directive", role_spec.system_prompt.clone()),
                 ("runtime_mode", runtime_mode.to_string()),
                 ("task_id", task_id.to_string()),
-                (
-                    "intent",
-                    payload_string(route, "intent").unwrap_or_default(),
-                ),
-                ("goal", payload_string(route, "goal").unwrap_or_default()),
+                ("intent", route.intent.clone()),
+                ("goal", route.goal.clone()),
                 (
                     "required_capabilities",
-                    route
-                        .get("requiredCapabilities")
-                        .cloned()
-                        .unwrap_or_else(|| json!([]))
-                        .to_string(),
+                    serde_json::to_string(&route.required_capabilities)
+                        .unwrap_or_else(|_| "[]".to_string()),
                 ),
                 ("previous_outputs_json", json!(outputs).to_string()),
             ],
         );
-        let user_prompt = format!(
-            "用户请求：{}\n任务目标：{}",
-            user_input,
-            payload_string(route, "goal").unwrap_or_default()
-        );
+        let user_prompt = format!("用户请求：{}\n任务目标：{}", user_input, route.goal);
         let raw = generate_structured_response_with_settings(
             settings,
             None,
@@ -9915,11 +10039,11 @@ fn run_subagent_orchestration_for_task(
 fn save_runtime_task_artifact(
     state: &State<'_, AppState>,
     task_id: &str,
-    route: &Value,
+    route: &RuntimeRouteRecord,
     goal: &str,
     orchestration: Option<&Value>,
 ) -> Result<Value, String> {
-    let intent = payload_string(route, "intent").unwrap_or_else(|| "direct_answer".to_string());
+    let intent = route.intent.clone();
     let root = workspace_root(state)?;
     let (dir, extension) = match intent.as_str() {
         "manuscript_creation" | "advisor_persona" | "discussion" | "direct_answer" => {
@@ -9934,7 +10058,8 @@ fn save_runtime_task_artifact(
         slug_from_relative_path(task_id),
         extension
     ));
-    let content = build_runtime_task_artifact_content(task_id, route, goal, orchestration)?;
+    let route_value = route.clone().into_value();
+    let content = build_runtime_task_artifact_content(task_id, &route_value, goal, orchestration)?;
     write_text_file(&path, &content)?;
     Ok(json!({
         "type": "saved-artifact",
@@ -9946,7 +10071,7 @@ fn save_runtime_task_artifact(
 fn run_reviewer_repair_for_task(
     settings: &Value,
     task_id: &str,
-    route: &Value,
+    route: &RuntimeRouteRecord,
     goal: &str,
     orchestration: &Value,
 ) -> Result<Value, String> {
@@ -9969,7 +10094,7 @@ fn run_reviewer_repair_for_task(
         "Task ID: {}\nGoal: {}\nRoute: {}\nReviewer issues: {}\n\nReturn strict JSON with fields summary, artifact, handoff, risks. Focus on concrete repair steps needed before the task can be considered complete.",
         task_id,
         goal,
-        route.to_string(),
+        route.clone().into_value(),
         issues
     );
     let raw = generate_structured_response_with_settings(
@@ -10215,6 +10340,7 @@ fn ensure_chat_session<'a>(
     }
 
     let timestamp = now_iso();
+    let metadata = build_session_metadata_from_session_id(&id);
     sessions.push(ChatSessionRecord {
         id: id.clone(),
         title: title_hint
@@ -10222,10 +10348,126 @@ fn ensure_chat_session<'a>(
             .unwrap_or_else(|| "New Chat".to_string()),
         created_at: timestamp.clone(),
         updated_at: timestamp,
-        metadata: None,
+        metadata,
     });
     let last_index = sessions.len() - 1;
     (&mut sessions[last_index], true)
+}
+
+fn infer_context_type_from_session_id(session_id: &str) -> Option<String> {
+    let mut parts = session_id.splitn(3, ':');
+    let prefix = parts.next().unwrap_or_default();
+    let context_type = parts.next().unwrap_or_default();
+    if prefix == "context-session" && !context_type.trim().is_empty() {
+        return Some(context_type.trim().to_string());
+    }
+    if session_id.starts_with("file-session:") {
+        return Some("file".to_string());
+    }
+    None
+}
+
+fn infer_context_id_from_session_id(session_id: &str) -> Option<String> {
+    let mut parts = session_id.splitn(3, ':');
+    let prefix = parts.next().unwrap_or_default();
+    let _context_type = parts.next().unwrap_or_default();
+    let context_id = parts.next().unwrap_or_default();
+    if prefix == "context-session" && !context_id.trim().is_empty() {
+        return Some(context_id.trim().to_string());
+    }
+    if session_id.starts_with("file-session:") {
+        return session_id
+            .split_once(':')
+            .map(|(_, value)| value.to_string())
+            .filter(|value| !value.trim().is_empty());
+    }
+    None
+}
+
+fn build_session_metadata_from_session_id(session_id: &str) -> Option<Value> {
+    let context_type = infer_context_type_from_session_id(session_id)?;
+    let context_id = infer_context_id_from_session_id(session_id);
+    Some(json!({
+        "contextType": context_type,
+        "contextId": context_id,
+        "isContextBound": true
+    }))
+}
+
+fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> String {
+    let context_type_from_metadata = store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+        .and_then(|session| {
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("contextType"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        });
+    let context_type = context_type_from_metadata
+        .or_else(|| infer_context_type_from_session_id(session_id))
+        .unwrap_or_else(|| "chat".to_string());
+    resolve_runtime_mode_from_context_type(Some(&context_type)).to_string()
+}
+
+fn session_context_type_and_id(store: &AppStore, session_id: &str) -> (String, Option<String>) {
+    let context_type_from_metadata = store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+        .and_then(|session| {
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("contextType"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        });
+    let context_id_from_metadata = store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+        .and_then(|session| {
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("contextId"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        });
+    let context_type = context_type_from_metadata
+        .or_else(|| infer_context_type_from_session_id(session_id))
+        .unwrap_or_else(|| "chat".to_string());
+    let context_id =
+        context_id_from_metadata.or_else(|| infer_context_id_from_session_id(session_id));
+    (context_type, context_id)
+}
+
+fn is_first_assistant_turn_for_session(store: &AppStore, session_id: &str) -> bool {
+    let history: Vec<&ChatMessageRecord> = store
+        .chat_messages
+        .iter()
+        .filter(|item| {
+            item.session_id == session_id && (item.role == "user" || item.role == "assistant")
+        })
+        .collect();
+    let assistant_count = history
+        .iter()
+        .filter(|item| item.role == "assistant")
+        .count();
+    assistant_count == 0 && history.len() <= 1
+}
+
+fn should_handle_redclaw_onboarding_for_session(store: &AppStore, session_id: &str) -> bool {
+    let (context_type, context_id) = session_context_type_and_id(store, session_id);
+    if context_type.trim().to_lowercase() != "redclaw" {
+        return false;
+    }
+    let id = context_id.unwrap_or_default();
+    id.starts_with("redclaw-singleton:") || id.trim() == "redclaw-singleton"
 }
 
 fn build_placeholder_assistant_response(message: &str) -> String {
@@ -10703,67 +10945,51 @@ fn emit_chat_sequence(
     session_id: &str,
     response: &str,
     thought: &str,
+    runtime_mode: &str,
     title_update: Option<(String, String)>,
 ) {
-    let _ = app.emit(
-        "chat:plan-updated",
-        json!({ "steps": [], "sessionId": session_id }),
+    emit_runtime_stream_start(app, session_id, "thinking", Some(runtime_mode));
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.plan_updated",
+        "plan updated",
+        Some(json!({ "steps": [] })),
     );
-    let _ = app.emit(
-        "chat:phase-start",
-        json!({ "name": "thinking", "sessionId": session_id }),
-    );
-    let _ = app.emit("chat:thought-start", json!({ "sessionId": session_id }));
     if !thought.trim().is_empty() {
-        let _ = app.emit(
-            "chat:thought-delta",
-            json!({ "content": thought, "sessionId": session_id }),
-        );
-        let _ = app.emit(
-            "chat:thinking",
-            json!({ "content": thought, "sessionId": session_id }),
-        );
+        emit_runtime_text_delta(app, session_id, "thought", thought);
     }
-    let _ = app.emit("chat:thought-end", json!({ "sessionId": session_id }));
-    let _ = app.emit(
-        "chat:phase-start",
-        json!({ "name": "responding", "sessionId": session_id }),
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.thought_end",
+        "thought stream completed",
+        None,
     );
+    emit_runtime_stream_start(app, session_id, "responding", Some(runtime_mode));
     for chunk in split_stream_chunks(response, 160) {
-        let _ = app.emit(
-            "chat:response-chunk",
-            json!({ "content": chunk, "sessionId": session_id }),
-        );
+        emit_runtime_text_delta(app, session_id, "response", &chunk);
     }
     if let Some((sid, title)) = title_update {
-        let _ = app.emit(
-            "chat:session-title-updated",
-            json!({ "sessionId": sid, "title": title }),
+        emit_runtime_task_checkpoint_saved(
+            app,
+            None,
+            Some(&sid),
+            "chat.session_title_updated",
+            "session title updated",
+            Some(json!({ "sessionId": sid.clone(), "title": title.clone() })),
         );
     }
-    let _ = app.emit(
-        "chat:response-end",
-        json!({ "content": response, "sessionId": session_id }),
+    emit_runtime_task_checkpoint_saved(
+        app,
+        None,
+        Some(session_id),
+        "chat.response_end",
+        "chat response completed",
+        Some(json!({ "content": response })),
     );
-}
-
-fn parse_millis_string(value: Option<&str>) -> Option<i64> {
-    value.and_then(|item| item.trim().parse::<i64>().ok())
-}
-
-fn next_scheduled_timestamp(task: &RedclawScheduledTaskRecord, now: i64) -> Option<String> {
-    let next_ms = match task.mode.as_str() {
-        "interval" => now + task.interval_minutes.unwrap_or(60) * 60_000,
-        "daily" => now + 24 * 60 * 60_000,
-        "weekly" => now + 7 * 24 * 60 * 60_000,
-        "once" => return None,
-        _ => now + 60 * 60_000,
-    };
-    Some(next_ms.to_string())
-}
-
-fn next_long_cycle_timestamp(task: &RedclawLongCycleTaskRecord, now: i64) -> Option<String> {
-    Some((now + task.interval_minutes * 60_000).to_string())
 }
 
 fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()> {
@@ -10833,6 +11059,7 @@ fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()
                     store.redclaw_state.last_tick_at = Some(now.to_string());
                     store.redclaw_state.next_tick_at =
                         Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
+                    sync_redclaw_job_definitions(store);
                     Ok(())
                 });
                 if let Ok(store) = state.store.lock() {
@@ -10867,6 +11094,7 @@ fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()
                     store.redclaw_state.last_tick_at = Some(now.to_string());
                     store.redclaw_state.next_tick_at =
                         Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
+                    sync_redclaw_job_definitions(store);
                     Ok(())
                 });
                 if let Ok(store) = state.store.lock() {
@@ -11033,6 +11261,15 @@ fn handle_channel(
     payload: Value,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
+    if let Some(result) = commands::bridge::handle_bridge_channel(app, state, channel, &payload) {
+        return result;
+    }
+    if let Some(result) = commands::redclaw::handle_redclaw_channel(app, state, channel, &payload) {
+        return result;
+    }
+    if let Some(result) = commands::runtime::handle_runtime_channel(app, state, channel, &payload) {
+        return result;
+    }
     match channel {
         "app:get-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
         "app:check-update" => Ok(json!({
@@ -13071,6 +13308,12 @@ fn handle_channel(
             let session = with_store_mut(state, |store| {
                 let (session, _) =
                     ensure_chat_session(&mut store.chat_sessions, Some(session_id), Some(title));
+                session.metadata = Some(json!({
+                    "contextType": context_type,
+                    "contextId": context_id,
+                    "isContextBound": true
+                }));
+                session.updated_at = now_iso();
                 Ok(session.clone())
             })?;
             Ok(json!(session))
@@ -13264,213 +13507,6 @@ fn handle_channel(
                 Ok(json!(messages))
             })
         }
-        "chat:get-runtime-state" => {
-            let requested_session_id = payload_value_as_string(&payload).unwrap_or_default();
-            let guard = state
-                .chat_runtime_states
-                .lock()
-                .map_err(|_| "chat runtime state lock 已损坏".to_string())?;
-            if let Some(current) = guard.get(&requested_session_id) {
-                Ok(json!({
-                    "success": true,
-                    "sessionId": current.session_id,
-                    "isProcessing": current.is_processing,
-                    "partialResponse": current.partial_response,
-                    "updatedAt": current.updated_at,
-                    "error": current.error,
-                }))
-            } else {
-                Ok(json!({
-                    "success": true,
-                    "sessionId": requested_session_id,
-                    "isProcessing": false,
-                    "partialResponse": "",
-                    "updatedAt": now_ms(),
-                }))
-            }
-        }
-        "runtime:query" => {
-            let session_id = payload_string(&payload, "sessionId");
-            let message = payload_string(&payload, "message").unwrap_or_default();
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-            let runtime_mode = with_store(state, |store| {
-                Ok(session_id
-                    .as_deref()
-                    .and_then(|current_session_id| {
-                        store
-                            .chat_sessions
-                            .iter()
-                            .find(|item| item.id == current_session_id)
-                            .and_then(|session| {
-                                session
-                                    .metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.get("contextType"))
-                                    .and_then(|value| value.as_str())
-                            })
-                    })
-                    .map(|value| resolve_runtime_mode_from_context_type(Some(value)).to_string())
-                    .unwrap_or_else(|| "redclaw".to_string()))
-            })?;
-            let route = route_runtime_intent_with_settings(
-                &settings_snapshot,
-                &runtime_mode,
-                &message,
-                payload_field(&payload, "metadata"),
-            );
-            let orchestration = if route
-                .get("requiresMultiAgent")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || route
-                    .get("requiresLongRunningTask")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            {
-                Some(run_subagent_orchestration_for_task(
-                    &settings_snapshot,
-                    &runtime_mode,
-                    session_id.as_deref().unwrap_or("runtime-query"),
-                    &route,
-                    &message,
-                )?)
-            } else {
-                None
-            };
-            let effective_message = orchestration
-                .as_ref()
-                .and_then(|value| value.get("outputs"))
-                .and_then(|value| value.as_array())
-                .filter(|items| !items.is_empty())
-                .map(|items| {
-                    let summaries = items
-                        .iter()
-                        .filter_map(|item| {
-                            Some(format!(
-                                "- {}: {}",
-                                payload_string(item, "roleId")?,
-                                payload_string(item, "summary").unwrap_or_default()
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!("{message}\n\nSubagent orchestration summary:\n{summaries}")
-                })
-                .unwrap_or_else(|| message.clone());
-            let execution = execute_chat_exchange(
-                Some(app),
-                state,
-                session_id,
-                effective_message,
-                message.clone(),
-                payload_field(&payload, "modelConfig"),
-                None,
-                "runtime-query",
-                "Runtime query completed",
-            )?;
-            let _ = with_store_mut(state, |store| {
-                append_session_checkpoint(
-                    store,
-                    &execution.session_id,
-                    "runtime.route",
-                    payload_string(&route, "reasoning")
-                        .unwrap_or_else(|| "runtime route".to_string()),
-                    Some(route.clone()),
-                );
-                if let Some(orchestration_value) = orchestration.clone() {
-                    append_session_checkpoint(
-                        store,
-                        &execution.session_id,
-                        "runtime.orchestration",
-                        "subagent orchestration completed".to_string(),
-                        Some(orchestration_value),
-                    );
-                }
-                Ok(())
-            });
-            emit_chat_sequence(
-                app,
-                &execution.session_id,
-                &execution.response,
-                "正在规划并调用模型生成响应。",
-                execution.title_update,
-            );
-            Ok(json!({
-                "success": true,
-                "sessionId": execution.session_id,
-                "response": execution.response,
-                "route": route,
-                "orchestration": orchestration
-            }))
-        }
-        "runtime:resume" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            Ok(json!({ "success": true, "sessionId": session_id }))
-        }
-        "runtime:fork-session" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            let forked = with_store_mut(state, |store| {
-                let Some(source) = store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| item.id == session_id)
-                    .cloned()
-                else {
-                    return Ok(json!({ "success": false, "error": "会话不存在" }));
-                };
-                let new_id = make_id("session");
-                let timestamp = now_iso();
-                let forked = ChatSessionRecord {
-                    id: new_id.clone(),
-                    title: format!("{} (Fork)", source.title),
-                    created_at: timestamp.clone(),
-                    updated_at: timestamp,
-                    metadata: source.metadata.clone(),
-                };
-                store.chat_sessions.push(forked);
-                Ok(json!({ "success": true, "sessionId": session_id, "forkedSessionId": new_id }))
-            })?;
-            Ok(forked)
-        }
-        "runtime:get-trace" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            with_store(state, |store| {
-                let mut items: Vec<SessionTranscriptRecord> = store
-                    .session_transcript_records
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                items.sort_by_key(|item| item.created_at);
-                Ok(json!(items))
-            })
-        }
-        "runtime:get-checkpoints" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            with_store(state, |store| {
-                let mut items: Vec<SessionCheckpointRecord> = store
-                    .session_checkpoints
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                items.sort_by_key(|item| item.created_at);
-                Ok(json!(items))
-            })
-        }
-        "runtime:get-tool-results" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            with_store(state, |store| {
-                let mut items: Vec<SessionToolResultRecord> = store
-                    .session_tool_results
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                items.sort_by_key(|item| item.created_at);
-                Ok(json!(items))
-            })
-        }
         "chat:create-session" => {
             let title = payload_value_as_string(&payload).unwrap_or_else(|| "New Chat".to_string());
             let session = with_store_mut(state, |store| {
@@ -13528,487 +13564,6 @@ fn handle_channel(
                     session.updated_at = now_iso();
                 }
                 Ok(json!({ "success": true }))
-            })
-        }
-        "tasks:create" => {
-            let runtime_mode =
-                payload_string(&payload, "runtimeMode").unwrap_or_else(|| "default".to_string());
-            let owner_session_id = payload_string(&payload, "sessionId");
-            let user_input = payload_string(&payload, "userInput")
-                .unwrap_or_else(|| "开发者手动创建任务".to_string());
-            let metadata = payload_field(&payload, "metadata").cloned();
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-            let route = route_runtime_intent_with_settings(
-                &settings_snapshot,
-                &runtime_mode,
-                &user_input,
-                metadata.as_ref(),
-            );
-            let role_id = payload_string(&route, "recommendedRole");
-            let graph = runtime_graph_for_route(&route);
-            let created = with_store_mut(state, |store| {
-                let task = RuntimeTaskRecord {
-                    id: make_id("task"),
-                    task_type: "manual".to_string(),
-                    status: "pending".to_string(),
-                    runtime_mode,
-                    owner_session_id,
-                    intent: payload_string(&route, "intent"),
-                    role_id: role_id.clone(),
-                    goal: Some(user_input.clone()),
-                    current_node: Some("plan".to_string()),
-                    route: Some(route.clone()),
-                    graph,
-                    artifacts: Vec::new(),
-                    checkpoints: vec![json!({
-                        "type": "route",
-                        "summary": payload_string(&route, "reasoning").unwrap_or_default(),
-                        "payload": route.clone()
-                    })],
-                    metadata,
-                    last_error: None,
-                    created_at: now_i64(),
-                    updated_at: now_i64(),
-                    started_at: None,
-                    completed_at: None,
-                };
-                append_runtime_task_trace(
-                    store,
-                    &task.id,
-                    "created",
-                    Some(json!({
-                        "goal": task.goal.clone(),
-                        "runtimeMode": task.runtime_mode,
-                        "intent": task.intent,
-                        "roleId": task.role_id,
-                        "route": task.route
-                    })),
-                );
-                store.runtime_tasks.push(task.clone());
-                Ok(task)
-            })?;
-            Ok(json!(created))
-        }
-        "tasks:list" => with_store(state, |store| {
-            let mut tasks = store.runtime_tasks.clone();
-            tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            Ok(json!(tasks))
-        }),
-        "tasks:get" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            with_store(state, |store| {
-                Ok(store
-                    .runtime_tasks
-                    .iter()
-                    .find(|item| item.id == task_id)
-                    .cloned()
-                    .map_or(Value::Null, |item| json!(item)))
-            })
-        }
-        "tasks:resume" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let task_snapshot = with_store_mut(state, |store| {
-                let Some(task) = store
-                    .runtime_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                else {
-                    return Ok(None);
-                };
-                task.status = "running".to_string();
-                task.updated_at = now_i64();
-                task.started_at.get_or_insert(now_i64());
-                task.current_node = Some("plan".to_string());
-                set_runtime_graph_node(
-                    &mut task.graph,
-                    "plan",
-                    "running",
-                    Some("route and execution plan resumed".to_string()),
-                    None,
-                );
-                Ok(Some(task.clone()))
-            })?;
-            let Some(task_snapshot) = task_snapshot else {
-                return Ok(json!({ "success": false, "error": "任务不存在" }));
-            };
-            let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-            let route = task_snapshot.route.clone().unwrap_or_else(|| {
-                runtime_direct_route(
-                    &task_snapshot.runtime_mode,
-                    task_snapshot.goal.as_deref().unwrap_or(""),
-                    task_snapshot.metadata.as_ref(),
-                )
-            });
-            let orchestration = if route
-                .get("requiresMultiAgent")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || task_snapshot.runtime_mode == "background-maintenance"
-            {
-                Some(run_subagent_orchestration_for_task(
-                    &settings_snapshot,
-                    &task_snapshot.runtime_mode,
-                    &task_snapshot.id,
-                    &route,
-                    task_snapshot.goal.as_deref().unwrap_or(""),
-                )?)
-            } else {
-                None
-            };
-            let reviewer_rejected = orchestration
-                .as_ref()
-                .and_then(|value| value.get("outputs"))
-                .and_then(|value| value.as_array())
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-                    })
-                })
-                .map(|review| {
-                    let approved = review
-                        .get("approved")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(true);
-                    let issue_count = review
-                        .get("issues")
-                        .and_then(|value| value.as_array())
-                        .map(|items| items.len())
-                        .unwrap_or(0);
-                    !approved || issue_count > 0
-                })
-                .unwrap_or(false);
-            let repair_plan = if reviewer_rejected {
-                orchestration
-                    .as_ref()
-                    .map(|value| {
-                        run_reviewer_repair_for_task(
-                            &settings_snapshot,
-                            &task_snapshot.id,
-                            &route,
-                            task_snapshot.goal.as_deref().unwrap_or(""),
-                            value,
-                        )
-                    })
-                    .transpose()?
-            } else {
-                None
-            };
-            let repair_orchestration = if reviewer_rejected {
-                repair_plan
-                    .as_ref()
-                    .map(|repair| {
-                        let repair_goal = format!(
-                            "{}\n\nRepair instructions:\n{}",
-                            task_snapshot.goal.as_deref().unwrap_or(""),
-                            payload_string(repair, "summary").unwrap_or_else(|| repair.to_string())
-                        );
-                        run_subagent_orchestration_for_task(
-                            &settings_snapshot,
-                            &task_snapshot.runtime_mode,
-                            &format!("{}-repair", task_snapshot.id),
-                            &route,
-                            &repair_goal,
-                        )
-                    })
-                    .transpose()?
-            } else {
-                None
-            };
-            let repair_pass_failed = repair_orchestration
-                .as_ref()
-                .and_then(|value| value.get("outputs"))
-                .and_then(|value| value.as_array())
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-                    })
-                })
-                .map(|review| {
-                    let approved = review
-                        .get("approved")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(true);
-                    let issue_count = review
-                        .get("issues")
-                        .and_then(|value| value.as_array())
-                        .map(|items| items.len())
-                        .unwrap_or(0);
-                    !approved || issue_count > 0
-                })
-                .unwrap_or(reviewer_rejected);
-            let final_orchestration = repair_orchestration.as_ref().or(orchestration.as_ref());
-            let saved_artifact = if reviewer_rejected && repair_pass_failed {
-                None
-            } else {
-                Some(save_runtime_task_artifact(
-                    state,
-                    &task_snapshot.id,
-                    &route,
-                    task_snapshot.goal.as_deref().unwrap_or(""),
-                    final_orchestration,
-                )?)
-            };
-            let result = with_store_mut(state, |store| {
-                let Some(task) = store
-                    .runtime_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                else {
-                    return Ok(json!({ "success": false, "error": "任务不存在" }));
-                };
-                task.intent = payload_string(&route, "intent");
-                task.role_id = payload_string(&route, "recommendedRole");
-                task.route = Some(route.clone());
-                task.current_node = Some("execute_tools".to_string());
-                set_runtime_graph_node(
-                    &mut task.graph,
-                    "plan",
-                    "completed",
-                    Some(
-                        payload_string(&route, "reasoning")
-                            .unwrap_or_else(|| "route resolved".to_string()),
-                    ),
-                    None,
-                );
-                set_runtime_graph_node(
-                    &mut task.graph,
-                    "retrieve",
-                    "completed",
-                    Some("runtime context prepared".to_string()),
-                    None,
-                );
-                if let Some(orchestration_value) = orchestration.clone() {
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "spawn_agents",
-                        "completed",
-                        Some("subagent orchestration completed".to_string()),
-                        None,
-                    );
-                    task.artifacts.push(json!({
-                        "type": "subagent-orchestration",
-                        "payload": orchestration_value.clone(),
-                        "createdAt": now_i64()
-                    }));
-                    task.checkpoints.push(json!({
-                        "type": "orchestration",
-                        "summary": "subagent orchestration completed",
-                        "payload": orchestration_value
-                    }));
-                }
-                if let Some(repair_value) = repair_plan.clone() {
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "review",
-                        "failed",
-                        Some("reviewer requested repair".to_string()),
-                        Some("reviewer rejected execution".to_string()),
-                    );
-                    task.artifacts.push(json!({
-                        "type": "repair-plan",
-                        "payload": repair_value.clone(),
-                        "createdAt": now_i64()
-                    }));
-                    task.checkpoints.push(json!({
-                        "type": "repair",
-                        "summary": payload_string(&repair_value, "summary").unwrap_or_else(|| "review repair plan generated".to_string()),
-                        "payload": repair_value.clone()
-                    }));
-                }
-                if let Some(repair_value) = repair_orchestration.clone() {
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "handoff",
-                        "completed",
-                        Some("repair pass completed".to_string()),
-                        None,
-                    );
-                    task.artifacts.push(json!({
-                        "type": "repair-pass",
-                        "payload": repair_value.clone(),
-                        "createdAt": now_i64()
-                    }));
-                    task.checkpoints.push(json!({
-                        "type": "repair_pass",
-                        "summary": "repair pass completed",
-                        "payload": repair_value
-                    }));
-                }
-                if let Some(artifact) = saved_artifact.clone() {
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "save_artifact",
-                        "completed",
-                        Some("artifact saved".to_string()),
-                        None,
-                    );
-                    task.artifacts.push(artifact.clone());
-                    task.checkpoints.push(json!({
-                        "type": "save_artifact",
-                        "summary": "artifact saved",
-                        "payload": artifact
-                    }));
-                    let mut work_item = create_work_item(
-                        "runtime-artifact",
-                        format!(
-                            "Runtime Artifact · {}",
-                            payload_string(&route, "intent").unwrap_or_else(|| "task".to_string())
-                        ),
-                        Some(payload_string(&route, "goal").unwrap_or_default()),
-                        Some(
-                            saved_artifact
-                                .as_ref()
-                                .and_then(|value| payload_string(value, "path"))
-                                .unwrap_or_default(),
-                        ),
-                        Some(json!({
-                            "taskId": task_id,
-                            "sessionId": task.owner_session_id.clone(),
-                            "intent": payload_string(&route, "intent"),
-                            "artifact": saved_artifact.clone(),
-                        })),
-                        2,
-                    );
-                    work_item.refs.task_ids.push(task_id.clone());
-                    if let Some(session_id) = task.owner_session_id.clone() {
-                        work_item.refs.session_ids.push(session_id);
-                    }
-                    store.work_items.push(work_item);
-                }
-                if reviewer_rejected && repair_pass_failed {
-                    task.status = "failed".to_string();
-                    task.last_error = Some("reviewer rejected execution".to_string());
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "execute_tools",
-                        "failed",
-                        Some("execution blocked by reviewer".to_string()),
-                        Some("reviewer rejected execution".to_string()),
-                    );
-                    if let Some(repair_value) = repair_plan.clone() {
-                        let mut work_item = create_work_item(
-                            "runtime-repair",
-                            format!(
-                                "Runtime Repair · {}",
-                                payload_string(&route, "intent")
-                                    .unwrap_or_else(|| "task".to_string())
-                            ),
-                            Some(
-                                payload_string(&repair_value, "summary")
-                                    .unwrap_or_else(|| "reviewer repair required".to_string()),
-                            ),
-                            Some(payload_string(&route, "goal").unwrap_or_default()),
-                            Some(json!({
-                                "taskId": task_id,
-                                "sessionId": task.owner_session_id.clone(),
-                                "intent": payload_string(&route, "intent"),
-                                "repair": repair_value,
-                            })),
-                            1,
-                        );
-                        work_item.refs.task_ids.push(task_id.clone());
-                        if let Some(session_id) = task.owner_session_id.clone() {
-                            work_item.refs.session_ids.push(session_id);
-                        }
-                        store.work_items.push(work_item);
-                    }
-                } else {
-                    task.status = "completed".to_string();
-                    task.last_error = None;
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "review",
-                        "completed",
-                        Some("reviewer approved execution".to_string()),
-                        None,
-                    );
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "execute_tools",
-                        "completed",
-                        Some("execution completed".to_string()),
-                        None,
-                    );
-                }
-                task.completed_at = Some(now_i64());
-                task.updated_at = now_i64();
-                append_runtime_task_trace(
-                    store,
-                    &task_id,
-                    "resumed",
-                    Some(json!({ "route": route.clone() })),
-                );
-                if let Some(orchestration_value) = orchestration.clone() {
-                    append_runtime_task_trace(
-                        store,
-                        &task_id,
-                        "subagent.completed",
-                        Some(orchestration_value),
-                    );
-                }
-                if let Some(repair_value) = repair_plan.clone() {
-                    append_runtime_task_trace(
-                        store,
-                        &task_id,
-                        "repair.generated",
-                        Some(repair_value),
-                    );
-                }
-                if let Some(repair_value) = repair_orchestration.clone() {
-                    append_runtime_task_trace(
-                        store,
-                        &task_id,
-                        "repair.pass_completed",
-                        Some(repair_value),
-                    );
-                }
-                append_runtime_task_trace(
-                    store,
-                    &task_id,
-                    if reviewer_rejected && repair_pass_failed {
-                        "failed"
-                    } else {
-                        "completed"
-                    },
-                    None,
-                );
-                Ok(json!({
-                    "success": !(reviewer_rejected && repair_pass_failed),
-                    "taskId": task_id,
-                    "error": if reviewer_rejected && repair_pass_failed { Value::String("reviewer rejected execution".to_string()) } else { Value::Null }
-                }))
-            })?;
-            Ok(result)
-        }
-        "tasks:cancel" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let result = with_store_mut(state, |store| {
-                let Some(task) = store
-                    .runtime_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                else {
-                    return Ok(json!({ "success": false, "error": "任务不存在" }));
-                };
-                task.status = "cancelled".to_string();
-                task.updated_at = now_i64();
-                task.completed_at = Some(now_i64());
-                append_runtime_task_trace(store, &task_id, "cancelled", None);
-                Ok(json!({ "success": true, "taskId": task_id }))
-            })?;
-            Ok(result)
-        }
-        "tasks:trace" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            with_store(state, |store| {
-                let mut items: Vec<RuntimeTaskTraceRecord> = store
-                    .runtime_task_traces
-                    .iter()
-                    .filter(|item| item.task_id == task_id)
-                    .cloned()
-                    .collect();
-                items.sort_by_key(|item| item.created_at);
-                Ok(json!(items))
             })
         }
         "chat:pick-attachment" => {
@@ -14658,19 +14213,12 @@ fn handle_channel(
                     "detail": "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。",
                 }),
             );
-            let _ = app.emit(
-                "chat:phase-start",
-                json!({
-                    "name": "responding",
-                    "sessionId": wander_session_id,
-                }),
-            );
-            let _ = app.emit(
-                "chat:thought-delta",
-                json!({
-                    "content": "正在综合随机素材、长期上下文与关键文件内容，收敛最终选题方向。",
-                    "sessionId": wander_session_id,
-                }),
+            emit_runtime_stream_start(app, &wander_session_id, "responding", Some("wander"));
+            emit_runtime_text_delta(
+                app,
+                &wander_session_id,
+                "thought",
+                "正在综合随机素材、长期上下文与关键文件内容，收敛最终选题方向。",
             );
             let execution_started_at = now_ms();
             let model_result = generate_wander_response(
@@ -16637,171 +16185,6 @@ fn handle_channel(
             })?;
             Ok(result)
         }
-        "session-bridge:status" => Ok(json!({
-            "enabled": true,
-            "listening": false,
-            "host": "127.0.0.1",
-            "port": 0,
-            "authToken": "",
-            "websocketUrl": "",
-            "httpBaseUrl": "",
-            "subscriberCount": 0,
-            "lastError": Value::Null,
-        })),
-        "session-bridge:list-sessions" => with_store(state, |store| {
-            let mut sessions = store.chat_sessions.clone();
-            sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            Ok(json!(sessions
-                .iter()
-                .map(|session| session_bridge_summary(session, &store))
-                .collect::<Vec<_>>()))
-        }),
-        "session-bridge:get-session" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            with_store(state, |store| {
-                let Some(session) = store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| item.id == session_id)
-                else {
-                    return Ok(Value::Null);
-                };
-                let transcript: Vec<SessionTranscriptRecord> = store
-                    .session_transcript_records
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                let checkpoints: Vec<SessionCheckpointRecord> = store
-                    .session_checkpoints
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                let tool_results: Vec<SessionToolResultRecord> = store
-                    .session_tool_results
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                let tasks: Vec<Value> = store
-                    .runtime_tasks
-                    .iter()
-                    .filter(|task| task.owner_session_id.as_deref() == Some(session_id.as_str()))
-                    .map(runtime_task_value)
-                    .collect();
-                let background_tasks = derived_background_tasks(&store);
-                Ok(json!({
-                    "session": {
-                        "id": session.id,
-                        "title": session.title,
-                        "updatedAt": session.updated_at.parse::<i64>().unwrap_or(0),
-                        "createdAt": session.created_at.parse::<i64>().unwrap_or(0),
-                        "contextType": "chat",
-                        "runtimeMode": "default",
-                        "isBackgroundSession": false,
-                        "ownerTaskCount": tasks.len(),
-                        "backgroundTaskCount": background_tasks.len(),
-                        "metadata": session.metadata,
-                    },
-                    "transcript": transcript,
-                    "checkpoints": checkpoints,
-                    "toolResults": tool_results,
-                    "tasks": tasks,
-                    "backgroundTasks": background_tasks,
-                    "permissionRequests": [],
-                }))
-            })
-        }
-        "session-bridge:list-permissions" => Ok(json!([])),
-        "session-bridge:create-session" => {
-            let title =
-                payload_string(&payload, "title").unwrap_or_else(|| "Session Bridge".to_string());
-            let summary = with_store_mut(state, |store| {
-                let session = ChatSessionRecord {
-                    id: make_id("session"),
-                    title,
-                    created_at: now_iso(),
-                    updated_at: now_iso(),
-                    metadata: payload_field(&payload, "metadata").cloned(),
-                };
-                store.chat_sessions.push(session.clone());
-                Ok(session_bridge_summary(&session, store))
-            })?;
-            Ok(summary)
-        }
-        "session-bridge:send-message" => {
-            let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-            let message = payload_string(&payload, "message").unwrap_or_default();
-            let execution = execute_chat_exchange(
-                None,
-                state,
-                Some(session_id.clone()),
-                message.clone(),
-                message,
-                None,
-                None,
-                "session-bridge",
-                "Session bridge message completed",
-            )?;
-            Ok(json!({ "accepted": true, "sessionId": execution.session_id }))
-        }
-        "session-bridge:resolve-permission" => Ok(json!({ "success": true })),
-        "background-tasks:list" => {
-            with_store(state, |store| Ok(json!(derived_background_tasks(&store))))
-        }
-        "background-tasks:get" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            with_store(state, |store| {
-                let task = derived_background_tasks(&store)
-                    .into_iter()
-                    .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(task_id.as_str()))
-                    .unwrap_or(Value::Null);
-                Ok(task)
-            })
-        }
-        "background-tasks:cancel" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.enabled = false;
-                    task.last_error = Some("Cancelled from background tasks".to_string());
-                    task.updated_at = now_iso();
-                    return Ok(json!({ "success": true, "kind": "scheduled-task" }));
-                }
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.enabled = false;
-                    task.status = "cancelled".to_string();
-                    task.last_error = Some("Cancelled from background tasks".to_string());
-                    task.updated_at = now_iso();
-                    return Ok(json!({ "success": true, "kind": "long-cycle" }));
-                }
-                if let Some(task) = store
-                    .runtime_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.status = "cancelled".to_string();
-                    task.updated_at = now_i64();
-                    task.completed_at = Some(now_i64());
-                    return Ok(json!({ "success": true, "kind": "runtime-task" }));
-                }
-                Ok(json!({ "success": false, "error": "后台任务不存在" }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
         "background-workers:get-pool-state" => Ok(json!({
             "json": [],
             "runtime": []
@@ -18013,397 +17396,6 @@ fn handle_channel(
             }
             Ok(json!({ "success": true, "processed": processed }))
         }
-        "redclaw:runner-status" => {
-            let _ = ensure_store_hydrated_for_redclaw(state);
-            with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
-        }
-        "redclaw:list-projects" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.projects.clone()))
-        }),
-        "redclaw:runner-start" => {
-            let status = with_store_mut(state, |store| {
-                store.redclaw_state.enabled = true;
-                store.redclaw_state.is_ticking = true;
-                store.redclaw_state.last_tick_at = Some(now_iso());
-                store.redclaw_state.next_tick_at = Some(now_iso());
-                if store.redclaw_state.next_maintenance_at.is_none() {
-                    store.redclaw_state.next_maintenance_at =
-                        Some((now_i64() + 10 * 60 * 1000).to_string());
-                }
-                if let Some(interval) =
-                    payload_field(&payload, "intervalMinutes").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.interval_minutes = interval;
-                }
-                if let Some(max_auto) =
-                    payload_field(&payload, "maxAutomationPerTick").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.max_automation_per_tick = max_auto;
-                }
-                if let Some(heartbeat) =
-                    payload_field(&payload, "heartbeatEnabled").and_then(|v| v.as_bool())
-                {
-                    if let Some(object) = store.redclaw_state.heartbeat.as_object_mut() {
-                        object.insert("enabled".to_string(), json!(heartbeat));
-                    }
-                }
-                Ok(redclaw_state_value(&store.redclaw_state))
-            })?;
-            if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
-                if runtime_guard.is_none() {
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let join = run_redclaw_scheduler(app.clone(), stop.clone());
-                    *runtime_guard = Some(RedclawRuntime {
-                        stop,
-                        join: Some(join),
-                    });
-                }
-            }
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        }
-        "redclaw:runner-stop" => {
-            if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
-                if let Some(mut runtime) = runtime_guard.take() {
-                    runtime.stop.store(true, Ordering::Relaxed);
-                    if let Some(join) = runtime.join.take() {
-                        let _ = join.join();
-                    }
-                }
-            }
-            let status = with_store_mut(state, |store| {
-                store.redclaw_state.enabled = false;
-                store.redclaw_state.is_ticking = false;
-                Ok(redclaw_state_value(&store.redclaw_state))
-            })?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        }
-        "redclaw:runner-run-now" => {
-            let (project_id, prompt) = with_store(state, |store| {
-                let project = store.redclaw_state.projects.first().cloned();
-                let project_id = project.as_ref().map(|item| item.id.clone());
-                let prompt = project
-                    .as_ref()
-                    .map(|item| format!("请推进当前 RedClaw 项目：{}\n\n输出最小下一步行动、内容策略和执行建议。", item.goal))
-                    .unwrap_or_else(|| "请为当前空间执行一次 RedClaw 巡检，给出内容生产的下一步建议。".to_string());
-                Ok((project_id, prompt))
-            })?;
-            let run_result = execute_redclaw_run(app, state, prompt, project_id, "runner-run-now")?;
-            let status = with_store_mut(state, |store| {
-                store.redclaw_state.last_tick_at = Some(now_iso());
-                Ok(redclaw_state_value(&store.redclaw_state))
-            })?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(json!({ "success": true, "status": status, "run": run_result }))
-        }
-        "redclaw:runner-set-project" => {
-            let project_id = payload_string(&payload, "projectId").unwrap_or_default();
-            let enabled = payload_field(&payload, "enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let prompt = normalize_optional_string(payload_string(&payload, "prompt"));
-            let updated = with_store_mut(state, |store| {
-                if enabled {
-                    if let Some(project) = store
-                        .redclaw_state
-                        .projects
-                        .iter_mut()
-                        .find(|item| item.id == project_id)
-                    {
-                        project.status = "active".to_string();
-                        project.updated_at = now_iso();
-                    } else {
-                        store.redclaw_state.projects.push(RedclawProjectRecord {
-                            id: if project_id.is_empty() {
-                                make_id("redclaw-project")
-                            } else {
-                                project_id.clone()
-                            },
-                            goal: prompt
-                                .clone()
-                                .unwrap_or_else(|| "RedClaw Project".to_string()),
-                            platform: Some("generic".to_string()),
-                            task_type: Some("manual".to_string()),
-                            status: "active".to_string(),
-                            updated_at: now_iso(),
-                        });
-                    }
-                } else {
-                    store
-                        .redclaw_state
-                        .projects
-                        .retain(|item| item.id != project_id);
-                }
-                Ok(json!({ "success": true }))
-            })?;
-            Ok(updated)
-        }
-        "redclaw:runner-set-config" => {
-            let status = with_store_mut(state, |store| {
-                if let Some(interval) =
-                    payload_field(&payload, "intervalMinutes").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.interval_minutes = interval;
-                }
-                if let Some(max_auto) =
-                    payload_field(&payload, "maxAutomationPerTick").and_then(|v| v.as_i64())
-                {
-                    store.redclaw_state.max_automation_per_tick = max_auto;
-                }
-                if let Some(object) = store.redclaw_state.heartbeat.as_object_mut() {
-                    if let Some(value) =
-                        payload_field(&payload, "heartbeatEnabled").and_then(|v| v.as_bool())
-                    {
-                        object.insert("enabled".to_string(), json!(value));
-                    }
-                    if let Some(value) =
-                        payload_field(&payload, "heartbeatIntervalMinutes").and_then(|v| v.as_i64())
-                    {
-                        object.insert("intervalMinutes".to_string(), json!(value));
-                    }
-                    if let Some(value) = payload_field(&payload, "heartbeatSuppressEmptyReport")
-                        .and_then(|v| v.as_bool())
-                    {
-                        object.insert("suppressEmptyReport".to_string(), json!(value));
-                    }
-                    if let Some(value) = payload_field(&payload, "heartbeatReportToMainSession")
-                        .and_then(|v| v.as_bool())
-                    {
-                        object.insert("reportToMainSession".to_string(), json!(value));
-                    }
-                }
-                Ok(redclaw_state_value(&store.redclaw_state))
-            })?;
-            let _ = app.emit("redclaw:runner-status", status.clone());
-            Ok(status)
-        }
-        "redclaw:runner-list-scheduled" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.scheduled_tasks.clone()))
-        }),
-        "redclaw:runner-add-scheduled" => {
-            let task = with_store_mut(state, |store| {
-                let item = RedclawScheduledTaskRecord {
-                    id: make_id("scheduled"),
-                    name: payload_string(&payload, "name")
-                        .unwrap_or_else(|| "定时任务".to_string()),
-                    enabled: payload_field(&payload, "enabled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true),
-                    mode: payload_string(&payload, "mode").unwrap_or_else(|| "daily".to_string()),
-                    prompt: payload_string(&payload, "prompt").unwrap_or_default(),
-                    project_id: normalize_optional_string(payload_string(&payload, "projectId")),
-                    interval_minutes: payload_field(&payload, "intervalMinutes")
-                        .and_then(|v| v.as_i64()),
-                    time: normalize_optional_string(payload_string(&payload, "time")),
-                    weekdays: payload_field(&payload, "weekdays")
-                        .and_then(|v| v.as_array())
-                        .map(|items| items.iter().filter_map(|i| i.as_i64()).collect()),
-                    run_at: normalize_optional_string(payload_string(&payload, "runAt")),
-                    created_at: now_iso(),
-                    updated_at: now_iso(),
-                    last_run_at: None,
-                    last_result: None,
-                    last_error: None,
-                    next_run_at: Some(now_iso()),
-                };
-                store.redclaw_state.scheduled_tasks.push(item.clone());
-                Ok(item)
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(json!({ "success": true, "task": task }))
-        }
-        "redclaw:runner-remove-scheduled" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let result = with_store_mut(state, |store| {
-                store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .retain(|item| item.id != task_id);
-                Ok(json!({ "success": true }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
-        "redclaw:runner-set-scheduled-enabled" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let enabled = payload_field(&payload, "enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.enabled = enabled;
-                    task.updated_at = now_iso();
-                }
-                Ok(json!({ "success": true }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
-        "redclaw:runner-run-scheduled-now" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let (project_id, prompt) = with_store(state, |store| {
-                let task = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter()
-                    .find(|item| item.id == task_id)
-                    .cloned();
-                let prompt = task
-                    .as_ref()
-                    .map(|item| item.prompt.clone())
-                    .unwrap_or_else(|| "请执行一次 RedClaw 定时任务。".to_string());
-                let project_id = task.and_then(|item| item.project_id);
-                Ok((project_id, prompt))
-            })?;
-            let run_result = execute_redclaw_run(app, state, prompt, project_id, "scheduled-task")?;
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.last_run_at = Some(now_iso());
-                    task.last_result = Some("success".to_string());
-                    task.updated_at = now_iso();
-                }
-                Ok(json!({ "success": true, "run": run_result }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
-        "redclaw:runner-list-long-cycle" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.long_cycle_tasks.clone()))
-        }),
-        "redclaw:runner-add-long-cycle" => {
-            let task = with_store_mut(state, |store| {
-                let item = RedclawLongCycleTaskRecord {
-                    id: make_id("long-cycle"),
-                    name: payload_string(&payload, "name")
-                        .unwrap_or_else(|| "长周期任务".to_string()),
-                    enabled: payload_field(&payload, "enabled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true),
-                    status: "paused".to_string(),
-                    objective: payload_string(&payload, "objective").unwrap_or_default(),
-                    step_prompt: payload_string(&payload, "stepPrompt").unwrap_or_default(),
-                    project_id: normalize_optional_string(payload_string(&payload, "projectId")),
-                    interval_minutes: payload_field(&payload, "intervalMinutes")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(720),
-                    total_rounds: payload_field(&payload, "totalRounds")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(12),
-                    completed_rounds: 0,
-                    created_at: now_iso(),
-                    updated_at: now_iso(),
-                    last_run_at: None,
-                    last_result: None,
-                    last_error: None,
-                    next_run_at: Some(now_iso()),
-                };
-                store.redclaw_state.long_cycle_tasks.push(item.clone());
-                Ok(item)
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(json!({ "success": true, "task": task }))
-        }
-        "redclaw:runner-remove-long-cycle" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let result = with_store_mut(state, |store| {
-                store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .retain(|item| item.id != task_id);
-                Ok(json!({ "success": true }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
-        "redclaw:runner-set-long-cycle-enabled" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let enabled = payload_field(&payload, "enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.enabled = enabled;
-                    task.status = if enabled {
-                        "running".to_string()
-                    } else {
-                        "paused".to_string()
-                    };
-                    task.updated_at = now_iso();
-                }
-                Ok(json!({ "success": true }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
-        "redclaw:runner-run-long-cycle-now" => {
-            let task_id = payload_string(&payload, "taskId").unwrap_or_default();
-            let (project_id, prompt) = with_store(state, |store| {
-                let task = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter()
-                    .find(|item| item.id == task_id)
-                    .cloned();
-                let prompt = task
-                    .as_ref()
-                    .map(|item| {
-                        format!(
-                            "目标：{}\n\n当前轮执行指令：{}",
-                            item.objective, item.step_prompt
-                        )
-                    })
-                    .unwrap_or_else(|| "请执行一次 RedClaw 长周期任务。".to_string());
-                let project_id = task.and_then(|item| item.project_id);
-                Ok((project_id, prompt))
-            })?;
-            let run_result =
-                execute_redclaw_run(app, state, prompt, project_id, "long-cycle-task")?;
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.completed_rounds += 1;
-                    task.last_run_at = Some(now_iso());
-                    task.last_result = Some("success".to_string());
-                    task.status = if task.completed_rounds >= task.total_rounds {
-                        "completed".to_string()
-                    } else {
-                        "running".to_string()
-                    };
-                    task.updated_at = now_iso();
-                }
-                Ok(json!({ "success": true, "run": run_result }))
-            })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
-        }
         "youtube:check-ytdlp" => {
             if let Some((path, version)) = detect_ytdlp() {
                 Ok(json!({ "installed": true, "version": version, "path": path }))
@@ -18450,159 +17442,6 @@ fn handle_channel(
         _ => Err(format!(
             "RedBox host does not recognize channel `{channel}`."
         )),
-    }
-}
-
-fn handle_send_channel(
-    app: &AppHandle,
-    channel: &str,
-    payload: Value,
-    state: &State<'_, AppState>,
-) -> Result<(), String> {
-    match channel {
-        "chat:send-message" => {
-            let session_id = payload_string(&payload, "sessionId");
-            let message = payload_string(&payload, "message").unwrap_or_default();
-            let display_content =
-                payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());
-            let is_redclaw_session = session_id
-                .as_deref()
-                .map(|value| value.starts_with("context-session:redclaw:"))
-                .unwrap_or(false);
-            let execution = execute_chat_exchange(
-                Some(app),
-                state,
-                session_id,
-                message.clone(),
-                display_content.clone(),
-                payload_field(&payload, "modelConfig"),
-                payload_field(&payload, "attachment").cloned(),
-                "chat-send",
-                "Chat response completed",
-            )?;
-            let mut redclaw_artifacts: Vec<Value> = Vec::new();
-            let mut redclaw_artifact_kind: Option<&str> = None;
-
-            if is_redclaw_session {
-                let project_id = with_store(state, |store| {
-                    Ok(store
-                        .redclaw_state
-                        .projects
-                        .first()
-                        .map(|item| item.id.clone())
-                        .unwrap_or_else(|| "redclaw-chat".to_string()))
-                })?;
-                let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
-                redclaw_artifacts = save_redclaw_outputs(
-                    state,
-                    artifact_kind,
-                    &project_id,
-                    &execution.session_id,
-                    &message,
-                    &execution.response,
-                    "chat-session",
-                )?;
-                redclaw_artifact_kind = Some(artifact_kind);
-                let _ = with_store_mut(state, |store| {
-                    store.work_items.push(create_work_item(
-                        "redclaw-note",
-                        format!("RedClaw Chat {}", artifact_kind),
-                        Some("RedClaw fixed session generated a persisted artifact.".to_string()),
-                        Some(display_content.clone()),
-                        Some(json!({
-                            "sessionId": execution.session_id,
-                            "artifactKind": artifact_kind,
-                            "artifacts": redclaw_artifacts.clone(),
-                        })),
-                        2,
-                    ));
-                    Ok(())
-                });
-            }
-
-            emit_chat_sequence(
-                app,
-                &execution.session_id,
-                &execution.response,
-                "正在分析输入并生成回答。",
-                execution.title_update,
-            );
-            if is_redclaw_session {
-                let _ = app.emit(
-                    "redclaw:runner-message",
-                    json!({
-                        "sessionId": execution.session_id,
-                        "artifactKind": redclaw_artifact_kind,
-                        "artifacts": redclaw_artifacts,
-                    }),
-                );
-            }
-            Ok(())
-        }
-        "chat:cancel" | "ai:cancel" => Ok(()),
-        "chat:confirm-tool" | "ai:confirm-tool" => {
-            let call_id = payload_string(&payload, "callId").unwrap_or_else(|| make_id("call"));
-            let confirmed = payload_field(&payload, "confirmed")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
-            let session_id = with_store_mut(state, |store| {
-                let session_id = latest_session_id(store);
-                store.session_tool_results.push(SessionToolResultRecord {
-                    id: make_id("tool-result"),
-                    session_id: session_id.clone(),
-                    call_id: call_id.clone(),
-                    tool_name: "confirmation".to_string(),
-                    command: None,
-                    success: confirmed,
-                    result_text: Some(if confirmed {
-                        "User confirmed tool execution".to_string()
-                    } else {
-                        "User cancelled tool execution".to_string()
-                    }),
-                    summary_text: Some(if confirmed {
-                        "Tool execution confirmed".to_string()
-                    } else {
-                        "Tool execution cancelled".to_string()
-                    }),
-                    prompt_text: None,
-                    original_chars: None,
-                    prompt_chars: None,
-                    truncated: false,
-                    payload: Some(json!({ "confirmed": confirmed })),
-                    created_at: now_i64(),
-                    updated_at: now_i64(),
-                });
-                Ok(session_id)
-            })?;
-            let _ = app.emit(
-                "chat:tool-end",
-                json!({
-                    "callId": call_id,
-                    "name": "confirmation",
-                    "sessionId": session_id,
-                    "output": {
-                        "success": confirmed,
-                        "content": if confirmed { "用户已确认执行" } else { "用户已取消执行" }
-                    }
-                }),
-            );
-            Ok(())
-        }
-        "ai:start-chat" => {
-            let message = payload_string(&payload, "message").unwrap_or_default();
-            let model_config = payload_field(&payload, "modelConfig").cloned();
-            handle_send_channel(
-                app,
-                "chat:send-message",
-                json!({
-                    "message": message,
-                    "displayContent": payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone()),
-                    "modelConfig": model_config
-                }),
-                state,
-            )
-        }
-        _ => Ok(()),
     }
 }
 
@@ -18670,26 +17509,30 @@ fn ipc_send(
                         );
                     }
                 }
-            } else if let Err(error) = handle_send_channel(
+            } else if let Err(error) = commands::chat::handle_send_channel(
                 &app_handle,
                 &channel_name,
                 payload_value.clone(),
                 &managed_state,
             ) {
                 let session_id = payload_string(&payload_value, "sessionId");
-                let _ = app_handle.emit(
-                    "chat:error",
-                    json!({
+                emit_runtime_task_checkpoint_saved(
+                    &app_handle,
+                    None,
+                    session_id.as_deref(),
+                    "chat.error",
+                    "chat execution failed",
+                    Some(json!({
                         "message": error,
                         "category": "execution",
                         "sessionId": session_id,
-                    }),
+                    })),
                 );
             }
         });
         Ok(())
     } else {
-        handle_send_channel(&app, &channel, payload, &state)
+        commands::chat::handle_send_channel(&app, &channel, payload, &state)
     }
 }
 
@@ -18699,6 +17542,7 @@ fn main() {
     if let Err(error) = maybe_import_legacy_store(&mut store, &store_path) {
         eprintln!("[RedBox legacy import] {error}");
     }
+    sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
         eprintln!("[RedBox store persist] {error}");
     }
@@ -18717,6 +17561,9 @@ fn main() {
         .setup(|app| {
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
+            if let Err(error) = ensure_redclaw_profile_files(&state) {
+                eprintln!("[RedBox redclaw profile init] {error}");
+            }
             if let Err(error) =
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
             {

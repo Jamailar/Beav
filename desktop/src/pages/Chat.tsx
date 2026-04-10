@@ -417,6 +417,7 @@ export function Chat({
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -428,6 +429,10 @@ export function Chat({
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
   const selectSessionRequestRef = useRef(0);
   
   // 缓冲未处理的 chunk，用于解决页面加载期间的数据丢失问题
@@ -1487,6 +1492,165 @@ export function Chat({
       });
     };
 
+    const handleRuntimeEvent = (_: unknown, envelope?: unknown) => {
+      const event = (envelope || {}) as Record<string, unknown>;
+      const eventType = String(event.eventType || '').trim();
+      if (!eventType) return;
+      const sessionId = String(event.sessionId || '').trim();
+      const activeSessionId = currentSessionIdRef.current;
+      if (sessionId && activeSessionId && sessionId !== activeSessionId) return;
+      const payload = (event.payload || {}) as Record<string, unknown>;
+
+      if (eventType === 'stream_start') {
+        const phase = String(payload.phase || '').trim();
+        if (phase) {
+          handlePhaseStart(null, { name: phase });
+        }
+        if (phase === 'thinking') {
+          handleThoughtStart(null);
+        }
+        return;
+      }
+
+      if (eventType === 'text_delta') {
+        const stream = String(payload.stream || 'response').trim();
+        const content = String(payload.content || '');
+        if (!content) return;
+        if (stream === 'thought') {
+          handleThoughtDelta(null, { content });
+          handleThinking(null, { content });
+        } else {
+          handleResponseChunk(null, { content });
+        }
+        return;
+      }
+
+      if (eventType === 'tool_request') {
+        handleToolStart(null, {
+          callId: String(payload.callId || ''),
+          name: String(payload.name || ''),
+          input: payload.input,
+          description: String(payload.description || ''),
+        });
+        return;
+      }
+
+      if (eventType === 'tool_result') {
+        const output = (payload.output || {}) as Record<string, unknown>;
+        const callId = String(payload.callId || '');
+        const name = String(payload.name || '');
+        const content = String(output.content || '');
+        const isPartial = Boolean(output.partial);
+        if (isPartial) {
+          handleToolUpdate(null, {
+            callId,
+            name,
+            partial: content,
+          });
+        } else {
+          handleToolEnd(null, {
+            callId,
+            name,
+            output: {
+              success: Boolean(output.success),
+              content,
+            },
+          });
+        }
+        return;
+      }
+
+      if (eventType === 'task_node_changed') {
+        const taskId = String(event.taskId || '').trim();
+        const nodeId = String(payload.nodeId || '').trim() || 'node';
+        const status = String(payload.status || '').trim().toLowerCase();
+        const summary = String(payload.summary || '').trim();
+        const error = String(payload.error || '').trim();
+        const callId = `task-node:${taskId || 'session'}:${nodeId}`;
+        const name = `task_node:${nodeId}`;
+        if (status === 'running' || status === 'pending') {
+          handleToolStart(null, {
+            callId,
+            name,
+            input: {
+              taskId,
+              nodeId,
+              status,
+            },
+            description: summary || `任务节点 ${nodeId} 执行中`,
+          });
+          return;
+        }
+        const success = status !== 'failed';
+        handleToolEnd(null, {
+          callId,
+          name,
+          output: {
+            success,
+            content: error || summary || `任务节点 ${nodeId} ${success ? '已完成' : '执行失败'}`,
+          },
+        });
+        return;
+      }
+
+      if (eventType === 'subagent_spawned') {
+        const taskId = String(event.taskId || '').trim();
+        const roleId = String(payload.roleId || '').trim() || 'subagent';
+        const spawnedMode = String(payload.runtimeMode || '').trim() || 'unknown';
+        const callId = `subagent:${taskId || 'session'}:${roleId}:${Date.now()}`;
+        handleToolStart(null, {
+          callId,
+          name: `subagent:${roleId}`,
+          input: {
+            taskId,
+            roleId,
+            runtimeMode: spawnedMode,
+          },
+          description: `已启动子 Agent：${roleId}`,
+        });
+        handleToolEnd(null, {
+          callId,
+          name: `subagent:${roleId}`,
+          output: {
+            success: true,
+            content: `子 Agent 已启动（role=${roleId}, mode=${spawnedMode}）`,
+          },
+        });
+        return;
+      }
+
+      if (eventType === 'task_checkpoint_saved') {
+        const checkpointType = String(payload.checkpointType || '').trim();
+        const checkpointPayload = (payload.payload || {}) as Record<string, unknown>;
+        if (checkpointType === 'chat.plan_updated') {
+          const steps = Array.isArray(checkpointPayload.steps) ? checkpointPayload.steps : [];
+          handlePlanUpdated(null, { steps });
+          return;
+        }
+        if (checkpointType === 'chat.thought_end') {
+          handleThoughtEnd(null);
+          return;
+        }
+        if (checkpointType === 'chat.response_end') {
+          handleResponseEnd(null, { content: String(checkpointPayload.content || '') });
+          return;
+        }
+        if (checkpointType === 'chat.error') {
+          handleError(null, checkpointPayload as ChatErrorEventPayload);
+          return;
+        }
+        if (checkpointType === 'chat.session_title_updated') {
+          const sessionId = String(checkpointPayload.sessionId || '');
+          const title = String(checkpointPayload.title || '');
+          if (sessionId && title) {
+            handleSessionTitleUpdated(null, { sessionId, title });
+          }
+          return;
+        }
+        return;
+      }
+    };
+
     const handleError = (_: unknown, error: ChatErrorEventPayload | string) => {
       setIsProcessing(false);
       setConfirmRequest(null);
@@ -1521,38 +1685,14 @@ export function Chat({
     };
 
     // Register Listeners
-    window.ipcRenderer.on('chat:phase-start', handlePhaseStart);
-    window.ipcRenderer.on('chat:thought-start', handleThoughtStart);
-    window.ipcRenderer.on('chat:thought-delta', handleThoughtDelta);
-    window.ipcRenderer.on('chat:thought-end', handleThoughtEnd);
-    window.ipcRenderer.on('chat:thinking', handleThinking); // Keep legacy
-    window.ipcRenderer.on('chat:response-chunk', handleResponseChunk);
-    window.ipcRenderer.on('chat:tool-start', handleToolStart);
-    window.ipcRenderer.on('chat:tool-update', handleToolUpdate);
-    window.ipcRenderer.on('chat:tool-end', handleToolEnd);
     window.ipcRenderer.on('chat:skill-activated', handleSkillActivated);
     window.ipcRenderer.on('chat:tool-confirm-request', handleConfirmRequest);
-    window.ipcRenderer.on('chat:response-end', handleResponseEnd);
-    window.ipcRenderer.on('chat:error', handleError);
-    window.ipcRenderer.on('chat:session-title-updated', handleSessionTitleUpdated);
-    window.ipcRenderer.on('chat:plan-updated', handlePlanUpdated);
+    window.ipcRenderer.on('runtime:event', handleRuntimeEvent);
 
     return () => {
-      window.ipcRenderer.off('chat:phase-start', handlePhaseStart);
-      window.ipcRenderer.off('chat:thought-start', handleThoughtStart);
-      window.ipcRenderer.off('chat:thought-delta', handleThoughtDelta);
-      window.ipcRenderer.off('chat:thought-end', handleThoughtEnd);
-      window.ipcRenderer.off('chat:thinking', handleThinking);
-      window.ipcRenderer.off('chat:response-chunk', handleResponseChunk);
-      window.ipcRenderer.off('chat:tool-start', handleToolStart);
-      window.ipcRenderer.off('chat:tool-update', handleToolUpdate);
-      window.ipcRenderer.off('chat:tool-end', handleToolEnd);
       window.ipcRenderer.off('chat:skill-activated', handleSkillActivated);
       window.ipcRenderer.off('chat:tool-confirm-request', handleConfirmRequest);
-      window.ipcRenderer.off('chat:response-end', handleResponseEnd);
-      window.ipcRenderer.off('chat:error', handleError);
-      window.ipcRenderer.off('chat:session-title-updated', handleSessionTitleUpdated);
-      window.ipcRenderer.off('chat:plan-updated', handlePlanUpdated);
+      window.ipcRenderer.off('runtime:event', handleRuntimeEvent);
 
       // Cleanup timer
       if (updateTimerRef.current) {

@@ -6,6 +6,8 @@ use std::thread::JoinHandle;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::{make_id, now_i64, AppStore};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerRecord {
@@ -104,6 +106,50 @@ pub struct RedclawProjectRecord {
     pub platform: Option<String>,
     pub task_type: Option<String>,
     pub status: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedclawJobDefinitionRecord {
+    pub id: String,
+    pub source_kind: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: String,
+    pub title: String,
+    pub enabled: bool,
+    pub owner_context_id: Option<String>,
+    pub runtime_mode: String,
+    pub trigger_kind: String,
+    pub progression_kind: String,
+    pub payload: Value,
+    pub next_due_at: Option<String>,
+    pub last_enqueued_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedclawJobExecutionRecord {
+    pub id: String,
+    pub definition_id: String,
+    pub status: String,
+    pub attempt_count: i64,
+    pub worker_id: Option<String>,
+    pub worker_mode: String,
+    pub session_id: Option<String>,
+    pub runtime_task_id: Option<String>,
+    pub started_at: Option<String>,
+    pub last_heartbeat_at: Option<String>,
+    pub heartbeat_timeout_ms: Option<i64>,
+    pub completed_at: Option<String>,
+    pub last_error: Option<String>,
+    pub input_snapshot: Option<Value>,
+    pub output_summary: Option<String>,
+    pub artifacts: Vec<Value>,
+    pub checkpoints: Vec<Value>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -335,6 +381,39 @@ pub struct RedclawRuntime {
     pub join: Option<JoinHandle<()>>,
 }
 
+pub fn append_session_checkpoint(
+    store: &mut AppStore,
+    session_id: &str,
+    checkpoint_type: &str,
+    summary: String,
+    payload: Option<Value>,
+) {
+    store.session_checkpoints.push(SessionCheckpointRecord {
+        id: make_id("checkpoint"),
+        session_id: session_id.to_string(),
+        checkpoint_type: checkpoint_type.to_string(),
+        summary,
+        payload,
+        created_at: now_i64(),
+    });
+}
+
+pub fn append_runtime_task_trace(
+    store: &mut AppStore,
+    task_id: &str,
+    event_type: &str,
+    payload: Option<Value>,
+) {
+    store.runtime_task_traces.push(RuntimeTaskTraceRecord {
+        id: now_i64(),
+        task_id: task_id.to_string(),
+        node_id: None,
+        event_type: event_type.to_string(),
+        payload,
+        created_at: now_i64(),
+    });
+}
+
 pub const RUNTIME_INTENT_NAMES: &[&str] = &[
     "direct_answer",
     "file_operation",
@@ -524,6 +603,112 @@ pub fn runtime_direct_route_record(
         ),
         source: "rule".to_string(),
     }
+}
+
+pub fn runtime_route_from_llm_parsed(
+    fallback: &RuntimeRouteRecord,
+    parsed: &Value,
+    user_input: &str,
+) -> Option<RuntimeRouteRecord> {
+    let intent = normalize_runtime_intent_name(
+        parsed
+            .get("primary_intent")
+            .or_else(|| parsed.get("intent"))
+            .and_then(|value| value.as_str()),
+    )?;
+    let recommended_role = normalize_runtime_role_id(
+        parsed
+            .get("recommended_role")
+            .or_else(|| parsed.get("role_id"))
+            .and_then(|value| value.as_str()),
+    )?;
+    let secondary_intents = parsed
+        .get("secondary_intents")
+        .or_else(|| parsed.get("secondaryIntents"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .filter_map(|item| normalize_runtime_intent_name(Some(item)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let deliverables = parsed
+        .get("deliverables")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let required_capabilities = parsed
+        .get("required_capabilities")
+        .or_else(|| parsed.get("requiredCapabilities"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| runtime_required_capabilities(&intent));
+    Some(RuntimeRouteRecord {
+        intent,
+        secondary_intents,
+        goal: parsed
+            .get("goal")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(user_input)
+            .to_string(),
+        deliverables,
+        required_capabilities,
+        recommended_role,
+        requires_long_running_task: parsed
+            .get("requires_long_running_task")
+            .or_else(|| parsed.get("requiresLongRunningTask"))
+            .and_then(Value::as_bool)
+            .unwrap_or(fallback.requires_long_running_task),
+        requires_multi_agent: parsed
+            .get("requires_multi_agent")
+            .or_else(|| parsed.get("requiresMultiAgent"))
+            .and_then(Value::as_bool)
+            .unwrap_or(fallback.requires_multi_agent),
+        requires_human_approval: parsed
+            .get("requires_human_approval")
+            .or_else(|| parsed.get("requiresHumanApproval"))
+            .and_then(Value::as_bool)
+            .unwrap_or(fallback.requires_human_approval),
+        confidence: parsed
+            .get("confidence")
+            .and_then(Value::as_f64)
+            .unwrap_or(fallback.confidence),
+        reasoning: parsed
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("llm-route")
+            .to_string(),
+        source: parsed
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("llm")
+            .to_string(),
+    })
 }
 
 pub fn runtime_graph_for_route(route: &Value) -> Vec<Value> {
@@ -1207,12 +1392,18 @@ mod tests {
 
     #[test]
     fn resolve_runtime_mode_from_context_type_maps_known_contexts() {
-        assert_eq!(resolve_runtime_mode_from_context_type(Some("wander")), "wander");
+        assert_eq!(
+            resolve_runtime_mode_from_context_type(Some("wander")),
+            "wander"
+        );
         assert_eq!(
             resolve_runtime_mode_from_context_type(Some("wechat-article")),
             "knowledge"
         );
-        assert_eq!(resolve_runtime_mode_from_context_type(Some("unknown")), "chatroom");
+        assert_eq!(
+            resolve_runtime_mode_from_context_type(Some("unknown")),
+            "chatroom"
+        );
     }
 
     #[test]
@@ -1225,7 +1416,10 @@ mod tests {
             infer_protocol("https://foo.googleapis.com", None, None),
             "gemini"
         );
-        assert_eq!(infer_protocol("https://api.openai.com/v1", None, None), "openai");
+        assert_eq!(
+            infer_protocol("https://api.openai.com/v1", None, None),
+            "openai"
+        );
     }
 
     #[test]

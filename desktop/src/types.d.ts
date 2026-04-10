@@ -105,6 +105,23 @@ export interface AgentTaskTrace {
   createdAt: number;
 }
 
+export type RuntimeUnifiedEventType =
+  | 'stream_start'
+  | 'text_delta'
+  | 'tool_request'
+  | 'tool_result'
+  | 'task_node_changed'
+  | 'subagent_spawned'
+  | 'task_checkpoint_saved';
+
+export interface RuntimeUnifiedEvent {
+  eventType: RuntimeUnifiedEventType;
+  sessionId?: string | null;
+  taskId?: string | null;
+  payload?: unknown;
+  timestamp: number;
+}
+
 export interface SessionRuntimeRecord {
   id: number;
   sessionId: string;
@@ -910,6 +927,36 @@ declare global {
         removeLongCycle: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
         setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         runLongCycleNow: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
+      };
+      redclawProfile: {
+        getBundle: () => Promise<{
+          profileRoot?: string;
+          agent?: string;
+          soul?: string;
+          identity?: string;
+          user?: string;
+          creatorProfile?: string;
+          bootstrap?: string;
+          onboardingState?: Record<string, unknown>;
+        }>;
+        updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) => Promise<{
+          success?: boolean;
+          docType?: string;
+          fileName?: string;
+          path?: string;
+          content?: string;
+          reason?: string;
+          error?: string;
+        }>;
+        getOnboardingStatus: () => Promise<{
+          completed?: boolean;
+          state?: Record<string, unknown>;
+        }>;
+        onboardingTurn: (payload: { input: string }) => Promise<{
+          handled?: boolean;
+          completed?: boolean;
+          responseText?: string;
+        }>;
       };
       assistantDaemon: {
         getStatus: () => Promise<{

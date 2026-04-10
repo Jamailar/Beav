@@ -306,6 +306,13 @@ function createIpcRenderer() {
       setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => invokeChannel('redclaw:runner-set-long-cycle-enabled', payload),
       runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload)
     },
+    redclawProfile: {
+      getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
+      updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) =>
+        invokeChannel('redclaw:profile:update-doc', payload),
+      getOnboardingStatus: () => invokeChannel('redclaw:profile:onboarding-status'),
+      onboardingTurn: (payload: { input: string }) => invokeChannel('redclaw:profile:onboarding-turn', payload),
+    },
     assistantDaemon: {
       getStatus: () => invokeChannel('assistant:daemon-status'),
       start: (payload?: Record<string, unknown>) => invokeChannel('assistant:daemon-start', payload || {}),
