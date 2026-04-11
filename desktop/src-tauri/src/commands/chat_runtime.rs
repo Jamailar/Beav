@@ -19,14 +19,38 @@ use crate::{
     AppState, ChatMessageRecord,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAgentTurnKind {
+    ChatSend,
+    RuntimeQuery,
+    SessionBridge,
+}
+
+impl SessionAgentTurnKind {
+    pub fn checkpoint_type(self) -> &'static str {
+        match self {
+            Self::ChatSend => "chat-send",
+            Self::RuntimeQuery => "runtime-query",
+            Self::SessionBridge => "session-bridge",
+        }
+    }
+
+    pub fn checkpoint_summary(self) -> &'static str {
+        match self {
+            Self::ChatSend => "Chat response completed",
+            Self::RuntimeQuery => "Runtime query completed",
+            Self::SessionBridge => "Session bridge message completed",
+        }
+    }
+}
+
 pub struct ChatExchangeRequest<'a> {
     pub session_id: Option<String>,
     pub message: String,
     pub display_content: String,
     pub model_config: Option<&'a Value>,
     pub attachment: Option<Value>,
-    pub checkpoint_type: &'a str,
-    pub checkpoint_summary: &'a str,
+    pub turn_kind: SessionAgentTurnKind,
 }
 
 impl<'a> ChatExchangeRequest<'a> {
@@ -43,8 +67,7 @@ impl<'a> ChatExchangeRequest<'a> {
             display_content,
             model_config,
             attachment,
-            checkpoint_type: "chat-send",
-            checkpoint_summary: "Chat response completed",
+            turn_kind: SessionAgentTurnKind::ChatSend,
         }
     }
 
@@ -60,8 +83,7 @@ impl<'a> ChatExchangeRequest<'a> {
             display_content,
             model_config,
             attachment: None,
-            checkpoint_type: "runtime-query",
-            checkpoint_summary: "Runtime query completed",
+            turn_kind: SessionAgentTurnKind::RuntimeQuery,
         }
     }
 
@@ -72,8 +94,7 @@ impl<'a> ChatExchangeRequest<'a> {
             message,
             model_config: None,
             attachment: None,
-            checkpoint_type: "session-bridge",
-            checkpoint_summary: "Session bridge message completed",
+            turn_kind: SessionAgentTurnKind::SessionBridge,
         }
     }
 }
@@ -91,8 +112,8 @@ pub fn execute_chat_exchange_request(
         request.display_content,
         request.model_config,
         request.attachment,
-        request.checkpoint_type,
-        request.checkpoint_summary,
+        request.turn_kind.checkpoint_type(),
+        request.turn_kind.checkpoint_summary(),
     )
 }
 
@@ -332,4 +353,22 @@ pub fn execute_chat_exchange(
         title_update,
         emitted_live_events,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_agent_turn_kind_maps_to_stable_checkpoint_contract() {
+        assert_eq!(SessionAgentTurnKind::ChatSend.checkpoint_type(), "chat-send");
+        assert_eq!(
+            SessionAgentTurnKind::RuntimeQuery.checkpoint_summary(),
+            "Runtime query completed"
+        );
+        assert_eq!(
+            SessionAgentTurnKind::SessionBridge.checkpoint_type(),
+            "session-bridge"
+        );
+    }
 }
