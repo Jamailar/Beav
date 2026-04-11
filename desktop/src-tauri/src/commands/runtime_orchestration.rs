@@ -3,7 +3,8 @@ use tauri::{AppHandle, State};
 
 use crate::events::emit_runtime_subagent_spawned;
 use crate::runtime::{
-    build_runtime_task_artifact_content, runtime_subagent_role_spec, RuntimeRouteRecord,
+    build_runtime_task_artifact_content, runtime_subagent_role_spec, RuntimeArtifact,
+    RuntimeRouteRecord,
 };
 use crate::{
     generate_structured_response_with_settings, load_redbox_prompt, parse_json_value_from_text,
@@ -98,7 +99,7 @@ pub fn save_runtime_task_artifact(
     route: &RuntimeRouteRecord,
     goal: &str,
     orchestration: Option<&Value>,
-) -> Result<Value, String> {
+) -> Result<RuntimeArtifact, String> {
     let intent = route.intent.clone();
     let root = workspace_root(state)?;
     let (dir, extension) = match intent.as_str() {
@@ -117,11 +118,13 @@ pub fn save_runtime_task_artifact(
     let route_value = route.clone().into_value();
     let content = build_runtime_task_artifact_content(task_id, &route_value, goal, orchestration)?;
     write_text_file(&path, &content)?;
-    Ok(json!({
-        "type": "saved-artifact",
-        "path": path.display().to_string(),
-        "intent": intent,
-    }))
+    Ok(RuntimeArtifact::new(
+        "saved-artifact",
+        "Saved Artifact",
+        Some(path.display().to_string()),
+        Some(json!({ "intent": intent })),
+        None,
+    ))
 }
 
 pub fn run_reviewer_repair_for_task(

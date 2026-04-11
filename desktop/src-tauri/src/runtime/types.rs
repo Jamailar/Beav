@@ -354,10 +354,6 @@ impl RuntimeArtifact {
         }
     }
 
-    pub fn from_value(value: &Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
-    }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

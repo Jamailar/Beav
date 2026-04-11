@@ -351,7 +351,7 @@ pub fn handle_runtime_task_channel(
                         task.checkpoints.push(checkpoint);
                     }
 
-                    if let Some(artifact_value) = saved_artifact.clone() {
+                    if let Some(artifact) = saved_artifact.clone() {
                         set_runtime_graph_node(
                             &mut task.graph,
                             "save_artifact",
@@ -365,13 +365,12 @@ pub fn handle_runtime_task_channel(
                             Some("artifact saved".to_string()),
                             None,
                         ));
-                        task.artifacts
-                            .push(runtime_artifact_from_value(&artifact_value));
+                        task.artifacts.push(artifact.clone());
                         let checkpoint = RuntimeCheckpointRecord::new(
                             "save_artifact",
                             "save_artifact",
                             "artifact saved",
-                            Some(artifact_value.clone()),
+                            Some(serde_json::to_value(&artifact).unwrap_or_else(|_| Value::Null)),
                         );
                         runtime_checkpoint_events.push((
                             "save_artifact".to_string(),
@@ -391,14 +390,12 @@ pub fn handle_runtime_task_channel(
                                 }
                             ),
                             Some(route.goal.clone()),
-                            Some(
-                                payload_string(&artifact_value, "path").unwrap_or_default(),
-                            ),
+                            Some(artifact.path.clone().unwrap_or_default()),
                             Some(json!({
                                 "taskId": task_id,
                                 "sessionId": task.owner_session_id.clone(),
                                 "intent": route.intent.clone(),
-                                "artifact": artifact_value.clone(),
+                                "artifact": artifact,
                             })),
                             2,
                         );
@@ -612,16 +609,4 @@ fn reviewer_rejected(orchestration: Option<&Value>) -> Option<bool> {
                 .unwrap_or(0);
             !approved || issue_count > 0
         })
-}
-
-fn runtime_artifact_from_value(value: &Value) -> RuntimeArtifact {
-    RuntimeArtifact::from_value(value).unwrap_or_else(|| {
-        RuntimeArtifact::new(
-            payload_string(value, "type").unwrap_or_else(|| "artifact".to_string()),
-            payload_string(value, "label").unwrap_or_else(|| "Runtime Artifact".to_string()),
-            payload_string(value, "path"),
-            Some(value.clone()),
-            None,
-        )
-    })
 }
