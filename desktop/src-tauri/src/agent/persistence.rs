@@ -91,10 +91,7 @@ pub fn persist_chat_exchange(
             &final_session_id,
             turn_kind.checkpoint_type(),
             turn_kind.checkpoint_summary().to_string(),
-            Some(json!({
-                "responsePreview": response.chars().take(80).collect::<String>(),
-                "runtimeMode": runtime_mode,
-            })),
+            Some(exchange_checkpoint_payload(response, &runtime_mode)),
         );
         Ok(())
     })?;
@@ -114,19 +111,7 @@ pub fn update_post_exchange_maintenance(
         let current = memory_maintenance_status_from_workspace(state)?
             .or_else(|| crate::memory_maintenance_status_from_settings(&store.settings))
             .unwrap_or_else(default_memory_maintenance_status);
-        let status = json!({
-            "started": true,
-            "running": false,
-            "lockState": current.get("lockState").cloned().unwrap_or_else(|| json!("owner")),
-            "blockedBy": current.get("blockedBy").cloned().unwrap_or(Value::Null),
-            "pendingMutations": current.get("pendingMutations").cloned().unwrap_or_else(|| json!(0)),
-            "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
-            "lastScanAt": now_i64(),
-            "lastReason": "query-after",
-            "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
-            "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
-            "nextScheduledAt": next_scheduled_at,
-        });
+        let status = build_post_exchange_maintenance_status(&current, next_scheduled_at);
         write_memory_maintenance_status_for_workspace(state, &status)?;
         if let Some(object) = store.settings.as_object_mut() {
             object.remove("redbox_memory_maintenance_status_json");
@@ -134,6 +119,32 @@ pub fn update_post_exchange_maintenance(
         store.redclaw_state.next_maintenance_at =
             value_to_i64_string(status.get("nextScheduledAt"));
         Ok(())
+    })
+}
+
+fn exchange_checkpoint_payload(response: &str, runtime_mode: &str) -> Value {
+    json!({
+        "responsePreview": response.chars().take(80).collect::<String>(),
+        "runtimeMode": runtime_mode,
+    })
+}
+
+fn build_post_exchange_maintenance_status(
+    current: &Value,
+    next_scheduled_at: i64,
+) -> Value {
+    json!({
+        "started": true,
+        "running": false,
+        "lockState": current.get("lockState").cloned().unwrap_or_else(|| json!("owner")),
+        "blockedBy": current.get("blockedBy").cloned().unwrap_or(Value::Null),
+        "pendingMutations": current.get("pendingMutations").cloned().unwrap_or_else(|| json!(0)),
+        "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
+        "lastScanAt": now_i64(),
+        "lastReason": "query-after",
+        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
+        "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
+        "nextScheduledAt": next_scheduled_at,
     })
 }
 
@@ -156,4 +167,54 @@ fn session_runtime_mode(session: &ChatSessionRecord) -> String {
                 .unwrap_or_else(|| "chat".to_string());
             resolve_runtime_mode_from_context_type(Some(&context_type)).to_string()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exchange_checkpoint_payload_truncates_preview_and_keeps_runtime_mode() {
+        let payload = exchange_checkpoint_payload(&"a".repeat(120), "chatroom");
+        assert_eq!(
+            payload.get("responsePreview").and_then(Value::as_str).map(|v| v.len()),
+            Some(80)
+        );
+        assert_eq!(
+            payload.get("runtimeMode").and_then(Value::as_str),
+            Some("chatroom")
+        );
+    }
+
+    #[test]
+    fn build_post_exchange_maintenance_status_preserves_current_fields_and_sets_next_time() {
+        let current = json!({
+            "lockState": "owner",
+            "blockedBy": null,
+            "pendingMutations": 2,
+            "lastRunAt": 123,
+            "lastSummary": "ok",
+            "lastError": null
+        });
+        let status = build_post_exchange_maintenance_status(&current, 999);
+        assert_eq!(status.get("lockState").and_then(Value::as_str), Some("owner"));
+        assert_eq!(status.get("pendingMutations").and_then(Value::as_i64), Some(2));
+        assert_eq!(status.get("nextScheduledAt").and_then(Value::as_i64), Some(999));
+        assert_eq!(status.get("lastReason").and_then(Value::as_str), Some("query-after"));
+    }
+
+    #[test]
+    fn session_runtime_mode_prefers_agent_profile_override() {
+        let session = ChatSessionRecord {
+            id: "session-1".to_string(),
+            title: "Test".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "agentProfile": "video-editor",
+                "contextType": "chat"
+            })),
+        };
+        assert_eq!(session_runtime_mode(&session), "video-editor");
+    }
 }
