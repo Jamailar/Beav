@@ -185,8 +185,13 @@ mod tests {
             None,
         );
 
-        let applied =
-            apply_task_resume_execution(&mut store, &task_id, &prepared, Some(artifact)).unwrap();
+        let applied = crate::runtime::apply_task_resume_execution(
+            &mut store,
+            &task_id,
+            &prepared,
+            Some(artifact),
+        )
+        .unwrap();
 
         assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(true));
         assert_eq!(store.work_items.len(), 1);
@@ -218,7 +223,9 @@ mod tests {
         let task_id = task.id.clone();
         store.runtime_tasks.push(task);
 
-        let applied = apply_task_resume_execution(&mut store, &task_id, &prepared, None).unwrap();
+        let applied =
+            crate::runtime::apply_task_resume_execution(&mut store, &task_id, &prepared, None)
+                .unwrap();
 
         assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(false));
         assert_eq!(
