@@ -1,16 +1,13 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::agent::ChatExchangeRequest;
+use crate::agent::{prepare_runtime_query_execution, ChatExchangeRequest};
 use crate::commands::chat_runtime::execute_chat_exchange_request;
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{
-    persist_runtime_query_checkpoints, prepare_runtime_query_execution,
-    runtime_query_checkpoint_events,
-};
+use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::{
     payload_field, payload_string, resolve_runtime_mode_for_session, AppState,
 };
