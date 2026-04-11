@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::agent::{prepare_runtime_query_execution, ChatExchangeRequest};
+use crate::agent::build_runtime_query_turn;
 use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
@@ -45,31 +45,31 @@ pub fn handle_runtime_query(
     } else {
         None
     };
-    let prepared = prepare_runtime_query_execution(route.clone(), orchestration.clone(), &message);
-    let route_value = prepared.route.clone().into_value();
+    let prepared = build_runtime_query_turn(
+        session_id,
+        route,
+        orchestration,
+        &message,
+        payload_field(payload, "modelConfig"),
+    );
     let execution = execute_session_agent_turn_request(
         Some(app),
         state,
-        ChatExchangeRequest::runtime_query(
-            session_id,
-            prepared.effective_message,
-            message.clone(),
-            payload_field(payload, "modelConfig"),
-        ),
+        prepared.request,
     )?;
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(
             store,
             &execution.session_id,
             &prepared.route.reasoning,
-            route_value.clone(),
+            prepared.route_value.clone(),
             prepared.orchestration.clone(),
         );
         Ok(())
     });
     for (checkpoint_type, summary, payload) in runtime_query_checkpoint_events(
         &prepared.route.reasoning,
-        route_value.clone(),
+        prepared.route_value.clone(),
         prepared.orchestration.clone(),
     ) {
         emit_runtime_task_checkpoint_saved(
@@ -93,7 +93,7 @@ pub fn handle_runtime_query(
         "success": true,
         "sessionId": execution.session_id,
         "response": execution.response,
-        "route": route_value,
+        "route": prepared.route_value,
         "orchestration": prepared.orchestration
     }))
 }

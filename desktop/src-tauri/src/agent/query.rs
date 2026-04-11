@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::agent::ChatExchangeRequest;
 use crate::runtime::RuntimeRouteRecord;
 use crate::payload_string;
 
@@ -7,6 +8,13 @@ pub struct PreparedRuntimeQueryExecution {
     pub route: RuntimeRouteRecord,
     pub orchestration: Option<Value>,
     pub effective_message: String,
+}
+
+pub struct PreparedRuntimeQueryTurn<'a> {
+    pub route: RuntimeRouteRecord,
+    pub route_value: Value,
+    pub orchestration: Option<Value>,
+    pub request: ChatExchangeRequest<'a>,
 }
 
 pub fn prepare_runtime_query_execution(
@@ -41,6 +49,29 @@ pub fn prepare_runtime_query_execution(
     }
 }
 
+pub fn build_runtime_query_turn<'a>(
+    session_id: Option<String>,
+    route: RuntimeRouteRecord,
+    orchestration: Option<Value>,
+    display_content: &str,
+    model_config: Option<&'a Value>,
+) -> PreparedRuntimeQueryTurn<'a> {
+    let prepared = prepare_runtime_query_execution(route, orchestration, display_content);
+    let route_value = prepared.route.clone().into_value();
+    let request = ChatExchangeRequest::runtime_query(
+        session_id,
+        prepared.effective_message,
+        display_content.to_string(),
+        model_config,
+    );
+    PreparedRuntimeQueryTurn {
+        route: prepared.route,
+        route_value,
+        orchestration: prepared.orchestration,
+        request,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +103,31 @@ mod tests {
         let prepared =
             prepare_runtime_query_execution(route, Some(json!({ "outputs": [] })), "help me");
         assert_eq!(prepared.effective_message, "help me");
+    }
+
+    #[test]
+    fn build_runtime_query_turn_carries_request_and_route_value() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let turn = build_runtime_query_turn(
+            Some("session-1".to_string()),
+            route,
+            Some(json!({
+                "outputs": [{ "roleId": "planner", "summary": "break into steps" }]
+            })),
+            "help me",
+            None,
+        );
+
+        assert_eq!(turn.request.session_id.as_deref(), Some("session-1"));
+        assert_eq!(turn.request.display_content, "help me");
+        assert_eq!(turn.request.turn_kind, crate::agent::SessionAgentTurnKind::RuntimeQuery);
+        assert_eq!(
+            turn.route_value.get("intent").and_then(Value::as_str),
+            Some(turn.route.intent.as_str())
+        );
+        assert!(turn
+            .request
+            .message
+            .contains("Subagent orchestration summary"));
     }
 }
