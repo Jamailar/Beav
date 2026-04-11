@@ -4,7 +4,9 @@ use crate::runtime::{
     append_runtime_task_trace, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeGraph,
     RuntimeGraphNodeRecord, RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
 };
-use crate::{create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord};
+use crate::{
+    create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord,
+};
 
 pub type RuntimeNodeEvent = (String, String, Option<String>, Option<String>);
 pub type RuntimeCheckpointEvent = (String, String, Option<Value>);
@@ -48,6 +50,42 @@ pub fn create_runtime_task(
         started_at: None,
         completed_at: None,
     }
+}
+
+pub fn store_runtime_task(
+    store: &mut AppStore,
+    task_type: &str,
+    status: &str,
+    runtime_mode: String,
+    owner_session_id: Option<String>,
+    goal: Option<String>,
+    route: RuntimeRouteRecord,
+    metadata: Option<Value>,
+) -> RuntimeTaskRecord {
+    let route_value = route.clone().into_value();
+    let task = create_runtime_task(
+        task_type,
+        status,
+        runtime_mode,
+        owner_session_id,
+        goal,
+        route,
+        metadata,
+    );
+    append_runtime_task_trace(
+        store,
+        &task.id,
+        "created",
+        Some(serde_json::json!({
+            "goal": task.goal.clone(),
+            "runtimeMode": task.runtime_mode,
+            "intent": task.intent,
+            "roleId": task.role_id,
+            "route": route_value
+        })),
+    );
+    store.runtime_tasks.push(task.clone());
+    task
 }
 
 pub fn list_runtime_tasks(store: &AppStore) -> Vec<RuntimeTaskRecord> {

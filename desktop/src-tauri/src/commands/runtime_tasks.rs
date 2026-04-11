@@ -7,9 +7,8 @@ mod runtime_task_resume;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, cancel_runtime_task, create_runtime_task, get_runtime_task,
-    list_runtime_task_traces, list_runtime_tasks, resume_runtime_task_snapshot,
-    runtime_task_value,
+    append_runtime_task_trace, cancel_runtime_task, get_runtime_task, list_runtime_task_traces,
+    list_runtime_tasks, resume_runtime_task_snapshot, runtime_task_value, store_runtime_task,
 };
 use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 use runtime_task_resume::{
@@ -45,9 +44,9 @@ pub fn handle_runtime_task_channel(
                     &user_input,
                     metadata.as_ref(),
                 );
-                let route_value = route.clone().into_value();
                 let created = with_store_mut(state, |store| {
-                    let task = create_runtime_task(
+                    Ok(store_runtime_task(
+                        store,
                         "manual",
                         "pending",
                         runtime_mode,
@@ -55,21 +54,7 @@ pub fn handle_runtime_task_channel(
                         Some(user_input.clone()),
                         route.clone(),
                         metadata,
-                    );
-                    append_runtime_task_trace(
-                        store,
-                        &task.id,
-                        "created",
-                        Some(json!({
-                            "goal": task.goal.clone(),
-                            "runtimeMode": task.runtime_mode,
-                            "intent": task.intent,
-                            "roleId": task.role_id,
-                            "route": route_value
-                        })),
-                    );
-                    store.runtime_tasks.push(task.clone());
-                    Ok(task)
+                    ))
                 })?;
                 Ok(json!(created))
             }
