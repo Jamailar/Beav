@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::runtime::{
-    RuntimeCheckpointRecord, RuntimeGraph, RuntimeGraphNodeRecord, RuntimeRouteRecord,
-    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeArtifact,
+    append_runtime_task_trace, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeGraph,
+    RuntimeGraphNodeRecord, RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
 };
 use crate::{create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord};
 
@@ -220,6 +220,38 @@ pub fn build_runtime_repair_work_item(
         work_item.refs.session_ids.push(session_id.to_string());
     }
     work_item
+}
+
+pub fn append_resume_traces(
+    store: &mut AppStore,
+    task_id: &str,
+    route_value: Value,
+    orchestration: Option<Value>,
+    repair_plan: Option<Value>,
+    repair_orchestration: Option<Value>,
+    failed: bool,
+) {
+    append_runtime_task_trace(store, task_id, "resumed", Some(serde_json::json!({ "route": route_value })));
+    if let Some(orchestration_value) = orchestration {
+        append_runtime_task_trace(
+            store,
+            task_id,
+            "subagent.completed",
+            Some(orchestration_value),
+        );
+    }
+    if let Some(repair_value) = repair_plan {
+        append_runtime_task_trace(store, task_id, "repair.generated", Some(repair_value));
+    }
+    if let Some(repair_value) = repair_orchestration {
+        append_runtime_task_trace(store, task_id, "repair.pass_completed", Some(repair_value));
+    }
+    append_runtime_task_trace(
+        store,
+        task_id,
+        if failed { "failed" } else { "completed" },
+        None,
+    );
 }
 
 pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {

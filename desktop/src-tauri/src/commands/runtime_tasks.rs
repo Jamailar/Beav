@@ -8,11 +8,12 @@ use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_task_node_changed};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
-    list_runtime_tasks, mark_task_running, reviewer_rejected, route_for_task_snapshot,
-    runtime_task_value, build_repair_goal, record_runtime_checkpoint, record_runtime_node,
-    build_runtime_artifact_work_item, build_runtime_repair_work_item, RuntimeArtifact,
-    RuntimeCheckpointEvent, RuntimeCheckpointRecord, RuntimeNodeEvent,
+    append_resume_traces, append_runtime_task_trace, build_repair_goal,
+    build_runtime_artifact_work_item, build_runtime_repair_work_item, create_runtime_task,
+    get_runtime_task, list_runtime_task_traces, list_runtime_tasks, mark_task_running,
+    record_runtime_checkpoint, record_runtime_node, reviewer_rejected,
+    route_for_task_snapshot, runtime_task_value, RuntimeArtifact, RuntimeCheckpointEvent,
+    RuntimeCheckpointRecord, RuntimeNodeEvent,
 };
 use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
 
@@ -392,45 +393,14 @@ pub fn handle_runtime_task_channel(
                         task.updated_at = now_i64();
                     }
                     store.work_items.extend(work_items_to_push);
-                    append_runtime_task_trace(
+                    append_resume_traces(
                         store,
                         &task_id,
-                        "resumed",
-                        Some(json!({ "route": route_value.clone() })),
-                    );
-                    if let Some(orchestration_value) = orchestration.clone() {
-                        append_runtime_task_trace(
-                            store,
-                            &task_id,
-                            "subagent.completed",
-                            Some(orchestration_value),
-                        );
-                    }
-                    if let Some(repair_value) = repair_plan.clone() {
-                        append_runtime_task_trace(
-                            store,
-                            &task_id,
-                            "repair.generated",
-                            Some(repair_value),
-                        );
-                    }
-                    if let Some(repair_value) = repair_orchestration.clone() {
-                        append_runtime_task_trace(
-                            store,
-                            &task_id,
-                            "repair.pass_completed",
-                            Some(repair_value),
-                        );
-                    }
-                    append_runtime_task_trace(
-                        store,
-                        &task_id,
-                        if reviewer_blocked && repair_pass_failed {
-                            "failed"
-                        } else {
-                            "completed"
-                        },
-                        None,
+                        route_value.clone(),
+                        orchestration.clone(),
+                        repair_plan.clone(),
+                        repair_orchestration.clone(),
+                        reviewer_blocked && repair_pass_failed,
                     );
 
                     Ok(json!({
