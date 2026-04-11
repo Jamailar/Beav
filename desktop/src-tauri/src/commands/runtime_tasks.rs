@@ -8,10 +8,10 @@ mod runtime_task_ops;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::resume_runtime_task_snapshot;
+use crate::runtime::apply_task_resume_execution;
 use crate::{payload_string, AppState};
 use runtime_task_resume::{
-    apply_task_resume_execution, emit_task_resume_events, maybe_save_task_resume_artifact,
-    prepare_task_resume_execution,
+    emit_task_resume_events, maybe_save_task_resume_artifact, prepare_task_resume_execution,
 };
 
 pub fn handle_runtime_task_channel(
