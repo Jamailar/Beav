@@ -3,12 +3,13 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::chat_runtime::execute_chat_exchange;
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::runtime_task_value;
+use crate::runtime::{
+    checkpoints_for_session, runtime_task_value, tool_results_for_session, trace_for_session,
+};
 use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 use crate::{
     log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
-    redclaw_state_value, AppState, AppStore, ChatSessionRecord, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord,
+    redclaw_state_value, AppState, AppStore, ChatSessionRecord,
 };
 
 fn session_bridge_summary(session: &ChatSessionRecord, store: &AppStore) -> Value {
@@ -68,24 +69,9 @@ pub fn handle_bridge_channel(
                 else {
                     return Ok(Value::Null);
                 };
-                let transcript: Vec<SessionTranscriptRecord> = store
-                    .session_transcript_records
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                let checkpoints: Vec<SessionCheckpointRecord> = store
-                    .session_checkpoints
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
-                let tool_results: Vec<SessionToolResultRecord> = store
-                    .session_tool_results
-                    .iter()
-                    .filter(|item| item.session_id == session_id)
-                    .cloned()
-                    .collect();
+                let transcript = trace_for_session(&store, &session_id);
+                let checkpoints = checkpoints_for_session(&store, &session_id);
+                let tool_results = tool_results_for_session(&store, &session_id);
                 let tasks: Vec<Value> = store
                     .runtime_tasks
                     .iter()

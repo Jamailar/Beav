@@ -1,6 +1,7 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    runtime_direct_route_record, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    checkpoints_for_session, runtime_direct_route_record, tool_results_for_session,
+    trace_for_session, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -141,24 +142,9 @@ pub fn handle_chat_sessions_wander_channel(
                         .iter()
                         .find(|item| item.id == session_id)
                         .cloned();
-                    let transcript: Vec<SessionTranscriptRecord> = store
-                        .session_transcript_records
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    let checkpoints: Vec<SessionCheckpointRecord> = store
-                        .session_checkpoints
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    let tool_results: Vec<SessionToolResultRecord> = store
-                        .session_tool_results
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
+                    let transcript = trace_for_session(&store, &session_id);
+                    let checkpoints = checkpoints_for_session(&store, &session_id);
+                    let tool_results = tool_results_for_session(&store, &session_id);
                     Ok(if let Some(session) = chat_session {
                         json!({
                             "chatSession": {
@@ -183,12 +169,9 @@ pub fn handle_chat_sessions_wander_channel(
                         .iter()
                         .find(|item| item.id == session_id)
                         .cloned();
-                    let last_checkpoint = store
-                        .session_checkpoints
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .max_by_key(|item| item.created_at)
-                        .cloned();
+                    let last_checkpoint = checkpoints_for_session(&store, &session_id)
+                        .into_iter()
+                        .max_by_key(|item| item.created_at);
                     Ok(if let Some(session) = chat_session {
                         json!({
                             "chatSession": {
@@ -250,29 +233,11 @@ pub fn handle_chat_sessions_wander_channel(
             }
             "sessions:get-transcript" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<SessionTranscriptRecord> = store
-                        .session_transcript_records
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(trace_for_session(&store, &session_id))))
             }
             "sessions:get-tool-results" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<SessionToolResultRecord> = store
-                        .session_tool_results
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(tool_results_for_session(&store, &session_id))))
             }
             "chat:get-messages" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
