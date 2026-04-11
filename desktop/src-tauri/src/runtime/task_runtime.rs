@@ -1,9 +1,10 @@
 use serde_json::Value;
 
 use crate::runtime::{
-    RuntimeCheckpointRecord, RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    RuntimeCheckpointRecord, RuntimeGraph, RuntimeGraphNodeRecord, RuntimeRouteRecord,
+    RuntimeTaskRecord, RuntimeTaskTraceRecord,
 };
-use crate::{make_id, now_i64, AppStore};
+use crate::{make_id, now_i64, payload_string, AppStore};
 
 pub fn build_route_checkpoint(route: &RuntimeRouteRecord) -> RuntimeCheckpointRecord {
     RuntimeCheckpointRecord::new(
@@ -83,4 +84,85 @@ pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {
         Some(summary.to_string()),
         None,
     );
+}
+
+pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {
+    runtime_graph_for_route_record(route)
+}
+
+pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeRecord> {
+    let typed_route = RuntimeRouteRecord::from_value(route);
+    let requires_multi_agent = typed_route
+        .as_ref()
+        .map(|item| item.requires_multi_agent)
+        .unwrap_or_else(|| {
+            route
+                .get("requiresMultiAgent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        });
+    let requires_long_running = if let Some(route) = typed_route.as_ref() {
+        route.requires_long_running_task
+    } else {
+        route
+            .get("requiresLongRunningTask")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    let mut nodes = vec![
+        pending_node("plan", "plan", "Plan"),
+        pending_node("retrieve", "retrieve", "Retrieve"),
+    ];
+    if requires_multi_agent || requires_long_running {
+        nodes.push(pending_node("spawn_agents", "spawn_agents", "Spawn Agents"));
+        nodes.push(pending_node("handoff", "handoff", "Handoff"));
+        nodes.push(pending_node("review", "review", "Review"));
+    }
+    nodes.push(pending_node("execute_tools", "execute_tools", "Execute"));
+    nodes.push(pending_node("save_artifact", "save_artifact", "Save Artifact"));
+    nodes
+}
+
+pub fn role_sequence_for_route(route: &Value) -> Vec<String> {
+    let intent = payload_string(route, "intent").unwrap_or_default();
+    match intent.as_str() {
+        "manuscript_creation" | "advisor_persona" => vec![
+            "planner".to_string(),
+            "researcher".to_string(),
+            "copywriter".to_string(),
+            "reviewer".to_string(),
+        ],
+        "cover_generation" | "image_creation" => vec![
+            "planner".to_string(),
+            "researcher".to_string(),
+            "image-director".to_string(),
+            "reviewer".to_string(),
+        ],
+        "knowledge_retrieval" => vec![
+            "planner".to_string(),
+            "researcher".to_string(),
+            "reviewer".to_string(),
+        ],
+        "automation" | "long_running_task" | "memory_maintenance" => vec![
+            "planner".to_string(),
+            "ops-coordinator".to_string(),
+            "reviewer".to_string(),
+        ],
+        _ => {
+            vec![payload_string(route, "recommendedRole").unwrap_or_else(|| "planner".to_string())]
+        }
+    }
+}
+
+fn pending_node(id: &str, node_type: &str, title: &str) -> RuntimeGraphNodeRecord {
+    RuntimeGraphNodeRecord {
+        id: id.to_string(),
+        node_type: node_type.to_string(),
+        status: "pending".to_string(),
+        title: title.to_string(),
+        started_at: None,
+        completed_at: None,
+        summary: None,
+        error: None,
+    }
 }
