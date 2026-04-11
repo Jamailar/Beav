@@ -2,6 +2,8 @@
 mod engine;
 #[path = "bridge.rs"]
 mod bridge;
+#[path = "chat.rs"]
+mod chat;
 #[path = "persistence.rs"]
 mod persistence;
 #[path = "query.rs"]
@@ -10,6 +12,7 @@ mod query;
 mod session;
 
 pub use bridge::*;
+pub use chat::*;
 pub use engine::*;
 pub use persistence::*;
 pub use query::*;
