@@ -2,7 +2,9 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{checkpoints_for_session, tool_results_for_session, trace_for_session};
+use crate::runtime::{
+    checkpoints_value_for_session, tool_results_value_for_session, trace_value_for_session,
+};
 use crate::{
     make_id, now_iso, now_ms, payload_string, payload_value_as_string, AppState, ChatSessionRecord,
 };
@@ -48,7 +50,7 @@ pub fn runtime_trace_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(json!(trace_for_session(&store, &session_id))))
+    with_store(state, |store| Ok(trace_value_for_session(&store, &session_id)))
 }
 
 pub fn runtime_checkpoints_value(
@@ -56,7 +58,7 @@ pub fn runtime_checkpoints_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(json!(checkpoints_for_session(&store, &session_id))))
+    with_store(state, |store| Ok(checkpoints_value_for_session(&store, &session_id)))
 }
 
 pub fn runtime_tool_results_value(
@@ -64,7 +66,7 @@ pub fn runtime_tool_results_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(json!(tool_results_for_session(&store, &session_id))))
+    with_store(state, |store| Ok(tool_results_value_for_session(&store, &session_id)))
 }
 
 pub fn fork_runtime_session(

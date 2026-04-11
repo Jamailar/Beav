@@ -16,6 +16,10 @@ pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTrans
     items
 }
 
+pub fn trace_value_for_session(store: &AppStore, session_id: &str) -> Value {
+    json!(trace_for_session(store, session_id))
+}
+
 pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<SessionCheckpointRecord> {
     let mut items: Vec<SessionCheckpointRecord> = store
         .session_checkpoints
@@ -25,6 +29,10 @@ pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<Sessio
         .collect();
     items.sort_by_key(|item| item.created_at);
     items
+}
+
+pub fn checkpoints_value_for_session(store: &AppStore, session_id: &str) -> Value {
+    json!(checkpoints_for_session(store, session_id))
 }
 
 pub fn tool_results_for_session(
@@ -39,6 +47,10 @@ pub fn tool_results_for_session(
         .collect();
     items.sort_by_key(|item| item.created_at);
     items
+}
+
+pub fn tool_results_value_for_session(store: &AppStore, session_id: &str) -> Value {
+    json!(tool_results_for_session(store, session_id))
 }
 
 pub fn transcript_count_for_session(store: &AppStore, session_id: &str) -> i64 {
@@ -371,6 +383,41 @@ mod tests {
         let route = crate::runtime::runtime_direct_route_record("default", "draft", None);
         let prepared = prepare_runtime_query_execution(route, Some(json!({ "outputs": [] })), "help me");
         assert_eq!(prepared.effective_message, "help me");
+    }
+
+    #[test]
+    fn session_value_helpers_preserve_array_shapes() {
+        let mut store = crate::AppStore::default();
+        store.session_transcript_records.push(SessionTranscriptRecord {
+            id: "trace-1".to_string(),
+            session_id: "session-1".to_string(),
+            record_type: "message".to_string(),
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            payload: None,
+            created_at: 1,
+        });
+        store.session_tool_results.push(SessionToolResultRecord {
+            id: "tool-1".to_string(),
+            session_id: "session-1".to_string(),
+            call_id: "call-1".to_string(),
+            tool_name: "redbox_fs".to_string(),
+            command: None,
+            success: true,
+            result_text: Some("ok".to_string()),
+            summary_text: None,
+            prompt_text: None,
+            original_chars: None,
+            prompt_chars: None,
+            truncated: false,
+            payload: None,
+            created_at: 1,
+            updated_at: 1,
+        });
+
+        assert!(trace_value_for_session(&store, "session-1").is_array());
+        assert!(tool_results_value_for_session(&store, "session-1").is_array());
+        assert!(checkpoints_value_for_session(&store, "session-1").is_array());
     }
 
     #[test]
