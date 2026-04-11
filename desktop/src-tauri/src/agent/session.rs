@@ -28,10 +28,12 @@ pub fn resolve_chat_exchange_context(
                 is_first_assistant_turn_for_session(&store, &working_session_id),
             ))
         })?;
-    let allow_redclaw_onboarding = runtime_mode == "redclaw"
-        && should_handle_redclaw_onboarding
-        && turn_kind == SessionAgentTurnKind::ChatSend
-        && is_first_assistant_turn;
+    let allow_redclaw_onboarding = should_allow_redclaw_onboarding(
+        &runtime_mode,
+        should_handle_redclaw_onboarding,
+        is_first_assistant_turn,
+        turn_kind,
+    );
     Ok(ChatExchangeContext {
         settings_snapshot,
         working_session_id,
@@ -91,7 +93,9 @@ pub fn resolve_chat_exchange_response_stage(
                 Ok(response) => {
                     return Ok(ChatExchangeResponseStage {
                         response,
-                        emitted_live_events: context.runtime_mode != "wander",
+                        emitted_live_events: emits_live_events_for_runtime_mode(
+                            &context.runtime_mode,
+                        ),
                     });
                 }
                 Err(error) => {
@@ -114,4 +118,60 @@ pub fn resolve_chat_exchange_response_stage(
         response: generate_chat_response(&context.settings_snapshot, model_config, message),
         emitted_live_events: false,
     })
+}
+
+fn should_allow_redclaw_onboarding(
+    runtime_mode: &str,
+    should_handle_redclaw_onboarding: bool,
+    is_first_assistant_turn: bool,
+    turn_kind: SessionAgentTurnKind,
+) -> bool {
+    runtime_mode == "redclaw"
+        && should_handle_redclaw_onboarding
+        && turn_kind == SessionAgentTurnKind::ChatSend
+        && is_first_assistant_turn
+}
+
+fn emits_live_events_for_runtime_mode(runtime_mode: &str) -> bool {
+    runtime_mode != "wander"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allow_redclaw_onboarding_requires_redclaw_chat_first_turn() {
+        assert!(should_allow_redclaw_onboarding(
+            "redclaw",
+            true,
+            true,
+            SessionAgentTurnKind::ChatSend,
+        ));
+        assert!(!should_allow_redclaw_onboarding(
+            "chatroom",
+            true,
+            true,
+            SessionAgentTurnKind::ChatSend,
+        ));
+        assert!(!should_allow_redclaw_onboarding(
+            "redclaw",
+            true,
+            false,
+            SessionAgentTurnKind::ChatSend,
+        ));
+        assert!(!should_allow_redclaw_onboarding(
+            "redclaw",
+            true,
+            true,
+            SessionAgentTurnKind::RuntimeQuery,
+        ));
+    }
+
+    #[test]
+    fn emits_live_events_for_runtime_mode_skips_wander_only() {
+        assert!(emits_live_events_for_runtime_mode("chatroom"));
+        assert!(emits_live_events_for_runtime_mode("redclaw"));
+        assert!(!emits_live_events_for_runtime_mode("wander"));
+    }
 }
