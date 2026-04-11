@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::ChatExchangeRequest;
-use crate::commands::chat_runtime::execute_chat_exchange_request;
+use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     session_bridge_detail_value, session_bridge_summary_value,
@@ -63,7 +63,7 @@ pub fn handle_bridge_channel(
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             let message = payload_string(payload, "message").unwrap_or_default();
-            execute_chat_exchange_request(
+            execute_session_agent_turn_request(
                 None,
                 state,
                 ChatExchangeRequest::session_bridge(session_id.clone(), message),

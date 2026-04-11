@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::agent::{prepare_runtime_query_execution, ChatExchangeRequest};
-use crate::commands::chat_runtime::execute_chat_exchange_request;
+use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
@@ -47,7 +47,7 @@ pub fn handle_runtime_query(
     };
     let prepared = prepare_runtime_query_execution(route.clone(), orchestration.clone(), &message);
     let route_value = prepared.route.clone().into_value();
-    let execution = execute_chat_exchange_request(
+    let execution = execute_session_agent_turn_request(
         Some(app),
         state,
         ChatExchangeRequest::runtime_query(

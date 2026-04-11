@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::ChatExchangeRequest;
-use crate::commands::chat_runtime::execute_chat_exchange_request;
+use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
@@ -30,7 +30,7 @@ pub fn handle_send_channel(
                 .as_deref()
                 .map(|value| value.starts_with("context-session:redclaw:"))
                 .unwrap_or(false);
-            let execution = execute_chat_exchange_request(
+            let execution = execute_session_agent_turn_request(
                 Some(app),
                 state,
                 ChatExchangeRequest::chat_send(

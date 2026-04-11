@@ -13,15 +13,15 @@ use crate::{
     handle_redclaw_onboarding_turn, AppState,
 };
 
-pub fn execute_chat_exchange_request(
+pub fn execute_session_agent_turn_request(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     request: ChatExchangeRequest<'_>,
 ) -> Result<ChatExecutionResult, String> {
-    execute_chat_exchange(app, state, request)
+    execute_session_agent_turn(app, state, request)
 }
 
-pub fn execute_chat_exchange(
+pub fn execute_session_agent_turn(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     request: ChatExchangeRequest<'_>,
