@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::commands::chat_runtime::execute_chat_exchange;
+use crate::commands::chat_runtime::{execute_chat_exchange_request, ChatExchangeRequest};
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
@@ -49,16 +49,18 @@ pub fn handle_runtime_query(
     };
     let prepared = prepare_runtime_query_execution(route.clone(), orchestration.clone(), &message);
     let route_value = prepared.route.clone().into_value();
-    let execution = execute_chat_exchange(
+    let execution = execute_chat_exchange_request(
         Some(app),
         state,
-        session_id,
-        prepared.effective_message,
-        message.clone(),
-        payload_field(payload, "modelConfig"),
-        None,
-        "runtime-query",
-        "Runtime query completed",
+        ChatExchangeRequest {
+            session_id,
+            message: prepared.effective_message,
+            display_content: message.clone(),
+            model_config: payload_field(payload, "modelConfig"),
+            attachment: None,
+            checkpoint_type: "runtime-query",
+            checkpoint_summary: "Runtime query completed",
+        },
     )?;
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(

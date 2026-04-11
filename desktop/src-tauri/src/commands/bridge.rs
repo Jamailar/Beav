@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::chat_runtime::execute_chat_exchange;
+use crate::commands::chat_runtime::{execute_chat_exchange_request, ChatExchangeRequest};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     session_bridge_detail_value, session_bridge_summary_value,
@@ -62,16 +62,18 @@ pub fn handle_bridge_channel(
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             let message = payload_string(payload, "message").unwrap_or_default();
-            execute_chat_exchange(
+            execute_chat_exchange_request(
                 None,
                 state,
-                Some(session_id.clone()),
-                message.clone(),
-                message,
-                None,
-                None,
-                "session-bridge",
-                "Session bridge message completed",
+                ChatExchangeRequest {
+                    session_id: Some(session_id.clone()),
+                    message: message.clone(),
+                    display_content: message,
+                    model_config: None,
+                    attachment: None,
+                    checkpoint_type: "session-bridge",
+                    checkpoint_summary: "Session bridge message completed",
+                },
             )
             .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id }))
         }

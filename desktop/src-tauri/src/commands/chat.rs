@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::chat_runtime::execute_chat_exchange;
+use crate::commands::chat_runtime::{execute_chat_exchange_request, ChatExchangeRequest};
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
@@ -29,16 +29,18 @@ pub fn handle_send_channel(
                 .as_deref()
                 .map(|value| value.starts_with("context-session:redclaw:"))
                 .unwrap_or(false);
-            let execution = execute_chat_exchange(
+            let execution = execute_chat_exchange_request(
                 Some(app),
                 state,
-                session_id,
-                message.clone(),
-                display_content.clone(),
-                payload_field(&payload, "modelConfig"),
-                payload_field(&payload, "attachment").cloned(),
-                "chat-send",
-                "Chat response completed",
+                ChatExchangeRequest {
+                    session_id,
+                    message: message.clone(),
+                    display_content: display_content.clone(),
+                    model_config: payload_field(&payload, "modelConfig"),
+                    attachment: payload_field(&payload, "attachment").cloned(),
+                    checkpoint_type: "chat-send",
+                    checkpoint_summary: "Chat response completed",
+                },
             )?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;

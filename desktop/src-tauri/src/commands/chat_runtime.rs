@@ -19,6 +19,34 @@ use crate::{
     AppState, ChatMessageRecord,
 };
 
+pub struct ChatExchangeRequest<'a> {
+    pub session_id: Option<String>,
+    pub message: String,
+    pub display_content: String,
+    pub model_config: Option<&'a Value>,
+    pub attachment: Option<Value>,
+    pub checkpoint_type: &'a str,
+    pub checkpoint_summary: &'a str,
+}
+
+pub fn execute_chat_exchange_request(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: ChatExchangeRequest<'_>,
+) -> Result<ChatExecutionResult, String> {
+    execute_chat_exchange(
+        app,
+        state,
+        request.session_id,
+        request.message,
+        request.display_content,
+        request.model_config,
+        request.attachment,
+        request.checkpoint_type,
+        request.checkpoint_summary,
+    )
+}
+
 pub fn execute_chat_exchange(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
