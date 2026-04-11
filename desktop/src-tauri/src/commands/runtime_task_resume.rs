@@ -378,3 +378,98 @@ pub fn emit_task_resume_events(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{create_runtime_task, runtime_direct_route_record};
+
+    fn prepared_execution(
+        reviewer_blocked: bool,
+        repair_pass_failed: bool,
+        repair_plan: Option<Value>,
+    ) -> PreparedTaskResumeExecution {
+        let route = runtime_direct_route_record("default", "draft something", None);
+        PreparedTaskResumeExecution {
+            route_value: route.clone().into_value(),
+            route,
+            orchestration: None,
+            repair_plan,
+            repair_orchestration: None,
+            reviewer_blocked,
+            repair_pass_failed,
+        }
+    }
+
+    #[test]
+    fn apply_task_resume_execution_saves_artifact_and_work_item_on_success() {
+        let prepared = prepared_execution(false, false, None);
+        let mut store = crate::AppStore::default();
+        let task = create_runtime_task(
+            "manual",
+            "running",
+            "default".to_string(),
+            Some("session-1".to_string()),
+            Some("draft something".to_string()),
+            prepared.route.clone(),
+            None,
+        );
+        let task_id = task.id.clone();
+        store.runtime_tasks.push(task);
+        let artifact = RuntimeArtifact::new(
+            "saved-artifact",
+            "Saved Artifact",
+            Some("/tmp/task-artifact.md".to_string()),
+            None,
+            None,
+        );
+
+        let applied =
+            apply_task_resume_execution(&mut store, &task_id, &prepared, Some(artifact)).unwrap();
+
+        assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(true));
+        assert_eq!(store.work_items.len(), 1);
+        assert_eq!(store.work_items[0].r#type, "runtime-artifact");
+        assert_eq!(store.runtime_tasks[0].status, "completed");
+        assert!(applied
+            .runtime_node_events
+            .iter()
+            .any(|(node_id, status, _, _)| node_id == "save_artifact" && status == "completed"));
+    }
+
+    #[test]
+    fn apply_task_resume_execution_creates_repair_work_item_when_blocked() {
+        let prepared = prepared_execution(
+            true,
+            true,
+            Some(serde_json::json!({ "summary": "repair missing evidence" })),
+        );
+        let mut store = crate::AppStore::default();
+        let task = create_runtime_task(
+            "manual",
+            "running",
+            "default".to_string(),
+            Some("session-1".to_string()),
+            Some("draft something".to_string()),
+            prepared.route.clone(),
+            None,
+        );
+        let task_id = task.id.clone();
+        store.runtime_tasks.push(task);
+
+        let applied = apply_task_resume_execution(&mut store, &task_id, &prepared, None).unwrap();
+
+        assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            applied.response.get("error").and_then(Value::as_str),
+            Some("reviewer rejected execution")
+        );
+        assert_eq!(store.work_items.len(), 1);
+        assert_eq!(store.work_items[0].r#type, "runtime-repair");
+        assert_eq!(store.runtime_tasks[0].status, "failed");
+        assert!(applied
+            .runtime_node_events
+            .iter()
+            .any(|(node_id, status, _, _)| node_id == "execute_tools" && status == "failed"));
+    }
+}
