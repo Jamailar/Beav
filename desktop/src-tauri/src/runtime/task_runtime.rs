@@ -77,13 +77,41 @@ pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {
     task.updated_at = now_i64();
     task.started_at.get_or_insert(now_i64());
     task.current_node = Some("plan".to_string());
-    crate::runtime::set_runtime_graph_node(
+    set_runtime_graph_node(
         &mut task.graph,
         "plan",
         "running",
         Some(summary.to_string()),
         None,
     );
+}
+
+pub fn set_runtime_graph_node(
+    graph: &mut [RuntimeGraphNodeRecord],
+    node_id: &str,
+    status: &str,
+    summary: Option<String>,
+    error: Option<String>,
+) {
+    if let Some(node) = graph.iter_mut().find(|item| item.id == node_id) {
+        node.status = status.to_string();
+        if status == "running" && node.started_at.is_none() {
+            node.started_at = Some(crate::now_i64());
+        }
+        if matches!(status, "completed" | "failed" | "skipped") {
+            node.completed_at = Some(crate::now_i64());
+        }
+        if let Some(summary) = summary {
+            node.summary = Some(summary);
+        }
+        if let Some(error) = error {
+            node.error = Some(error);
+        }
+    }
+}
+
+pub fn runtime_task_value(task: &RuntimeTaskRecord) -> Value {
+    serde_json::json!(task)
 }
 
 pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {

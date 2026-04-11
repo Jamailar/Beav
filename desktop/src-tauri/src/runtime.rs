@@ -1,5 +1,3 @@
-use serde_json::{json, Value};
-
 #[path = "runtime/agent_engine.rs"]
 mod agent_engine;
 #[path = "runtime/config_runtime.rs"]
@@ -23,37 +21,10 @@ pub use session_runtime::*;
 pub use task_runtime::*;
 pub use types::*;
 
-pub fn set_runtime_graph_node(
-    graph: &mut [RuntimeGraphNodeRecord],
-    node_id: &str,
-    status: &str,
-    summary: Option<String>,
-    error: Option<String>,
-) {
-    if let Some(node) = graph.iter_mut().find(|item| item.id == node_id) {
-        node.status = status.to_string();
-        if status == "running" && node.started_at.is_none() {
-            node.started_at = Some(crate::now_i64());
-        }
-        if matches!(status, "completed" | "failed" | "skipped") {
-            node.completed_at = Some(crate::now_i64());
-        }
-        if let Some(summary) = summary {
-            node.summary = Some(summary);
-        }
-        if let Some(error) = error {
-            node.error = Some(error);
-        }
-    }
-}
-
-pub fn runtime_task_value(task: &RuntimeTaskRecord) -> Value {
-    json!(task)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
     use std::path::Path;
 
     #[test]
