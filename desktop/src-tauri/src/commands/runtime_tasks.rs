@@ -11,9 +11,9 @@ use crate::runtime::{
     append_resume_traces, append_runtime_task_trace, build_repair_goal,
     build_runtime_artifact_work_item, build_runtime_repair_work_item, create_runtime_task,
     get_runtime_task, list_runtime_task_traces, list_runtime_tasks, mark_task_running,
-    record_runtime_checkpoint, record_runtime_node, reviewer_rejected,
-    route_for_task_snapshot, runtime_task_value, RuntimeArtifact, RuntimeCheckpointEvent,
-    RuntimeCheckpointRecord, RuntimeNodeEvent,
+    record_runtime_checkpoint, record_runtime_node, reviewer_rejected, route_for_task_snapshot,
+    runtime_task_value, PreparedTaskResumeExecution, RuntimeArtifact,
+    RuntimeCheckpointEvent, RuntimeCheckpointRecord, RuntimeNodeEvent,
 };
 use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
 
@@ -113,77 +113,22 @@ pub fn handle_runtime_task_channel(
                 };
 
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                let route = route_for_task_snapshot(&task_snapshot).unwrap_or_else(|| {
-                    crate::runtime::runtime_direct_route_record(
-                        &task_snapshot.runtime_mode,
-                        task_snapshot.goal.as_deref().unwrap_or(""),
-                        task_snapshot.metadata.as_ref(),
-                    )
-                });
-                let route_value = route.clone().into_value();
-                let orchestration = if route.requires_multi_agent
-                    || task_snapshot.runtime_mode == "background-maintenance"
-                {
-                    Some(run_subagent_orchestration_for_task(
-                        Some(app),
-                        &settings_snapshot,
-                        &task_snapshot.runtime_mode,
-                        &task_snapshot.id,
-                        task_snapshot.owner_session_id.as_deref(),
-                        &route,
-                        task_snapshot.goal.as_deref().unwrap_or(""),
-                    )?)
-                } else {
-                    None
-                };
-                let reviewer_blocked = reviewer_rejected(orchestration.as_ref());
-                let repair_plan = if reviewer_blocked {
-                    orchestration
-                        .as_ref()
-                        .map(|value| {
-                            run_reviewer_repair_for_task(
-                                &settings_snapshot,
-                                &task_snapshot.id,
-                                &route,
-                                task_snapshot.goal.as_deref().unwrap_or(""),
-                                value,
-                            )
-                        })
-                        .transpose()?
-                } else {
-                    None
-                };
-                let repair_orchestration = if reviewer_blocked {
-                    repair_plan
-                        .as_ref()
-                        .map(|repair| {
-                            let repair_goal = build_repair_goal(
-                                task_snapshot.goal.as_deref().unwrap_or(""),
-                                repair,
-                            );
-                            run_subagent_orchestration_for_task(
-                                Some(app),
-                                &settings_snapshot,
-                                &task_snapshot.runtime_mode,
-                                &format!("{}-repair", task_snapshot.id),
-                                task_snapshot.owner_session_id.as_deref(),
-                                &route,
-                                &repair_goal,
-                            )
-                        })
-                        .transpose()?
-                } else {
-                    None
-                };
-                let repair_pass_failed = reviewer_rejected(repair_orchestration.as_ref());
-                let final_orchestration = repair_orchestration.as_ref().or(orchestration.as_ref());
-                let saved_artifact = if reviewer_blocked && repair_pass_failed {
+                let prepared = prepare_task_resume_execution(
+                    app,
+                    &settings_snapshot,
+                    &task_snapshot,
+                )?;
+                let final_orchestration = prepared
+                    .repair_orchestration
+                    .as_ref()
+                    .or(prepared.orchestration.as_ref());
+                let saved_artifact = if prepared.reviewer_blocked && prepared.repair_pass_failed {
                     None
                 } else {
                     Some(save_runtime_task_artifact(
                         state,
                         &task_snapshot.id,
-                        &route,
+                        &prepared.route,
                         task_snapshot.goal.as_deref().unwrap_or(""),
                         final_orchestration,
                     )?)
@@ -202,9 +147,9 @@ pub fn handle_runtime_task_channel(
                             return Ok(json!({ "success": false, "error": "任务不存在" }));
                         };
 
-                        task.intent = Some(route.intent.clone());
-                        task.role_id = Some(route.recommended_role.clone());
-                        task.route = Some(route.clone());
+                        task.intent = Some(prepared.route.intent.clone());
+                        task.role_id = Some(prepared.route.recommended_role.clone());
+                        task.route = Some(prepared.route.clone());
                         task.current_node = Some("execute_tools".to_string());
 
                         record_runtime_node(
@@ -212,10 +157,10 @@ pub fn handle_runtime_task_channel(
                             &mut runtime_node_events,
                             "plan",
                             "completed",
-                            Some(if route.reasoning.trim().is_empty() {
+                            Some(if prepared.route.reasoning.trim().is_empty() {
                                 "route resolved".to_string()
                             } else {
-                                route.reasoning.clone()
+                                prepared.route.reasoning.clone()
                             }),
                             None,
                         );
@@ -229,7 +174,7 @@ pub fn handle_runtime_task_channel(
                             None,
                         );
 
-                        if let Some(orchestration_value) = orchestration.clone() {
+                        if let Some(orchestration_value) = prepared.orchestration.clone() {
                             record_runtime_node(
                                 task,
                                 &mut runtime_node_events,
@@ -258,7 +203,7 @@ pub fn handle_runtime_task_channel(
                             );
                         }
 
-                        if let Some(repair_value) = repair_plan.clone() {
+                        if let Some(repair_value) = prepared.repair_plan.clone() {
                             record_runtime_node(
                                 task,
                                 &mut runtime_node_events,
@@ -288,7 +233,7 @@ pub fn handle_runtime_task_channel(
                             );
                         }
 
-                        if let Some(repair_value) = repair_orchestration.clone() {
+                        if let Some(repair_value) = prepared.repair_orchestration.clone() {
                             record_runtime_node(
                                 task,
                                 &mut runtime_node_events,
@@ -344,12 +289,12 @@ pub fn handle_runtime_task_channel(
                             work_items_to_push.push(build_runtime_artifact_work_item(
                                 &task_id,
                                 task.owner_session_id.as_deref(),
-                                &route,
+                                &prepared.route,
                                 &artifact,
                             ));
                         }
 
-                        if reviewer_blocked && repair_pass_failed {
+                        if prepared.reviewer_blocked && prepared.repair_pass_failed {
                             task.status = "failed".to_string();
                             task.last_error = Some("reviewer rejected execution".to_string());
                             record_runtime_node(
@@ -360,11 +305,11 @@ pub fn handle_runtime_task_channel(
                                 Some("execution blocked by reviewer".to_string()),
                                 Some("reviewer rejected execution".to_string()),
                             );
-                            if let Some(repair_value) = repair_plan.clone() {
+                            if let Some(repair_value) = prepared.repair_plan.clone() {
                                 work_items_to_push.push(build_runtime_repair_work_item(
                                     &task_id,
                                     task.owner_session_id.as_deref(),
-                                    &route,
+                                    &prepared.route,
                                     &repair_value,
                                 ));
                             }
@@ -396,17 +341,17 @@ pub fn handle_runtime_task_channel(
                     append_resume_traces(
                         store,
                         &task_id,
-                        route_value.clone(),
-                        orchestration.clone(),
-                        repair_plan.clone(),
-                        repair_orchestration.clone(),
-                        reviewer_blocked && repair_pass_failed,
+                        prepared.route_value.clone(),
+                        prepared.orchestration.clone(),
+                        prepared.repair_plan.clone(),
+                        prepared.repair_orchestration.clone(),
+                        prepared.reviewer_blocked && prepared.repair_pass_failed,
                     );
 
                     Ok(json!({
-                        "success": !(reviewer_blocked && repair_pass_failed),
+                        "success": !(prepared.reviewer_blocked && prepared.repair_pass_failed),
                         "taskId": task_id,
-                        "error": if reviewer_blocked && repair_pass_failed {
+                        "error": if prepared.reviewer_blocked && prepared.repair_pass_failed {
                             Value::String("reviewer rejected execution".to_string())
                         } else {
                             Value::Null
@@ -463,4 +408,81 @@ pub fn handle_runtime_task_channel(
         }
     })();
     Some(result)
+}
+
+fn prepare_task_resume_execution(
+    app: &AppHandle,
+    settings_snapshot: &Value,
+    task_snapshot: &crate::runtime::RuntimeTaskRecord,
+) -> Result<PreparedTaskResumeExecution, String> {
+    let route = route_for_task_snapshot(task_snapshot).unwrap_or_else(|| {
+        crate::runtime::runtime_direct_route_record(
+            &task_snapshot.runtime_mode,
+            task_snapshot.goal.as_deref().unwrap_or(""),
+            task_snapshot.metadata.as_ref(),
+        )
+    });
+    let route_value = route.clone().into_value();
+    let orchestration = if route.requires_multi_agent
+        || task_snapshot.runtime_mode == "background-maintenance"
+    {
+        Some(run_subagent_orchestration_for_task(
+            Some(app),
+            settings_snapshot,
+            &task_snapshot.runtime_mode,
+            &task_snapshot.id,
+            task_snapshot.owner_session_id.as_deref(),
+            &route,
+            task_snapshot.goal.as_deref().unwrap_or(""),
+        )?)
+    } else {
+        None
+    };
+    let reviewer_blocked = reviewer_rejected(orchestration.as_ref());
+    let repair_plan = if reviewer_blocked {
+        orchestration
+            .as_ref()
+            .map(|value| {
+                run_reviewer_repair_for_task(
+                    settings_snapshot,
+                    &task_snapshot.id,
+                    &route,
+                    task_snapshot.goal.as_deref().unwrap_or(""),
+                    value,
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let repair_orchestration = if reviewer_blocked {
+        repair_plan
+            .as_ref()
+            .map(|repair| {
+                let repair_goal =
+                    build_repair_goal(task_snapshot.goal.as_deref().unwrap_or(""), repair);
+                run_subagent_orchestration_for_task(
+                    Some(app),
+                    settings_snapshot,
+                    &task_snapshot.runtime_mode,
+                    &format!("{}-repair", task_snapshot.id),
+                    task_snapshot.owner_session_id.as_deref(),
+                    &route,
+                    &repair_goal,
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let repair_pass_failed = reviewer_rejected(repair_orchestration.as_ref());
+    Ok(PreparedTaskResumeExecution {
+        route,
+        route_value,
+        orchestration,
+        repair_plan,
+        repair_orchestration,
+        reviewer_blocked,
+        repair_pass_failed,
+    })
 }
