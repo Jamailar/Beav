@@ -470,14 +470,3 @@ pub struct PreparedExecution {
     pub orchestration: Option<Value>,
     pub effective_message: String,
 }
-
-#[derive(Debug, Clone)]
-pub struct PreparedTaskResumeExecution {
-    pub route: IntentRoute,
-    pub route_value: Value,
-    pub orchestration: Option<Value>,
-    pub repair_plan: Option<Value>,
-    pub repair_orchestration: Option<Value>,
-    pub reviewer_blocked: bool,
-    pub repair_pass_failed: bool,
-}
