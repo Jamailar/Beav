@@ -4,8 +4,10 @@ use tauri::State;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, cancel_runtime_task, get_runtime_task, list_runtime_task_traces,
-    list_runtime_tasks, runtime_task_value, store_runtime_task,
+    append_runtime_task_trace, cancel_runtime_task,
+    get_runtime_task_value as runtime_task_lookup_value,
+    list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
+    store_runtime_task,
 };
 use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 
@@ -63,11 +65,7 @@ pub fn get_runtime_task_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    with_store(state, |store| {
-        Ok(get_runtime_task(&store, &task_id).map_or(Value::Null, |item| {
-            runtime_task_value(&item)
-        }))
-    })
+    with_store(state, |store| Ok(runtime_task_lookup_value(&store, &task_id)))
 }
 
 pub fn cancel_runtime_task_value(
@@ -89,5 +87,5 @@ pub fn runtime_task_trace_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    with_store(state, |store| Ok(json!(list_runtime_task_traces(&store, &task_id))))
+    with_store(state, |store| Ok(runtime_task_traces_lookup_value(&store, &task_id)))
 }

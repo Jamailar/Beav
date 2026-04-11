@@ -103,6 +103,10 @@ pub fn get_runtime_task(store: &AppStore, task_id: &str) -> Option<RuntimeTaskRe
         .cloned()
 }
 
+pub fn get_runtime_task_value(store: &AppStore, task_id: &str) -> Value {
+    get_runtime_task(store, task_id).map_or(Value::Null, |item| runtime_task_value(&item))
+}
+
 pub fn list_runtime_task_traces(store: &AppStore, task_id: &str) -> Vec<RuntimeTaskTraceRecord> {
     let mut items: Vec<RuntimeTaskTraceRecord> = store
         .runtime_task_traces
@@ -112,6 +116,10 @@ pub fn list_runtime_task_traces(store: &AppStore, task_id: &str) -> Vec<RuntimeT
         .collect();
     items.sort_by_key(|item| item.created_at);
     items
+}
+
+pub fn list_runtime_task_traces_value(store: &AppStore, task_id: &str) -> Value {
+    serde_json::json!(list_runtime_task_traces(store, task_id))
 }
 
 pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {
