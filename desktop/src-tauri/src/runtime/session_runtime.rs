@@ -384,4 +384,24 @@ mod tests {
         assert_eq!(events[0].0, "runtime.route");
         assert_eq!(events[1].0, "runtime.orchestration");
     }
+
+    #[test]
+    fn persist_runtime_query_checkpoints_writes_route_and_orchestration_records() {
+        let mut store = crate::AppStore::default();
+
+        persist_runtime_query_checkpoints(
+            &mut store,
+            "session-1",
+            "route resolved",
+            json!({ "intent": "direct_answer" }),
+            Some(json!({ "outputs": [{ "roleId": "planner" }] })),
+        );
+
+        assert_eq!(store.session_checkpoints.len(), 2);
+        assert_eq!(store.session_checkpoints[0].checkpoint_type, "runtime.route");
+        assert_eq!(
+            store.session_checkpoints[1].checkpoint_type,
+            "runtime.orchestration"
+        );
+    }
 }
