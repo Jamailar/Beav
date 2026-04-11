@@ -89,6 +89,33 @@ pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {
     );
 }
 
+pub fn resume_runtime_task_snapshot(
+    store: &mut AppStore,
+    task_id: &str,
+    summary: &str,
+) -> Option<RuntimeTaskRecord> {
+    let task = store
+        .runtime_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)?;
+    mark_task_running(task, summary);
+    Some(task.clone())
+}
+
+pub fn cancel_runtime_task(store: &mut AppStore, task_id: &str) -> bool {
+    let Some(task) = store
+        .runtime_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+    else {
+        return false;
+    };
+    task.status = "cancelled".to_string();
+    task.updated_at = now_i64();
+    task.completed_at = Some(now_i64());
+    true
+}
+
 pub fn set_runtime_graph_node(
     graph: &mut [RuntimeGraphNodeRecord],
     node_id: &str,

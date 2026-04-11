@@ -7,10 +7,11 @@ mod runtime_task_resume;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
-    list_runtime_tasks, mark_task_running, runtime_task_value,
+    append_runtime_task_trace, cancel_runtime_task, create_runtime_task, get_runtime_task,
+    list_runtime_task_traces, list_runtime_tasks, resume_runtime_task_snapshot,
+    runtime_task_value,
 };
-use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
+use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
 use runtime_task_resume::{
     apply_task_resume_execution, emit_task_resume_events, maybe_save_task_resume_artifact,
     prepare_task_resume_execution,
@@ -97,15 +98,11 @@ pub fn handle_runtime_task_channel(
             "tasks:resume" => {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
                 let task_snapshot = with_store_mut(state, |store| {
-                    let Some(task) = store
-                        .runtime_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    else {
-                        return Ok(None);
-                    };
-                    mark_task_running(task, "route and execution plan resumed");
-                    Ok(Some(task.clone()))
+                    Ok(resume_runtime_task_snapshot(
+                        store,
+                        &task_id,
+                        "route and execution plan resumed",
+                    ))
                 })?;
                 let Some(task_snapshot) = task_snapshot else {
                     return Ok(json!({ "success": false, "error": "任务不存在" }));
@@ -131,16 +128,9 @@ pub fn handle_runtime_task_channel(
             "tasks:cancel" => {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
                 let result = with_store_mut(state, |store| {
-                    let Some(task) = store
-                        .runtime_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    else {
+                    if !cancel_runtime_task(store, &task_id) {
                         return Ok(json!({ "success": false, "error": "任务不存在" }));
-                    };
-                    task.status = "cancelled".to_string();
-                    task.updated_at = now_i64();
-                    task.completed_at = Some(now_i64());
+                    }
                     append_runtime_task_trace(store, &task_id, "cancelled", None);
                     Ok(json!({ "success": true, "taskId": task_id }))
                 })?;
