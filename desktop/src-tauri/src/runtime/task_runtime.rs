@@ -361,3 +361,67 @@ fn pending_node(id: &str, node_type: &str, title: &str) -> RuntimeGraphNodeRecor
         error: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::runtime_direct_route_record;
+
+    #[test]
+    fn resume_runtime_task_snapshot_marks_task_running_and_returns_clone() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let task = create_runtime_task(
+            "manual",
+            "pending",
+            "default".to_string(),
+            Some("session-1".to_string()),
+            Some("draft".to_string()),
+            route,
+            None,
+        );
+        let task_id = task.id.clone();
+        let mut store = crate::AppStore::default();
+        store.runtime_tasks.push(task);
+
+        let snapshot =
+            resume_runtime_task_snapshot(&mut store, &task_id, "resumed from test").unwrap();
+
+        assert_eq!(snapshot.status, "running");
+        assert_eq!(store.runtime_tasks[0].status, "running");
+        assert_eq!(store.runtime_tasks[0].current_node.as_deref(), Some("plan"));
+        let plan = store.runtime_tasks[0]
+            .graph
+            .iter()
+            .find(|node| node.id == "plan")
+            .unwrap();
+        assert_eq!(plan.status, "running");
+        assert_eq!(plan.summary.as_deref(), Some("resumed from test"));
+    }
+
+    #[test]
+    fn cancel_runtime_task_marks_completed_and_returns_true() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let task = create_runtime_task(
+            "manual",
+            "running",
+            "default".to_string(),
+            None,
+            Some("draft".to_string()),
+            route,
+            None,
+        );
+        let task_id = task.id.clone();
+        let mut store = crate::AppStore::default();
+        store.runtime_tasks.push(task);
+
+        assert!(cancel_runtime_task(&mut store, &task_id));
+        assert_eq!(store.runtime_tasks[0].status, "cancelled");
+        assert!(store.runtime_tasks[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn cancel_runtime_task_returns_false_for_unknown_task() {
+        let mut store = crate::AppStore::default();
+        assert!(!cancel_runtime_task(&mut store, "missing-task"));
+    }
+}
