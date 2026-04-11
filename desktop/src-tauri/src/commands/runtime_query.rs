@@ -1,7 +1,8 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::commands::chat_runtime::{execute_chat_exchange_request, ChatExchangeRequest};
+use crate::agent::ChatExchangeRequest;
+use crate::commands::chat_runtime::execute_chat_exchange_request;
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};

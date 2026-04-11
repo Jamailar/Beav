@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_shared;
+mod agent;
 mod assistant_core;
 mod chat_helpers;
 mod commands;
@@ -600,6 +601,7 @@ struct EditorRuntimeStateRecord {
     active_panel: Option<String>,
     drawer_panel: Option<String>,
     scene_item_transforms: Option<Value>,
+    track_ui: Option<Value>,
     viewport_scroll_left: f64,
     viewport_max_scroll_left: f64,
     timeline_zoom_percent: f64,
@@ -2602,6 +2604,47 @@ fn execute_interactive_tool_call(
                     "manuscripts:add-package-track",
                     editor_tool_payload(file_path, arguments, &["kind"]),
                 ),
+                "track_reorder" | "track-reorder" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:move-package-track",
+                        editor_tool_payload(file_path.clone(), arguments, &["trackId", "direction"]),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor track reordered",
+                            Some(json!({
+                                "filePath": file_path,
+                                "trackId": payload_string(arguments, "trackId"),
+                                "direction": payload_string(arguments, "direction")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "track_delete" | "track-delete" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:delete-package-track",
+                        editor_tool_payload(file_path.clone(), arguments, &["trackId"]),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor track deleted",
+                            Some(json!({
+                                "filePath": file_path,
+                                "trackId": payload_string(arguments, "trackId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
                 "clip_add" | "clip-add" => call_manuscript_channel(
                     "manuscripts:add-package-clip",
                     editor_tool_payload(
@@ -2662,6 +2705,26 @@ fn execute_interactive_tool_call(
                     }
                     Ok(result)
                 }
+                "subtitle_add" | "subtitle-add" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:insert-package-subtitle-at-playhead",
+                        editor_tool_payload(file_path.clone(), arguments, &["text", "track", "order", "durationMs"]),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor subtitle added",
+                            Some(json!({
+                                "filePath": file_path,
+                                "text": payload_string(arguments, "text")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
                 "clip_update" | "clip-update" => call_manuscript_channel(
                     "manuscripts:update-package-clip",
                     editor_tool_payload(
@@ -2669,6 +2732,10 @@ fn execute_interactive_tool_call(
                         arguments,
                         &[
                             "clipId",
+                            "name",
+                            "assetKind",
+                            "subtitleStyle",
+                            "transitionStyle",
                             "track",
                             "order",
                             "durationMs",
@@ -3234,7 +3301,7 @@ packageKind: {package_kind}\n\
 trackNames: {}\n\
 clips: {}\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / focus_clip / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
+工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / track_reorder / track_delete / focus_clip / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
     )

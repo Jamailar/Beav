@@ -1,7 +1,8 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::chat_runtime::{execute_chat_exchange_request, ChatExchangeRequest};
+use crate::agent::ChatExchangeRequest;
+use crate::commands::chat_runtime::execute_chat_exchange_request;
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };

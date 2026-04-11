@@ -1,6 +1,10 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
+use crate::agent::{
+    ChatExchangeContext, ChatExchangePersistenceStage, ChatExchangeRequest,
+    ChatExchangeResponseStage, SessionAgentTurnKind,
+};
 use crate::commands::chat_state::{
     ensure_chat_session, infer_context_type_from_session_id, is_chat_runtime_cancel_requested,
     is_first_assistant_turn_for_session, resolve_runtime_mode_for_session,
@@ -18,104 +22,6 @@ use crate::{
     session_title_from_message, value_to_i64_string, write_memory_maintenance_status_for_workspace,
     AppState, ChatMessageRecord,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionAgentTurnKind {
-    ChatSend,
-    RuntimeQuery,
-    SessionBridge,
-}
-
-impl SessionAgentTurnKind {
-    pub fn checkpoint_type(self) -> &'static str {
-        match self {
-            Self::ChatSend => "chat-send",
-            Self::RuntimeQuery => "runtime-query",
-            Self::SessionBridge => "session-bridge",
-        }
-    }
-
-    pub fn checkpoint_summary(self) -> &'static str {
-        match self {
-            Self::ChatSend => "Chat response completed",
-            Self::RuntimeQuery => "Runtime query completed",
-            Self::SessionBridge => "Session bridge message completed",
-        }
-    }
-}
-
-pub struct ChatExchangeRequest<'a> {
-    pub session_id: Option<String>,
-    pub message: String,
-    pub display_content: String,
-    pub model_config: Option<&'a Value>,
-    pub attachment: Option<Value>,
-    pub turn_kind: SessionAgentTurnKind,
-}
-
-struct ChatExchangeContext {
-    settings_snapshot: Value,
-    working_session_id: String,
-    runtime_mode: String,
-    should_handle_redclaw_onboarding: bool,
-    allow_redclaw_onboarding: bool,
-}
-
-struct ChatExchangeResponseStage {
-    response: String,
-    emitted_live_events: bool,
-}
-
-struct ChatExchangePersistenceStage {
-    final_session_id: String,
-    title_update: Option<(String, String)>,
-}
-
-impl<'a> ChatExchangeRequest<'a> {
-    pub fn chat_send(
-        session_id: Option<String>,
-        message: String,
-        display_content: String,
-        model_config: Option<&'a Value>,
-        attachment: Option<Value>,
-    ) -> Self {
-        Self {
-            session_id,
-            message,
-            display_content,
-            model_config,
-            attachment,
-            turn_kind: SessionAgentTurnKind::ChatSend,
-        }
-    }
-
-    pub fn runtime_query(
-        session_id: Option<String>,
-        effective_message: String,
-        display_content: String,
-        model_config: Option<&'a Value>,
-    ) -> Self {
-        Self {
-            session_id,
-            message: effective_message,
-            display_content,
-            model_config,
-            attachment: None,
-            turn_kind: SessionAgentTurnKind::RuntimeQuery,
-        }
-    }
-
-    pub fn session_bridge(session_id: String, message: String) -> Self {
-        Self {
-            session_id: Some(session_id),
-            display_content: message.clone(),
-            message,
-            model_config: None,
-            attachment: None,
-            turn_kind: SessionAgentTurnKind::SessionBridge,
-        }
-    }
-}
 
 pub fn execute_chat_exchange_request(
     app: Option<&AppHandle>,
@@ -440,45 +346,4 @@ fn session_runtime_mode(session: &crate::ChatSessionRecord) -> String {
                 .unwrap_or_else(|| "chat".to_string());
             resolve_runtime_mode_from_context_type(Some(&context_type)).to_string()
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn session_agent_turn_kind_maps_to_stable_checkpoint_contract() {
-        assert_eq!(SessionAgentTurnKind::ChatSend.checkpoint_type(), "chat-send");
-        assert_eq!(
-            SessionAgentTurnKind::RuntimeQuery.checkpoint_summary(),
-            "Runtime query completed"
-        );
-        assert_eq!(
-            SessionAgentTurnKind::SessionBridge.checkpoint_type(),
-            "session-bridge"
-        );
-    }
-
-    #[test]
-    fn chat_exchange_request_constructors_set_expected_turn_kinds() {
-        assert_eq!(
-            ChatExchangeRequest::chat_send(None, "m".to_string(), "d".to_string(), None, None)
-                .turn_kind,
-            SessionAgentTurnKind::ChatSend
-        );
-        assert_eq!(
-            ChatExchangeRequest::runtime_query(
-                None,
-                "m".to_string(),
-                "d".to_string(),
-                None,
-            )
-            .turn_kind,
-            SessionAgentTurnKind::RuntimeQuery
-        );
-        assert_eq!(
-            ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()).turn_kind,
-            SessionAgentTurnKind::SessionBridge
-        );
-    }
 }
