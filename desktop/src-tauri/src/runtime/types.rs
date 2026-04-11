@@ -465,13 +465,6 @@ pub struct RedclawRuntime {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreparedExecution {
-    pub route: IntentRoute,
-    pub orchestration: Option<Value>,
-    pub effective_message: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct PreparedTaskResumeExecution {
     pub route: IntentRoute,
     pub route_value: Value,

@@ -1,13 +1,19 @@
 use serde_json::Value;
 
-use crate::runtime::{PreparedExecution, RuntimeRouteRecord};
+use crate::runtime::RuntimeRouteRecord;
 use crate::payload_string;
+
+pub struct PreparedRuntimeQueryExecution {
+    pub route: RuntimeRouteRecord,
+    pub orchestration: Option<Value>,
+    pub effective_message: String,
+}
 
 pub fn prepare_runtime_query_execution(
     route: RuntimeRouteRecord,
     orchestration: Option<Value>,
     message: &str,
-) -> PreparedExecution {
+) -> PreparedRuntimeQueryExecution {
     let effective_message = orchestration
         .as_ref()
         .and_then(|value| value.get("outputs"))
@@ -28,7 +34,7 @@ pub fn prepare_runtime_query_execution(
             format!("{message}\n\nSubagent orchestration summary:\n{summaries}")
         })
         .unwrap_or_else(|| message.to_string());
-    PreparedExecution {
+    PreparedRuntimeQueryExecution {
         route,
         orchestration,
         effective_message,
