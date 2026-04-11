@@ -4,34 +4,13 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::chat_runtime::execute_chat_exchange;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    checkpoints_for_session, runtime_task_value, tool_results_for_session, trace_for_session,
+    session_bridge_detail_value, session_bridge_summary_value,
 };
 use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 use crate::{
     log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
-    redclaw_state_value, AppState, AppStore, ChatSessionRecord,
+    redclaw_state_value, AppState, ChatSessionRecord,
 };
-
-fn session_bridge_summary(session: &ChatSessionRecord, store: &AppStore) -> Value {
-    let updated_at = session.updated_at.parse::<i64>().unwrap_or(0);
-    let created_at = session.created_at.parse::<i64>().unwrap_or(0);
-    let owner_task_count = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session.id.as_str()))
-        .count() as i64;
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": updated_at,
-        "createdAt": created_at,
-        "contextType": "chat",
-        "runtimeMode": "default",
-        "isBackgroundSession": false,
-        "ownerTaskCount": owner_task_count,
-        "backgroundTaskCount": 0,
-    })
-}
 
 pub fn handle_bridge_channel(
     app: &AppHandle,
@@ -56,49 +35,14 @@ pub fn handle_bridge_channel(
             sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
             Ok(json!(sessions
                 .iter()
-                .map(|session| session_bridge_summary(session, &store))
+                .map(|session| session_bridge_summary_value(session, &store))
                 .collect::<Vec<_>>()))
         }),
         "session-bridge:get-session" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             with_store(state, |store| {
-                let Some(session) = store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| item.id == session_id)
-                else {
-                    return Ok(Value::Null);
-                };
-                let transcript = trace_for_session(&store, &session_id);
-                let checkpoints = checkpoints_for_session(&store, &session_id);
-                let tool_results = tool_results_for_session(&store, &session_id);
-                let tasks: Vec<Value> = store
-                    .runtime_tasks
-                    .iter()
-                    .filter(|task| task.owner_session_id.as_deref() == Some(session_id.as_str()))
-                    .map(runtime_task_value)
-                    .collect();
                 let background_tasks = derived_background_tasks(&store);
-                Ok(json!({
-                    "session": {
-                        "id": session.id,
-                        "title": session.title,
-                        "updatedAt": session.updated_at.parse::<i64>().unwrap_or(0),
-                        "createdAt": session.created_at.parse::<i64>().unwrap_or(0),
-                        "contextType": "chat",
-                        "runtimeMode": "default",
-                        "isBackgroundSession": false,
-                        "ownerTaskCount": tasks.len(),
-                        "backgroundTaskCount": background_tasks.len(),
-                        "metadata": session.metadata,
-                    },
-                    "transcript": transcript,
-                    "checkpoints": checkpoints,
-                    "toolResults": tool_results,
-                    "tasks": tasks,
-                    "backgroundTasks": background_tasks,
-                    "permissionRequests": [],
-                }))
+                Ok(session_bridge_detail_value(&store, &session_id, &background_tasks))
             })
         }
         "session-bridge:list-permissions" => Ok(json!([])),
@@ -113,7 +57,7 @@ pub fn handle_bridge_channel(
                 metadata: payload_field(payload, "metadata").cloned(),
             };
             store.chat_sessions.push(session.clone());
-            Ok(session_bridge_summary(&session, store))
+            Ok(session_bridge_summary_value(&session, store))
         }),
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();

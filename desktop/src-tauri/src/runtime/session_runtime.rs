@@ -1,6 +1,6 @@
 use crate::runtime::{
-    PreparedExecution, RuntimeRouteRecord, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord,
+    runtime_task_value, PreparedExecution, RuntimeRouteRecord, SessionCheckpointRecord,
+    SessionToolResultRecord, SessionTranscriptRecord,
 };
 use crate::{payload_string, AppStore, ChatSessionRecord};
 use serde_json::{json, Value};
@@ -113,6 +113,67 @@ pub fn session_resume_value(store: &AppStore, session_id: &str) -> Value {
     })
 }
 
+pub fn session_bridge_summary_value(session: &ChatSessionRecord, store: &AppStore) -> Value {
+    let updated_at = session.updated_at.parse::<i64>().unwrap_or(0);
+    let created_at = session.created_at.parse::<i64>().unwrap_or(0);
+    let owner_task_count = store
+        .runtime_tasks
+        .iter()
+        .filter(|task| task.owner_session_id.as_deref() == Some(session.id.as_str()))
+        .count() as i64;
+    json!({
+        "id": session.id,
+        "title": session.title,
+        "updatedAt": updated_at,
+        "createdAt": created_at,
+        "contextType": "chat",
+        "runtimeMode": "default",
+        "isBackgroundSession": false,
+        "ownerTaskCount": owner_task_count,
+        "backgroundTaskCount": 0,
+    })
+}
+
+pub fn session_bridge_detail_value(
+    store: &AppStore,
+    session_id: &str,
+    background_tasks: &[Value],
+) -> Value {
+    let Some(session) = store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+    else {
+        return Value::Null;
+    };
+    let tasks: Vec<Value> = store
+        .runtime_tasks
+        .iter()
+        .filter(|task| task.owner_session_id.as_deref() == Some(session_id))
+        .map(runtime_task_value)
+        .collect();
+    json!({
+        "session": {
+            "id": session.id,
+            "title": session.title,
+            "updatedAt": session.updated_at.parse::<i64>().unwrap_or(0),
+            "createdAt": session.created_at.parse::<i64>().unwrap_or(0),
+            "contextType": "chat",
+            "runtimeMode": "default",
+            "isBackgroundSession": false,
+            "ownerTaskCount": tasks.len(),
+            "backgroundTaskCount": background_tasks.len(),
+            "metadata": session.metadata,
+        },
+        "transcript": trace_for_session(store, session_id),
+        "checkpoints": checkpoints_for_session(store, session_id),
+        "toolResults": tool_results_for_session(store, session_id),
+        "tasks": tasks,
+        "backgroundTasks": background_tasks,
+        "permissionRequests": [],
+    })
+}
+
 pub fn prepare_runtime_query_execution(
     route: RuntimeRouteRecord,
     orchestration: Option<Value>,
@@ -198,5 +259,38 @@ mod tests {
         let store = crate::AppStore::default();
         assert_eq!(session_detail_value(&store, "missing"), Value::Null);
         assert_eq!(session_resume_value(&store, "missing"), Value::Null);
+    }
+
+    #[test]
+    fn session_bridge_values_include_counts_and_tasks() {
+        let mut store = crate::AppStore::default();
+        let session = test_session("session-1");
+        store.chat_sessions.push(session.clone());
+        store.runtime_tasks.push(crate::runtime::create_runtime_task(
+            "manual",
+            "pending",
+            "default".to_string(),
+            Some("session-1".to_string()),
+            Some("draft".to_string()),
+            crate::runtime::runtime_direct_route_record("default", "draft", None),
+            None,
+        ));
+
+        let summary = session_bridge_summary_value(&session, &store);
+        assert_eq!(summary.get("ownerTaskCount").and_then(Value::as_i64), Some(1));
+
+        let detail = session_bridge_detail_value(&store, "session-1", &[json!({"id": "bg-1"})]);
+        assert_eq!(
+            detail.get("session")
+                .and_then(|item| item.get("backgroundTaskCount"))
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            detail.get("tasks")
+                .and_then(Value::as_array)
+                .map(|items| items.len()),
+            Some(1)
+        );
     }
 }
