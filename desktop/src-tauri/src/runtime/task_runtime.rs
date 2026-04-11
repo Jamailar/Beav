@@ -462,4 +462,34 @@ mod tests {
         let mut store = crate::AppStore::default();
         assert!(!cancel_runtime_task(&mut store, "missing-task"));
     }
+
+    #[test]
+    fn store_runtime_task_persists_task_and_created_trace() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let mut store = crate::AppStore::default();
+
+        let task = store_runtime_task(
+            &mut store,
+            "manual",
+            "pending",
+            "default".to_string(),
+            Some("session-1".to_string()),
+            Some("draft".to_string()),
+            route,
+            Some(serde_json::json!({ "source": "test" })),
+        );
+
+        assert_eq!(store.runtime_tasks.len(), 1);
+        assert_eq!(store.runtime_tasks[0].id, task.id);
+        assert_eq!(store.runtime_task_traces.len(), 1);
+        assert_eq!(store.runtime_task_traces[0].event_type, "created");
+        assert_eq!(
+            store.runtime_task_traces[0]
+                .payload
+                .as_ref()
+                .and_then(|value| value.get("runtimeMode"))
+                .and_then(Value::as_str),
+            Some("default")
+        );
+    }
 }
