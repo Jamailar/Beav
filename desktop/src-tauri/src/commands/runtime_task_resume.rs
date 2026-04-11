@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::commands::runtime_orchestration::{
@@ -9,7 +9,7 @@ use crate::runtime::{
     build_repair_goal, reviewer_rejected, route_for_task_snapshot, PreparedTaskResumeExecution,
     RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent, RuntimeTaskRecord,
 };
-use crate::AppState;
+use crate::{payload_string, AppState};
 
 pub fn prepare_task_resume_execution(
     app: &AppHandle,
@@ -86,6 +86,45 @@ pub fn prepare_task_resume_execution(
         reviewer_blocked,
         repair_pass_failed,
     })
+}
+
+pub fn handle_runtime_task_resume(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let task_id = payload_string(payload, "taskId").unwrap_or_default();
+    let task_snapshot = crate::persistence::with_store_mut(state, |store| {
+        Ok(crate::runtime::resume_runtime_task_snapshot(
+            store,
+            &task_id,
+            "route and execution plan resumed",
+        ))
+    })?;
+    let Some(task_snapshot) = task_snapshot else {
+        return Ok(json!({ "success": false, "error": "任务不存在" }));
+    };
+
+    let settings_snapshot = crate::persistence::with_store(state, |store| Ok(store.settings.clone()))?;
+    let prepared = prepare_task_resume_execution(app, &settings_snapshot, &task_snapshot)?;
+    let saved_artifact = maybe_save_task_resume_artifact(state, &task_snapshot, &prepared)?;
+
+    let applied = crate::persistence::with_store_mut(state, |store| {
+        crate::runtime::apply_task_resume_execution(
+            store,
+            &task_id,
+            &prepared,
+            saved_artifact.clone(),
+        )
+    })?;
+    emit_task_resume_events(
+        app,
+        &task_id,
+        task_snapshot.owner_session_id.as_deref(),
+        applied.runtime_node_events,
+        applied.runtime_checkpoint_events,
+    );
+    Ok(applied.response)
 }
 
 pub fn maybe_save_task_resume_artifact(
