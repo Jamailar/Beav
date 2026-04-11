@@ -2,9 +2,9 @@ use serde_json::Value;
 
 use crate::runtime::{
     RuntimeCheckpointRecord, RuntimeGraph, RuntimeGraphNodeRecord, RuntimeRouteRecord,
-    RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeArtifact,
 };
-use crate::{make_id, now_i64, payload_string, AppStore};
+use crate::{create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord};
 
 pub type RuntimeNodeEvent = (String, String, Option<String>, Option<String>);
 pub type RuntimeCheckpointEvent = (String, String, Option<Value>);
@@ -151,6 +151,75 @@ pub fn record_runtime_checkpoint(
         checkpoint.payload.clone(),
     ));
     task.checkpoints.push(checkpoint);
+}
+
+pub fn build_runtime_artifact_work_item(
+    task_id: &str,
+    owner_session_id: Option<&str>,
+    route: &RuntimeRouteRecord,
+    artifact: &RuntimeArtifact,
+) -> WorkItemRecord {
+    let mut work_item = create_work_item(
+        "runtime-artifact",
+        format!(
+            "Runtime Artifact · {}",
+            if route.intent.trim().is_empty() {
+                "task".to_string()
+            } else {
+                route.intent.clone()
+            }
+        ),
+        Some(route.goal.clone()),
+        Some(artifact.path.clone().unwrap_or_default()),
+        Some(serde_json::json!({
+            "taskId": task_id,
+            "sessionId": owner_session_id,
+            "intent": route.intent.clone(),
+            "artifact": artifact,
+        })),
+        2,
+    );
+    work_item.refs.task_ids.push(task_id.to_string());
+    if let Some(session_id) = owner_session_id {
+        work_item.refs.session_ids.push(session_id.to_string());
+    }
+    work_item
+}
+
+pub fn build_runtime_repair_work_item(
+    task_id: &str,
+    owner_session_id: Option<&str>,
+    route: &RuntimeRouteRecord,
+    repair_value: &Value,
+) -> WorkItemRecord {
+    let mut work_item = create_work_item(
+        "runtime-repair",
+        format!(
+            "Runtime Repair · {}",
+            if route.intent.trim().is_empty() {
+                "task".to_string()
+            } else {
+                route.intent.clone()
+            }
+        ),
+        Some(
+            payload_string(repair_value, "summary")
+                .unwrap_or_else(|| "reviewer repair required".to_string()),
+        ),
+        Some(route.goal.clone()),
+        Some(serde_json::json!({
+            "taskId": task_id,
+            "sessionId": owner_session_id,
+            "intent": route.intent.clone(),
+            "repair": repair_value,
+        })),
+        1,
+    );
+    work_item.refs.task_ids.push(task_id.to_string());
+    if let Some(session_id) = owner_session_id {
+        work_item.refs.session_ids.push(session_id.to_string());
+    }
+    work_item
 }
 
 pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {

@@ -11,11 +11,10 @@ use crate::runtime::{
     append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
     list_runtime_tasks, mark_task_running, reviewer_rejected, route_for_task_snapshot,
     runtime_task_value, build_repair_goal, record_runtime_checkpoint, record_runtime_node,
-    RuntimeArtifact, RuntimeCheckpointEvent, RuntimeCheckpointRecord, RuntimeNodeEvent,
+    build_runtime_artifact_work_item, build_runtime_repair_work_item, RuntimeArtifact,
+    RuntimeCheckpointEvent, RuntimeCheckpointRecord, RuntimeNodeEvent,
 };
-use crate::{
-    create_work_item, log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState,
-};
+use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
 
 pub fn handle_runtime_task_channel(
     app: &AppHandle,
@@ -192,18 +191,20 @@ pub fn handle_runtime_task_channel(
                 let mut runtime_node_events: Vec<RuntimeNodeEvent> = Vec::new();
                 let mut runtime_checkpoint_events: Vec<RuntimeCheckpointEvent> = Vec::new();
                 let result = with_store_mut(state, |store| {
-                    let Some(task) = store
-                        .runtime_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "任务不存在" }));
-                    };
+                    let mut work_items_to_push = Vec::new();
+                    {
+                        let Some(task) = store
+                            .runtime_tasks
+                            .iter_mut()
+                            .find(|item| item.id == task_id)
+                        else {
+                            return Ok(json!({ "success": false, "error": "任务不存在" }));
+                        };
 
-                    task.intent = Some(route.intent.clone());
-                    task.role_id = Some(route.recommended_role.clone());
-                    task.route = Some(route.clone());
-                    task.current_node = Some("execute_tools".to_string());
+                        task.intent = Some(route.intent.clone());
+                        task.role_id = Some(route.recommended_role.clone());
+                        task.route = Some(route.clone());
+                        task.current_node = Some("execute_tools".to_string());
 
                     record_runtime_node(
                         task,
@@ -227,7 +228,7 @@ pub fn handle_runtime_task_channel(
                         None,
                     );
 
-                    if let Some(orchestration_value) = orchestration.clone() {
+                        if let Some(orchestration_value) = orchestration.clone() {
                         record_runtime_node(
                             task,
                             &mut runtime_node_events,
@@ -254,9 +255,9 @@ pub fn handle_runtime_task_channel(
                             &mut runtime_checkpoint_events,
                             checkpoint,
                         );
-                    }
+                        }
 
-                    if let Some(repair_value) = repair_plan.clone() {
+                        if let Some(repair_value) = repair_plan.clone() {
                         record_runtime_node(
                             task,
                             &mut runtime_node_events,
@@ -284,9 +285,9 @@ pub fn handle_runtime_task_channel(
                             &mut runtime_checkpoint_events,
                             checkpoint,
                         );
-                    }
+                        }
 
-                    if let Some(repair_value) = repair_orchestration.clone() {
+                        if let Some(repair_value) = repair_orchestration.clone() {
                         record_runtime_node(
                             task,
                             &mut runtime_node_events,
@@ -313,9 +314,9 @@ pub fn handle_runtime_task_channel(
                             &mut runtime_checkpoint_events,
                             checkpoint,
                         );
-                    }
+                        }
 
-                    if let Some(artifact) = saved_artifact.clone() {
+                        if let Some(artifact) = saved_artifact.clone() {
                         record_runtime_node(
                             task,
                             &mut runtime_node_events,
@@ -337,34 +338,15 @@ pub fn handle_runtime_task_channel(
                             checkpoint,
                         );
 
-                        let mut work_item = create_work_item(
-                            "runtime-artifact",
-                            format!(
-                                "Runtime Artifact · {}",
-                                if route.intent.trim().is_empty() {
-                                    "task".to_string()
-                                } else {
-                                    route.intent.clone()
-                                }
-                            ),
-                            Some(route.goal.clone()),
-                            Some(artifact.path.clone().unwrap_or_default()),
-                            Some(json!({
-                                "taskId": task_id,
-                                "sessionId": task.owner_session_id.clone(),
-                                "intent": route.intent.clone(),
-                                "artifact": artifact,
-                            })),
-                            2,
-                        );
-                        work_item.refs.task_ids.push(task_id.clone());
-                        if let Some(session_id) = task.owner_session_id.clone() {
-                            work_item.refs.session_ids.push(session_id);
+                            work_items_to_push.push(build_runtime_artifact_work_item(
+                                &task_id,
+                                task.owner_session_id.as_deref(),
+                                &route,
+                                &artifact,
+                            ));
                         }
-                        store.work_items.push(work_item);
-                    }
 
-                    if reviewer_blocked && repair_pass_failed {
+                        if reviewer_blocked && repair_pass_failed {
                         task.status = "failed".to_string();
                         task.last_error = Some("reviewer rejected execution".to_string());
                         record_runtime_node(
@@ -375,59 +357,39 @@ pub fn handle_runtime_task_channel(
                             Some("execution blocked by reviewer".to_string()),
                             Some("reviewer rejected execution".to_string()),
                         );
-                        if let Some(repair_value) = repair_plan.clone() {
-                            let mut work_item = create_work_item(
-                                "runtime-repair",
-                                format!(
-                                    "Runtime Repair · {}",
-                                    if route.intent.trim().is_empty() {
-                                        "task".to_string()
-                                    } else {
-                                        route.intent.clone()
-                                    }
-                                ),
-                                Some(
-                                    payload_string(&repair_value, "summary")
-                                        .unwrap_or_else(|| "reviewer repair required".to_string()),
-                                ),
-                                Some(route.goal.clone()),
-                                Some(json!({
-                                    "taskId": task_id,
-                                    "sessionId": task.owner_session_id.clone(),
-                                    "intent": route.intent.clone(),
-                                    "repair": repair_value,
-                                })),
-                                1,
-                            );
-                            work_item.refs.task_ids.push(task_id.clone());
-                            if let Some(session_id) = task.owner_session_id.clone() {
-                                work_item.refs.session_ids.push(session_id);
+                            if let Some(repair_value) = repair_plan.clone() {
+                                work_items_to_push.push(build_runtime_repair_work_item(
+                                    &task_id,
+                                    task.owner_session_id.as_deref(),
+                                    &route,
+                                    &repair_value,
+                                ));
                             }
-                            store.work_items.push(work_item);
+                        } else {
+                            task.status = "completed".to_string();
+                            task.last_error = None;
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "review",
+                                "completed",
+                                Some("reviewer approved execution".to_string()),
+                                None,
+                            );
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "execute_tools",
+                                "completed",
+                                Some("execution completed".to_string()),
+                                None,
+                            );
                         }
-                    } else {
-                        task.status = "completed".to_string();
-                        task.last_error = None;
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "review",
-                            "completed",
-                            Some("reviewer approved execution".to_string()),
-                            None,
-                        );
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "execute_tools",
-                            "completed",
-                            Some("execution completed".to_string()),
-                            None,
-                        );
-                    }
 
-                    task.completed_at = Some(now_i64());
-                    task.updated_at = now_i64();
+                        task.completed_at = Some(now_i64());
+                        task.updated_at = now_i64();
+                    }
+                    store.work_items.extend(work_items_to_push);
                     append_runtime_task_trace(
                         store,
                         &task_id,
