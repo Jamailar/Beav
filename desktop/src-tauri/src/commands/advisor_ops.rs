@@ -1087,9 +1087,27 @@ pub fn handle_advisor_channel(
                 Ok(json!({ "success": true, "processed": processed }))
             }
             "youtube:check-ytdlp" => {
+                let started_at = now_ms();
+                let request_id = format!("youtube:check-ytdlp:{}", started_at);
                 if let Some((path, version)) = detect_ytdlp() {
+                    log_timing_event(
+                        state,
+                        "settings",
+                        &request_id,
+                        "youtube:check-ytdlp",
+                        started_at,
+                        Some("installed=true".to_string()),
+                    );
                     Ok(json!({ "installed": true, "version": version, "path": path }))
                 } else {
+                    log_timing_event(
+                        state,
+                        "settings",
+                        &request_id,
+                        "youtube:check-ytdlp",
+                        started_at,
+                        Some("installed=false".to_string()),
+                    );
                     Ok(json!({ "installed": false }))
                 }
             }

@@ -5,10 +5,12 @@ use std::path::Path;
 use crate::{
     extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path, now_iso,
     optional_asset_url_from_note_path, read_text_file_or_empty, slug_from_relative_path,
-    AdvisorRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    KnowledgeNoteStatsRecord, MediaAssetRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord,
+    AdvisorRecord, ChatRoomMessageRecord, ChatRoomRecord, CoverAssetRecord,
+    DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord,
+    MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord,
     RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
-    SubjectRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord,
+    SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord,
+    YoutubeVideoRecord,
 };
 
 pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
@@ -263,6 +265,187 @@ pub(crate) fn load_advisors_from_fs(advisors_root: &Path) -> Vec<AdvisorRecord> 
     }
     advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     advisors
+}
+
+pub(crate) fn load_chat_rooms_from_fs(chatrooms_root: &Path) -> Vec<ChatRoomRecord> {
+    let mut rooms = Vec::new();
+    let Ok(entries) = fs::read_dir(chatrooms_root) else {
+        return rooms;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some(".system_rooms_state.json") {
+            continue;
+        }
+        let Some(value) = read_json_file(&path) else {
+            continue;
+        };
+        let id = value
+            .get("id")
+            .and_then(|item| item.as_str())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|item| item.to_str())
+                    .unwrap_or("chatroom")
+                    .to_string()
+            });
+        let advisor_ids = value
+            .get("advisorIds")
+            .or_else(|| value.get("advisor_ids"))
+            .and_then(|item| item.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToString::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        rooms.push(ChatRoomRecord {
+            id,
+            name: value
+                .get("name")
+                .and_then(|item| item.as_str())
+                .unwrap_or("未命名群聊")
+                .to_string(),
+            advisor_ids,
+            created_at: value
+                .get("createdAt")
+                .or_else(|| value.get("created_at"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("0")
+                .to_string(),
+            is_system: value.get("isSystem").and_then(|item| item.as_bool()),
+            system_type: value
+                .get("systemType")
+                .or_else(|| value.get("system_type"))
+                .and_then(|item| item.as_str())
+                .map(ToString::to_string),
+        });
+    }
+    rooms.sort_by(|a, b| {
+        b.is_system
+            .unwrap_or(false)
+            .cmp(&a.is_system.unwrap_or(false))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+    rooms
+}
+
+pub(crate) fn load_chatroom_messages_from_fs(chatrooms_root: &Path) -> Vec<ChatRoomMessageRecord> {
+    let mut messages = Vec::new();
+    let Ok(entries) = fs::read_dir(chatrooms_root) else {
+        return messages;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some(".system_rooms_state.json") {
+            continue;
+        }
+        let Some(value) = read_json_file(&path) else {
+            continue;
+        };
+        let room_id = value
+            .get("id")
+            .and_then(|item| item.as_str())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|item| item.to_str())
+                    .unwrap_or("chatroom")
+                    .to_string()
+            });
+        let room_messages = value
+            .get("messages")
+            .and_then(|item| item.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for item in room_messages {
+            messages.push(ChatRoomMessageRecord {
+                id: item
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                room_id: room_id.clone(),
+                role: item
+                    .get("role")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("advisor")
+                    .to_string(),
+                advisor_id: item
+                    .get("advisorId")
+                    .or_else(|| item.get("advisor_id"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                advisor_name: item
+                    .get("advisorName")
+                    .or_else(|| item.get("advisor_name"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                advisor_avatar: item
+                    .get("advisorAvatar")
+                    .or_else(|| item.get("advisor_avatar"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                content: item
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                timestamp: item
+                    .get("timestamp")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                is_streaming: item
+                    .get("isStreaming")
+                    .or_else(|| item.get("is_streaming"))
+                    .and_then(|value| value.as_bool()),
+                phase: item
+                    .get("phase")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+            });
+        }
+    }
+    messages.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    messages
+}
+
+pub(crate) fn load_memories_from_fs(memory_root: &Path) -> Vec<UserMemoryRecord> {
+    read_json_file(&memory_root.join("catalog.json"))
+        .and_then(|value| {
+            value
+                .get("memories")
+                .and_then(|item| item.as_array())
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<UserMemoryRecord>(item).ok())
+        .collect()
+}
+
+pub(crate) fn load_memory_history_from_fs(memory_root: &Path) -> Vec<MemoryHistoryRecord> {
+    read_json_file(&memory_root.join("history.json"))
+        .and_then(|value| value.get("items").and_then(|item| item.as_array()).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<MemoryHistoryRecord>(item).ok())
+        .collect()
 }
 
 pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetRecord> {

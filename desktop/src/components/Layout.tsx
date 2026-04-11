@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ViewType } from '../App';
 import { IndexingStatus } from './IndexingStatus';
+import { appAlert } from '../utils/appDialogs';
 
 const appLogo = new URL('../../Box.png', import.meta.url).href;
 
@@ -181,11 +182,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     try {
       const result = await window.ipcRenderer.invoke('app:open-release-page', { url: updateNotice.htmlUrl }) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
-        alert(result?.error || '打开下载页面失败');
+        void appAlert(result?.error || '打开下载页面失败');
       }
     } catch (error) {
       console.error('Failed to open release page:', error);
-      alert('打开下载页面失败');
+      void appAlert('打开下载页面失败');
     } finally {
       setIsOpeningReleasePage(false);
     }
@@ -197,14 +198,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     try {
       const result = await window.ipcRenderer.invoke('spaces:switch', nextSpaceId) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
-        alert(result?.error || '切换空间失败');
+        void appAlert(result?.error || '切换空间失败');
         return;
       }
       setIsSpaceMenuOpen(false);
       window.location.reload();
     } catch (error) {
       console.error('Failed to switch space:', error);
-      alert('切换空间失败，请重试');
+      void appAlert('切换空间失败，请重试');
     } finally {
       setIsSwitchingSpace(false);
     }
@@ -236,7 +237,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const submitSpaceDialog = useCallback(async () => {
     const trimmedName = spaceDialogName.trim();
     if (!trimmedName) {
-      alert('空间名称不能为空');
+      void appAlert('空间名称不能为空');
       return;
     }
 
@@ -245,7 +246,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       if (spaceDialogMode === 'create') {
         const result = await window.ipcRenderer.invoke('spaces:create', trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
         if (!result?.success || !result.space) {
-          alert(result?.error || '创建空间失败');
+          void appAlert(result?.error || '创建空间失败');
           return;
         }
         setIsSpaceDialogOpen(false);
@@ -257,13 +258,13 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       }
 
       if (!spaceDialogTargetId) {
-        alert('未找到要重命名的空间');
+        void appAlert('未找到要重命名的空间');
         return;
       }
 
       const result = await window.ipcRenderer.invoke('spaces:rename', { id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
-        alert(result?.error || '重命名失败');
+        void appAlert(result?.error || '重命名失败');
         return;
       }
 
@@ -273,7 +274,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       await loadSpaces();
     } catch (error) {
       console.error('Failed to submit space dialog:', error);
-      alert(spaceDialogMode === 'create' ? '创建空间失败，请重试' : '重命名空间失败，请重试');
+      void appAlert(spaceDialogMode === 'create' ? '创建空间失败，请重试' : '重命名空间失败，请重试');
     } finally {
       setIsSpaceDialogSubmitting(false);
     }

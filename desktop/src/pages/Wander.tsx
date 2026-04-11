@@ -81,6 +81,11 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
   const [progressCards, setProgressCards] = useState<WanderProgressCard[]>([]);
   const activeRequestIdRef = useRef('');
   const activeSessionIdRef = useRef('');
+  const historyListRef = useRef<WanderHistoryRecord[]>([]);
+
+  useEffect(() => {
+    historyListRef.current = historyList;
+  }, [historyList]);
 
   const upsertProgressCard = useCallback((next: WanderProgressCard) => {
     setProgressCards((prev) => {
@@ -332,12 +337,27 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
     });
   };
 
+  const syncWanderModeSetting = useCallback(async () => {
+    try {
+      const settings = await window.ipcRenderer.getSettings();
+      setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
+    } catch (error) {
+      console.error('Failed to load wander mode setting:', error);
+    }
+  }, []);
+
   // 加载历史记录列表
-  const loadHistoryList = async () => {
-    const list = await window.ipcRenderer.invoke('wander:list-history') as WanderHistoryRecord[];
-    setHistoryList(list);
-    return list;
-  };
+  const loadHistoryList = useCallback(async () => {
+    try {
+      const list = await window.ipcRenderer.invoke('wander:list-history') as WanderHistoryRecord[];
+      const normalized = Array.isArray(list) ? list : [];
+      setHistoryList(normalized);
+      return normalized;
+    } catch (error) {
+      console.error('Failed to load wander history list:', error);
+      return historyListRef.current;
+    }
+  }, []);
 
   // 加载单条历史记录
   const loadHistory = (record: WanderHistoryRecord) => {
@@ -382,14 +402,10 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
     if (phase === 'running' || loading) {
       return;
     }
-    try {
-      const settings = await window.ipcRenderer.getSettings();
-      setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
-    } catch (error) {
-      console.error('Failed to load wander mode setting:', error);
-    }
-
-    const list = await loadHistoryList();
+    const [, list] = await Promise.all([
+      syncWanderModeSetting(),
+      loadHistoryList(),
+    ]);
     if (list.length > 0 && currentHistoryId) {
       const currentRecord = list.find((item) => item.id === currentHistoryId);
       if (currentRecord) {
@@ -403,6 +419,9 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
     if (list.length > 0) {
       loadHistory(list[0]);
     } else {
+      if (parsedResult || items.length > 0 || currentHistoryId || showFinal || phase !== 'idle') {
+        return;
+      }
       setPhase('idle');
       setShowFinal(false);
       setParsedResult(null);
@@ -410,13 +429,23 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
       setItems([]);
       setCurrentHistoryId(null);
     }
-  }, [currentHistoryId, loading, parsedResult, phase]);
+  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderModeSetting]);
 
   usePageRefresh({
     isActive,
     refresh: refreshPage,
-    triggerOnSettingsChange: true,
   });
+
+  useEffect(() => {
+    if (!isActive) return;
+    const handleSettingsUpdated = () => {
+      void syncWanderModeSetting();
+    };
+    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    return () => {
+      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+    };
+  }, [isActive, syncWanderModeSetting]);
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -715,7 +744,7 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
           {phase !== 'idle' && (
             <>
               <button
-                onClick={() => { loadHistoryList(); setShowHistory(true); }}
+                onClick={() => { void loadHistoryList(); setShowHistory(true); }}
                 className="flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:bg-surface-secondary rounded-lg transition-colors"
               >
                 <History className="w-4 h-4" />

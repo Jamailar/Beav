@@ -1,0 +1,218 @@
+import { useSyncExternalStore } from 'react';
+import type { RemotionCompositionConfig } from '../../../components/manuscripts/remotion/types';
+
+export type VideoEditorViewportMetrics = {
+    scrollLeft: number;
+    maxScrollLeft: number;
+};
+
+export type VideoEditorPreviewTab = 'preview' | 'motion' | 'script';
+export type VideoEditorRatioPreset = '16:9' | '9:16';
+export type VideoEditorLeftPanel =
+    | 'uploads'
+    | 'videos'
+    | 'images'
+    | 'audios'
+    | 'selection'
+    | 'texts'
+    | 'captions'
+    | 'transitions';
+
+export type SceneItemTransform = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    lockAspectRatio: boolean;
+    minWidth: number;
+    minHeight: number;
+};
+
+export type VideoEditorState = {
+    project: {
+        title: string;
+        filePath: string;
+        width: number;
+        height: number;
+        ratioPreset: VideoEditorRatioPreset;
+        fps: number;
+        durationInFrames: number;
+        exportPath: string | null;
+        isExporting: boolean;
+    };
+    assets: {
+        currentPreviewAssetId: string | null;
+        selectedAssetId: string | null;
+        materialSearch: string;
+    };
+    timeline: {
+        selectedClipId: string | null;
+        activeTrackId: string | null;
+        viewport: VideoEditorViewportMetrics;
+        zoomPercent: number;
+        playheadSeconds: number;
+    };
+    timelinePreview: {
+        mode: 'timeline-composition';
+        activeClipId: string | null;
+        visibleClipIds: string[];
+        orderedClipIds: string[];
+        timelineDurationSeconds: number;
+        playbackStatus: 'idle' | 'playing' | 'ended';
+    };
+    selection: {
+        kind: 'clip' | 'scene' | 'scene-item' | 'asset' | null;
+        sceneItemId: string | null;
+        sceneItemKind: 'asset' | 'overlay' | 'title' | null;
+    };
+    player: {
+        previewTab: VideoEditorPreviewTab;
+        isPlaying: boolean;
+        currentTime: number;
+        currentFrame: number;
+    };
+    scene: {
+        selectedSceneId: string | null;
+        editableComposition: RemotionCompositionConfig | null;
+        guidesVisible: boolean;
+        safeAreaVisible: boolean;
+        itemTransforms: Record<string, SceneItemTransform>;
+    };
+    panels: {
+        leftPanel: VideoEditorLeftPanel;
+        materialPaneWidth: number;
+        timelineHeight: number;
+        redclawDrawerOpen: boolean;
+    };
+    remotion: {
+        motionPrompt: string;
+    };
+    script: {
+        dirty: boolean;
+    };
+};
+
+type PartialUpdater =
+    | Partial<VideoEditorState>
+    | ((state: VideoEditorState) => Partial<VideoEditorState>);
+
+export type VideoEditorStore = {
+    getState: () => VideoEditorState;
+    setState: (updater: PartialUpdater) => void;
+    subscribe: (listener: () => void) => () => void;
+};
+
+function hasStateChanges(current: VideoEditorState, partial: Partial<VideoEditorState>): boolean {
+    const keys = Object.keys(partial) as Array<keyof VideoEditorState>;
+    for (const key of keys) {
+        const nextValue = partial[key];
+        const currentValue = current[key];
+        if (!Object.is(currentValue, nextValue)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+export function createVideoEditorStore(initialState?: Partial<VideoEditorState>): VideoEditorStore {
+    let state: VideoEditorState = {
+        project: {
+            title: '',
+            filePath: '',
+            width: 1080,
+            height: 1920,
+            ratioPreset: '9:16',
+            fps: 30,
+            durationInFrames: 1,
+            exportPath: null,
+            isExporting: false,
+        },
+        assets: {
+            currentPreviewAssetId: null,
+            selectedAssetId: null,
+            materialSearch: '',
+        },
+        timeline: {
+            selectedClipId: null,
+            activeTrackId: null,
+            viewport: {
+                scrollLeft: 0,
+                maxScrollLeft: 0,
+            },
+            zoomPercent: 100,
+            playheadSeconds: 0,
+        },
+        timelinePreview: {
+            mode: 'timeline-composition',
+            activeClipId: null,
+            visibleClipIds: [],
+            orderedClipIds: [],
+            timelineDurationSeconds: 0,
+            playbackStatus: 'idle',
+        },
+        selection: {
+            kind: null,
+            sceneItemId: null,
+            sceneItemKind: null,
+        },
+        player: {
+            previewTab: 'preview',
+            isPlaying: false,
+            currentTime: 0,
+            currentFrame: 0,
+        },
+        scene: {
+            selectedSceneId: null,
+            editableComposition: null,
+            guidesVisible: true,
+            safeAreaVisible: true,
+            itemTransforms: {},
+        },
+        panels: {
+            leftPanel: 'uploads',
+            materialPaneWidth: 300,
+            timelineHeight: 280,
+            redclawDrawerOpen: true,
+        },
+        remotion: {
+            motionPrompt: '',
+        },
+        script: {
+            dirty: false,
+        },
+        ...initialState,
+    };
+
+    const listeners = new Set<() => void>();
+
+    return {
+        getState: () => state,
+        setState: (updater) => {
+            const partial = typeof updater === 'function' ? updater(state) : updater;
+            if (!partial || Object.keys(partial).length === 0) {
+                return;
+            }
+            if (!hasStateChanges(state, partial)) {
+                return;
+            }
+            state = {
+                ...state,
+                ...partial,
+            };
+            listeners.forEach((listener) => listener());
+        },
+        subscribe: (listener) => {
+            listeners.add(listener);
+            return () => {
+                listeners.delete(listener);
+            };
+        },
+    };
+}
+
+export function useVideoEditorStore<Selected>(
+    store: VideoEditorStore,
+    selector: (state: VideoEditorState) => Selected
+): Selected {
+    return useSyncExternalStore(store.subscribe, () => selector(store.getState()), () => selector(store.getState()));
+}

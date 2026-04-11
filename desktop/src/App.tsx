@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
+import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
@@ -21,9 +22,9 @@ const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workbo
 
 export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
 
-const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw', 'wander'];
+const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw', 'wander', 'settings'];
 const MAX_CACHED_VIEWS = 5;
-const NON_CACHEABLE_VIEWS = new Set<ViewType>(['settings']);
+const NON_CACHEABLE_VIEWS = new Set<ViewType>([]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 
 // 待发送的聊天消息（用于跨页面传递）
@@ -331,14 +332,14 @@ function App() {
         {mountedViews.has('creative-chat') && (
           <div className={currentView === 'creative-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'creative-chat' ? <ViewLoadingFallback /> : null}>
-              <CreativeChatPage />
+              <CreativeChatPage isActive={currentView === 'creative-chat'} />
             </Suspense>
           </div>
         )}
         {mountedViews.has('skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
-              <SkillsPage />
+              <SkillsPage isActive={currentView === 'skills'} />
             </Suspense>
           </div>
         )}
@@ -356,7 +357,7 @@ function App() {
         {mountedViews.has('advisors') && (
           <div className={currentView === 'advisors' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'advisors' ? <ViewLoadingFallback /> : null}>
-              <AdvisorsPage />
+              <AdvisorsPage isActive={currentView === 'advisors'} />
             </Suspense>
           </div>
         )}
@@ -383,7 +384,7 @@ function App() {
         {mountedViews.has('archives') && (
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
-              <ArchivesPage />
+              <ArchivesPage isActive={currentView === 'archives'} />
             </Suspense>
           </div>
         )}
@@ -413,14 +414,14 @@ function App() {
         {mountedViews.has('subjects') && (
           <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
-              <SubjectsPage />
+              <SubjectsPage isActive={currentView === 'subjects'} />
             </Suspense>
           </div>
         )}
         {mountedViews.has('media-library') && (
           <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
-              <MediaLibraryPage />
+              <MediaLibraryPage isActive={currentView === 'media-library'} />
             </Suspense>
           </div>
         )}
@@ -487,6 +488,7 @@ function App() {
         </div>
       )}
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
+      <AppDialogsHost />
     </>
   );
 }

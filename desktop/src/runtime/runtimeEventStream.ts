@@ -29,6 +29,7 @@ export interface RuntimeEventStreamHandlers {
   onChatPlanUpdated?: (payload: { sessionId: string; steps: unknown[] }) => void;
   onChatThoughtEnd?: (payload: { sessionId: string }) => void;
   onChatResponseEnd?: (payload: { sessionId: string; content: string }) => void;
+  onChatCancelled?: (payload: { sessionId: string }) => void;
   onChatError?: (payload: { sessionId: string; errorPayload: UnknownRecord }) => void;
   onChatSessionTitleUpdated?: (payload: { sessionId: string; title: string }) => void;
   onChatSkillActivated?: (payload: { sessionId: string; name: string; description: string }) => void;
@@ -69,6 +70,7 @@ export interface RuntimeEventStreamHandlers {
     done: boolean;
   }) => void;
   onCreativeChatDone?: (payload: { roomId: string }) => void;
+  onCreativeChatError?: (payload: { roomId: string; error: UnknownRecord }) => void;
 }
 
 function toRecord(value: unknown): UnknownRecord {
@@ -204,6 +206,10 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       handlers.onChatResponseEnd?.({ sessionId, content: String(checkpointPayload.content || '') });
       return;
     }
+    if (checkpointType === 'chat.cancelled') {
+      handlers.onChatCancelled?.({ sessionId });
+      return;
+    }
     if (checkpointType === 'chat.error') {
       handlers.onChatError?.({ sessionId, errorPayload: checkpointPayload });
       return;
@@ -302,6 +308,15 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       const roomId = toText(checkpointPayload.roomId);
       if (!roomId) return;
       handlers.onCreativeChatDone?.({ roomId });
+      return;
+    }
+    if (checkpointType === 'creative_chat.error') {
+      const roomId = toText(checkpointPayload.roomId);
+      if (!roomId) return;
+      handlers.onCreativeChatError?.({
+        roomId,
+        error: checkpointPayload,
+      });
       return;
     }
   }

@@ -1,12 +1,98 @@
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 use tauri::State;
 
 use crate::{
     generate_structured_response_with_settings, load_redbox_prompt, make_id, normalize_base_url,
     now_i64, now_iso, parse_json_value_from_text, payload_string, render_redbox_prompt,
     run_curl_json, run_curl_text, truncate_chars, value_to_i64_string, with_store, with_store_mut,
-    AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord,
+    workspace_root, write_json_value, AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord,
 };
+
+pub(crate) fn memory_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = workspace_root(state)?.join("memory");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn memory_catalog_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(memory_root(state)?.join("catalog.json"))
+}
+
+fn memory_history_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(memory_root(state)?.join("history.json"))
+}
+
+fn memory_maintenance_status_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(memory_root(state)?.join("maintenance-status.json"))
+}
+
+fn memory_summary_markdown(memories: &[UserMemoryRecord]) -> String {
+    let mut lines = vec![
+        "# MEMORY.md".to_string(),
+        "".to_string(),
+        format!("自动生成时间：{}", now_iso()),
+        "".to_string(),
+        "## Active Memories".to_string(),
+    ];
+    let mut active = memories
+        .iter()
+        .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
+        .cloned()
+        .collect::<Vec<_>>();
+    active.sort_by(|a, b| {
+        b.updated_at
+            .unwrap_or(b.created_at)
+            .cmp(&a.updated_at.unwrap_or(a.created_at))
+    });
+    if active.is_empty() {
+        lines.push("- （暂无）".to_string());
+    } else {
+        for item in active.iter().take(80) {
+            let preview = truncate_chars(item.content.trim(), 220);
+            lines.push(format!("- [{}] {}", item.r#type, preview));
+        }
+    }
+    lines.join("\n")
+}
+
+pub(crate) fn persist_memory_workspace_state(
+    state: &State<'_, AppState>,
+    store: &AppStore,
+) -> Result<(), String> {
+    write_json_value(
+        &memory_catalog_path(state)?,
+        &json!({ "memories": store.memories }),
+    )?;
+    write_json_value(
+        &memory_history_path(state)?,
+        &json!({ "items": store.memory_history }),
+    )?;
+    fs::write(
+        memory_root(state)?.join("MEMORY.md"),
+        memory_summary_markdown(&store.memories),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn memory_maintenance_status_from_workspace(
+    state: &State<'_, AppState>,
+) -> Result<Option<Value>, String> {
+    let path = memory_maintenance_status_path(state)?;
+    Ok(fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object()))
+}
+
+pub(crate) fn write_memory_maintenance_status_for_workspace(
+    state: &State<'_, AppState>,
+    status: &Value,
+) -> Result<(), String> {
+    write_json_value(&memory_maintenance_status_path(state)?, status)
+}
 
 pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
     let template =
@@ -94,8 +180,15 @@ pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
     )
 }
 
-pub(crate) fn bump_memory_maintenance_mutation(store: &mut AppStore, reason: &str) {
-    let current = memory_maintenance_status_from_settings(&store.settings)
+pub(crate) fn bump_memory_maintenance_mutation(
+    state: &State<'_, AppState>,
+    store: &mut AppStore,
+    reason: &str,
+) {
+    let current = memory_maintenance_status_from_workspace(state)
+        .ok()
+        .flatten()
+        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
         .unwrap_or_else(default_memory_maintenance_status);
     let pending = current
         .get("pendingMutations")
@@ -120,9 +213,10 @@ pub(crate) fn bump_memory_maintenance_mutation(store: &mut AppStore, reason: &st
         "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
         "nextScheduledAt": now_i64() + next_delay_ms,
     });
-    let mut settings = store.settings.clone();
-    write_memory_maintenance_status(&mut settings, &status);
-    store.settings = settings;
+    let _ = write_memory_maintenance_status_for_workspace(state, &status);
+    if let Some(object) = store.settings.as_object_mut() {
+        object.remove("redbox_memory_maintenance_status_json");
+    }
     store.redclaw_state.next_maintenance_at = value_to_i64_string(status.get("nextScheduledAt"));
 }
 
@@ -323,11 +417,13 @@ pub(crate) fn run_memory_maintenance_with_reason(
         "deleted": deleted
     });
     let _ = with_store_mut(state, |store| {
-        let mut settings = store.settings.clone();
-        write_memory_maintenance_status(&mut settings, &status);
-        store.settings = settings;
+        let _ = write_memory_maintenance_status_for_workspace(state, &status);
+        if let Some(object) = store.settings.as_object_mut() {
+            object.remove("redbox_memory_maintenance_status_json");
+        }
         store.redclaw_state.next_maintenance_at =
             value_to_i64_string(status.get("nextScheduledAt"));
+        persist_memory_workspace_state(state, store)?;
         Ok(())
     });
     Ok(status)
@@ -502,15 +598,6 @@ pub(crate) fn memory_maintenance_status_from_settings(settings: &Value) -> Optio
     payload_string(settings, "redbox_memory_maintenance_status_json")
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .filter(|value| value.is_object())
-}
-
-pub(crate) fn write_memory_maintenance_status(settings: &mut Value, status: &Value) {
-    if let Some(object) = settings.as_object_mut() {
-        object.insert(
-            "redbox_memory_maintenance_status_json".to_string(),
-            json!(serde_json::to_string(status).unwrap_or_else(|_| "{}".to_string())),
-        );
-    }
 }
 
 pub(crate) fn default_memory_maintenance_status() -> Value {

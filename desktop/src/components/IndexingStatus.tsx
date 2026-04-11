@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Database, Loader2, CheckCircle2, RefreshCw, HardDrive, X, List, PlayCircle, Clock } from 'lucide-react';
 import { clsx } from 'clsx';
+import { appConfirm } from '../utils/appDialogs';
 
 interface IndexingStatusData {
   isIndexing: boolean;
@@ -40,7 +41,7 @@ export function IndexingStatus() {
   };
 
   const handleClearQueue = async () => {
-    if (confirm('确定要清空所有等待中的任务吗？')) {
+    if (await appConfirm('确定要清空所有等待中的任务吗？', { title: '清空索引队列', confirmLabel: '清空', tone: 'danger' })) {
       await window.ipcRenderer.invoke('indexing:clear-queue');
     }
   };

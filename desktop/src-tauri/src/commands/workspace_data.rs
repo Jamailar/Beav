@@ -337,6 +337,8 @@ pub fn handle_workspace_data_channel(
                 })
             }
             "memory:list" => with_store(state, |store| {
+                let started_at = now_ms();
+                let request_id = format!("memory:list:{}", started_at);
                 let mut items: Vec<UserMemoryRecord> = store
                     .memories
                     .iter()
@@ -348,9 +350,19 @@ pub fn handle_workspace_data_channel(
                         .unwrap_or(b.created_at)
                         .cmp(&a.updated_at.unwrap_or(a.created_at))
                 });
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "memory:list",
+                    started_at,
+                    Some(format!("items={}", items.len())),
+                );
                 Ok(json!(items))
             }),
             "memory:archived" => with_store(state, |store| {
+                let started_at = now_ms();
+                let request_id = format!("memory:archived:{}", started_at);
                 let mut items: Vec<UserMemoryRecord> = store
                     .memories
                     .iter()
@@ -358,17 +370,51 @@ pub fn handle_workspace_data_channel(
                     .cloned()
                     .collect();
                 items.sort_by(|a, b| b.archived_at.unwrap_or(0).cmp(&a.archived_at.unwrap_or(0)));
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "memory:archived",
+                    started_at,
+                    Some(format!("items={}", items.len())),
+                );
                 Ok(json!(items))
             }),
             "memory:history" => with_store(state, |store| {
+                let started_at = now_ms();
+                let request_id = format!("memory:history:{}", started_at);
                 let mut items = store.memory_history.clone();
                 items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "memory:history",
+                    started_at,
+                    Some(format!("items={}", items.len())),
+                );
                 Ok(json!(items))
             }),
-            "memory:maintenance-status" => with_store(state, |store| {
-                Ok(memory_maintenance_status_from_settings(&store.settings)
-                    .unwrap_or_else(default_memory_maintenance_status))
-            }),
+            "memory:maintenance-status" => {
+                let started_at = now_ms();
+                let request_id = format!("memory:maintenance-status:{}", started_at);
+                let workspace_status = memory_maintenance_status_from_workspace(state)?;
+                let fallback_status = with_store(state, |store| {
+                    Ok(memory_maintenance_status_from_settings(&store.settings))
+                })?;
+                let response = json!(workspace_status
+                    .or(fallback_status)
+                    .unwrap_or_else(default_memory_maintenance_status));
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "memory:maintenance-status",
+                    started_at,
+                    None,
+                );
+                Ok(response)
+            }
             "memory:maintenance-run" => run_memory_maintenance_with_reason(state, "manual"),
             "memory:search" => {
                 let query = payload_string(payload, "query")
@@ -433,11 +479,13 @@ pub fn handle_workspace_data_channel(
                         after: Some(json!(item.clone())),
                         archived_memory_id: None,
                     });
-                    bump_memory_maintenance_mutation(store, "mutation");
+                    bump_memory_maintenance_mutation(state, store, "mutation");
+                    persist_memory_workspace_state(state, store)?;
                     Ok(item)
                 })?;
                 let _ = with_store(state, |store| {
-                    let pending = memory_maintenance_status_from_settings(&store.settings)
+                    let pending = memory_maintenance_status_from_workspace(state)?
+                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
                         .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
                         .unwrap_or(0);
                     Ok(pending)
@@ -468,12 +516,14 @@ pub fn handle_workspace_data_channel(
                             after: Some(json!(item.clone())),
                             archived_memory_id: Some(item.id.clone()),
                         });
-                        bump_memory_maintenance_mutation(store, "mutation");
+                        bump_memory_maintenance_mutation(state, store, "mutation");
                     }
+                    persist_memory_workspace_state(state, store)?;
                     Ok(json!({ "success": true }))
                 })?;
                 let _ = with_store(state, |store| {
-                    let pending = memory_maintenance_status_from_settings(&store.settings)
+                    let pending = memory_maintenance_status_from_workspace(state)?
+                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
                         .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
                         .unwrap_or(0);
                     Ok(pending)

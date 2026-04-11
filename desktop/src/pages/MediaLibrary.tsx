@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, Pencil, X, Clapperboard, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
@@ -189,7 +190,7 @@ function inferImageAspectFromSize(size: string): string {
     return bestDelta <= 0.04 ? best : '';
 }
 
-export function MediaLibrary() {
+export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [assets, setAssets] = useState<MediaAsset[]>([]);
     const [manuscripts, setManuscripts] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
@@ -232,43 +233,63 @@ export function MediaLibrary() {
     const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+    const hasLoadedSnapshotRef = useRef(false);
+    const loadDataRequestRef = useRef(0);
+    const loadSettingsRequestRef = useRef(0);
 
     const loadData = useCallback(async () => {
-        setLoading(true);
+        const requestId = loadDataRequestRef.current + 1;
+        loadDataRequestRef.current = requestId;
+        if (!hasLoadedSnapshotRef.current) {
+            setLoading(true);
+        }
         setError('');
         try {
             const [mediaResult, tree] = await Promise.all([
                 window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<MediaListResponse>,
                 window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>,
             ]);
+            if (requestId !== loadDataRequestRef.current) return;
 
             if (!mediaResult?.success) {
                 setError(mediaResult?.error || '加载媒体库失败');
-                setAssets([]);
             } else {
-                setAssets(Array.isArray(mediaResult.assets) ? mediaResult.assets : []);
+                const nextAssets = Array.isArray(mediaResult.assets) ? mediaResult.assets : [];
+                setAssets(nextAssets);
+                setDrafts((prev) => Object.fromEntries(
+                    Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
+                ));
+                setBindTarget((prev) => Object.fromEntries(
+                    Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
+                ));
+                setExpandedAssetId((prev) => (
+                    prev && nextAssets.some((asset) => asset.id === prev) ? prev : null
+                ));
+                hasLoadedSnapshotRef.current = true;
             }
             setManuscripts(flattenManuscripts(Array.isArray(tree) ? tree : []));
-            setDrafts({});
-            setBindTarget({});
-            setExpandedAssetId(null);
         } catch (e) {
+            if (requestId !== loadDataRequestRef.current) return;
             console.error('Failed to load media library:', e);
             setError('加载媒体库失败');
-            setAssets([]);
-            setManuscripts([]);
         } finally {
-            setLoading(false);
+            if (requestId === loadDataRequestRef.current) {
+                setLoading(false);
+            }
         }
     }, []);
 
     useEffect(() => {
+        if (!isActive) return;
         void loadData();
-    }, [loadData]);
+    }, [isActive, loadData]);
 
     const loadSettings = useCallback(async () => {
+        const requestId = loadSettingsRequestRef.current + 1;
+        loadSettingsRequestRef.current = requestId;
         try {
             const s = await window.ipcRenderer.getSettings();
+            if (requestId !== loadSettingsRequestRef.current) return;
             const next = (s || {}) as SettingsShape;
             setSettings(next);
             setModel(next.image_model || 'gpt-image-1');
@@ -276,14 +297,15 @@ export function MediaLibrary() {
             setSize(next.image_size || '');
             setQuality(next.image_quality || 'standard');
         } catch (e) {
+            if (requestId !== loadSettingsRequestRef.current) return;
             console.error('Failed to load image settings:', e);
-            setSettings({});
         }
     }, []);
 
     useEffect(() => {
+        if (!isActive) return;
         void loadSettings();
-    }, [loadSettings]);
+    }, [isActive, loadSettings]);
 
     useEffect(() => {
         if (!size) return;
@@ -354,13 +376,13 @@ export function MediaLibrary() {
                 prompt: draft.prompt,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
-                alert(result?.error || '更新失败');
+                void appAlert(result?.error || '更新失败');
                 return;
             }
             await loadData();
         } catch (e) {
             console.error('Failed to update media metadata:', e);
-            alert('更新失败');
+            void appAlert('更新失败');
         } finally {
             setWorkingId(null);
         }
@@ -369,7 +391,7 @@ export function MediaLibrary() {
     const handleBind = useCallback(async (asset: MediaAsset) => {
         const manuscriptPath = bindTarget[asset.id] || asset.boundManuscriptPath || '';
         if (!manuscriptPath) {
-            alert('请选择要绑定的稿件');
+            void appAlert('请选择要绑定的稿件');
             return;
         }
         setWorkingId(asset.id);
@@ -379,13 +401,13 @@ export function MediaLibrary() {
                 manuscriptPath,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
-                alert(result?.error || '绑定失败');
+                void appAlert(result?.error || '绑定失败');
                 return;
             }
             await loadData();
         } catch (e) {
             console.error('Failed to bind media asset:', e);
-            alert('绑定失败');
+            void appAlert('绑定失败');
         } finally {
             setWorkingId(null);
         }
@@ -393,7 +415,11 @@ export function MediaLibrary() {
 
     const handleDeleteAsset = useCallback(async (asset: MediaAsset) => {
         const label = asset.title || asset.id;
-        const confirmed = window.confirm(`确认删除媒体“${label}”？${asset.relativePath ? '\n对应文件也会一并删除。' : ''}`);
+        const confirmed = await appConfirm(`确认删除媒体“${label}”？${asset.relativePath ? '\n对应文件也会一并删除。' : ''}`, {
+            title: '删除媒体',
+            confirmLabel: '删除',
+            tone: 'danger',
+        });
         if (!confirmed) return;
         setWorkingId(asset.id);
         try {
@@ -401,7 +427,7 @@ export function MediaLibrary() {
                 assetId: asset.id,
             }) as { success?: boolean; error?: string };
             if (!result?.success) {
-                alert(result?.error || '删除失败');
+                void appAlert(result?.error || '删除失败');
                 return;
             }
             setDrafts((prev) => {
@@ -418,7 +444,7 @@ export function MediaLibrary() {
             await loadData();
         } catch (e) {
             console.error('Failed to delete media asset:', e);
-            alert('删除失败');
+            void appAlert('删除失败');
         } finally {
             setWorkingId(null);
         }
@@ -727,7 +753,7 @@ export function MediaLibrary() {
             </div>
 
             <div className="flex-1 overflow-auto p-6">
-                {loading ? (
+                {loading && filteredAssets.length === 0 && assets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">正在加载媒体库...</div>
                 ) : error ? (
                     <div className="text-sm text-status-error">{error}</div>

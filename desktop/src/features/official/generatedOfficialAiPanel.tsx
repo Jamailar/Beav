@@ -48,6 +48,15 @@ interface RedboxSessionDisplaySnapshot {
 }
 
 const SESSION_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:display-session';
+const PANEL_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:panel-display';
+
+interface RedboxPanelDisplaySnapshot {
+  user: Record<string, unknown> | null;
+  points: Record<string, unknown> | null;
+  models: ModelsResponseItem[];
+  callRecords: RedboxCallRecordItem[];
+  updatedAt: number;
+}
 
 const invoke = async <T,>(channel: string, payload?: unknown): Promise<T> => {
   return window.ipcRenderer.invoke(channel, payload) as Promise<T>;
@@ -90,6 +99,36 @@ const writeDisplaySessionSnapshot = (sessionData: RedboxAuthSession | null): voi
   }
 };
 
+const readPanelDisplaySnapshot = (): RedboxPanelDisplaySnapshot | null => {
+  try {
+    const raw = window.localStorage.getItem(PANEL_DISPLAY_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as RedboxPanelDisplaySnapshot;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      user: parsed.user && typeof parsed.user === 'object' ? parsed.user : null,
+      points: parsed.points && typeof parsed.points === 'object' ? parsed.points : null,
+      models: Array.isArray(parsed.models) ? parsed.models : [],
+      callRecords: Array.isArray(parsed.callRecords) ? parsed.callRecords : [],
+      updatedAt: Number(parsed.updatedAt || Date.now()),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writePanelDisplaySnapshot = (snapshot: RedboxPanelDisplaySnapshot | null): void => {
+  try {
+    if (!snapshot) {
+      window.localStorage.removeItem(PANEL_DISPLAY_SNAPSHOT_KEY);
+      return;
+    }
+    window.localStorage.setItem(PANEL_DISPLAY_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  } catch {
+    // ignore snapshot failures
+  }
+};
+
 const normalizeRechargeAmountInput = (raw: string): string => {
   const text = String(raw || '').trim();
   if (!text) return '';
@@ -126,13 +165,14 @@ const buildWechatQrDataUrl = async (value: string): Promise<string> => {
 };
 
 const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
+  const initialPanelSnapshot = readPanelDisplaySnapshot();
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
   const [session, setSession] = useState<RedboxAuthSession | null>(() => readDisplaySessionSnapshot());
   const [bootstrapped, setBootstrapped] = useState(false);
-  const [user, setUser] = useState<Record<string, unknown> | null>(null);
-  const [points, setPoints] = useState<Record<string, unknown> | null>(null);
-  const [models, setModels] = useState<ModelsResponseItem[]>([]);
-  const [callRecords, setCallRecords] = useState<RedboxCallRecordItem[]>([]);
+  const [user, setUser] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.user || null);
+  const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
+  const [models, setModels] = useState<ModelsResponseItem[]>(() => initialPanelSnapshot?.models || []);
+  const [callRecords, setCallRecords] = useState<RedboxCallRecordItem[]>(() => initialPanelSnapshot?.callRecords || []);
   const [rechargeAmount, setRechargeAmount] = useState('9.90');
   const [rechargeOrderNo, setRechargeOrderNo] = useState('');
   const [rechargeStatusText, setRechargeStatusText] = useState('');
@@ -163,29 +203,67 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     writeDisplaySessionSnapshot(sessionData);
   }, []);
 
+  const requestSettingsRefresh = useCallback((options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
+    void onReloadSettings({
+      preserveViewState: true,
+      preserveRemoteModels: true,
+      ...options,
+    });
+  }, [onReloadSettings]);
+
+  useEffect(() => {
+    writePanelDisplaySnapshot({
+      user,
+      points,
+      models,
+      callRecords,
+      updatedAt: Date.now(),
+    });
+  }, [callRecords, models, points, user]);
+
   const hydrateCachedSession = useCallback(async () => {
     const result = await invoke<{ success: boolean; session?: RedboxAuthSession | null; error?: string }>('redbox-auth:get-session-cached');
     if (!result?.success) {
-      applySession(null);
+      const fallback = readDisplaySessionSnapshot();
+      if (fallback?.accessToken) {
+        applySession(fallback);
+        return fallback;
+      }
       return null;
     }
     const sessionData = result.session || null;
-    applySession(sessionData);
+    if (sessionData?.accessToken) {
+      applySession(sessionData);
+      return sessionData;
+    }
+    const fallback = readDisplaySessionSnapshot();
+    if (fallback?.accessToken) {
+      applySession(fallback);
+      return fallback;
+    }
+    applySession(null);
     return sessionData;
   }, [applySession]);
 
-  const hydrateSession = useCallback(async () => {
+  const hydrateSession = useCallback(async (options?: { preserveExisting?: boolean }) => {
+    const preserveExisting = options?.preserveExisting ?? true;
     const result = await invoke<{ success: boolean; session?: RedboxAuthSession | null; error?: string }>('redbox-auth:get-session');
     if (!result?.success) {
-      applySession(null);
-      setUser(null);
-      setPoints(null);
-      return null;
+      return preserveExisting ? session : null;
     }
     const sessionData = result.session || null;
-    applySession(sessionData);
-    return sessionData;
-  }, [applySession]);
+    if (sessionData?.accessToken) {
+      applySession(sessionData);
+      return sessionData;
+    }
+    if (preserveExisting && session?.accessToken) {
+      return session;
+    }
+    applySession(null);
+    setUser(null);
+    setPoints(null);
+    return null;
+  }, [applySession, session]);
 
   const fetchUser = useCallback(async () => {
     const result = await invoke<{ success: boolean; user?: Record<string, unknown>; error?: string }>('redbox-auth:me');
@@ -219,29 +297,38 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     setCallRecords((result.records || []).filter((item) => String(item?.id || '').trim()));
   }, []);
 
+  const loadAuthenticatedData = useCallback(async () => {
+    await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+  }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
+
+  const refreshSessionSilently = useCallback(async () => {
+    const sessionData = await hydrateSession({ preserveExisting: true });
+    if (sessionData?.accessToken) {
+      requestSettingsRefresh();
+      void loadAuthenticatedData();
+      return sessionData;
+    }
+    return null;
+  }, [hydrateSession, loadAuthenticatedData, requestSettingsRefresh]);
+
   const refreshProfileAndPoints = useCallback(async () => {
     setBusy(true);
     try {
       let sessionData = session;
       if (!sessionData?.accessToken) {
-        sessionData = await hydrateSession();
+        sessionData = await hydrateSession({ preserveExisting: false });
       }
       if (!sessionData?.accessToken) {
         throw new Error('当前未登录，请先登录官方账号');
       }
-      await Promise.all([
-        fetchUser(),
-        fetchPoints(),
-        fetchModels(),
-        fetchCallRecords(),
-      ]);
+      await loadAuthenticatedData();
       setPanelNotice('success', `用户信息与积分余额已刷新（${new Date().toLocaleTimeString()}）`);
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '刷新用户信息失败');
     } finally {
       setBusy(false);
     }
-  }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser, hydrateSession, session, setPanelNotice]);
+  }, [hydrateSession, loadAuthenticatedData, session, setPanelNotice]);
 
   const startWechatPolling = useCallback((sessionId: string) => {
     stopWechatPolling();
@@ -261,8 +348,8 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
           if (result.data.session) {
             applySession(result.data.session);
           }
-          await onReloadSettings();
-          await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+          requestSettingsRefresh();
+          await loadAuthenticatedData();
           setPanelNotice('success', '微信登录成功');
         } else if (status === 'EXPIRED' || status === 'FAILED') {
           stopWechatPolling();
@@ -272,12 +359,13 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         // keep polling quietly
       }
     }, 2200);
-  }, [applySession, fetchCallRecords, fetchModels, fetchPoints, fetchUser, onReloadSettings, setPanelNotice, stopWechatPolling]);
+  }, [applySession, loadAuthenticatedData, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
-  const fetchWechatQr = useCallback(async () => {
-    setBusy(true);
-    setWechatQrUrl('');
-    setWechatLoginUrl('');
+  const fetchWechatQr = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setBusy(true);
+    }
     try {
       const result = await invoke<{ success: boolean; data?: RedboxWechatInfo; error?: string }>('redbox-auth:wechat-url', { state: 'redconvert-desktop' });
       if (!result?.success || !result.data) {
@@ -298,7 +386,9 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '获取二维码失败');
     } finally {
-      setBusy(false);
+      if (!silent) {
+        setBusy(false);
+      }
     }
   }, [setPanelNotice, startWechatPolling]);
 
@@ -339,15 +429,15 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         throw new Error(result?.error || (mode === 'login' ? '登录失败' : '注册失败'));
       }
       applySession(result.session);
-      await onReloadSettings();
-      await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+      requestSettingsRefresh();
+      await loadAuthenticatedData();
       setPanelNotice('success', mode === 'login' ? '登录成功' : '注册并登录成功');
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : (mode === 'login' ? '登录失败' : '注册失败'));
     } finally {
       setBusy(false);
     }
-  }, [applySession, fetchCallRecords, fetchModels, fetchPoints, fetchUser, onReloadSettings, setPanelNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
+  }, [applySession, loadAuthenticatedData, requestSettingsRefresh, setPanelNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
 
   const logout = useCallback(async () => {
     setBusy(true);
@@ -362,16 +452,17 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setPoints(null);
       setModels([]);
       setCallRecords([]);
+      writePanelDisplaySnapshot(null);
       setRechargeOrderNo('');
       setRechargeStatusText('');
-      await onReloadSettings();
+      requestSettingsRefresh();
       setPanelNotice('success', '已退出登录');
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '退出登录失败');
     } finally {
       setBusy(false);
     }
-  }, [applySession, onReloadSettings, setPanelNotice, stopWechatPolling]);
+  }, [applySession, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
   const handleCreateOrderAndPay = useCallback(async () => {
     const amount = normalizeRechargeAmountInput(rechargeAmount);
@@ -439,6 +530,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     }
     return 0;
   }, [points]);
+  const hasPointsSnapshot = points && typeof points === 'object';
 
   const pointsPerYuan = useMemo(() => {
     if (!points || typeof points !== 'object') return 100;
@@ -458,30 +550,28 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
 
   useEffect(() => {
     let canceled = false;
+    setBootstrapped(true);
     const bootstrap = async () => {
       try {
         const cachedSession = await hydrateCachedSession();
         if (canceled) return;
-        setBootstrapped(true);
         if (cachedSession?.accessToken) {
-          void onReloadSettings();
-          void Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+          requestSettingsRefresh();
+          void loadAuthenticatedData();
+          void refreshSessionSilently();
+          return;
         }
 
-        const sessionData = await hydrateSession();
+        const sessionData = await hydrateSession({ preserveExisting: true });
         if (canceled) return;
         if (sessionData?.accessToken) {
-          await onReloadSettings();
-          await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+          requestSettingsRefresh();
+          void loadAuthenticatedData();
         } else if (!cachedSession?.accessToken) {
-          await fetchWechatQr();
+          void fetchWechatQr({ silent: true });
         }
       } catch {
         // ignore
-      } finally {
-        if (!canceled) {
-          setBootstrapped(true);
-        }
       }
     };
     void bootstrap();
@@ -489,7 +579,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       canceled = true;
       stopWechatPolling();
     };
-  }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser, fetchWechatQr, hydrateCachedSession, hydrateSession, onReloadSettings, stopWechatPolling]);
+  }, [fetchWechatQr, hydrateCachedSession, hydrateSession, loadAuthenticatedData, refreshSessionSilently, requestSettingsRefresh, stopWechatPolling]);
 
   useEffect(() => {
     const handleSessionUpdated = async (_event: unknown, payload?: { session?: RedboxAuthSession | null }) => {
@@ -502,14 +592,14 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         setCallRecords([]);
         return;
       }
-      await onReloadSettings();
-      await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+      requestSettingsRefresh();
+      await loadAuthenticatedData();
     };
     window.ipcRenderer.on('redbox-auth:session-updated', handleSessionUpdated);
     return () => {
       window.ipcRenderer.off('redbox-auth:session-updated', handleSessionUpdated);
     };
-  }, [applySession, fetchCallRecords, fetchModels, fetchPoints, fetchUser, onReloadSettings]);
+  }, [applySession, loadAuthenticatedData, requestSettingsRefresh]);
 
   return (
     <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 space-y-4">
@@ -684,7 +774,9 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-text-primary">
-                  {Number(pointsValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 积分
+                  {hasPointsSnapshot
+                    ? `${Number(pointsValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 积分`
+                    : '—'}
                 </span>
                 <button
                   type="button"

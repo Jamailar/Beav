@@ -9,6 +9,7 @@ import { clsx } from 'clsx';
 // Replaced MDEditor with CodeMirrorEditor
 import { CodeMirrorEditor } from '../components/manuscripts/CodeMirrorEditor';
 import { GraphView } from '../components/manuscripts/GraphView';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 // import { Chat } from './Chat';
 // import { CreativeChat } from './CreativeChat';
 import { Knowledge } from './Knowledge';
@@ -468,7 +469,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     const handleDelete = async (e: React.MouseEvent, path: string) => {
         e.stopPropagation();
-        if (!confirm('Delete this item?')) return;
+        if (!(await appConfirm('Delete this item?', { title: 'Delete Item', confirmLabel: 'Delete', tone: 'danger' }))) return;
         try {
             await window.ipcRenderer.invoke('manuscripts:delete', path);
             if (state.selectedFile === path) {
@@ -618,7 +619,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const secret = wechatBindingDraft.secret.trim();
         if (!appId || !secret) {
             setActionNotice('请先填写 AppID 和 Secret');
-            window.alert('请先填写 AppID 和 Secret');
+            void appAlert('请先填写 AppID 和 Secret');
             return;
         }
         setWechatBindingBusy(true);
@@ -636,7 +637,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setWechatBindingDraft((prev) => ({ ...prev, secret: '' }));
             setWechatBindModalOpen(false);
             setActionNotice(`已绑定公众号：${result.binding.name}`);
-            window.alert(`绑定成功：${result.binding.name}`);
+            void appAlert(`绑定成功：${result.binding.name}`);
         } catch (error) {
             console.error('Failed to bind wechat official account:', error);
             const message = error instanceof Error ? error.message : '绑定失败';
@@ -646,7 +647,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (whitelistIp) {
                 setWechatHelpModalOpen(true);
             }
-            window.alert(`绑定失败：${message}`);
+            void appAlert(`绑定失败：${message}`);
         } finally {
             setWechatBindingBusy(false);
         }
@@ -662,7 +663,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     const handleUnbindWechatOfficial = useCallback(async () => {
         if (!activeWechatBinding) return;
-        if (!window.confirm(`解绑公众号“${activeWechatBinding.name}”？`)) return;
+        if (!(await appConfirm(`解绑公众号“${activeWechatBinding.name}”？`, { title: '解绑公众号', confirmLabel: '解绑', tone: 'danger' }))) return;
         setWechatBindingBusy(true);
         try {
             const result = await window.ipcRenderer.wechatOfficial.unbind({

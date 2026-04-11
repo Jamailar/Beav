@@ -9,6 +9,7 @@ import { KnowledgeChatModal } from '../components/KnowledgeChatModal';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 
 interface Note { type?: string; sourceUrl?: string;
     id: string;
@@ -207,10 +208,35 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [embeddedViewportWidth, setEmbeddedViewportWidth] = useState(0);
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
+    const notesRef = useRef<Note[]>([]);
+    const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
+    const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
+    const hasKnowledgeSnapshotRef = useRef(false);
+    const loadNotesRequestRef = useRef(0);
+    const loadYoutubeVideosRequestRef = useRef(0);
+    const loadDocumentSourcesRequestRef = useRef(0);
+    const loadAllKnowledgeRequestRef = useRef(0);
 
     // 搜索框状态
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        notesRef.current = notes;
+    }, [notes]);
+
+    useEffect(() => {
+        youtubeVideosRef.current = youtubeVideos;
+    }, [youtubeVideos]);
+
+    useEffect(() => {
+        documentSourcesRef.current = documentSources;
+    }, [documentSources]);
+
+    const hasKnowledgeDataSnapshot = useCallback(() => {
+        if (hasKnowledgeSnapshotRef.current) return true;
+        return notesRef.current.length > 0 || youtubeVideosRef.current.length > 0 || documentSourcesRef.current.length > 0;
+    }, []);
 
     // 快捷键监听
     useEffect(() => {
@@ -464,64 +490,112 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     }, [isExpandableXiaohongshuNote, onNavigateToRedClaw]);
 
     const loadNotes = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadNotesRequestRef.current + 1;
+        loadNotesRequestRef.current = requestId;
+        const hasLocalData = hasKnowledgeDataSnapshot();
+        if (!hasLocalData) {
+            setIsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.invoke('knowledge:list') as Note[];
+            if (requestId !== loadNotesRequestRef.current) return;
             setNotes(list || []);
+            hasKnowledgeSnapshotRef.current = true;
         } catch (e) {
+            if (requestId !== loadNotesRequestRef.current) return;
             console.error('Failed to load notes:', e);
-            setNotes([]);
+            if (!hasLocalData) {
+                setNotes([]);
+            }
         } finally {
-            setIsLoading(false);
+            if (requestId === loadNotesRequestRef.current) {
+                setIsLoading(false);
+            }
         }
-    }, []);
+    }, [hasKnowledgeDataSnapshot]);
 
     const loadYoutubeVideos = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadYoutubeVideosRequestRef.current + 1;
+        loadYoutubeVideosRequestRef.current = requestId;
+        const hasLocalData = hasKnowledgeDataSnapshot();
+        if (!hasLocalData) {
+            setIsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.invoke('knowledge:list-youtube') as YouTubeVideo[];
+            if (requestId !== loadYoutubeVideosRequestRef.current) return;
             setYoutubeVideos(list || []);
+            hasKnowledgeSnapshotRef.current = true;
         } catch (e) {
+            if (requestId !== loadYoutubeVideosRequestRef.current) return;
             console.error('Failed to load YouTube videos:', e);
-            setYoutubeVideos([]);
+            if (!hasLocalData) {
+                setYoutubeVideos([]);
+            }
         } finally {
-            setIsLoading(false);
+            if (requestId === loadYoutubeVideosRequestRef.current) {
+                setIsLoading(false);
+            }
         }
-    }, []);
+    }, [hasKnowledgeDataSnapshot]);
 
     const loadDocumentSources = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadDocumentSourcesRequestRef.current + 1;
+        loadDocumentSourcesRequestRef.current = requestId;
+        const hasLocalData = hasKnowledgeDataSnapshot();
+        if (!hasLocalData) {
+            setIsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.invoke('knowledge:docs:list') as DocumentKnowledgeSource[];
+            if (requestId !== loadDocumentSourcesRequestRef.current) return;
             setDocumentSources(Array.isArray(list) ? list : []);
+            hasKnowledgeSnapshotRef.current = true;
         } catch (error) {
+            if (requestId !== loadDocumentSourcesRequestRef.current) return;
             console.error('Failed to load document sources:', error);
-            setDocumentSources([]);
+            if (!hasLocalData) {
+                setDocumentSources([]);
+            }
         } finally {
-            setIsLoading(false);
+            if (requestId === loadDocumentSourcesRequestRef.current) {
+                setIsLoading(false);
+            }
         }
-    }, []);
+    }, [hasKnowledgeDataSnapshot]);
 
     const loadAllKnowledge = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadAllKnowledgeRequestRef.current + 1;
+        loadAllKnowledgeRequestRef.current = requestId;
+        const hasLocalData = hasKnowledgeDataSnapshot();
+        if (!hasLocalData) {
+            setIsLoading(true);
+        }
         try {
             const [noteList, videoList, docList] = await Promise.all([
                 window.ipcRenderer.invoke('knowledge:list') as Promise<Note[]>,
                 window.ipcRenderer.invoke('knowledge:list-youtube') as Promise<YouTubeVideo[]>,
                 window.ipcRenderer.invoke('knowledge:docs:list') as Promise<DocumentKnowledgeSource[]>,
             ]);
+            if (requestId !== loadAllKnowledgeRequestRef.current) return;
             setNotes(Array.isArray(noteList) ? noteList : []);
             setYoutubeVideos(Array.isArray(videoList) ? videoList : []);
             setDocumentSources(Array.isArray(docList) ? docList : []);
+            hasKnowledgeSnapshotRef.current = true;
         } catch (error) {
+            if (requestId !== loadAllKnowledgeRequestRef.current) return;
             console.error('Failed to load knowledge:', error);
-            setNotes([]);
-            setYoutubeVideos([]);
-            setDocumentSources([]);
+            if (!hasLocalData) {
+                setNotes([]);
+                setYoutubeVideos([]);
+                setDocumentSources([]);
+            }
         } finally {
-            setIsLoading(false);
+            if (requestId === loadAllKnowledgeRequestRef.current) {
+                setIsLoading(false);
+            }
         }
-    }, []);
+    }, [hasKnowledgeDataSnapshot]);
 
     useEffect(() => {
         void loadAllKnowledge();
@@ -810,7 +884,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     }, [loadNotes, selectedNote]);
 
     const handleDeleteNote = async (noteId: string) => {
-        if (!confirm('确定要删除这篇笔记吗？')) return;
+        if (!(await appConfirm('确定要删除这篇笔记吗？', { title: '删除笔记', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
             await window.ipcRenderer.invoke('knowledge:delete', noteId);
@@ -839,13 +913,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             } else {
                 setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'failed' } : note));
                 setSelectedNote(prev => prev && prev.id === noteId ? { ...prev, transcriptionStatus: 'failed' } : prev);
-                alert(res.error || '转录失败');
+                void appAlert(res.error || '转录失败');
             }
         } catch (e) {
             console.error('Failed to transcribe note:', e);
             setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'failed' } : note));
             setSelectedNote(prev => prev && prev.id === noteId ? { ...prev, transcriptionStatus: 'failed' } : prev);
-            alert('转录失败');
+            void appAlert('转录失败');
         } finally {
             setIsTranscribing(false);
         }
@@ -856,7 +930,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             const orderedImages = orderImages(note.images || []);
             const coverImage = orderedImages[selectedImageIndex] || note.cover || orderedImages[0] || '';
             if (!coverImage) {
-                alert('这篇笔记没有可用封面图');
+                void appAlert('这篇笔记没有可用封面图');
                 return;
             }
 
@@ -932,15 +1006,15 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             window.dispatchEvent(new CustomEvent('cover:templates-updated', {
                 detail: { spaceId },
             }));
-            alert('已保存为封面模板，可在「封面」页直接套用。');
+            void appAlert('已保存为封面模板，可在「封面」页直接套用。');
         } catch (error) {
             console.error('Failed to save cover template from note:', error);
-            alert('保存封面模板失败');
+            void appAlert('保存封面模板失败');
         }
     }, [selectedImageIndex]);
 
     const handleDeleteVideo = async (videoId: string) => {
-        if (!confirm('确定要删除这个视频吗？')) return;
+        if (!(await appConfirm('确定要删除这个视频吗？', { title: '删除视频', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
             await window.ipcRenderer.invoke('knowledge:delete-youtube', videoId);
@@ -986,14 +1060,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             };
             await loadYoutubeVideos();
             if (result?.success) {
-                alert(`已更新 ${result.updated || 0} 个 YouTube 视频摘要${result?.skipped ? `，跳过 ${result.skipped} 个无字幕视频` : ''}`);
+                void appAlert(`已更新 ${result.updated || 0} 个 YouTube 视频摘要${result?.skipped ? `，跳过 ${result.skipped} 个无字幕视频` : ''}`);
                 return;
             }
             const firstError = result?.errors?.[0]?.error || '批量刷新摘要失败';
-            alert(firstError);
+            void appAlert(firstError);
         } catch (error) {
             console.error('Failed to refresh YouTube summaries:', error);
-            alert('批量刷新 YouTube 摘要失败');
+            void appAlert('批量刷新 YouTube 摘要失败');
         } finally {
             setIsRefreshingYoutubeSummaries(false);
         }
@@ -1002,7 +1076,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleAddDocumentFiles = async () => {
         const result = await window.ipcRenderer.invoke('knowledge:docs:add-files') as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '添加文件失败');
+            void appAlert(result?.error || '添加文件失败');
             return;
         }
         await loadDocumentSources();
@@ -1011,7 +1085,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleAddDocumentFolder = async () => {
         const result = await window.ipcRenderer.invoke('knowledge:docs:add-folder') as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '添加文件夹失败');
+            void appAlert(result?.error || '添加文件夹失败');
             return;
         }
         await loadDocumentSources();
@@ -1020,17 +1094,17 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleAddObsidianVault = async () => {
         const result = await window.ipcRenderer.invoke('knowledge:docs:add-obsidian-vault') as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '添加 Obsidian 仓库失败');
+            void appAlert(result?.error || '添加 Obsidian 仓库失败');
             return;
         }
         await loadDocumentSources();
     };
 
     const handleDeleteDocumentSource = async (source: DocumentKnowledgeSource) => {
-        if (!confirm(`确定要移除文档源“${source.name}”吗？`)) return;
+        if (!(await appConfirm(`确定要移除文档源“${source.name}”吗？`, { title: '移除文档源', confirmLabel: '移除', tone: 'danger' }))) return;
         const result = await window.ipcRenderer.invoke('knowledge:docs:delete-source', source.id) as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '删除文档源失败');
+            void appAlert(result?.error || '删除文档源失败');
             return;
         }
         await loadDocumentSources();
@@ -1041,7 +1115,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         if (!normalized) return;
         const result = await window.ipcRenderer.invoke('file:show-in-folder', { source: normalized }) as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '打开文件夹失败');
+            void appAlert(result?.error || '打开文件夹失败');
         }
     };
 
@@ -1516,7 +1590,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 ref={embeddedViewportRef}
                 className={clsx('flex-1 overflow-auto', isEmbedded ? 'p-3' : 'p-6')}
             >
-                {isLoading ? (
+                {isLoading && notes.length === 0 && youtubeVideos.length === 0 && documentSources.length === 0 ? (
                     <div className="text-center text-text-tertiary text-xs py-16">加载中...</div>
                 ) : (
                     <div className="space-y-4">

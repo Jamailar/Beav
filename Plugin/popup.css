@@ -80,6 +80,13 @@ h1 {
   gap: 8px;
 }
 
+.action-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #8f8575;
+  padding: 0 2px;
+}
+
 .btn {
   border: 1px solid #d6c2a8;
   border-radius: 12px;
@@ -108,6 +115,16 @@ h1 {
   background: #c2410c;
   border-color: #c2410c;
   color: #fff7ed;
+}
+
+.btn-secondary {
+  background: #eee7dc;
+  border-color: #ddd2c0;
+  color: #6b645a;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: #c7bcaa;
 }
 
 .btn-primary:disabled {

@@ -151,22 +151,6 @@ fn emit_legacy_chat_compat_event(
     }
 }
 
-fn emit_legacy_creative_chat_compat_event(app: &AppHandle, checkpoint_type: &str, payload: &Value) {
-    let Some(event_name) = (match checkpoint_type {
-        "creative_chat.user_message" => Some("creative-chat:user-message"),
-        "creative_chat.advisor_start" => Some("creative-chat:advisor-start"),
-        "creative_chat.thinking" => Some("creative-chat:thinking"),
-        "creative_chat.rag" => Some("creative-chat:rag"),
-        "creative_chat.tool" => Some("creative-chat:tool"),
-        "creative_chat.stream" => Some("creative-chat:stream"),
-        "creative_chat.done" => Some("creative-chat:done"),
-        _ => None,
-    }) else {
-        return;
-    };
-    let _ = app.emit(event_name, payload.clone());
-}
-
 pub fn emit_runtime_event(
     app: &AppHandle,
     event_type: &str,
@@ -441,5 +425,4 @@ pub fn emit_creative_chat_checkpoint(
         checkpoint_type,
         Some(payload.clone()),
     );
-    emit_legacy_creative_chat_compat_event(app, checkpoint_type, &payload);
 }

@@ -8,10 +8,13 @@ use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_task_node_changed};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, runtime_graph_for_route, set_runtime_graph_node, RuntimeRouteRecord,
-    RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
+    list_runtime_tasks, mark_task_running, route_for_task_snapshot, runtime_task_value,
+    set_runtime_graph_node, RuntimeArtifact, RuntimeCheckpointRecord,
 };
-use crate::{create_work_item, make_id, now_i64, payload_field, payload_string, AppState};
+use crate::{
+    create_work_item, log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState,
+};
 
 pub fn handle_runtime_task_channel(
     app: &AppHandle,
@@ -42,34 +45,16 @@ pub fn handle_runtime_task_channel(
                     metadata.as_ref(),
                 );
                 let route_value = route.clone().into_value();
-                let role_id = Some(route.recommended_role.clone());
-                let graph = runtime_graph_for_route(&route_value);
                 let created = with_store_mut(state, |store| {
-                    let task = RuntimeTaskRecord {
-                        id: make_id("task"),
-                        task_type: "manual".to_string(),
-                        status: "pending".to_string(),
+                    let task = create_runtime_task(
+                        "manual",
+                        "pending",
                         runtime_mode,
                         owner_session_id,
-                        intent: Some(route.intent.clone()),
-                        role_id: role_id.clone(),
-                        goal: Some(user_input.clone()),
-                        current_node: Some("plan".to_string()),
-                        route: Some(route_value.clone()),
-                        graph,
-                        artifacts: Vec::new(),
-                        checkpoints: vec![json!({
-                            "type": "route",
-                            "summary": route.reasoning.clone(),
-                            "payload": route_value.clone()
-                        })],
+                        Some(user_input.clone()),
+                        route.clone(),
                         metadata,
-                        last_error: None,
-                        created_at: now_i64(),
-                        updated_at: now_i64(),
-                        started_at: None,
-                        completed_at: None,
-                    };
+                    );
                     append_runtime_task_trace(
                         store,
                         &task.id,
@@ -88,19 +73,25 @@ pub fn handle_runtime_task_channel(
                 Ok(json!(created))
             }
             "tasks:list" => with_store(state, |store| {
-                let mut tasks = store.runtime_tasks.clone();
-                tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                let started_at = now_ms();
+                let request_id = format!("tasks:list:{}", started_at);
+                let tasks = list_runtime_tasks(&store);
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "tasks:list",
+                    started_at,
+                    Some(format!("tasks={}", tasks.len())),
+                );
                 Ok(json!(tasks))
             }),
             "tasks:get" => {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
                 with_store(state, |store| {
-                    Ok(store
-                        .runtime_tasks
-                        .iter()
-                        .find(|item| item.id == task_id)
-                        .cloned()
-                        .map_or(Value::Null, |item| json!(item)))
+                    Ok(get_runtime_task(&store, &task_id).map_or(Value::Null, |item| {
+                        runtime_task_value(&item)
+                    }))
                 })
             }
             "tasks:resume" => {
@@ -113,34 +104,21 @@ pub fn handle_runtime_task_channel(
                     else {
                         return Ok(None);
                     };
-                    task.status = "running".to_string();
-                    task.updated_at = now_i64();
-                    task.started_at.get_or_insert(now_i64());
-                    task.current_node = Some("plan".to_string());
-                    set_runtime_graph_node(
-                        &mut task.graph,
-                        "plan",
-                        "running",
-                        Some("route and execution plan resumed".to_string()),
-                        None,
-                    );
+                    mark_task_running(task, "route and execution plan resumed");
                     Ok(Some(task.clone()))
                 })?;
                 let Some(task_snapshot) = task_snapshot else {
                     return Ok(json!({ "success": false, "error": "任务不存在" }));
                 };
+
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                let route = task_snapshot
-                    .route
-                    .as_ref()
-                    .and_then(RuntimeRouteRecord::from_value)
-                    .unwrap_or_else(|| {
-                        crate::runtime::runtime_direct_route_record(
-                            &task_snapshot.runtime_mode,
-                            task_snapshot.goal.as_deref().unwrap_or(""),
-                            task_snapshot.metadata.as_ref(),
-                        )
-                    });
+                let route = route_for_task_snapshot(&task_snapshot).unwrap_or_else(|| {
+                    crate::runtime::runtime_direct_route_record(
+                        &task_snapshot.runtime_mode,
+                        task_snapshot.goal.as_deref().unwrap_or(""),
+                        task_snapshot.metadata.as_ref(),
+                    )
+                });
                 let route_value = route.clone().into_value();
                 let orchestration = if route.requires_multi_agent
                     || task_snapshot.runtime_mode == "background-maintenance"
@@ -157,29 +135,8 @@ pub fn handle_runtime_task_channel(
                 } else {
                     None
                 };
-                let reviewer_rejected = orchestration
-                    .as_ref()
-                    .and_then(|value| value.get("outputs"))
-                    .and_then(|value| value.as_array())
-                    .and_then(|items| {
-                        items.iter().find(|item| {
-                            item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-                        })
-                    })
-                    .map(|review| {
-                        let approved = review
-                            .get("approved")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(true);
-                        let issue_count = review
-                            .get("issues")
-                            .and_then(|value| value.as_array())
-                            .map(|items| items.len())
-                            .unwrap_or(0);
-                        !approved || issue_count > 0
-                    })
-                    .unwrap_or(false);
-                let repair_plan = if reviewer_rejected {
+                let reviewer_blocked = reviewer_rejected(orchestration.as_ref()).unwrap_or(false);
+                let repair_plan = if reviewer_blocked {
                     orchestration
                         .as_ref()
                         .map(|value| {
@@ -195,7 +152,7 @@ pub fn handle_runtime_task_channel(
                 } else {
                     None
                 };
-                let repair_orchestration = if reviewer_rejected {
+                let repair_orchestration = if reviewer_blocked {
                     repair_plan
                         .as_ref()
                         .map(|repair| {
@@ -219,30 +176,10 @@ pub fn handle_runtime_task_channel(
                 } else {
                     None
                 };
-                let repair_pass_failed = repair_orchestration
-                    .as_ref()
-                    .and_then(|value| value.get("outputs"))
-                    .and_then(|value| value.as_array())
-                    .and_then(|items| {
-                        items.iter().find(|item| {
-                            item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-                        })
-                    })
-                    .map(|review| {
-                        let approved = review
-                            .get("approved")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(true);
-                        let issue_count = review
-                            .get("issues")
-                            .and_then(|value| value.as_array())
-                            .map(|items| items.len())
-                            .unwrap_or(0);
-                        !approved || issue_count > 0
-                    })
-                    .unwrap_or(reviewer_rejected);
+                let repair_pass_failed =
+                    reviewer_rejected(repair_orchestration.as_ref()).unwrap_or(reviewer_blocked);
                 let final_orchestration = repair_orchestration.as_ref().or(orchestration.as_ref());
-                let saved_artifact = if reviewer_rejected && repair_pass_failed {
+                let saved_artifact = if reviewer_blocked && repair_pass_failed {
                     None
                 } else {
                     Some(save_runtime_task_artifact(
@@ -253,6 +190,7 @@ pub fn handle_runtime_task_channel(
                         final_orchestration,
                     )?)
                 };
+
                 let mut runtime_node_events: Vec<(String, String, Option<String>, Option<String>)> =
                     Vec::new();
                 let mut runtime_checkpoint_events: Vec<(String, String, Option<Value>)> =
@@ -265,10 +203,12 @@ pub fn handle_runtime_task_channel(
                     else {
                         return Ok(json!({ "success": false, "error": "任务不存在" }));
                     };
+
                     task.intent = Some(route.intent.clone());
                     task.role_id = Some(route.recommended_role.clone());
-                    task.route = Some(route_value.clone());
+                    task.route = Some(route.clone());
                     task.current_node = Some("execute_tools".to_string());
+
                     set_runtime_graph_node(
                         &mut task.graph,
                         "plan",
@@ -290,6 +230,7 @@ pub fn handle_runtime_task_channel(
                         }),
                         None,
                     ));
+
                     set_runtime_graph_node(
                         &mut task.graph,
                         "retrieve",
@@ -303,6 +244,7 @@ pub fn handle_runtime_task_channel(
                         Some("runtime context prepared".to_string()),
                         None,
                     ));
+
                     if let Some(orchestration_value) = orchestration.clone() {
                         set_runtime_graph_node(
                             &mut task.graph,
@@ -317,25 +259,27 @@ pub fn handle_runtime_task_channel(
                             Some("subagent orchestration completed".to_string()),
                             None,
                         ));
-                        task.artifacts.push(json!({
-                            "type": "subagent-orchestration",
-                            "payload": orchestration_value.clone(),
-                            "createdAt": now_i64()
-                        }));
-                        task.checkpoints.push(json!({
-                            "type": "orchestration",
-                            "summary": "subagent orchestration completed",
-                            "payload": orchestration_value
-                        }));
+                        task.artifacts.push(RuntimeArtifact::new(
+                            "subagent-orchestration",
+                            "Subagent Orchestration",
+                            None,
+                            None,
+                            Some(orchestration_value.clone()),
+                        ));
+                        let checkpoint = RuntimeCheckpointRecord::new(
+                            "orchestration",
+                            "spawn_agents",
+                            "subagent orchestration completed",
+                            Some(orchestration_value),
+                        );
                         runtime_checkpoint_events.push((
                             "orchestration".to_string(),
-                            "subagent orchestration completed".to_string(),
-                            task.checkpoints
-                                .last()
-                                .and_then(|item| item.get("payload"))
-                                .cloned(),
+                            checkpoint.summary.clone(),
+                            checkpoint.payload.clone(),
                         ));
+                        task.checkpoints.push(checkpoint);
                     }
+
                     if let Some(repair_value) = repair_plan.clone() {
                         set_runtime_graph_node(
                             &mut task.graph,
@@ -350,23 +294,28 @@ pub fn handle_runtime_task_channel(
                             Some("reviewer requested repair".to_string()),
                             Some("reviewer rejected execution".to_string()),
                         ));
-                        task.artifacts.push(json!({
-                            "type": "repair-plan",
-                            "payload": repair_value.clone(),
-                            "createdAt": now_i64()
-                        }));
-                        task.checkpoints.push(json!({
-                            "type": "repair",
-                            "summary": payload_string(&repair_value, "summary").unwrap_or_else(|| "review repair plan generated".to_string()),
-                            "payload": repair_value.clone()
-                        }));
-                        runtime_checkpoint_events.push((
-                            "repair".to_string(),
+                        task.artifacts.push(RuntimeArtifact::new(
+                            "repair-plan",
+                            "Repair Plan",
+                            None,
+                            None,
+                            Some(repair_value.clone()),
+                        ));
+                        let checkpoint = RuntimeCheckpointRecord::new(
+                            "repair",
+                            "review",
                             payload_string(&repair_value, "summary")
                                 .unwrap_or_else(|| "review repair plan generated".to_string()),
                             Some(repair_value.clone()),
+                        );
+                        runtime_checkpoint_events.push((
+                            "repair".to_string(),
+                            checkpoint.summary.clone(),
+                            checkpoint.payload.clone(),
                         ));
+                        task.checkpoints.push(checkpoint);
                     }
+
                     if let Some(repair_value) = repair_orchestration.clone() {
                         set_runtime_graph_node(
                             &mut task.graph,
@@ -381,26 +330,28 @@ pub fn handle_runtime_task_channel(
                             Some("repair pass completed".to_string()),
                             None,
                         ));
-                        task.artifacts.push(json!({
-                            "type": "repair-pass",
-                            "payload": repair_value.clone(),
-                            "createdAt": now_i64()
-                        }));
-                        task.checkpoints.push(json!({
-                            "type": "repair_pass",
-                            "summary": "repair pass completed",
-                            "payload": repair_value
-                        }));
+                        task.artifacts.push(RuntimeArtifact::new(
+                            "repair-pass",
+                            "Repair Pass",
+                            None,
+                            None,
+                            Some(repair_value.clone()),
+                        ));
+                        let checkpoint = RuntimeCheckpointRecord::new(
+                            "repair_pass",
+                            "handoff",
+                            "repair pass completed",
+                            Some(repair_value),
+                        );
                         runtime_checkpoint_events.push((
                             "repair_pass".to_string(),
-                            "repair pass completed".to_string(),
-                            task.checkpoints
-                                .last()
-                                .and_then(|item| item.get("payload"))
-                                .cloned(),
+                            checkpoint.summary.clone(),
+                            checkpoint.payload.clone(),
                         ));
+                        task.checkpoints.push(checkpoint);
                     }
-                    if let Some(artifact) = saved_artifact.clone() {
+
+                    if let Some(artifact_value) = saved_artifact.clone() {
                         set_runtime_graph_node(
                             &mut task.graph,
                             "save_artifact",
@@ -414,20 +365,21 @@ pub fn handle_runtime_task_channel(
                             Some("artifact saved".to_string()),
                             None,
                         ));
-                        task.artifacts.push(artifact.clone());
-                        task.checkpoints.push(json!({
-                            "type": "save_artifact",
-                            "summary": "artifact saved",
-                            "payload": artifact
-                        }));
+                        task.artifacts
+                            .push(runtime_artifact_from_value(&artifact_value));
+                        let checkpoint = RuntimeCheckpointRecord::new(
+                            "save_artifact",
+                            "save_artifact",
+                            "artifact saved",
+                            Some(artifact_value.clone()),
+                        );
                         runtime_checkpoint_events.push((
                             "save_artifact".to_string(),
-                            "artifact saved".to_string(),
-                            task.checkpoints
-                                .last()
-                                .and_then(|item| item.get("payload"))
-                                .cloned(),
+                            checkpoint.summary.clone(),
+                            checkpoint.payload.clone(),
                         ));
+                        task.checkpoints.push(checkpoint);
+
                         let mut work_item = create_work_item(
                             "runtime-artifact",
                             format!(
@@ -440,16 +392,13 @@ pub fn handle_runtime_task_channel(
                             ),
                             Some(route.goal.clone()),
                             Some(
-                                saved_artifact
-                                    .as_ref()
-                                    .and_then(|value| payload_string(value, "path"))
-                                    .unwrap_or_default(),
+                                payload_string(&artifact_value, "path").unwrap_or_default(),
                             ),
                             Some(json!({
                                 "taskId": task_id,
                                 "sessionId": task.owner_session_id.clone(),
                                 "intent": route.intent.clone(),
-                                "artifact": saved_artifact.clone(),
+                                "artifact": artifact_value.clone(),
                             })),
                             2,
                         );
@@ -459,7 +408,8 @@ pub fn handle_runtime_task_channel(
                         }
                         store.work_items.push(work_item);
                     }
-                    if reviewer_rejected && repair_pass_failed {
+
+                    if reviewer_blocked && repair_pass_failed {
                         task.status = "failed".to_string();
                         task.last_error = Some("reviewer rejected execution".to_string());
                         set_runtime_graph_node(
@@ -535,6 +485,7 @@ pub fn handle_runtime_task_channel(
                             None,
                         ));
                     }
+
                     task.completed_at = Some(now_i64());
                     task.updated_at = now_i64();
                     append_runtime_task_trace(
@@ -570,19 +521,25 @@ pub fn handle_runtime_task_channel(
                     append_runtime_task_trace(
                         store,
                         &task_id,
-                        if reviewer_rejected && repair_pass_failed {
+                        if reviewer_blocked && repair_pass_failed {
                             "failed"
                         } else {
                             "completed"
                         },
                         None,
                     );
+
                     Ok(json!({
-                        "success": !(reviewer_rejected && repair_pass_failed),
+                        "success": !(reviewer_blocked && repair_pass_failed),
                         "taskId": task_id,
-                        "error": if reviewer_rejected && repair_pass_failed { Value::String("reviewer rejected execution".to_string()) } else { Value::Null }
+                        "error": if reviewer_blocked && repair_pass_failed {
+                            Value::String("reviewer rejected execution".to_string())
+                        } else {
+                            Value::Null
+                        }
                     }))
                 })?;
+
                 for (node_id, status, summary, error) in runtime_node_events {
                     emit_runtime_task_node_changed(
                         app,
@@ -626,19 +583,45 @@ pub fn handle_runtime_task_channel(
             }
             "tasks:trace" => {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<RuntimeTaskTraceRecord> = store
-                        .runtime_task_traces
-                        .iter()
-                        .filter(|item| item.task_id == task_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(list_runtime_task_traces(&store, &task_id))))
             }
             _ => unreachable!("channel prefiltered"),
         }
     })();
     Some(result)
+}
+
+fn reviewer_rejected(orchestration: Option<&Value>) -> Option<bool> {
+    orchestration
+        .and_then(|value| value.get("outputs"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
+            })
+        })
+        .map(|review| {
+            let approved = review
+                .get("approved")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
+            let issue_count = review
+                .get("issues")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            !approved || issue_count > 0
+        })
+}
+
+fn runtime_artifact_from_value(value: &Value) -> RuntimeArtifact {
+    RuntimeArtifact::from_value(value).unwrap_or_else(|| {
+        RuntimeArtifact::new(
+            payload_string(value, "type").unwrap_or_else(|| "artifact".to_string()),
+            payload_string(value, "label").unwrap_or_else(|| "Runtime Artifact".to_string()),
+            payload_string(value, "path"),
+            Some(value.clone()),
+            None,
+        )
+    })
 }

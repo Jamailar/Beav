@@ -6,8 +6,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::runtime_task_value;
 use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 use crate::{
-    make_id, now_i64, now_iso, payload_field, payload_string, redclaw_state_value, AppState,
-    AppStore, ChatSessionRecord, SessionCheckpointRecord, SessionToolResultRecord,
+    log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
+    redclaw_state_value, AppState, AppStore, ChatSessionRecord, SessionCheckpointRecord, SessionToolResultRecord,
     SessionTranscriptRecord,
 };
 
@@ -147,7 +147,20 @@ pub fn handle_bridge_channel(
         }
         "session-bridge:resolve-permission" => Ok(json!({ "success": true })),
         "background-tasks:list" => {
-            with_store(state, |store| Ok(json!(derived_background_tasks(&store))))
+            with_store(state, |store| {
+                let started_at = now_ms();
+                let request_id = format!("background-tasks:list:{}", started_at);
+                let tasks = derived_background_tasks(&store);
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "background-tasks:list",
+                    started_at,
+                    Some(format!("tasks={}", tasks.len())),
+                );
+                Ok(json!(tasks))
+            })
         }
         "background-tasks:get" => {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();

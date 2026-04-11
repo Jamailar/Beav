@@ -7,6 +7,28 @@ use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
+pub(crate) fn persist_media_workspace_catalog(state: &State<'_, AppState>) -> Result<(), String> {
+    let assets = with_store(state, |store| Ok(store.media_assets.clone()))?;
+    write_json_value(
+        &media_root(state)?.join("catalog.json"),
+        &json!({
+            "version": 1,
+            "assets": assets,
+        }),
+    )
+}
+
+pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Result<(), String> {
+    let assets = with_store(state, |store| Ok(store.cover_assets.clone()))?;
+    write_json_value(
+        &cover_root(state)?.join("catalog.json"),
+        &json!({
+            "version": 1,
+            "assets": assets,
+        }),
+    )
+}
+
 pub fn handle_library_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -413,45 +435,58 @@ pub fn handle_library_channel(
                 }
                 Ok(json!({ "success": false, "error": "媒体资产没有可打开的文件路径" }))
             }
-            "media:update" => with_store_mut(state, |store| {
-                let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                let Some(asset) = store
-                    .media_assets
-                    .iter_mut()
-                    .find(|item| item.id == asset_id)
-                else {
-                    return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
-                };
-                asset.title = normalize_optional_string(payload_string(payload, "title"));
-                asset.project_id = normalize_optional_string(payload_string(payload, "projectId"));
-                asset.prompt = normalize_optional_string(payload_string(payload, "prompt"));
-                asset.updated_at = now_iso();
-                Ok(json!({ "success": true, "asset": asset.clone() }))
-            }),
-            "media:bind" => with_store_mut(state, |store| {
-                let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                let manuscript_path =
-                    normalize_optional_string(payload_string(payload, "manuscriptPath"));
-                let Some(asset) = store
-                    .media_assets
-                    .iter_mut()
-                    .find(|item| item.id == asset_id)
-                else {
-                    return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
-                };
-                asset.bound_manuscript_path = manuscript_path;
-                asset.updated_at = now_iso();
-                Ok(json!({ "success": true, "asset": asset.clone() }))
-            }),
-            "media:delete" => with_store_mut(state, |store| {
-                let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                let before = store.media_assets.len();
-                store.media_assets.retain(|item| item.id != asset_id);
-                if before == store.media_assets.len() {
-                    return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
-                }
-                Ok(json!({ "success": true }))
-            }),
+            "media:update" => {
+                let result = with_store_mut(state, |store| {
+                    let asset_id = payload_string(payload, "assetId").unwrap_or_default();
+                    let Some(asset) = store
+                        .media_assets
+                        .iter_mut()
+                        .find(|item| item.id == asset_id)
+                    else {
+                        return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
+                    };
+                    asset.title = normalize_optional_string(payload_string(payload, "title"));
+                    asset.project_id =
+                        normalize_optional_string(payload_string(payload, "projectId"));
+                    asset.prompt = normalize_optional_string(payload_string(payload, "prompt"));
+                    asset.updated_at = now_iso();
+                    Ok(json!({ "success": true, "asset": asset.clone() }))
+                })?;
+                persist_media_workspace_catalog(state)?;
+                Ok(result)
+            }
+            "media:bind" => {
+                let result = with_store_mut(state, |store| {
+                    let asset_id = payload_string(payload, "assetId").unwrap_or_default();
+                    let manuscript_path =
+                        normalize_optional_string(payload_string(payload, "manuscriptPath"));
+                    let Some(asset) = store
+                        .media_assets
+                        .iter_mut()
+                        .find(|item| item.id == asset_id)
+                    else {
+                        return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
+                    };
+                    asset.bound_manuscript_path = manuscript_path;
+                    asset.updated_at = now_iso();
+                    Ok(json!({ "success": true, "asset": asset.clone() }))
+                })?;
+                persist_media_workspace_catalog(state)?;
+                Ok(result)
+            }
+            "media:delete" => {
+                let result = with_store_mut(state, |store| {
+                    let asset_id = payload_string(payload, "assetId").unwrap_or_default();
+                    let before = store.media_assets.len();
+                    store.media_assets.retain(|item| item.id != asset_id);
+                    if before == store.media_assets.len() {
+                        return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
+                    }
+                    Ok(json!({ "success": true }))
+                })?;
+                persist_media_workspace_catalog(state)?;
+                Ok(result)
+            }
             "media:import-files" => {
                 let selected = pick_files_native("选择要导入媒体库的文件", false, true)?;
                 if selected.is_empty() {
@@ -493,6 +528,7 @@ pub fn handle_library_channel(
                     }
                     Ok(assets)
                 })?;
+                persist_media_workspace_catalog(state)?;
                 Ok(json!({ "success": true, "assets": imported, "imported": imported.len() }))
             }
             "cover:list" => {
@@ -659,6 +695,7 @@ pub fn handle_library_channel(
                 ));
                     Ok(assets)
                 })?;
+                persist_cover_workspace_catalog(state)?;
                 Ok(json!({ "success": true, "assets": created }))
             }
             _ => unreachable!(),

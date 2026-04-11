@@ -10,6 +10,7 @@ import {
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import {
   type AgentTaskSnapshot,
   type AgentTaskTrace,
@@ -79,6 +80,10 @@ const DEFAULT_CHAT_MAX_TOKENS = 262144;
 const DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK = 131072;
 const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
+const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
+const SETTINGS_TAB_POLL_DELAY_MS = 300;
+
+type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 
@@ -266,7 +271,8 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
 };
 
 export function Settings({ isActive = true }: { isActive?: boolean }) {
-  const [activeTab, setActiveTab] = useState<'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental'>('ai');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [aiTabContentReady, setAiTabContentReady] = useState(false);
   const { flags, updateFlag } = useFeatureFlags();
   const [formData, setFormData] = useState({
     api_endpoint: '',
@@ -384,8 +390,42 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, []);
   const fetchModelsRequestRef = useRef(0);
   const fetchImageModelsRequestRef = useRef(0);
+  const settingsLoadRequestRef = useRef(0);
+  const memoryLoadRequestRef = useRef(0);
+  const debugLogsLoadRequestRef = useRef(0);
+  const runtimeTasksLoadRequestRef = useRef(0);
+  const runtimeSessionsLoadRequestRef = useRef(0);
+  const runtimeTaskTracesLoadRequestRef = useRef(0);
+  const runtimeSessionDetailsLoadRequestRef = useRef(0);
+  const backgroundTasksLoadRequestRef = useRef(0);
+  const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
+  const settingsActivationTimerRef = useRef<number | null>(null);
+  const baseSettingsLoadedRef = useRef(false);
+  const baseSettingsInFlightRef = useRef(false);
+  const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
+    general: false,
+    ai: false,
+    knowledge: false,
+    tools: false,
+    memory: false,
+    experimental: false,
+  });
+  const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
+    general: false,
+    ai: false,
+    knowledge: false,
+    tools: false,
+    memory: false,
+    experimental: false,
+  });
+
+  const logSettingsPerf = useCallback((stage: string, startedAt: number, extra?: string) => {
+    const elapsed = Math.round(performance.now() - startedAt);
+    const suffix = extra ? ` | ${extra}` : '';
+    console.debug(`[settings][perf] ${stage} elapsed=${elapsed}ms${suffix}`);
+  }, []);
 
   const defaultAiSource = useMemo(() => {
     if (!aiSources.length) return null;
@@ -706,20 +746,36 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setAiModelSubTab('custom');
       return;
     }
+    setOfficialAiPanelEnabled(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
+    if (activeTab !== 'ai' || aiModelSubTab !== 'login' || OfficialAiPanelComponent) return;
     let canceled = false;
+    const startedAt = performance.now();
     void loadOfficialAiPanelModule().then((module) => {
       if (canceled) return;
       const nextComponent = module?.default || null;
-      setOfficialAiPanelEnabled(Boolean(nextComponent));
       setOfficialAiPanelComponent(() => nextComponent);
       if (!nextComponent) {
         setAiModelSubTab('custom');
       }
+      logSettingsPerf('official-panel-load', startedAt, nextComponent ? 'loaded' : 'empty');
     });
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, logSettingsPerf, officialAiPanelEnabled]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai') {
+      setAiTabContentReady(false);
+      return;
+    }
+    console.log('[settings][ai] tab-enter');
+    return;
+  }, [activeTab]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -827,24 +883,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (!isActive) return;
-    loadSettings();
-    checkTools();
-    loadBrowserPluginStatus();
-    loadAssistantDaemonStatus();
-    loadVectorStats();
-    loadAppVersion();
-
-    const handleProgress = (_: unknown, progress: number) => {
-      setInstallProgress(progress);
-    };
-    window.ipcRenderer.on('youtube:install-progress', handleProgress);
-    return () => {
-      window.ipcRenderer.off('youtube:install-progress', handleProgress);
-    };
-  }, [isActive]);
-
-  useEffect(() => {
     if (!isActive) {
       return;
     }
@@ -891,47 +929,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       assistantDaemonLogBufferRef.current = [];
     };
   }, [activeTab, assistantDaemonBusy, assistantDaemonDraftDirty, isActive]);
-
-  useEffect(() => {
-    if (!isActive) {
-      return;
-    }
-    let memoryPollTimer: number | null = null;
-    let runtimePollTimer: number | null = null;
-    let backgroundTaskPollTimer: number | null = null;
-    if (activeTab === 'memory') {
-      void loadMemories();
-      memoryPollTimer = window.setInterval(() => {
-        void loadMemories();
-      }, 15000);
-    }
-    if (activeTab === 'general') {
-      void loadRecentDebugLogs();
-    }
-    if (activeTab === 'tools' && formData.developer_mode_enabled) {
-      void loadToolDiagnostics();
-      void loadRuntimeDeveloperData();
-      runtimePollTimer = window.setInterval(() => {
-        void loadRuntimeTasks();
-        void loadRuntimeSessions();
-      }, 8000);
-      backgroundTaskPollTimer = window.setInterval(() => {
-        void loadBackgroundTasks();
-      }, 5000);
-    }
-
-    return () => {
-      if (memoryPollTimer) {
-        window.clearInterval(memoryPollTimer);
-      }
-      if (runtimePollTimer) {
-        window.clearInterval(runtimePollTimer);
-      }
-      if (backgroundTaskPollTimer) {
-        window.clearInterval(backgroundTaskPollTimer);
-      }
-    };
-  }, [activeTab, formData.developer_mode_enabled, isActive]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -987,28 +984,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   useEffect(() => {
     if (!activeAiSource) return;
-    let cancelled = false;
-    const detect = async () => {
-      try {
-        const result = await window.ipcRenderer.detectAiProtocol({
-          baseURL: activeAiSource.baseURL,
-          presetId: activeAiSource.presetId,
-          protocol: activeAiSource.protocol,
-        });
-        if (cancelled || !result?.success || !result.protocol) return;
-        setDetectedAiProtocol(result.protocol);
-        if (activeAiSource.protocol !== result.protocol) {
-          updateAiSource(activeAiSource.id, (source) => ({ ...source, protocol: result.protocol }));
-        }
-      } catch {
-        // ignore detect failures for live typing
-      }
-    };
-    void detect();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeAiSource?.id, activeAiSource?.baseURL, activeAiSource?.presetId]);
+    setDetectedAiProtocol((activeAiSource?.protocol || 'openai') as AiProtocol);
+  }, [activeAiSource?.id, activeAiSource?.baseURL, activeAiSource?.presetId, activeTab]);
 
   useEffect(() => {
     return undefined;
@@ -1293,15 +1270,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setModelsBySource((prev) => ({ ...prev, [activeAiSource.id]: [] }));
       setTestStatus('idle');
       setTestMsg('');
-      return;
     }
-
-    const timer = window.setTimeout(() => {
-      void fetchModelsForSource(activeAiSource, { manual: false });
-    }, 650);
-
-    return () => window.clearTimeout(timer);
   }, [
+    activeTab,
     activeAiSource?.id,
     activeAiSource?.baseURL,
     activeAiSource?.apiKey,
@@ -1417,14 +1388,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (current === DASHSCOPE_LOCKED_IMAGE_MODEL) return prev;
       return { ...prev, image_model: DASHSCOPE_LOCKED_IMAGE_MODEL };
     });
-  }, [isDashscopeImageTemplate]);
+  }, [activeTab, isDashscopeImageTemplate]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void fetchImageModels({ manual: false });
-    }, 450);
-    return () => window.clearTimeout(timer);
+    return;
   }, [
+    activeTab,
     formData.api_endpoint,
     formData.api_key,
     formData.image_api_key,
@@ -1432,63 +1401,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     formData.image_provider,
     formData.image_provider_template,
     fetchImageModels,
-  ]);
-
-  useEffect(() => {
-    const nextSourceId = resolveLinkedSourceId({
-      endpoint: formData.transcription_endpoint || formData.api_endpoint,
-      apiKey: formData.transcription_key || formData.api_key,
-      model: formData.transcription_model,
-      fallbackId: defaultAiSourceId,
-    });
-    setTranscriptionSourceId((prev) => prev === nextSourceId ? prev : nextSourceId);
-  }, [
-    aiSources,
-    defaultAiSourceId,
-    formData.api_endpoint,
-    formData.api_key,
-    formData.transcription_endpoint,
-    formData.transcription_key,
-    formData.transcription_model,
-    resolveLinkedSourceId,
-  ]);
-
-  useEffect(() => {
-    const nextSourceId = resolveLinkedSourceId({
-      endpoint: formData.embedding_endpoint || formData.api_endpoint,
-      apiKey: formData.embedding_key || formData.api_key,
-      model: formData.embedding_model,
-      fallbackId: defaultAiSourceId,
-    });
-    setEmbeddingSourceId((prev) => prev === nextSourceId ? prev : nextSourceId);
-  }, [
-    aiSources,
-    defaultAiSourceId,
-    formData.api_endpoint,
-    formData.api_key,
-    formData.embedding_endpoint,
-    formData.embedding_key,
-    formData.embedding_model,
-    resolveLinkedSourceId,
-  ]);
-
-  useEffect(() => {
-    const nextSourceId = resolveLinkedSourceId({
-      endpoint: formData.image_endpoint || formData.api_endpoint,
-      apiKey: formData.image_api_key || formData.api_key,
-      model: formData.image_model,
-      fallbackId: defaultAiSourceId,
-    });
-    setImageSourceId((prev) => prev === nextSourceId ? prev : nextSourceId);
-  }, [
-    aiSources,
-    defaultAiSourceId,
-    formData.api_endpoint,
-    formData.api_key,
-    formData.image_endpoint,
-    formData.image_api_key,
-    formData.image_model,
-    resolveLinkedSourceId,
   ]);
 
   const persistMcpServers = async (nextServers: McpServerConfig[], tip?: string) => {
@@ -1576,7 +1488,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
-  const loadMemories = async () => {
+  const loadMemories = useCallback(async () => {
+    const requestId = ++memoryLoadRequestRef.current;
     setIsMemoryLoading(true);
     try {
       const [data, archived, history, maintenanceStatus] = await Promise.all([
@@ -1585,6 +1498,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         window.ipcRenderer.invoke('memory:history') as Promise<MemoryHistoryEntry[]>,
         window.ipcRenderer.invoke('memory:maintenance-status') as Promise<MemoryMaintenanceStatus>,
       ]);
+      if (requestId !== memoryLoadRequestRef.current) return;
       setMemories(data);
       setArchivedMemories(archived);
       setMemoryHistory(history);
@@ -1592,9 +1506,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (e) {
       console.error("Failed to load memories", e);
     } finally {
-      setIsMemoryLoading(false);
+      if (requestId === memoryLoadRequestRef.current) {
+        setIsMemoryLoading(false);
+      }
     }
-  };
+  }, []);
 
   const handleRunMemoryMaintenance = async () => {
     try {
@@ -1644,7 +1560,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   };
 
   const handleDeleteMemory = async (id: string) => {
-    if (!confirm('确定要删除这条记忆吗？')) return;
+    if (!(await appConfirm('确定要删除这条记忆吗？', { title: '删除记忆', confirmLabel: '删除', tone: 'danger' }))) return;
     try {
       await window.ipcRenderer.invoke('memory:delete', id);
       loadMemories();
@@ -1653,59 +1569,62 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
-  const loadAppVersion = async () => {
+  const loadAppVersion = useCallback(async () => {
     try {
       const version = await window.ipcRenderer.getAppVersion();
       setAppVersion(version || '');
     } catch (e) {
       console.error('Failed to load app version:', e);
     }
-  };
+  }, []);
 
-  const loadRecentDebugLogs = async () => {
+  const loadRecentDebugLogs = useCallback(async () => {
+    const requestId = ++debugLogsLoadRequestRef.current;
     setIsDebugLogsLoading(true);
     try {
       const result = await window.ipcRenderer.debug.getRecent(120);
+      if (requestId !== debugLogsLoadRequestRef.current) return;
       setRecentDebugLogs(Array.isArray(result?.lines) ? result.lines : []);
     } catch (e) {
       console.error('Failed to load debug logs', e);
-      setRecentDebugLogs([]);
     } finally {
-      setIsDebugLogsLoading(false);
+      if (requestId === debugLogsLoadRequestRef.current) {
+        setIsDebugLogsLoading(false);
+      }
     }
-  };
+  }, []);
 
   const openDebugLogDirectory = async () => {
     const result = await window.ipcRenderer.debug.openLogDir();
     if (!result?.success && result?.error) {
-      alert(`打开日志目录失败：${result.error}`);
+      void appAlert(`打开日志目录失败：${result.error}`);
     }
   };
 
-  const loadToolDiagnostics = async () => {
+  const loadToolDiagnostics = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.toolDiagnostics.list();
       setToolDiagnostics(Array.isArray(result) ? result : []);
     } catch (e) {
       console.error('Failed to load tool diagnostics', e);
-      setToolDiagnostics([]);
     }
-  };
+  }, []);
 
-  const loadRuntimeRoles = async () => {
+  const loadRuntimeRoles = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.aiRoles.list();
       setRuntimeRoles(Array.isArray(result) ? result : []);
     } catch (e) {
       console.error('Failed to load runtime roles', e);
-      setRuntimeRoles([]);
     }
-  };
+  }, []);
 
-  const loadRuntimeTasks = async (preserveSelection = true) => {
+  const loadRuntimeTasks = useCallback(async (preserveSelection = true) => {
+    const requestId = ++runtimeTasksLoadRequestRef.current;
     setIsRuntimeLoading(true);
     try {
       const result = await window.ipcRenderer.tasks.list({ limit: 40 });
+      if (requestId !== runtimeTasksLoadRequestRef.current) return;
       const taskList = Array.isArray(result) ? result : [];
       setRuntimeTasks(taskList);
       setSelectedRuntimeTaskId((prev) => {
@@ -1716,18 +1635,21 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     } catch (e) {
       console.error('Failed to load runtime tasks', e);
-      setRuntimeTasks([]);
       if (!preserveSelection) {
         setSelectedRuntimeTaskId('');
       }
     } finally {
-      setIsRuntimeLoading(false);
+      if (requestId === runtimeTasksLoadRequestRef.current) {
+        setIsRuntimeLoading(false);
+      }
     }
-  };
+  }, []);
 
-  const loadRuntimeSessions = async (preserveSelection = true) => {
+  const loadRuntimeSessions = useCallback(async (preserveSelection = true) => {
+    const requestId = ++runtimeSessionsLoadRequestRef.current;
     try {
       const result = await window.ipcRenderer.sessions.list();
+      if (requestId !== runtimeSessionsLoadRequestRef.current) return;
       const sessionList = Array.isArray(result) ? result as RuntimeSessionListItem[] : [];
       setRuntimeSessions(sessionList);
       setSelectedRuntimeSessionId((prev) => {
@@ -1738,32 +1660,34 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     } catch (e) {
       console.error('Failed to load runtime sessions', e);
-      setRuntimeSessions([]);
       if (!preserveSelection) {
         setSelectedRuntimeSessionId('');
       }
     }
-  };
+  }, []);
 
-  const loadRuntimeTaskTraces = async (taskId: string) => {
+  const loadRuntimeTaskTraces = useCallback(async (taskId: string) => {
     const normalizedTaskId = String(taskId || '').trim();
     if (!normalizedTaskId) {
       setRuntimeTaskTraces([]);
       return;
     }
+    const requestId = ++runtimeTaskTracesLoadRequestRef.current;
     setIsRuntimeTraceLoading(true);
     try {
       const result = await window.ipcRenderer.tasks.trace({ taskId: normalizedTaskId, limit: 120 });
+      if (requestId !== runtimeTaskTracesLoadRequestRef.current) return;
       setRuntimeTaskTraces(Array.isArray(result) ? result : []);
     } catch (e) {
       console.error('Failed to load runtime task traces', e);
-      setRuntimeTaskTraces([]);
     } finally {
-      setIsRuntimeTraceLoading(false);
+      if (requestId === runtimeTaskTracesLoadRequestRef.current) {
+        setIsRuntimeTraceLoading(false);
+      }
     }
-  };
+  }, []);
 
-  const loadRuntimeSessionDetails = async (sessionId: string) => {
+  const loadRuntimeSessionDetails = useCallback(async (sessionId: string) => {
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedSessionId) {
       setRuntimeSessionTranscript([]);
@@ -1771,6 +1695,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setRuntimeSessionToolResults([]);
       return;
     }
+    const requestId = ++runtimeSessionDetailsLoadRequestRef.current;
     setIsRuntimeSessionLoading(true);
     try {
       const [transcript, checkpoints, toolResults] = await Promise.all([
@@ -1778,33 +1703,34 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         window.ipcRenderer.runtime.getCheckpoints({ sessionId: normalizedSessionId, limit: 80 }),
         window.ipcRenderer.runtime.getToolResults({ sessionId: normalizedSessionId, limit: 120 }),
       ]);
+      if (requestId !== runtimeSessionDetailsLoadRequestRef.current) return;
       setRuntimeSessionTranscript(Array.isArray(transcript) ? transcript as RuntimeSessionTranscriptItem[] : []);
       setRuntimeSessionCheckpoints(Array.isArray(checkpoints) ? checkpoints as RuntimeSessionCheckpointItem[] : []);
       setRuntimeSessionToolResults(Array.isArray(toolResults) ? toolResults as RuntimeSessionToolResultItem[] : []);
     } catch (e) {
       console.error('Failed to load runtime session details', e);
-      setRuntimeSessionTranscript([]);
-      setRuntimeSessionCheckpoints([]);
-      setRuntimeSessionToolResults([]);
     } finally {
-      setIsRuntimeSessionLoading(false);
+      if (requestId === runtimeSessionDetailsLoadRequestRef.current) {
+        setIsRuntimeSessionLoading(false);
+      }
     }
-  };
+  }, []);
 
-  const loadRuntimeHooks = async () => {
+  const loadRuntimeHooks = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.toolHooks.list();
       setRuntimeHooks(Array.isArray(result) ? result as RuntimeHookDefinition[] : []);
     } catch (e) {
       console.error('Failed to load runtime hooks', e);
-      setRuntimeHooks([]);
     }
-  };
+  }, []);
 
-  const loadBackgroundTasks = async (preserveSelection = true) => {
+  const loadBackgroundTasks = useCallback(async (preserveSelection = true) => {
+    const requestId = ++backgroundTasksLoadRequestRef.current;
     setIsBackgroundTasksLoading(true);
     try {
       const result = await window.ipcRenderer.backgroundTasks.list();
+      if (requestId !== backgroundTasksLoadRequestRef.current) return;
       const taskList = Array.isArray(result) ? result as BackgroundTaskItem[] : [];
       setBackgroundTasks(taskList);
       setSelectedBackgroundTaskId((prev) => {
@@ -1815,38 +1741,53 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     } catch (e) {
       console.error('Failed to load background tasks', e);
-      setBackgroundTasks([]);
       if (!preserveSelection) {
         setSelectedBackgroundTaskId('');
       }
     } finally {
-      setIsBackgroundTasksLoading(false);
+      if (requestId === backgroundTasksLoadRequestRef.current) {
+        setIsBackgroundTasksLoading(false);
+      }
     }
-  };
+  }, []);
 
-  const loadBackgroundWorkerPool = async () => {
+  const loadBackgroundWorkerPool = useCallback(async () => {
+    const requestId = ++backgroundWorkerPoolLoadRequestRef.current;
     try {
       const result = await window.ipcRenderer.backgroundWorkers.getPoolState();
+      if (requestId !== backgroundWorkerPoolLoadRequestRef.current) return;
       setBackgroundWorkerPool({
         json: Array.isArray(result?.json) ? result.json : [],
         runtime: Array.isArray(result?.runtime) ? result.runtime : [],
       });
     } catch (e) {
       console.error('Failed to load background worker pool', e);
-      setBackgroundWorkerPool({ json: [], runtime: [] });
     }
-  };
+  }, []);
 
-  const loadRuntimeDeveloperData = async () => {
+  const loadRuntimeDeveloperData = useCallback(async () => {
     await Promise.all([
       loadRuntimeRoles(),
+      loadToolDiagnostics(),
+    ]);
+    await Promise.all([
       loadRuntimeTasks(),
       loadRuntimeSessions(),
       loadRuntimeHooks(),
+    ]);
+    await Promise.all([
       loadBackgroundTasks(),
       loadBackgroundWorkerPool(),
     ]);
-  };
+  }, [
+    loadBackgroundTasks,
+    loadBackgroundWorkerPool,
+    loadRuntimeHooks,
+    loadRuntimeRoles,
+    loadRuntimeSessions,
+    loadRuntimeTasks,
+    loadToolDiagnostics,
+  ]);
 
   const handleCreateRuntimeTask = async () => {
     setIsRuntimeCreating(true);
@@ -1983,15 +1924,55 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         void loadToolDiagnostics();
         void loadRuntimeDeveloperData();
       }
-      window.alert('开发者模式已开启（24 小时内有效）');
+      void appAlert('开发者模式已开启（24 小时内有效）');
       return 0;
     });
   }, [activeTab, persistDeveloperModeState]);
 
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
+    const preserveViewState = Boolean(options?.preserveViewState);
+    const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
+    const requestId = ++settingsLoadRequestRef.current;
     try {
       const settings = await window.ipcRenderer.getSettings();
+      if (requestId !== settingsLoadRequestRef.current) return;
       if (settings) {
+        const resolveLinkedSourceIdFromList = (params: {
+          endpoint?: string;
+          apiKey?: string;
+          model?: string;
+          fallbackId?: string;
+        }): string => {
+          const normalizedEndpoint = String(params.endpoint || '').trim();
+          const normalizedApiKey = String(params.apiKey || '').trim();
+          const normalizedModel = String(params.model || '').trim();
+          let bestSourceId = '';
+          let bestScore = -1;
+
+          for (const source of sourceList) {
+            let score = 0;
+            const sourceEndpoint = String(source.baseURL || '').trim();
+            const sourceApiKey = String(source.apiKey || '').trim();
+            const sourceModels = [
+              ...(source.models || []),
+              source.model,
+              ...(source.modelsMeta || []).map((item) => String(item?.id || '').trim()),
+            ].filter(Boolean);
+            if (normalizedEndpoint && sourceEndpoint === normalizedEndpoint) score += 4;
+            if (normalizedApiKey && sourceApiKey && sourceApiKey === normalizedApiKey) score += 2;
+            if (normalizedModel && sourceModels.includes(normalizedModel)) score += 1;
+            if (score > bestScore) {
+              bestScore = score;
+              bestSourceId = source.id;
+            }
+          }
+
+          if (bestScore > 0 && bestSourceId) return bestSourceId;
+          const fallbackId = String(params.fallbackId || '').trim();
+          if (fallbackId && sourceList.some((source) => source.id === fallbackId)) return fallbackId;
+          return normalizedDefaultId;
+        };
+
         const requestedDefaultSourceId = String(settings.default_ai_source_id || '').trim();
         const prefersOfficialDefault = requestedDefaultSourceId.toLowerCase() === 'redbox_official_auto';
         let sourceList = parseAiSources(settings.ai_sources_json).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
@@ -2015,6 +1996,24 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           ? loadedDefaultId
           : (loadedDefaultId === 'redbox_official_auto' ? 'redbox_official_auto' : (sourceList[0]?.id || 'redbox_official_auto'));
         const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId) || sourceList[0] || null;
+        const resolvedTranscriptionSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.transcription_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.transcription_key || settings.api_key || '').trim(),
+          model: String(settings.transcription_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
+        const resolvedEmbeddingSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.embedding_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.embedding_key || settings.api_key || '').trim(),
+          model: String(settings.embedding_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
+        const resolvedImageSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.image_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.image_api_key || settings.api_key || '').trim(),
+          model: String(settings.image_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
         const unlockedAt = String(settings.developer_mode_unlocked_at || '').trim();
         const unlockedAtMs = unlockedAt ? Date.parse(unlockedAt) : NaN;
         const developerModeEnabled = Boolean(settings.developer_mode_enabled)
@@ -2023,10 +2022,40 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
         setAiSources(sourceList);
         setDefaultAiSourceId(normalizedDefaultId);
-        setActiveAiSourceId(normalizedDefaultId);
-        setModelsBySource({});
+        setActiveAiSourceId((prevActiveId) => {
+          if (!preserveViewState) {
+            return normalizedDefaultId;
+          }
+          const currentActiveId = String(prevActiveId || '').trim();
+          if (currentActiveId === 'redbox_official_auto') {
+            return currentActiveId;
+          }
+          if (currentActiveId && sourceList.some((source) => source.id === currentActiveId)) {
+            return currentActiveId;
+          }
+          return normalizedDefaultId;
+        });
+        setModelsBySource((prev) => {
+          if (!preserveRemoteModels) {
+            return {};
+          }
+          const validSourceIds = new Set(sourceList.map((source) => source.id));
+          return Object.fromEntries(
+            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
+          );
+        });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
         setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        setTranscriptionSourceId(resolvedTranscriptionSourceId);
+        setEmbeddingSourceId(resolvedEmbeddingSourceId);
+        setImageSourceId(resolvedImageSourceId);
+        console.log('[settings][ai] loadSettings-applied', {
+          sourceCount: sourceList.length,
+          defaultAiSourceId: normalizedDefaultId,
+          transcriptionSourceId: resolvedTranscriptionSourceId,
+          embeddingSourceId: resolvedEmbeddingSourceId,
+          imageSourceId: resolvedImageSourceId,
+        });
 
         setFormData({
           api_endpoint: resolvedDefaultSource?.baseURL || '',
@@ -2089,21 +2118,33 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           void persistDeveloperModeState(false, null);
         }
       } else {
+        if (requestId !== settingsLoadRequestRef.current) return;
         setAiSources([]);
         setDefaultAiSourceId('redbox_official_auto');
-        setActiveAiSourceId('redbox_official_auto');
-        setModelsBySource({});
+        setActiveAiSourceId((prevActiveId) => {
+          if (preserveViewState && String(prevActiveId || '').trim() === 'redbox_official_auto') {
+            return prevActiveId;
+          }
+          return 'redbox_official_auto';
+        });
+        setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
       }
     } catch (e) {
+      if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  };
+  }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
 
-  const reloadCustomAiSettings = useCallback(async () => {
-    await loadSettings();
-  }, []);
+  const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
+    await loadSettings({
+      preserveViewState: true,
+      preserveRemoteModels: true,
+      ...options,
+    });
+  }, [loadSettings]);
+
 
   useEffect(() => {
     if (!formData.developer_mode_enabled || !formData.developer_mode_unlocked_at) {
@@ -2125,16 +2166,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
 
-  const checkTools = async () => {
+  const checkTools = useCallback(async () => {
     try {
       const status = await window.ipcRenderer.checkYtdlp();
       setYtdlpStatus(status);
     } catch (e) {
       console.error(e);
     }
-  };
+  }, []);
 
-  const loadBrowserPluginStatus = async () => {
+  const loadBrowserPluginStatus = useCallback(async () => {
     try {
       const status = await window.ipcRenderer.browserPlugin.getStatus();
       setBrowserPluginStatus(status);
@@ -2149,7 +2190,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         error: String(error),
       });
     }
-  };
+  }, []);
 
   const loadAssistantDaemonStatus = useCallback(async () => {
     try {
@@ -2206,7 +2247,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
     } catch (error) {
       console.error('Failed to save assistant daemon config', error);
-      window.alert(`保存后台通信配置失败：${String(error)}`);
+      void appAlert(`保存后台通信配置失败：${String(error)}`);
     } finally {
       setAssistantDaemonBusy(false);
     }
@@ -2220,7 +2261,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
     } catch (error) {
       console.error('Failed to start assistant daemon', error);
-      window.alert(`启动后台值守失败：${String(error)}`);
+      void appAlert(`启动后台值守失败：${String(error)}`);
     } finally {
       setAssistantDaemonBusy(false);
     }
@@ -2234,7 +2275,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
     } catch (error) {
       console.error('Failed to stop assistant daemon', error);
-      window.alert(`停止后台值守失败：${String(error)}`);
+      void appAlert(`停止后台值守失败：${String(error)}`);
     } finally {
       setAssistantDaemonBusy(false);
     }
@@ -2257,7 +2298,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           connected: false,
           stateDir: result.stateDir,
         });
-        window.alert(result.message || '启动微信扫码失败。');
+        void appAlert(result.message || '启动微信扫码失败。');
         return;
       }
       setAssistantDaemonWeixinLogin({
@@ -2270,7 +2311,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     } catch (error) {
       console.error('Failed to start Weixin login', error);
-      window.alert(`启动微信扫码失败：${String(error)}`);
+      void appAlert(`启动微信扫码失败：${String(error)}`);
     } finally {
       setAssistantDaemonWeixinLoginBusy(false);
     }
@@ -2279,7 +2320,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const handleCheckAssistantDaemonWeixinLogin = useCallback(async () => {
     const sessionKey = String(assistantDaemonWeixinLogin?.sessionKey || '').trim();
     if (!sessionKey) {
-      window.alert('请先点击“开始扫码”，生成微信二维码。');
+      void appAlert('请先点击“开始扫码”，生成微信二维码。');
       return;
     }
     setAssistantDaemonWeixinLoginBusy(true);
@@ -2312,7 +2353,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       }
     } catch (error) {
       console.error('Failed to wait for Weixin login', error);
-      window.alert(`检查微信登录状态失败：${String(error)}`);
+      void appAlert(`检查微信登录状态失败：${String(error)}`);
     } finally {
       setAssistantDaemonWeixinLoginBusy(false);
     }
@@ -2322,7 +2363,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setAssistantDaemonWeixinLogin(null);
   }, []);
 
-  const loadVectorStats = async () => {
+  const loadVectorStats = useCallback(async () => {
     try {
       const stats = await window.ipcRenderer.invoke('indexing:get-stats') as { totalStats: { vectors: number; documents: number } } | null;
       if (stats && stats.totalStats) {
@@ -2331,18 +2372,215 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (e) {
       console.error("Failed to load vector stats", e);
     }
-  };
+  }, []);
+
+  const ensureBaseSettingsLoaded = useCallback(async (force = false) => {
+    if (baseSettingsInFlightRef.current) return;
+    if (!force && baseSettingsLoadedRef.current) return;
+    baseSettingsInFlightRef.current = true;
+    const startedAt = performance.now();
+    try {
+      await loadSettings({
+        preserveViewState: true,
+        preserveRemoteModels: true,
+      });
+      baseSettingsLoadedRef.current = true;
+      tabWarmRef.current.ai = true;
+      if (officialAiPanelEnabled && !OfficialAiPanelComponent) {
+        void loadOfficialAiPanelModule().then((module) => {
+          const nextComponent = module?.default || null;
+          if (!nextComponent) return;
+          setOfficialAiPanelComponent(() => nextComponent);
+        });
+      }
+      logSettingsPerf(force ? 'base-settings-refresh' : 'base-settings-load', startedAt);
+    } finally {
+      baseSettingsInFlightRef.current = false;
+    }
+  }, [OfficialAiPanelComponent, loadSettings, logSettingsPerf, officialAiPanelEnabled]);
+
+  const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
+    if (!isActive) return;
+    if (tabInFlightRef.current[tab]) return;
+    if (!force && tabWarmRef.current[tab]) return;
+    tabInFlightRef.current[tab] = true;
+    const startedAt = performance.now();
+    try {
+      if (tab === 'general') {
+        await Promise.all([
+          loadAppVersion(),
+          loadRecentDebugLogs(),
+          loadAssistantDaemonStatus(),
+        ]);
+      } else if (tab === 'memory') {
+        await loadMemories();
+      } else if (tab === 'knowledge') {
+        await loadVectorStats();
+      } else if (tab === 'tools') {
+        await Promise.all([
+          checkTools(),
+          loadBrowserPluginStatus(),
+        ]);
+        if (formData.developer_mode_enabled) {
+          await loadToolDiagnostics();
+          await loadRuntimeRoles();
+          await Promise.all([
+            loadRuntimeTasks(),
+            loadRuntimeSessions(),
+            loadRuntimeHooks(),
+          ]);
+          await Promise.all([
+            loadBackgroundTasks(),
+            loadBackgroundWorkerPool(),
+          ]);
+        }
+      } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
+        const module = await loadOfficialAiPanelModule();
+        const nextComponent = module?.default || null;
+        setOfficialAiPanelComponent(() => nextComponent);
+        if (!nextComponent) {
+          setAiModelSubTab('custom');
+        }
+      }
+      tabWarmRef.current[tab] = true;
+      logSettingsPerf(force ? `tab-refresh:${tab}` : `tab-load:${tab}`, startedAt);
+    } finally {
+      tabInFlightRef.current[tab] = false;
+    }
+  }, [
+    OfficialAiPanelComponent,
+    aiModelSubTab,
+    checkTools,
+    formData.developer_mode_enabled,
+    isActive,
+    loadAppVersion,
+    loadAssistantDaemonStatus,
+    loadBackgroundTasks,
+    loadBackgroundWorkerPool,
+    loadBrowserPluginStatus,
+    loadMemories,
+    loadRecentDebugLogs,
+    loadRuntimeHooks,
+    loadRuntimeRoles,
+    loadRuntimeSessions,
+    loadRuntimeTasks,
+    loadToolDiagnostics,
+    loadVectorStats,
+    logSettingsPerf,
+    officialAiPanelEnabled,
+  ]);
+
+  useEffect(() => {
+    const handleProgress = (_: unknown, progress: number) => {
+      setInstallProgress(progress);
+    };
+    window.ipcRenderer.on('youtube:install-progress', handleProgress);
+    return () => {
+      window.ipcRenderer.off('youtube:install-progress', handleProgress);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isActive) {
+      if (settingsActivationTimerRef.current != null) {
+        window.clearTimeout(settingsActivationTimerRef.current);
+        settingsActivationTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (settingsActivationTimerRef.current != null) {
+      window.clearTimeout(settingsActivationTimerRef.current);
+    }
+
+    settingsActivationTimerRef.current = window.setTimeout(() => {
+      void ensureBaseSettingsLoaded();
+      settingsActivationTimerRef.current = null;
+    }, SETTINGS_ACTIVATION_DEBOUNCE_MS);
+
+    return () => {
+      if (settingsActivationTimerRef.current != null) {
+        window.clearTimeout(settingsActivationTimerRef.current);
+        settingsActivationTimerRef.current = null;
+      }
+    };
+  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const handleSettingsUpdated = () => {
+      void ensureBaseSettingsLoaded(true);
+      if (activeTab === 'general' || activeTab === 'knowledge' || activeTab === 'tools') {
+        tabWarmRef.current[activeTab] = false;
+        void ensureTabResourcesLoaded(activeTab, true);
+      }
+    };
+    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
+    return () => {
+      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
+    };
+  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive]);
+
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+    if (!baseSettingsLoadedRef.current) {
+      return;
+    }
+    let memoryPollTimer: number | null = null;
+    let runtimePollTimer: number | null = null;
+    let backgroundTaskPollTimer: number | null = null;
+    if (activeTab === 'memory') {
+      void ensureTabResourcesLoaded('memory');
+      memoryPollTimer = window.setInterval(() => {
+        void ensureTabResourcesLoaded('memory', true);
+      }, 15000);
+    }
+    if (activeTab === 'knowledge') {
+      void ensureTabResourcesLoaded('knowledge');
+    }
+    if (activeTab === 'tools') {
+      void ensureTabResourcesLoaded('tools');
+      runtimePollTimer = window.setInterval(() => {
+        if (!formData.developer_mode_enabled) return;
+        void Promise.all([
+          loadRuntimeTasks(),
+          loadRuntimeSessions(),
+        ]);
+      }, Math.max(8000, SETTINGS_TAB_POLL_DELAY_MS));
+      backgroundTaskPollTimer = window.setInterval(() => {
+        if (!formData.developer_mode_enabled) return;
+        void Promise.all([
+          loadBackgroundTasks(),
+          loadBackgroundWorkerPool(),
+        ]);
+      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+    }
+
+    return () => {
+      if (memoryPollTimer) {
+        window.clearInterval(memoryPollTimer);
+      }
+      if (runtimePollTimer) {
+        window.clearInterval(runtimePollTimer);
+      }
+      if (backgroundTaskPollTimer) {
+        window.clearInterval(backgroundTaskPollTimer);
+      }
+    };
+  }, [activeTab, ensureTabResourcesLoaded, formData.developer_mode_enabled, isActive, loadBackgroundTasks, loadBackgroundWorkerPool, loadRuntimeSessions, loadRuntimeTasks]);
 
   const handleRebuildIndex = async () => {
-    if (!confirm('确定要重建所有索引吗？这可能需要一些时间，且会暂时清空现有向量数据。')) return;
+    if (!(await appConfirm('确定要重建所有索引吗？这可能需要一些时间，且会暂时清空现有向量数据。', { title: '重建索引', confirmLabel: '重建', tone: 'danger' }))) return;
 
     setIsRebuilding(true);
     try {
       await window.ipcRenderer.invoke('indexing:rebuild-all');
-      alert('已触发后台索引重建任务。您可以在侧边栏查看进度。');
+      void appAlert('已触发后台索引重建任务。您可以在侧边栏查看进度。');
       loadVectorStats();
     } catch (e) {
-      alert('重建失败: ' + String(e));
+      void appAlert('重建失败: ' + String(e));
     } finally {
       setIsRebuilding(false);
     }
@@ -2355,12 +2593,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       const res = await window.ipcRenderer.installYtdlp();
       if (res.success) {
         await checkTools();
-        alert('安装成功！');
+        void appAlert('安装成功！');
       } else {
-        alert('安装失败: ' + res.error);
+        void appAlert('安装失败: ' + res.error);
       }
     } catch (e) {
-      alert('安装出错');
+      void appAlert('安装出错');
     } finally {
       setIsInstallingTool(false);
     }
@@ -2372,12 +2610,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       const res = await window.ipcRenderer.updateYtdlp();
       if (res.success) {
         await checkTools();
-        alert('更新成功！');
+        void appAlert('更新成功！');
       } else {
-        alert('更新失败: ' + res.error);
+        void appAlert('更新失败: ' + res.error);
       }
     } catch (e) {
-      alert('更新出错');
+      void appAlert('更新出错');
     } finally {
       setIsInstallingTool(false);
     }
@@ -2388,14 +2626,14 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     try {
       const result = await window.ipcRenderer.browserPlugin.prepare();
       if (!result.success) {
-        window.alert(`插件准备失败：${result.error || '未知错误'}`);
+        void appAlert(`插件准备失败：${result.error || '未知错误'}`);
         return;
       }
       await loadBrowserPluginStatus();
-      window.alert(`插件已准备完成。\n\n目录：${result.path}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，选择“加载已解压的扩展程序”，并指向该目录。`);
+      void appAlert(`插件已准备完成。\n\n目录：${result.path}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，选择“加载已解压的扩展程序”，并指向该目录。`);
     } catch (error) {
       console.error('Failed to prepare browser plugin', error);
-      window.alert(`插件准备失败：${String(error)}`);
+      void appAlert(`插件准备失败：${String(error)}`);
     } finally {
       setIsPreparingBrowserPlugin(false);
     }
@@ -2405,13 +2643,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     try {
       const result = await window.ipcRenderer.browserPlugin.openDir();
       if (!result.success) {
-        window.alert(`打开插件目录失败：${result.error || '未知错误'}`);
+        void appAlert(`打开插件目录失败：${result.error || '未知错误'}`);
         return;
       }
       await loadBrowserPluginStatus();
     } catch (error) {
       console.error('Failed to open browser plugin dir', error);
-      window.alert(`打开插件目录失败：${String(error)}`);
+      void appAlert(`打开插件目录失败：${String(error)}`);
     }
   };
 
@@ -2554,7 +2792,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         {tabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              const startedAt = performance.now();
+              setActiveTab(tab.id);
+              logSettingsPerf(`tab-click:${tab.id}`, startedAt);
+            }}
             className={clsx(
               "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
               activeTab === tab.id ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-secondary/50 hover:text-text-primary"
@@ -2637,6 +2879,21 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                     </div>
                   </div>
 
+                  {!aiTabContentReady && (
+                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary space-y-3">
+                      <div>AI 模型页已切换到最小占位模式，先确认是否仍会卡死。</div>
+                      <button
+                        type="button"
+                        onClick={() => setAiTabContentReady(true)}
+                        className="px-3 py-2 rounded-lg border border-border bg-surface-primary text-text-primary hover:bg-surface-secondary transition-colors"
+                      >
+                        加载高级 AI 设置
+                      </button>
+                    </div>
+                  )}
+
+                  {aiTabContentReady && (
+                  <>
                   {aiModelSubTab === 'custom' && (
                   <>
                   <div className="space-y-4">
@@ -3338,8 +3595,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                   </div>
                   </>
                   )}
-                  {aiModelSubTab === 'login' && officialAiPanelEnabled && (
-                    <div className="space-y-4">
+                  {officialAiPanelEnabled && (
+                    <div className={aiModelSubTab === 'login' ? 'space-y-4' : 'hidden'} aria-hidden={aiModelSubTab !== 'login'}>
                       {OfficialAiPanelComponent ? (
                         <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
                       ) : (
@@ -3348,6 +3605,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         </div>
                       )}
                     </div>
+                  )}
+                  </>
                   )}
 
                 </section>

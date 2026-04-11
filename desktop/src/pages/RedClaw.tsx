@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
     Bot,
     Check,
@@ -399,9 +399,19 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     const [longAdvanced, setLongAdvanced] = useState(false);
     const [longDraft, setLongDraft] = useState<LongDraft>(() => longDraftFromTemplate(LONG_TEMPLATES[0]));
     const [isAddingLong, setIsAddingLong] = useState(false);
+    const sessionRequestIdRef = useRef(0);
+    const runnerStatusRequestIdRef = useRef(0);
+    const projectsRequestIdRef = useRef(0);
+    const skillsRequestIdRef = useRef(0);
+    const hasSessionSnapshotRef = useRef(false);
+    const hasRunnerSnapshotRef = useRef(false);
+    const hasSkillsSnapshotRef = useRef(false);
 
     const initSession = useCallback(async () => {
-        setIsSessionLoading(true);
+        const requestId = ++sessionRequestIdRef.current;
+        if (!hasSessionSnapshotRef.current) {
+            setIsSessionLoading(true);
+        }
         try {
             const spaceInfo = await window.ipcRenderer.invoke('spaces:list') as {
                 activeSpaceId?: string;
@@ -417,12 +427,18 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
                 title: `RedClaw · ${spaceName}`,
                 initialContext: `${REDCLAW_CONTEXT}\n当前空间: ${spaceName} (${activeSpaceId})`,
             });
+            if (requestId !== sessionRequestIdRef.current) return;
             setSessionId(session.id);
+            hasSessionSnapshotRef.current = true;
         } catch (error) {
             console.error('Failed to initialize RedClaw session:', error);
-            setSessionId(null);
+            if (!hasSessionSnapshotRef.current) {
+                setSessionId(null);
+            }
         } finally {
-            setIsSessionLoading(false);
+            if (requestId === sessionRequestIdRef.current) {
+                setIsSessionLoading(false);
+            }
         }
     }, []);
 
@@ -436,10 +452,15 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     }, []);
 
     const loadRunnerStatus = useCallback(async (syncForm = false) => {
-        setAutomationLoading(true);
+        const requestId = ++runnerStatusRequestIdRef.current;
+        if (!hasRunnerSnapshotRef.current) {
+            setAutomationLoading(true);
+        }
         try {
             const status = await window.ipcRenderer.redclawRunner.getStatus() as RunnerStatus;
+            if (requestId !== runnerStatusRequestIdRef.current) return;
             setRunnerStatus(status);
+            hasRunnerSnapshotRef.current = true;
             if (syncForm) {
                 applyRunnerForm(status);
             }
@@ -447,32 +468,41 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             console.error('Failed to load runner status:', error);
             setAutomationMessage('加载自动化状态失败');
         } finally {
-            setAutomationLoading(false);
+            if (requestId === runnerStatusRequestIdRef.current) {
+                setAutomationLoading(false);
+            }
         }
     }, [applyRunnerForm]);
 
     const loadProjects = useCallback(async () => {
+        const requestId = ++projectsRequestIdRef.current;
         try {
             const list = await window.ipcRenderer.invoke('redclaw:list-projects', { limit: 60 }) as RedClawProjectSummary[];
+            if (requestId !== projectsRequestIdRef.current) return;
             if (Array.isArray(list)) {
                 setProjects(list);
             }
         } catch (error) {
             console.error('Failed to load RedClaw projects:', error);
-            setProjects([]);
         }
     }, []);
 
     const loadSkills = useCallback(async () => {
-        setIsSkillsLoading(true);
+        const requestId = ++skillsRequestIdRef.current;
+        if (!hasSkillsSnapshotRef.current) {
+            setIsSkillsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.listSkills();
+            if (requestId !== skillsRequestIdRef.current) return;
             setSkills((list || []) as SkillDefinition[]);
+            hasSkillsSnapshotRef.current = true;
         } catch (error) {
             console.error('Failed to load skills:', error);
-            setSkills([]);
         } finally {
-            setIsSkillsLoading(false);
+            if (requestId === skillsRequestIdRef.current) {
+                setIsSkillsLoading(false);
+            }
         }
     }, []);
 
@@ -948,7 +978,7 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     return (
         <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
             <div className="relative flex-1 min-w-0 overflow-hidden">
-                {isSessionLoading ? (
+                {isSessionLoading && !sessionId ? (
                     <div className="h-full flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3 text-text-tertiary">
                             <Loader2 className="w-6 h-6 animate-spin" />

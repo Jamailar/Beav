@@ -1,4 +1,7 @@
 use crate::persistence::{with_store, with_store_mut};
+use crate::runtime::{
+    runtime_direct_route_record, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -87,21 +90,27 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(json!(sessions))
             }),
             "sessions:list" => with_store(state, |store| {
+                let started_at = now_ms();
+                let request_id = format!("sessions:list:{}", started_at);
                 let mut sessions = store.chat_sessions.clone();
                 sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                let mut transcript_count_by_session = std::collections::HashMap::<String, i64>::new();
+                let mut checkpoint_count_by_session = std::collections::HashMap::<String, i64>::new();
+                for item in &store.session_transcript_records {
+                    *transcript_count_by_session
+                        .entry(item.session_id.clone())
+                        .or_insert(0) += 1;
+                }
+                for item in &store.session_checkpoints {
+                    *checkpoint_count_by_session
+                        .entry(item.session_id.clone())
+                        .or_insert(0) += 1;
+                }
                 let items: Vec<Value> = sessions
                     .into_iter()
                     .map(|session| {
-                        let transcript_count = store
-                            .session_transcript_records
-                            .iter()
-                            .filter(|item| item.session_id == session.id)
-                            .count() as i64;
-                        let checkpoint_count = store
-                            .session_checkpoints
-                            .iter()
-                            .filter(|item| item.session_id == session.id)
-                            .count() as i64;
+                        let transcript_count = transcript_count_by_session.get(&session.id).copied().unwrap_or(0);
+                        let checkpoint_count = checkpoint_count_by_session.get(&session.id).copied().unwrap_or(0);
                         json!({
                             "id": session.id,
                             "transcriptCount": transcript_count,
@@ -114,6 +123,14 @@ pub fn handle_chat_sessions_wander_channel(
                         })
                     })
                     .collect();
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "sessions:list",
+                    started_at,
+                    Some(format!("sessions={}", items.len())),
+                );
                 Ok(json!(items))
             }),
             "sessions:get" => {
@@ -303,8 +320,21 @@ pub fn handle_chat_sessions_wander_channel(
                     store
                         .chat_messages
                         .retain(|item| item.session_id != session_id);
+                    store
+                        .session_transcript_records
+                        .retain(|item| item.session_id != session_id);
+                    store
+                        .session_checkpoints
+                        .retain(|item| item.session_id != session_id);
+                    store
+                        .session_tool_results
+                        .retain(|item| item.session_id != session_id);
                     Ok(json!({ "success": true }))
-                })
+                })?;
+                if let Ok(mut guard) = state.chat_runtime_states.lock() {
+                    guard.remove(&session_id);
+                }
+                Ok(json!({ "success": true }))
             }
             "chat:compact-context" => Ok(json!({ "success": true })),
             "chat:get-context-usage" => Ok(json!({
@@ -538,6 +568,8 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 let task_started_at = now_ms();
                 let task_id = with_store_mut(state, |store| {
+                    let typed_route = RuntimeRouteRecord::from_value(&route)
+                        .unwrap_or_else(|| runtime_direct_route_record("wander", "漫步生成新选题", None));
                     let task = RuntimeTaskRecord {
                         id: make_id("task"),
                         task_type: "wander".to_string(),
@@ -547,18 +579,20 @@ pub fn handle_chat_sessions_wander_channel(
                             "context-session:wander:{}",
                             slug_from_relative_path(&request_id)
                         )),
-                        intent: payload_string(&route, "intent"),
-                        role_id: payload_string(&route, "recommendedRole"),
+                        intent: Some(typed_route.intent.clone()),
+                        role_id: Some(typed_route.recommended_role.clone()),
                         goal: Some("漫步生成新选题".to_string()),
                         current_node: Some("plan".to_string()),
-                        route: Some(route.clone()),
+                        route: Some(typed_route.clone()),
                         graph: runtime_graph_for_route(&route),
                         artifacts: Vec::new(),
-                        checkpoints: vec![json!({
-                            "type": "route",
-                            "summary": payload_string(&route, "reasoning").unwrap_or_else(|| "wander route".to_string()),
-                            "payload": route.clone()
-                        })],
+                        checkpoints: vec![RuntimeCheckpointRecord::new(
+                            "route",
+                            "plan",
+                            payload_string(&route, "reasoning")
+                                .unwrap_or_else(|| "wander route".to_string()),
+                            Some(route.clone()),
+                        )],
                         metadata: Some(json!({
                             "requestId": request_id.clone(),
                             "contextType": "wander",
@@ -916,12 +950,13 @@ pub fn handle_chat_sessions_wander_channel(
                         task.status = "completed".to_string();
                         task.completed_at = Some(now_i64());
                         task.updated_at = now_i64();
-                        task.artifacts.push(json!({
-                            "type": "wander-result",
-                            "label": "漫步结果",
-                            "payload": result_value.clone(),
-                            "historyId": history_id.clone(),
-                        }));
+                        task.artifacts.push(RuntimeArtifact::new(
+                            "wander-result",
+                            "漫步结果",
+                            None,
+                            Some(json!({ "historyId": history_id.clone() })),
+                            Some(result_value.clone()),
+                        ));
                     }
                     append_runtime_task_trace(
                         store,

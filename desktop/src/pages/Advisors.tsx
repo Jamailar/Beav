@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, Database, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download } from 'lucide-react';
 import { clsx } from 'clsx';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 
 interface Advisor {
     id: string;
@@ -24,7 +25,7 @@ const isRenderableAvatarUrl = (value: string): boolean => {
     return hasRenderableAssetUrl(value);
 };
 
-export function Advisors() {
+export function Advisors({ isActive = true }: { isActive?: boolean }) {
     const [advisors, setAdvisors] = useState<Advisor[]>([]);
     const [selectedAdvisor, setSelectedAdvisor] = useState<Advisor | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -37,8 +38,11 @@ export function Advisors() {
 
     // Indexing status
     const [indexingStatus, setIndexingStatus] = useState<any>(null);
+    const hasLoadedSnapshotRef = useRef(false);
+    const loadAdvisorsRequestRef = useRef(0);
 
     useEffect(() => {
+        if (!isActive) return;
         const handleIndexingStatus = (_: unknown, status: any) => {
             setIndexingStatus(status);
         };
@@ -50,38 +54,46 @@ export function Advisors() {
         return () => {
             window.ipcRenderer.off('indexing:status', handleIndexingStatus);
         };
-    }, []);
+    }, [isActive]);
 
-    const loadAdvisors = useCallback(async () => {
-        setIsLoading(true);
+    const loadAdvisors = useCallback(async (): Promise<Advisor[]> => {
+        const requestId = loadAdvisorsRequestRef.current + 1;
+        loadAdvisorsRequestRef.current = requestId;
+        if (!hasLoadedSnapshotRef.current) {
+            setIsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.invoke('advisors:list') as Advisor[];
-            setAdvisors(list || []);
+            if (requestId !== loadAdvisorsRequestRef.current) return [];
+            const normalizedList = Array.isArray(list) ? list : [];
+            setAdvisors(normalizedList);
+            setSelectedAdvisor((prev) => {
+                if (!prev) return prev;
+                return normalizedList.find((item) => item.id === prev.id) || null;
+            });
+            hasLoadedSnapshotRef.current = true;
+            return normalizedList;
         } catch (e) {
+            if (requestId !== loadAdvisorsRequestRef.current) return [];
             console.error('Failed to load advisors:', e);
+            return [];
         } finally {
-            setIsLoading(false);
+            if (requestId === loadAdvisorsRequestRef.current) {
+                setIsLoading(false);
+            }
         }
     }, []);
 
     // Listen for download progress
     useEffect(() => {
+        if (!isActive) return;
         const handleDownloadProgress = (_event: unknown, data: { advisorId: string; progress: string }) => {
             setDownloadStatus(data);
             // 检测下载完成（新架构会发送"下载完成！"消息）
             if (data.progress.includes('下载完成') || data.progress.includes('下载失败')) {
                 // 刷新 advisor 列表以更新 knowledgeFiles
                 setTimeout(() => {
-                    loadAdvisors().then(() => {
-                        // 如果当前选中的是这个 advisor，更新 selectedAdvisor
-                        setAdvisors(prev => {
-                            const updated = prev.find(a => a.id === data.advisorId);
-                            if (updated && selectedAdvisor?.id === data.advisorId) {
-                                setSelectedAdvisor(updated);
-                            }
-                            return prev;
-                        });
-                    });
+                    void loadAdvisors();
                     // 清除下载状态显示
                     setTimeout(() => setDownloadStatus(null), 3000);
                 }, 1000);
@@ -92,11 +104,12 @@ export function Advisors() {
         return () => {
             window.ipcRenderer.off('advisors:download-progress', handleDownloadProgress);
         };
-    }, [selectedAdvisor, loadAdvisors]);
+    }, [isActive, loadAdvisors]);
 
     useEffect(() => {
-        loadAdvisors();
-    }, [loadAdvisors]);
+        if (!isActive) return;
+        void loadAdvisors();
+    }, [isActive, loadAdvisors]);
 
     const handleCreate = () => {
         setEditingAdvisor(null);
@@ -109,7 +122,7 @@ export function Advisors() {
     };
 
     const handleDelete = async (advisorId: string) => {
-        if (!confirm('确定要删除这个智囊团成员吗？')) return;
+        if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
         try {
             await window.ipcRenderer.invoke('advisors:delete', advisorId);
             await loadAdvisors();
@@ -163,10 +176,7 @@ export function Advisors() {
         try {
             const result = await window.ipcRenderer.invoke('advisors:upload-knowledge', advisorId);
             if (result) {
-                await loadAdvisors();
-                // Refresh selected advisor
-                // Note: state update is async, we need to be careful. Better to re-fetch list and find.
-                const list = await window.ipcRenderer.invoke('advisors:list') as Advisor[];
+                const list = await loadAdvisors();
                 const updated = list.find(a => a.id === advisorId);
                 if (updated) setSelectedAdvisor(updated);
             }
@@ -176,7 +186,7 @@ export function Advisors() {
     };
 
     const handleDeleteKnowledge = async (advisorId: string, fileName: string) => {
-        if (!confirm(`确定要删除知识库文件 "${fileName}" 吗？`)) return;
+        if (!(await appConfirm(`确定要删除知识库文件 "${fileName}" 吗？`, { title: '删除知识文件', confirmLabel: '删除', tone: 'danger' }))) return;
         try {
             await window.ipcRenderer.invoke('advisors:delete-knowledge', { advisorId, fileName });
             await loadAdvisors();
@@ -186,12 +196,12 @@ export function Advisors() {
     };
 
     const handleRebuildAdvisorIndex = async (advisorId: string) => {
-        if (!confirm('确定要重建该成员的知识库索引吗？\n\n这可能需要几分钟时间，具体取决于知识库文件的大小。在此期间，您可以继续使用其他功能。')) return;
+        if (!(await appConfirm('确定要重建该成员的知识库索引吗？\n\n这可能需要几分钟时间，具体取决于知识库文件的大小。在此期间，您可以继续使用其他功能。', { title: '重建知识库索引', confirmLabel: '重建', tone: 'danger' }))) return;
         try {
             await window.ipcRenderer.invoke('indexing:rebuild-advisor', advisorId);
         } catch (e) {
             console.error('Failed to rebuild advisor index:', e);
-            alert('重建触发失败');
+            void appAlert('重建触发失败');
         }
     };
 
@@ -211,7 +221,7 @@ export function Advisors() {
                 </div>
 
                 <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {isLoading ? (
+                    {isLoading && advisors.length === 0 ? (
                         <div className="text-center text-text-tertiary text-xs py-8">加载中...</div>
                     ) : advisors.length === 0 ? (
                         <div className="text-center text-text-tertiary text-xs py-8">
@@ -337,11 +347,11 @@ export function Advisors() {
                                                     // 更新选中的 advisor
                                                     setSelectedAdvisor(prev => prev ? { ...prev, systemPrompt: result.prompt! } : null);
                                                 } else {
-                                                    alert('优化失败: ' + (result.error || '未知错误'));
+                                                    void appAlert('优化失败: ' + (result.error || '未知错误'));
                                                 }
                                             } catch (e) {
                                                 console.error('Deep optimization error:', e);
-                                                alert('优化失败，请检查 API 设置');
+                                                void appAlert('优化失败，请检查 API 设置');
                                             } finally {
                                                 setIsOptimizingPrompt(false);
                                             }
@@ -480,7 +490,7 @@ export function Advisors() {
                             </section>
 
                             {/* Video Management Section - Only for YouTube-imported advisors */}
-                            <VideoManagement advisorId={selectedAdvisor.id} />
+                            <VideoManagement advisorId={selectedAdvisor.id} isActive={isActive} />
                         </div>
                     </>
                 ) : (
@@ -539,7 +549,7 @@ interface YoutubeRunnerStatus {
 }
 
 // Video Management Component
-function VideoManagement({ advisorId }: { advisorId: string }) {
+function VideoManagement({ advisorId, isActive = true }: { advisorId: string; isActive?: boolean }) {
     const [videos, setVideos] = useState<LocalVideoEntry[]>([]);
     const [youtubeChannel, setYoutubeChannel] = useState<YoutubeChannelState | null>(null);
     const [runnerStatus, setRunnerStatus] = useState<YoutubeRunnerStatus | null>(null);
@@ -554,37 +564,54 @@ function VideoManagement({ advisorId }: { advisorId: string }) {
 
     const [fetchCount, setFetchCount] = useState(50);
     const [showFetchSettings, setShowFetchSettings] = useState(false);
+    const hasLoadedVideosSnapshotRef = useRef(false);
+    const loadVideosRequestRef = useRef(0);
+    const loadRunnerStatusRequestRef = useRef(0);
 
     const loadRunnerStatus = useCallback(async () => {
+        const requestId = loadRunnerStatusRequestRef.current + 1;
+        loadRunnerStatusRequestRef.current = requestId;
         try {
             const res = await window.ipcRenderer.getAdvisorYoutubeRunnerStatus();
+            if (requestId !== loadRunnerStatusRequestRef.current) return;
             if (res.success) {
                 setRunnerStatus(res.status || null);
             }
         } catch (e) {
+            if (requestId !== loadRunnerStatusRequestRef.current) return;
             console.error(e);
         }
     }, []);
 
     const loadVideos = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadVideosRequestRef.current + 1;
+        loadVideosRequestRef.current = requestId;
+        if (!hasLoadedVideosSnapshotRef.current) {
+            setIsLoading(true);
+        }
         try {
             const res = await window.ipcRenderer.getVideos(advisorId);
+            if (requestId !== loadVideosRequestRef.current) return;
             if (res.success) {
                 setVideos(res.videos || []);
                 setYoutubeChannel(res.youtubeChannel || null);
+                hasLoadedVideosSnapshotRef.current = true;
             }
         } catch (e) {
+            if (requestId !== loadVideosRequestRef.current) return;
             console.error(e);
         } finally {
-            setIsLoading(false);
+            if (requestId === loadVideosRequestRef.current) {
+                setIsLoading(false);
+            }
         }
     }, [advisorId]);
 
     useEffect(() => {
-        loadVideos();
-        loadRunnerStatus();
-    }, [loadVideos, loadRunnerStatus]);
+        if (!isActive) return;
+        void loadVideos();
+        void loadRunnerStatus();
+    }, [isActive, loadVideos, loadRunnerStatus]);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -599,7 +626,7 @@ function VideoManagement({ advisorId }: { advisorId: string }) {
                 setCurrentPage(1);
                 await loadVideos();
             } else {
-                alert('刷新失败: ' + res.error);
+                void appAlert('刷新失败: ' + res.error);
             }
         } catch (e) {
             console.error(e);
@@ -623,7 +650,7 @@ function VideoManagement({ advisorId }: { advisorId: string }) {
         try {
             const res = await window.ipcRenderer.retryFailedVideos(advisorId);
             if (!res.success) {
-                alert('重试失败: ' + (res.error || '未知错误'));
+                void appAlert('重试失败: ' + (res.error || '未知错误'));
             }
         } catch (e) {
             console.error(e);
@@ -662,14 +689,14 @@ function VideoManagement({ advisorId }: { advisorId: string }) {
                 maxDownloadsPerRun: Number(youtubeChannel.maxDownloadsPerRun) || 3,
             });
             if (!res.success) {
-                alert('保存失败: ' + (res.error || '未知错误'));
+                void appAlert('保存失败: ' + (res.error || '未知错误'));
                 return;
             }
             await loadVideos();
             await loadRunnerStatus();
         } catch (e) {
             console.error(e);
-            alert('保存失败，请稍后重试');
+            void appAlert('保存失败，请稍后重试');
         } finally {
             setIsSavingSettings(false);
         }
@@ -680,13 +707,13 @@ function VideoManagement({ advisorId }: { advisorId: string }) {
         try {
             const res = await window.ipcRenderer.runAdvisorYoutubeNow(advisorId);
             if (!res.success) {
-                alert('后台同步失败: ' + (res.error || '未知错误'));
+                void appAlert('后台同步失败: ' + (res.error || '未知错误'));
             }
             await loadVideos();
             await loadRunnerStatus();
         } catch (e) {
             console.error(e);
-            alert('后台同步失败，请稍后重试');
+            void appAlert('后台同步失败，请稍后重试');
         } finally {
             setIsRunningNow(false);
         }
@@ -982,10 +1009,10 @@ function AdvisorModal({
             if (result.success) {
                 await checkYtdlpStatus();
             } else {
-                alert('安装失败: ' + (result.error || '未知错误'));
+                void appAlert('安装失败: ' + (result.error || '未知错误'));
             }
         } catch (e) {
-            alert('安装出错，请稍后重试');
+            void appAlert('安装出错，请稍后重试');
         } finally {
             setIsInstallingYtdlp(false);
         }
@@ -1014,11 +1041,11 @@ function AdvisorModal({
                     setSystemPrompt(`角色背景：\n${info.channelDescription}\n\n请模仿这个频道的风格进行对话。`);
                 }
             } else {
-                alert('获取失败: ' + (result.error || '未知错误'));
+                void appAlert('获取失败: ' + (result.error || '未知错误'));
             }
         } catch (e) {
             console.error(e);
-            alert('获取失败，请检查 ytdlp 是否安装以及网络连接');
+            void appAlert('获取失败，请检查 ytdlp 是否安装以及网络连接');
         } finally {
             setIsLoadingInfo(false);
         }
@@ -1050,11 +1077,11 @@ function AdvisorModal({
             if (result.success && result.prompt) {
                 setSystemPrompt(result.prompt);
             } else {
-                alert('优化失败: ' + (result.error || '未知错误'));
+                void appAlert('优化失败: ' + (result.error || '未知错误'));
             }
         } catch (e) {
             console.error('Optimization error:', e);
-            alert('优化失败，请检查 API 设置');
+            void appAlert('优化失败，请检查 API 设置');
         } finally {
             setIsOptimizing(false);
         }
@@ -1063,7 +1090,7 @@ function AdvisorModal({
     // AI Persona Generation for YouTube mode
     const handleGeneratePersona = async () => {
         if (!youtubeInfo) {
-            alert('请先获取频道信息');
+            void appAlert('请先获取频道信息');
             return;
         }
 
@@ -1088,11 +1115,11 @@ function AdvisorModal({
                     }
                 }
             } else {
-                alert('生成失败: ' + (result.error || '未知错误'));
+                void appAlert('生成失败: ' + (result.error || '未知错误'));
             }
         } catch (e) {
             console.error('Persona generation error:', e);
-            alert('生成失败，请检查 API 设置');
+            void appAlert('生成失败，请检查 API 设置');
         } finally {
             setIsOptimizing(false);
         }

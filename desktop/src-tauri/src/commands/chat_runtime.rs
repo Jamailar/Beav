@@ -11,12 +11,12 @@ use crate::runtime::{append_session_checkpoint, ChatExecutionResult};
 use crate::{
     append_debug_log_state, append_session_transcript, default_memory_maintenance_status,
     ensure_redclaw_onboarding_completed_with_defaults, generate_chat_response,
-    handle_redclaw_onboarding_turn, make_id, memory_maintenance_status_from_settings,
+    handle_redclaw_onboarding_turn, make_id, memory_maintenance_status_from_workspace,
     next_memory_maintenance_at_ms, now_i64, now_iso, resolve_chat_config,
     resolve_runtime_mode_from_context_type, run_anthropic_interactive_chat_runtime,
     run_gemini_interactive_chat_runtime, run_openai_interactive_chat_runtime,
-    session_title_from_message, value_to_i64_string, write_memory_maintenance_status, AppState,
-    ChatMessageRecord,
+    session_title_from_message, value_to_i64_string, write_memory_maintenance_status_for_workspace,
+    AppState, ChatMessageRecord,
 };
 
 pub fn execute_chat_exchange(
@@ -224,7 +224,8 @@ pub fn execute_chat_exchange(
     let _ = update_chat_runtime_state(state, &final_session_id, false, response.clone(), None);
     let _ = with_store_mut(state, |store| {
         let next_scheduled_at = next_memory_maintenance_at_ms(&response, now_i64());
-        let current = memory_maintenance_status_from_settings(&store.settings)
+        let current = memory_maintenance_status_from_workspace(state)?
+            .or_else(|| crate::memory_maintenance_status_from_settings(&store.settings))
             .unwrap_or_else(default_memory_maintenance_status);
         let status = json!({
             "started": true,
@@ -239,9 +240,10 @@ pub fn execute_chat_exchange(
             "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
             "nextScheduledAt": next_scheduled_at,
         });
-        let mut settings = store.settings.clone();
-        write_memory_maintenance_status(&mut settings, &status);
-        store.settings = settings;
+        write_memory_maintenance_status_for_workspace(state, &status)?;
+        if let Some(object) = store.settings.as_object_mut() {
+            object.remove("redbox_memory_maintenance_status_json");
+        }
         store.redclaw_state.next_maintenance_at =
             value_to_i64_string(status.get("nextScheduledAt"));
         Ok(())

@@ -138,22 +138,51 @@ fn background_phase_from_status(status: &str) -> &str {
 
 pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
     let mut tasks = Vec::new();
-    for task in &store.redclaw_state.scheduled_tasks {
-        let definition_id = store
-            .redclaw_job_definitions
+    let definition_by_scheduled_source: std::collections::HashMap<String, String> = store
+        .redclaw_job_definitions
+        .iter()
+        .filter_map(|item| {
+            if item.source_kind.as_deref() == Some("scheduled") {
+                item.source_task_id
+                    .as_ref()
+                    .map(|source_task_id| (source_task_id.clone(), item.id.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let definition_by_long_cycle_source: std::collections::HashMap<String, String> = store
+        .redclaw_job_definitions
+        .iter()
+        .filter_map(|item| {
+            if item.source_kind.as_deref() == Some("long_cycle") {
+                item.source_task_id
+                    .as_ref()
+                    .map(|source_task_id| (source_task_id.clone(), item.id.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let latest_execution_by_definition: std::collections::HashMap<String, &crate::RedclawJobExecutionRecord> =
+        store
+            .redclaw_job_executions
             .iter()
-            .find(|item| {
-                item.source_kind.as_deref() == Some("scheduled")
-                    && item.source_task_id.as_deref() == Some(task.id.as_str())
-            })
-            .map(|item| item.id.clone());
-        let execution = definition_id.as_ref().and_then(|definition_id| {
-            store
-                .redclaw_job_executions
-                .iter()
-                .filter(|item| item.definition_id == *definition_id)
-                .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
-        });
+            .fold(std::collections::HashMap::new(), |mut acc, execution| {
+                let replace = acc
+                    .get(&execution.definition_id)
+                    .map(|current| execution.updated_at > current.updated_at)
+                    .unwrap_or(true);
+                if replace {
+                    acc.insert(execution.definition_id.clone(), execution);
+                }
+                acc
+            });
+    for task in &store.redclaw_state.scheduled_tasks {
+        let definition_id = definition_by_scheduled_source.get(&task.id).cloned();
+        let execution = definition_id
+            .as_ref()
+            .and_then(|definition_id| latest_execution_by_definition.get(definition_id).copied());
         let status = execution
             .map(|item| item.status.as_str())
             .unwrap_or(if task.enabled { "running" } else { "cancelled" });
@@ -189,21 +218,10 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
         }));
     }
     for task in &store.redclaw_state.long_cycle_tasks {
-        let definition_id = store
-            .redclaw_job_definitions
-            .iter()
-            .find(|item| {
-                item.source_kind.as_deref() == Some("long_cycle")
-                    && item.source_task_id.as_deref() == Some(task.id.as_str())
-            })
-            .map(|item| item.id.clone());
-        let execution = definition_id.as_ref().and_then(|definition_id| {
-            store
-                .redclaw_job_executions
-                .iter()
-                .filter(|item| item.definition_id == *definition_id)
-                .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
-        });
+        let definition_id = definition_by_long_cycle_source.get(&task.id).cloned();
+        let execution = definition_id
+            .as_ref()
+            .and_then(|definition_id| latest_execution_by_definition.get(definition_id).copied());
         let status = execution
             .map(|item| item.status.as_str())
             .unwrap_or(task.status.as_str());

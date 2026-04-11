@@ -1,6 +1,26 @@
 let latestPageInfo = null;
 let latestUrl = location.href;
 let updateTimer = null;
+let fastPollTimer = null;
+let fastPollUntil = 0;
+
+const EMIT_DEBOUNCE_MS = 40;
+const FAST_POLL_INTERVAL_MS = 120;
+const FAST_POLL_DURATION_MS = 2500;
+const URL_WATCH_INTERVAL_MS = 150;
+
+function createLinkFallbackPageInfo(overrides = {}) {
+    return {
+        kind: 'generic',
+        action: 'save-page-link',
+        label: '仅保存链接到知识库',
+        description: '当前页面可作为链接收藏保存到知识库。',
+        primaryEnabled: true,
+        detected: false,
+        statusText: '未检测到内容',
+        ...overrides,
+    };
+}
 
 function getInitialState() {
     const scripts = document.querySelectorAll('script');
@@ -64,13 +84,10 @@ function detectXhsNoteInfo() {
     const hasValidNote = Boolean(noteRoot || articleRoot || hasStateContent || hasDomContent);
 
     if (!hasValidNote) {
-        return {
+        return createLinkFallbackPageInfo({
             kind: 'xhs-pending',
-            action: 'save-xhs',
-            label: '未检测到有效内容请刷新',
             description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
-            primaryEnabled: false,
-        };
+        });
     }
 
     return {
@@ -79,6 +96,7 @@ function detectXhsNoteInfo() {
         label: hasVideo && imageEls.length === 0 ? '保存小红书视频笔记到知识库' : '保存小红书图文到知识库',
         description: '当前页面已识别为小红书内容页。',
         primaryEnabled: true,
+        detected: true,
     };
 }
 
@@ -93,17 +111,25 @@ function detectPageInfo() {
             label: '保存公众号文章到知识库',
             description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
             primaryEnabled: true,
+            detected: true,
         };
     }
 
     if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') {
         const isVideoPage = pathname.startsWith('/watch') || pathname.startsWith('/shorts/') || hostname === 'youtu.be';
+        if (!isVideoPage) {
+            return createLinkFallbackPageInfo({
+                kind: 'youtube-generic',
+                description: '当前页面还没有稳定识别到有效的视频内容。',
+            });
+        }
         return {
-            kind: isVideoPage ? 'youtube' : 'youtube-generic',
+            kind: 'youtube',
             action: 'save-youtube',
-            label: isVideoPage ? '保存youtube视频到知识库' : '未检测到有效内容请刷新',
-            description: isVideoPage ? '当前页面已识别为 YouTube 视频页。' : '当前页面还没有稳定识别到有效的视频内容。',
-            primaryEnabled: isVideoPage,
+            label: '保存YouTube视频到知识库',
+            description: '当前页面已识别为 YouTube 视频页。',
+            primaryEnabled: true,
+            detected: true,
         };
     }
 
@@ -111,13 +137,7 @@ function detectPageInfo() {
         return detectXhsNoteInfo();
     }
 
-    return {
-        kind: 'generic',
-        action: 'save-page-link',
-        label: '保存当前页面链接到知识库',
-        description: '当前页面可作为链接收藏保存到知识库。',
-        primaryEnabled: true,
-    };
+    return createLinkFallbackPageInfo();
 }
 
 function emitPageState() {
@@ -129,7 +149,7 @@ function emitPageState() {
     }).catch(() => {});
 }
 
-function scheduleEmit() {
+function scheduleEmit(delay = EMIT_DEBOUNCE_MS) {
     if (updateTimer) {
         clearTimeout(updateTimer);
     }
@@ -138,7 +158,20 @@ function scheduleEmit() {
             latestUrl = location.href;
         }
         emitPageState();
-    }, 120);
+    }, delay);
+}
+
+function startFastPolling(duration = FAST_POLL_DURATION_MS) {
+    fastPollUntil = Math.max(fastPollUntil, Date.now() + duration);
+    if (fastPollTimer) return;
+
+    fastPollTimer = setInterval(() => {
+        emitPageState();
+        if (Date.now() >= fastPollUntil) {
+            clearInterval(fastPollTimer);
+            fastPollTimer = null;
+        }
+    }, FAST_POLL_INTERVAL_MS);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -167,8 +200,22 @@ observer.observe(document.documentElement, {
 setInterval(() => {
     if (latestUrl !== location.href) {
         latestUrl = location.href;
-        scheduleEmit();
+        scheduleEmit(0);
+        startFastPolling();
     }
-}, 500);
+}, URL_WATCH_INTERVAL_MS);
 
-scheduleEmit();
+window.addEventListener('load', () => {
+    scheduleEmit(0);
+    startFastPolling();
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        scheduleEmit(0);
+        startFastPolling(1500);
+    }
+});
+
+scheduleEmit(0);
+startFastPolling();

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Lightbulb, Plus, Pencil, X, Check, FileText, RefreshCw, Power } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -27,7 +27,7 @@ const formatSkillSourceScope = (scope?: string) => {
     }
 };
 
-export function Skills() {
+export function Skills({ isActive = true }: { isActive?: boolean }) {
     const [skills, setSkills] = useState<Skill[]>([]);
     const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
     const [isEditing, setIsEditing] = useState(false);
@@ -38,22 +38,40 @@ export function Skills() {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [newSkillName, setNewSkillName] = useState('');
     const [createError, setCreateError] = useState('');
+    const skillsRef = useRef<Skill[]>([]);
+    const hasLoadedSnapshotRef = useRef(false);
+    const loadRequestRef = useRef(0);
+
+    useEffect(() => {
+        skillsRef.current = skills;
+    }, [skills]);
 
     const loadSkills = useCallback(async () => {
-        setIsLoading(true);
+        const requestId = loadRequestRef.current + 1;
+        loadRequestRef.current = requestId;
+        const hasLocalSkills = hasLoadedSnapshotRef.current || skillsRef.current.length > 0;
+        if (!hasLocalSkills) {
+            setIsLoading(true);
+        }
         try {
             const list = await window.ipcRenderer.listSkills();
+            if (requestId !== loadRequestRef.current) return;
             setSkills(list || []);
+            hasLoadedSnapshotRef.current = true;
         } catch (e) {
+            if (requestId !== loadRequestRef.current) return;
             console.error('Failed to load skills:', e);
         } finally {
-            setIsLoading(false);
+            if (requestId === loadRequestRef.current) {
+                setIsLoading(false);
+            }
         }
     }, []);
 
     useEffect(() => {
-        loadSkills();
-    }, [loadSkills]);
+        if (!isActive) return;
+        void loadSkills();
+    }, [isActive, loadSkills]);
 
     const handleSelectSkill = (skill: Skill) => {
         setSelectedSkill(skill);
@@ -170,7 +188,7 @@ export function Skills() {
                 </div>
 
                 <div className="flex-1 overflow-auto p-2 space-y-1">
-                    {isLoading ? (
+                    {isLoading && skills.length === 0 ? (
                         <div className="text-center text-text-tertiary text-xs py-8">
                             加载中...
                         </div>

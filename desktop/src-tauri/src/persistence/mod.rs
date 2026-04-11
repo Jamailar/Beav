@@ -2,11 +2,16 @@ use dirs::config_dir;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
 use tauri::State;
 
 use crate::runtime::SkillRecord;
 use crate::scheduler::sync_redclaw_job_definitions;
+use crate::workspace_loaders::{
+    load_chat_rooms_from_fs, load_chatroom_messages_from_fs, load_memories_from_fs,
+    load_memory_history_from_fs,
+};
 use crate::{
     active_space_workspace_root_from_store, load_advisors_from_fs, load_cover_assets_from_fs,
     load_document_sources_from_fs, load_knowledge_notes_from_fs, load_media_assets_from_fs,
@@ -200,7 +205,9 @@ pub fn with_store_mut<T>(
 ) -> Result<T, String> {
     let mut store = state.store.lock().map_err(|_| "状态锁已损坏".to_string())?;
     let result = mutator(&mut store)?;
-    persist_store(&state.store_path, &store)?;
+    let snapshot = store.clone();
+    drop(store);
+    schedule_store_persist(state, snapshot);
     Ok(result)
 }
 
@@ -220,6 +227,10 @@ pub fn hydrate_store_from_workspace_files(
     store.categories = load_subject_categories_from_fs(&root.join("subjects"));
     store.subjects = load_subjects_from_fs(&root.join("subjects"));
     store.advisors = load_advisors_from_fs(&root.join("advisors"));
+    store.chat_rooms = load_chat_rooms_from_fs(&root.join("chatrooms"));
+    store.chatroom_messages = load_chatroom_messages_from_fs(&root.join("chatrooms"));
+    store.memories = load_memories_from_fs(&root.join("memory"));
+    store.memory_history = load_memory_history_from_fs(&root.join("memory"));
     store.media_assets = load_media_assets_from_fs(&root.join("media"));
     store.cover_assets = load_cover_assets_from_fs(&root.join("cover"));
     store.knowledge_notes = load_knowledge_notes_from_fs(&root.join("knowledge"));
@@ -298,4 +309,41 @@ pub fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<
         }
         Ok(())
     })
+}
+
+fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
+    let path = state.store_path.clone();
+    let version = state
+        .store_persist_version
+        .fetch_add(1, Ordering::SeqCst)
+        .saturating_add(1);
+    let latest = state.store_persist_version.clone();
+    std::thread::spawn(move || {
+        let serialized = match serde_json::to_string_pretty(&store) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("[RedBox async persist] serialize failed: {error}");
+                return;
+            }
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                eprintln!("[RedBox async persist] create dir failed: {error}");
+                return;
+            }
+        }
+        let tmp_path = path.with_extension(format!("json.tmp.{version}"));
+        if let Err(error) = fs::write(&tmp_path, serialized) {
+            eprintln!("[RedBox async persist] temp write failed: {error}");
+            return;
+        }
+        if version != latest.load(Ordering::SeqCst) {
+            let _ = fs::remove_file(&tmp_path);
+            return;
+        }
+        if let Err(error) = fs::rename(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            eprintln!("[RedBox async persist] rename failed: {error}");
+        }
+    });
 }

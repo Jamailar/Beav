@@ -8,6 +8,7 @@ import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { appConfirm } from '../utils/appDialogs';
 
 interface Session {
   id: string;
@@ -430,6 +431,8 @@ export function Chat({
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
+  const chatRoomsRequestIdRef = useRef(0);
+  const sessionsRequestIdRef = useRef(0);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
@@ -532,18 +535,23 @@ export function Chat({
   }, []);
 
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
+    const requestId = ++chatRoomsRequestIdRef.current;
     const silent = Boolean(options?.silent);
     if (!silent) {
       setIsRoomPickerLoading(true);
     }
     try {
       const rooms = await window.ipcRenderer.invoke('chatrooms:list') as ChatRoom[];
-      setChatRooms(Array.isArray(rooms) ? rooms : []);
+      if (requestId !== chatRoomsRequestIdRef.current) {
+        return;
+      }
+      if (Array.isArray(rooms)) {
+        setChatRooms(rooms);
+      }
     } catch (error) {
       console.error('Failed to load chat rooms:', error);
-      setChatRooms([]);
     } finally {
-      if (!silent) {
+      if (requestId === chatRoomsRequestIdRef.current && !silent) {
         setIsRoomPickerLoading(false);
       }
     }
@@ -774,11 +782,16 @@ export function Chat({
   }, [pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
 
   const loadSessions = async () => {
+    const requestId = ++sessionsRequestIdRef.current;
     try {
       const list = await window.ipcRenderer.chat.getSessions();
-      setSessions(list);
-      if (list.length > 0 && !currentSessionId) {
-        selectSession(list[0].id);
+      if (requestId !== sessionsRequestIdRef.current) {
+        return;
+      }
+      const normalizedList = Array.isArray(list) ? list : [];
+      setSessions(normalizedList);
+      if (normalizedList.length > 0 && !currentSessionIdRef.current) {
+        void selectSession(normalizedList[0].id);
       }
     } catch (error) {
       console.error('Failed to load sessions:', error);
@@ -904,7 +917,15 @@ export function Chat({
   const clearSession = async () => {
     if (!currentSessionId) return;
     try {
+      if (isProcessing) {
+        window.ipcRenderer.chat.cancel({ sessionId: currentSessionId });
+      }
       await window.ipcRenderer.chat.clearMessages(currentSessionId);
+      missedChunksRef.current = '';
+      flushPendingAssistantChunk();
+      setIsProcessing(false);
+      setConfirmRequest(null);
+      setErrorNotice(null);
       setMessages([]);
     } catch (error) {
       console.error('Failed to clear session:', error);
@@ -913,7 +934,7 @@ export function Chat({
 
   const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation(); // 防止触发选择会话
-    if (!confirm('确定要删除这个对话吗？')) return;
+    if (!(await appConfirm('确定要删除这个对话吗？', { title: '删除对话', confirmLabel: '删除', tone: 'danger' }))) return;
 
     try {
       await window.ipcRenderer.chat.deleteSession(sessionId);
@@ -1028,7 +1049,7 @@ export function Chat({
 
   const handleOpenRoomPicker = useCallback(async () => {
     setShowRoomPicker(true);
-    await loadChatRooms();
+    void loadChatRooms();
   }, [loadChatRooms]);
 
   // 发送到群聊
@@ -1036,8 +1057,7 @@ export function Chat({
     if (!selectionMenu.text) return;
 
     try {
-      // 发送消息到群聊 - 注意参数名是 message 而不是 content
-      await window.ipcRenderer.invoke('chatrooms:send', {
+      window.ipcRenderer.send('chatrooms:send', {
         roomId,
         message: selectionMenu.text
       });
@@ -1466,6 +1486,28 @@ export function Chat({
       loadSessions(); // Update session list (e.g. title might change)
     };
 
+    const handleCancelled = () => {
+      flushPendingAssistantChunk();
+      missedChunksRef.current = '';
+      setIsProcessing(false);
+      setConfirmRequest(null);
+      setErrorNotice(null);
+      setMessages(prev => {
+        const lastMsg = prev[prev.length - 1];
+        if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
+        const now = Date.now();
+        const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
+          if (item.status !== 'running') return item;
+          return {
+            ...item,
+            status: 'done',
+            duration: now - item.timestamp,
+          } as ProcessItem;
+        });
+        return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false }];
+      });
+    };
+
     const handleSessionTitleUpdated = (_: unknown, { sessionId, title }: { sessionId: string; title: string }) => {
       setSessions(prev => prev.map(s =>
         s.id === sessionId ? { ...s, title } : s
@@ -1593,6 +1635,9 @@ export function Chat({
       },
       onChatResponseEnd: ({ content }) => {
         handleResponseEnd(null, { content });
+      },
+      onChatCancelled: () => {
+        handleCancelled();
       },
       onChatError: ({ errorPayload }) => {
         handleError(null, errorPayload as ChatErrorEventPayload);

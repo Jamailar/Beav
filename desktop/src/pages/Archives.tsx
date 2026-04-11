@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Archive,
     Plus,
@@ -16,6 +16,7 @@ import {
     X,
     Check
 } from 'lucide-react';
+import { appConfirm } from '../utils/appDialogs';
 import { clsx } from 'clsx';
 
 interface ArchiveProfileRecord {
@@ -103,7 +104,7 @@ const formatDate = (sample: ArchiveSample) => {
     return Number.isNaN(date.valueOf()) ? '' : date.toISOString().slice(0, 10);
 };
 
-export function Archives() {
+export function Archives({ isActive = true }: { isActive?: boolean }) {
     const [profiles, setProfiles] = useState<ArchiveProfile[]>([]);
     const [samples, setSamples] = useState<ArchiveSample[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
@@ -114,6 +115,13 @@ export function Archives() {
     const [isSampleModalOpen, setIsSampleModalOpen] = useState(false);
     const [editingProfile, setEditingProfile] = useState<ArchiveProfile | null>(null);
     const [editingSample, setEditingSample] = useState<ArchiveSample | null>(null);
+    const profilesRef = useRef<ArchiveProfile[]>([]);
+    const samplesRef = useRef<ArchiveSample[]>([]);
+    const selectedProfileIdRef = useRef('');
+    const hasLoadedProfilesSnapshotRef = useRef(false);
+    const hasLoadedSamplesSnapshotRef = useRef(false);
+    const loadProfilesRequestRef = useRef(0);
+    const loadSamplesRequestRef = useRef(0);
 
     const [profileForm, setProfileForm] = useState({
         name: '',
@@ -143,12 +151,31 @@ export function Archives() {
         [samples, selectedSampleId]
     );
 
-    const loadProfiles = async () => {
-        setIsLoadingProfiles(true);
+    useEffect(() => {
+        profilesRef.current = profiles;
+    }, [profiles]);
+
+    useEffect(() => {
+        samplesRef.current = samples;
+    }, [samples]);
+
+    useEffect(() => {
+        selectedProfileIdRef.current = selectedProfileId;
+    }, [selectedProfileId]);
+
+    const loadProfiles = useCallback(async () => {
+        const requestId = loadProfilesRequestRef.current + 1;
+        loadProfilesRequestRef.current = requestId;
+        const hasLocalProfiles = hasLoadedProfilesSnapshotRef.current || profilesRef.current.length > 0;
+        if (!hasLocalProfiles) {
+            setIsLoadingProfiles(true);
+        }
         try {
             const result = await window.ipcRenderer.invoke('archives:list') as ArchiveProfileRecord[];
+            if (requestId !== loadProfilesRequestRef.current) return;
             const list = (result || []).map(normalizeProfile);
             setProfiles(list);
+            hasLoadedProfilesSnapshotRef.current = true;
             if (list.length > 0) {
                 setSelectedProfileId(prev => {
                     const exists = list.some(profile => profile.id === prev);
@@ -161,46 +188,62 @@ export function Archives() {
                 setIsLoadingSamples(false);
             }
         } catch (error) {
+            if (requestId !== loadProfilesRequestRef.current) return;
             console.error('Failed to load archives:', error);
         } finally {
-            setIsLoadingProfiles(false);
+            if (requestId === loadProfilesRequestRef.current) {
+                setIsLoadingProfiles(false);
+            }
         }
-    };
+    }, []);
 
-    const loadSamples = async (profileId: string) => {
+    const loadSamples = useCallback(async (profileId: string) => {
         if (!profileId) return;
-        setIsLoadingSamples(true);
+        const requestId = loadSamplesRequestRef.current + 1;
+        loadSamplesRequestRef.current = requestId;
+        const hasLocalSamples = (hasLoadedSamplesSnapshotRef.current || samplesRef.current.length > 0) && selectedProfileIdRef.current === profileId;
+        if (!hasLocalSamples) {
+            setIsLoadingSamples(true);
+        }
         try {
             const result = await window.ipcRenderer.invoke('archives:samples:list', profileId) as ArchiveSampleRecord[];
+            if (requestId !== loadSamplesRequestRef.current) return;
             const list = (result || []).map(normalizeSample);
             setSamples(list);
+            hasLoadedSamplesSnapshotRef.current = true;
             setSelectedSampleId(list[0]?.id || '');
         } catch (error) {
+            if (requestId !== loadSamplesRequestRef.current) return;
             console.error('Failed to load samples:', error);
         } finally {
-            setIsLoadingSamples(false);
+            if (requestId === loadSamplesRequestRef.current) {
+                setIsLoadingSamples(false);
+            }
         }
-    };
-
-    useEffect(() => {
-        loadProfiles();
     }, []);
 
     useEffect(() => {
-        if (selectedProfileId) {
-            loadSamples(selectedProfileId);
-        }
-    }, [selectedProfileId]);
+        if (!isActive) return;
+        void loadProfiles();
+    }, [isActive, loadProfiles]);
 
     useEffect(() => {
+        if (!isActive) return;
+        if (selectedProfileId) {
+            void loadSamples(selectedProfileId);
+        }
+    }, [isActive, loadSamples, selectedProfileId]);
+
+    useEffect(() => {
+        if (!isActive) return;
         const handleSampleCreated = (_event: unknown, data: { profileId: string }) => {
-            if (data.profileId === selectedProfileId) {
-                loadSamples(selectedProfileId);
+            if (data.profileId === selectedProfileIdRef.current) {
+                void loadSamples(selectedProfileIdRef.current);
             }
         };
         window.ipcRenderer.on('archives:sample-created', handleSampleCreated);
         return () => window.ipcRenderer.off('archives:sample-created', handleSampleCreated);
-    }, [selectedProfileId]);
+    }, [isActive, loadSamples]);
 
     const openCreateProfile = () => {
         setEditingProfile(null);
@@ -268,7 +311,7 @@ export function Archives() {
 
     const deleteProfile = async () => {
         if (!selectedProfile) return;
-        if (!window.confirm(`确定删除档案“${selectedProfile.name}”及其样本吗？`)) return;
+        if (!(await appConfirm(`确定删除档案“${selectedProfile.name}”及其样本吗？`, { title: '删除档案', confirmLabel: '删除', tone: 'danger' }))) return;
         await window.ipcRenderer.invoke('archives:delete', selectedProfile.id);
         await loadProfiles();
     };
@@ -337,7 +380,7 @@ export function Archives() {
 
     const deleteSample = async () => {
         if (!selectedSample) return;
-        if (!window.confirm(`确定删除样本“${selectedSample.title}”吗？`)) return;
+        if (!(await appConfirm(`确定删除样本“${selectedSample.title}”吗？`, { title: '删除样本', confirmLabel: '删除', tone: 'danger' }))) return;
         await window.ipcRenderer.invoke('archives:samples:delete', selectedSample.id);
         await loadSamples(selectedProfileId);
     };
@@ -382,7 +425,7 @@ export function Archives() {
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                    {isLoadingProfiles ? (
+                    {isLoadingProfiles && profiles.length === 0 ? (
                         <div className="text-xs text-text-tertiary px-2">加载中...</div>
                     ) : profiles.length === 0 ? (
                         <div className="text-xs text-text-tertiary px-2">暂无档案，先创建一个吧</div>
@@ -543,7 +586,7 @@ export function Archives() {
 
                         <div className="mt-4 grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
                             <div className="space-y-3">
-                                {isLoadingSamples ? (
+                                {isLoadingSamples && samples.length === 0 ? (
                                     <div className="text-xs text-text-tertiary">加载中...</div>
                                 ) : samples.length === 0 ? (
                                     <div className="text-xs text-text-tertiary">暂无样本，先添加一条内容吧</div>

@@ -7,8 +7,8 @@ use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord,
+    append_session_checkpoint, checkpoints_for_session, prepare_runtime_query_execution,
+    tool_results_for_session, trace_for_session,
 };
 use crate::{
     make_id, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
@@ -77,7 +77,6 @@ pub fn handle_runtime_session_channel(
                     &message,
                     payload_field(payload, "metadata"),
                 );
-                let route_value = route.clone().into_value();
                 let orchestration =
                     if route.requires_multi_agent || route.requires_long_running_task {
                         Some(run_subagent_orchestration_for_task(
@@ -92,31 +91,14 @@ pub fn handle_runtime_session_channel(
                     } else {
                         None
                     };
-                let effective_message = orchestration
-                    .as_ref()
-                    .and_then(|value| value.get("outputs"))
-                    .and_then(|value| value.as_array())
-                    .filter(|items| !items.is_empty())
-                    .map(|items| {
-                        let summaries = items
-                            .iter()
-                            .filter_map(|item| {
-                                Some(format!(
-                                    "- {}: {}",
-                                    payload_string(item, "roleId")?,
-                                    payload_string(item, "summary").unwrap_or_default()
-                                ))
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        format!("{message}\n\nSubagent orchestration summary:\n{summaries}")
-                    })
-                    .unwrap_or_else(|| message.clone());
+                let prepared =
+                    prepare_runtime_query_execution(route.clone(), orchestration.clone(), &message);
+                let route_value = prepared.route.clone().into_value();
                 let execution = execute_chat_exchange(
                     Some(app),
                     state,
                     session_id,
-                    effective_message,
+                    prepared.effective_message,
                     message.clone(),
                     payload_field(payload, "modelConfig"),
                     None,
@@ -131,11 +113,11 @@ pub fn handle_runtime_session_channel(
                         if route.reasoning.trim().is_empty() {
                             "runtime route".to_string()
                         } else {
-                            route.reasoning.clone()
+                            prepared.route.reasoning.clone()
                         },
                         Some(route_value.clone()),
                     );
-                    if let Some(orchestration_value) = orchestration.clone() {
+                    if let Some(orchestration_value) = prepared.orchestration.clone() {
                         append_session_checkpoint(
                             store,
                             &execution.session_id,
@@ -154,11 +136,11 @@ pub fn handle_runtime_session_channel(
                     if route.reasoning.trim().is_empty() {
                         "runtime route"
                     } else {
-                        route.reasoning.as_str()
+                        prepared.route.reasoning.as_str()
                     },
                     Some(route_value.clone()),
                 );
-                if let Some(orchestration_value) = orchestration.clone() {
+                if let Some(orchestration_value) = prepared.orchestration.clone() {
                     emit_runtime_task_checkpoint_saved(
                         app,
                         None,
@@ -181,7 +163,7 @@ pub fn handle_runtime_session_channel(
                     "sessionId": execution.session_id,
                     "response": execution.response,
                     "route": route_value,
-                    "orchestration": orchestration
+                    "orchestration": prepared.orchestration
                 }))
             }
             "runtime:resume" => {
@@ -217,42 +199,15 @@ pub fn handle_runtime_session_channel(
             }
             "runtime:get-trace" => {
                 let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<SessionTranscriptRecord> = store
-                        .session_transcript_records
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(trace_for_session(&store, &session_id))))
             }
             "runtime:get-checkpoints" => {
                 let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<SessionCheckpointRecord> = store
-                        .session_checkpoints
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(checkpoints_for_session(&store, &session_id))))
             }
             "runtime:get-tool-results" => {
                 let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let mut items: Vec<SessionToolResultRecord> = store
-                        .session_tool_results
-                        .iter()
-                        .filter(|item| item.session_id == session_id)
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| item.created_at);
-                    Ok(json!(items))
-                })
+                with_store(state, |store| Ok(json!(tool_results_for_session(&store, &session_id))))
             }
             _ => unreachable!("channel prefiltered"),
         }

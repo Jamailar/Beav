@@ -39,6 +39,16 @@ export interface RemotionScene {
     overlays?: RemotionOverlay[];
 }
 
+export interface RemotionSceneItemTransform {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    lockAspectRatio?: boolean;
+    minWidth?: number;
+    minHeight?: number;
+}
+
 export interface RemotionRenderResult {
     outputPath?: string;
     renderedAt?: number;
@@ -54,6 +64,6 @@ export interface RemotionCompositionConfig {
     durationInFrames: number;
     backgroundColor?: string;
     scenes: RemotionScene[];
+    sceneItemTransforms?: Record<string, RemotionSceneItemTransform>;
     render?: RemotionRenderResult;
 }
-

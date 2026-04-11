@@ -31,7 +31,18 @@ pub fn handle_assistant_daemon_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "assistant:daemon-status" => with_store(state, |store| {
-                Ok(assistant_state_value(&store.assistant_state))
+                let started_at = now_ms();
+                let request_id = format!("assistant:daemon-status:{}", started_at);
+                let value = assistant_state_value(&store.assistant_state);
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "assistant:daemon-status",
+                    started_at,
+                    None,
+                );
+                Ok(value)
             }),
             "assistant:daemon-set-config" | "assistant:daemon-start" => {
                 let enable_listening = channel == "assistant:daemon-start";

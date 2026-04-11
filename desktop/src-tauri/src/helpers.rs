@@ -1,9 +1,9 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-use crate::{ensure_parent_dir, manuscripts_root, AppState, FileNode};
+use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
 
 pub(crate) fn normalize_relative_path(value: &str) -> String {
     value
@@ -226,6 +226,151 @@ pub(crate) fn title_from_relative_path(path: &str) -> String {
         .to_string()
 }
 
+fn parse_optional_i64_from_value(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|item| {
+        item.as_i64()
+            .or_else(|| item.as_str().and_then(|raw| raw.trim().parse::<i64>().ok()))
+    })
+}
+
+fn markdown_summary(content: &str, max_chars: usize) -> String {
+    let plain = String::from(content)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace("\0", "")
+        .replace("```", " ")
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with("---"))
+        .map(|line| line.trim_start_matches('#').trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let chars = plain.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        plain
+    } else {
+        chars.into_iter().take(max_chars).collect::<String>()
+    }
+}
+
+fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
+        return None;
+    }
+    let mut lines = trimmed.lines();
+    let first = lines.next()?;
+    if first.trim() != "---" {
+        return None;
+    }
+    let mut object = serde_json::Map::new();
+    for line in lines {
+        let normalized = line.trim();
+        if normalized == "---" {
+            break;
+        }
+        let Some((key, raw_value)) = normalized.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let raw_value = raw_value.trim();
+        let value = if (raw_value.starts_with('"') && raw_value.ends_with('"'))
+            || (raw_value.starts_with('{') && raw_value.ends_with('}'))
+            || (raw_value.starts_with('[') && raw_value.ends_with(']'))
+        {
+            serde_json::from_str::<Value>(raw_value)
+                .unwrap_or_else(|_| Value::String(raw_value.trim_matches('"').to_string()))
+        } else if let Ok(number) = raw_value.parse::<i64>() {
+            json!(number)
+        } else {
+            json!(raw_value)
+        };
+        object.insert(key.to_string(), value);
+    }
+    Some(Value::Object(object))
+}
+
+fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> FileNode {
+    let manifest = read_json_value_or(&package_manifest_path(path), json!({}));
+    let entry_path = package_entry_path(path, file_name, Some(&manifest));
+    let entry_content = fs::read_to_string(&entry_path).unwrap_or_default();
+    let title =
+        payload_string(&manifest, "title").unwrap_or_else(|| title_from_relative_path(file_name));
+    let draft_type = payload_string(&manifest, "draftType")
+        .unwrap_or_else(|| get_draft_type_from_file_name(file_name).to_string());
+    let updated_at = parse_optional_i64_from_value(
+        manifest
+            .get("updatedAt")
+            .or_else(|| manifest.get("updated_at")),
+    )
+    .or_else(|| {
+        fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as i64)
+    });
+    let status = payload_string(&manifest, "status");
+    let summary = if entry_content.trim().is_empty() {
+        None
+    } else {
+        Some(markdown_summary(&entry_content, 72))
+    };
+    FileNode {
+        name: file_name.to_string(),
+        path: relative,
+        is_directory: false,
+        children: None,
+        status,
+        title: Some(title),
+        draft_type: Some(draft_type),
+        updated_at,
+        summary,
+    }
+}
+
+fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> FileNode {
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let frontmatter = parse_markdown_frontmatter(&content).unwrap_or_else(|| json!({}));
+    let title = payload_string(&frontmatter, "title")
+        .unwrap_or_else(|| title_from_relative_path(file_name));
+    let draft_type = payload_string(&frontmatter, "draftType")
+        .or_else(|| payload_string(&frontmatter, "draft_type"))
+        .unwrap_or_else(|| get_draft_type_from_file_name(file_name).to_string());
+    let status = payload_string(&frontmatter, "status");
+    let updated_at = parse_optional_i64_from_value(
+        frontmatter
+            .get("updatedAt")
+            .or_else(|| frontmatter.get("updated_at")),
+    )
+    .or_else(|| {
+        fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as i64)
+    });
+    let summary = if content.trim().is_empty() {
+        None
+    } else {
+        Some(markdown_summary(&content, 72))
+    };
+    FileNode {
+        name: file_name.to_string(),
+        path: relative,
+        is_directory: false,
+        children: None,
+        status,
+        title: Some(title),
+        draft_type: Some(draft_type),
+        updated_at,
+        summary,
+    }
+}
+
 pub(crate) fn resolve_manuscript_path(
     state: &State<'_, AppState>,
     relative: &str,
@@ -259,26 +404,44 @@ pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, St
         );
 
         if path.is_dir() && is_manuscript_package_name(&file_name) {
-            nodes.push(FileNode {
-                name: file_name,
-                path: relative,
-                is_directory: false,
-                children: None,
-            });
+            nodes.push(file_node_from_package(&path, &file_name, relative));
         } else if path.is_dir() {
+            let updated_at = fs::metadata(&path)
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64);
             nodes.push(FileNode {
                 name: file_name,
                 path: relative,
                 is_directory: true,
                 children: Some(list_tree(root, &path)?),
+                status: None,
+                title: None,
+                draft_type: None,
+                updated_at,
+                summary: None,
             });
         } else if path.is_file() {
-            nodes.push(FileNode {
-                name: file_name,
-                path: relative,
-                is_directory: false,
-                children: None,
-            });
+            if file_name.ends_with(".md") {
+                nodes.push(file_node_from_markdown(&path, &file_name, relative));
+            } else {
+                nodes.push(FileNode {
+                    name: file_name,
+                    path: relative,
+                    is_directory: false,
+                    children: None,
+                    status: None,
+                    title: None,
+                    draft_type: None,
+                    updated_at: fs::metadata(&path)
+                        .ok()
+                        .and_then(|meta| meta.modified().ok())
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_millis() as i64),
+                    summary: None,
+                });
+            }
         }
     }
 

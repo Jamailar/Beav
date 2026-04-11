@@ -1,5 +1,19 @@
 const API_ROOT = 'http://127.0.0.1:23456/api';
 const pageStateCache = new Map();
+const PAGE_STATE_NEGATIVE_TTL_MS = 350;
+
+function createLinkFallbackPageInfo(overrides = {}) {
+  return {
+    kind: 'generic',
+    action: 'save-page-link',
+    label: '仅保存链接到知识库',
+    description: '当前页面可作为链接收藏保存到知识库。',
+    primaryEnabled: true,
+    detected: false,
+    statusText: '未检测到内容',
+    ...overrides,
+  };
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -86,7 +100,17 @@ async function inspectPage(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
     const currentUrl = String(tab?.url || '');
-    if (cached && cached.url === currentUrl && cached.pageInfo) {
+    const shouldTrustCache = Boolean(
+      cached &&
+      cached.url === currentUrl &&
+      cached.pageInfo &&
+      (
+        cached.pageInfo.detected ||
+        (Date.now() - Number(cached.updatedAt || 0)) < PAGE_STATE_NEGATIVE_TTL_MS
+      )
+    );
+
+    if (shouldTrustCache) {
       pageInfo = cached.pageInfo;
     } else {
       const contentResponse = await chrome.tabs.sendMessage(tabId, { type: 'page-state:get' }).catch(() => null);
@@ -114,12 +138,7 @@ async function inspectPage(tabId) {
   }
   return {
     success: true,
-    pageInfo: pageInfo || {
-      kind: 'generic',
-      label: '保存当前页面链接',
-      description: '当前页面可作为链接收藏保存到知识库。',
-      primaryEnabled: true,
-    },
+    pageInfo: pageInfo || createLinkFallbackPageInfo(),
   };
 }
 
@@ -140,6 +159,7 @@ function detectCaptureTargetFromUrl(rawUrl) {
       action: 'save-page-link',
       label: '保存公众号文章到知识库',
       description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
+      detected: true,
     };
   }
 
@@ -149,23 +169,26 @@ function detectCaptureTargetFromUrl(rawUrl) {
       return {
         kind: 'youtube',
         action: 'save-youtube',
-        label: '保存youtube视频到知识库',
+        label: '保存YouTube视频到知识库',
         description: '当前页面已识别为 YouTube 视频页。',
+        detected: true,
       };
     }
+
+    return createLinkFallbackPageInfo({
+      kind: 'youtube-generic',
+      description: '当前页面还没有稳定识别到有效的视频内容。',
+    });
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
-    return {
+    return createLinkFallbackPageInfo({
       kind: 'xhs-pending',
-      action: 'save-xhs',
-      label: '未检测到有效内容请刷新',
       description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
-      primaryEnabled: false,
-    };
+    });
   }
 
-  return null;
+  return createLinkFallbackPageInfo();
 }
 
 async function checkDesktopServer() {
@@ -1536,6 +1559,19 @@ async function extractXhsNotePayload() {
 }
 
 function detectCaptureTarget() {
+  function createLocalLinkFallbackPageInfo(overrides = {}) {
+    return {
+      kind: 'generic',
+      action: 'save-page-link',
+      label: '仅保存链接到知识库',
+      description: '当前页面可作为链接收藏保存到知识库。',
+      primaryEnabled: true,
+      detected: false,
+      statusText: '未检测到内容',
+      ...overrides,
+    };
+  }
+
   const hostname = String(location.hostname || '').toLowerCase();
 
   if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be') {
@@ -1545,10 +1581,16 @@ function detectCaptureTarget() {
       return {
         kind: 'youtube',
         action: 'save-youtube',
-        label: '保存youtube视频到知识库',
+        label: '保存YouTube视频到知识库',
         description: '当前页面已识别为 YouTube 视频页。',
+        detected: true,
       };
     }
+
+    return createLocalLinkFallbackPageInfo({
+      kind: 'youtube-generic',
+      description: '当前页面还没有稳定识别到有效的视频内容。',
+    });
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
@@ -1696,7 +1738,8 @@ function detectCaptureTarget() {
         kind: isVideoNote ? 'xhs-video' : 'xhs-image',
         action: 'save-xhs',
         label: isVideoNote ? '保存小红书视频笔记到知识库' : '保存小红书图文到知识库',
-        description: isVideoNote ? '当前页面已识别为小红书视频笔记。' : '当前页面已识别为小红书图文笔记。'
+        description: isVideoNote ? '当前页面已识别为小红书视频笔记。' : '当前页面已识别为小红书图文笔记。',
+        detected: true,
       };
     }
 
@@ -1707,8 +1750,14 @@ function detectCaptureTarget() {
         action: 'save-xhs',
         label: '保存小红书图文到知识库',
         description: '当前页面已识别为小红书图文内容页。',
+        detected: true,
       };
     }
+
+    return createLocalLinkFallbackPageInfo({
+      kind: 'xhs-pending',
+      description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+    });
   }
 
   if (hostname === 'mp.weixin.qq.com') {
@@ -1717,6 +1766,7 @@ function detectCaptureTarget() {
       action: 'save-page-link',
       label: '保存公众号文章到知识库',
       description: '当前页面已识别为公众号文章，将完整保存正文、图片和排版。',
+      detected: true,
     };
   }
 
@@ -1728,13 +1778,9 @@ function detectCaptureTarget() {
       action: 'save-page-link',
       label: '保存链接文章到知识库',
       description: '将提取正文、来源和封面保存到知识库。',
+      detected: true,
     };
   }
 
-  return {
-    kind: 'generic',
-    action: 'save-page-link',
-    label: '保存当前页面链接到知识库',
-    description: '当前页面可作为链接收藏保存到知识库。',
-  };
+  return createLocalLinkFallbackPageInfo();
 }

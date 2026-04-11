@@ -4,8 +4,9 @@ use std::path::Path;
 use tauri::State;
 
 use crate::{
-    get_default_package_entry, get_draft_type_from_file_name, get_package_kind_from_file_name,
-    join_relative, lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
+    commands::manuscripts::timeline_clip_duration_ms, get_default_package_entry,
+    get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative,
+    lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
     package_assets_path, package_cover_path, package_entry_path, package_images_path,
     package_manifest_path, package_remotion_path, package_timeline_path,
     parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
@@ -234,6 +235,11 @@ pub(crate) fn normalize_ai_remotion_scene(
         "durationInFrames": current_frame.max(90),
         "backgroundColor": background_color,
         "scenes": normalized_scenes,
+        "sceneItemTransforms": candidate
+            .get("sceneItemTransforms")
+            .cloned()
+            .or_else(|| fallback.get("sceneItemTransforms").cloned())
+            .unwrap_or_else(|| json!({})),
         "render": candidate.get("render").cloned().unwrap_or(Value::Null)
     })
 }
@@ -472,6 +478,7 @@ pub(crate) fn build_timeline_clip_summaries(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let mut cursor_ms = 0_i64;
         for (index, clip) in children.iter().enumerate() {
             let metadata = clip.get("metadata").cloned().unwrap_or_else(|| json!({}));
             let asset_id = metadata
@@ -482,6 +489,9 @@ pub(crate) fn build_timeline_clip_summaries(
                         .and_then(|value| value.as_str())
                 })
                 .unwrap_or("");
+            let duration_ms = timeline_clip_duration_ms(clip);
+            let start_ms = cursor_ms;
+            let end_ms = cursor_ms + duration_ms;
             clips.push(json!({
                 "clipId": timeline_clip_identity(clip, track_name, index),
                 "assetId": asset_id,
@@ -489,14 +499,19 @@ pub(crate) fn build_timeline_clip_summaries(
                 "track": track_name,
                 "trackKind": track_kind,
                 "order": metadata.get("order").cloned().unwrap_or(json!(index)),
-                "durationMs": metadata.get("durationMs").cloned().unwrap_or(Value::Null),
+                "durationMs": metadata.get("durationMs").cloned().unwrap_or(json!(duration_ms)),
                 "trimInMs": metadata.get("trimInMs").cloned().unwrap_or(json!(0)),
                 "trimOutMs": metadata.get("trimOutMs").cloned().unwrap_or(json!(0)),
                 "enabled": metadata.get("enabled").cloned().unwrap_or(json!(true)),
                 "assetKind": metadata.get("assetKind").cloned().unwrap_or(Value::Null),
+                "startMs": start_ms,
+                "endMs": end_ms,
+                "startSeconds": start_ms as f64 / 1000.0,
+                "endSeconds": end_ms as f64 / 1000.0,
                 "mediaPath": clip.pointer("/media_references/DEFAULT_MEDIA/target_url").cloned().unwrap_or(Value::Null),
                 "mimeType": clip.pointer("/media_references/DEFAULT_MEDIA/metadata/mimeType").cloned().unwrap_or(Value::Null)
             }));
+            cursor_ms = end_ms;
         }
     }
     (tracks, source_refs, clips)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import {
     FolderPlus,
     ImagePlus,
@@ -140,7 +141,7 @@ function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[]
         .filter((item) => item.key || item.value);
 }
 
-export function Subjects() {
+export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const [categories, setCategories] = useState<SubjectCategory[]>([]);
     const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
     const [loading, setLoading] = useState(true);
@@ -159,9 +160,15 @@ export function Subjects() {
     const recordingTimeoutRef = useRef<number | null>(null);
     const recordingStreamRef = useRef<MediaStream | null>(null);
     const recorderRef = useRef<MediaRecorder | null>(null);
+    const hasLoadedSnapshotRef = useRef(false);
+    const loadDataRequestRef = useRef(0);
 
     const loadData = useCallback(async () => {
-        setLoading(true);
+        const requestId = loadDataRequestRef.current + 1;
+        loadDataRequestRef.current = requestId;
+        if (!hasLoadedSnapshotRef.current) {
+            setLoading(true);
+        }
         setError('');
         try {
             const [categoriesResult, subjectsResult] = await Promise.all([
@@ -174,21 +181,29 @@ export function Subjects() {
             if (!subjectsResult?.success) {
                 throw new Error(subjectsResult?.error || '加载主体失败');
             }
+            if (requestId !== loadDataRequestRef.current) return;
             setCategories(Array.isArray(categoriesResult.categories) ? categoriesResult.categories : []);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
+            hasLoadedSnapshotRef.current = true;
         } catch (e) {
+            if (requestId !== loadDataRequestRef.current) return;
             console.error('Failed to load subjects:', e);
             setError(e instanceof Error ? e.message : '加载主体库失败');
-            setCategories([]);
-            setSubjects([]);
+            if (!hasLoadedSnapshotRef.current) {
+                setCategories([]);
+                setSubjects([]);
+            }
         } finally {
-            setLoading(false);
+            if (requestId === loadDataRequestRef.current) {
+                setLoading(false);
+            }
         }
     }, []);
 
     useEffect(() => {
+        if (!isActive) return;
         void loadData();
-    }, [loadData]);
+    }, [isActive, loadData]);
 
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
 
@@ -302,7 +317,7 @@ export function Subjects() {
         const nextFiles = Array.from(files || []);
         if (!nextFiles.length) return;
         if (draft.images.length + nextFiles.length > 5) {
-            alert('主体最多只能保存 5 张图片');
+            void appAlert('主体最多只能保存 5 张图片');
             return;
         }
         const nextImages = await Promise.all(nextFiles.map(async (file) => ({
@@ -445,7 +460,7 @@ export function Subjects() {
         if (!name) return;
         const result = await window.ipcRenderer.subjects.categories.create({ name: name.trim() });
         if (!result?.success) {
-            alert(result?.error || '创建分类失败');
+            void appAlert(result?.error || '创建分类失败');
             return;
         }
         await loadData();
@@ -460,17 +475,17 @@ export function Subjects() {
         if (!name || name.trim() === category.name) return;
         const result = await window.ipcRenderer.subjects.categories.update({ id: category.id, name: name.trim() });
         if (!result?.success) {
-            alert(result?.error || '重命名分类失败');
+            void appAlert(result?.error || '重命名分类失败');
             return;
         }
         await loadData();
     }, [loadData]);
 
     const handleDeleteCategory = useCallback(async (category: SubjectCategory) => {
-        if (!window.confirm(`删除分类“${category.name}”？如果仍有主体使用该分类，将会被拒绝。`)) return;
+        if (!(await appConfirm(`删除分类“${category.name}”？如果仍有主体使用该分类，将会被拒绝。`, { title: '删除分类', confirmLabel: '删除', tone: 'danger' }))) return;
         const result = await window.ipcRenderer.subjects.categories.delete({ id: category.id });
         if (!result?.success) {
-            alert(result?.error || '删除分类失败');
+            void appAlert(result?.error || '删除分类失败');
             return;
         }
         if (categoryFilter === category.id) {
@@ -532,7 +547,7 @@ export function Subjects() {
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
-        if (!window.confirm(`删除主体“${draft.name || draft.id}”？`)) return;
+        if (!(await appConfirm(`删除主体“${draft.name || draft.id}”？`, { title: '删除主体', confirmLabel: '删除', tone: 'danger' }))) return;
         setWorking(true);
         try {
             const result = await window.ipcRenderer.subjects.delete({ id: draft.id });
@@ -651,7 +666,7 @@ export function Subjects() {
                     </div>
                 )}
 
-                {loading ? (
+                {loading && subjects.length === 0 && categories.length === 0 ? (
                     <div className="text-sm text-text-tertiary">主体库加载中...</div>
                 ) : filteredSubjects.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-border bg-surface-primary/70 px-6 py-10 text-center text-sm text-text-tertiary">

@@ -2,7 +2,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::{
-    browser_plugin_bundled_root, browser_plugin_export_root, copy_dir_recursive, AppState,
+    browser_plugin_bundled_root, browser_plugin_export_root, copy_dir_recursive, log_timing_event,
+    now_ms, AppState,
 };
 
 pub fn handle_plugin_channel(
@@ -23,10 +24,20 @@ pub fn handle_plugin_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "plugin:browser-extension-status" => {
+                let started_at = now_ms();
+                let request_id = format!("plugin:browser-extension-status:{}", started_at);
                 let bundled_path = browser_plugin_bundled_root();
                 let export_path = browser_plugin_export_root(state)?;
                 let bundled = bundled_path.join("manifest.json").exists();
                 let exported = export_path.join("manifest.json").exists();
+                log_timing_event(
+                    state,
+                    "settings",
+                    &request_id,
+                    "plugin:browser-extension-status",
+                    started_at,
+                    Some(format!("bundled={} exported={}", bundled, exported)),
+                );
                 Ok(json!({
                     "success": true,
                     "bundled": bundled,

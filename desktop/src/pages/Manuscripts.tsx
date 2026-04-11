@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
@@ -447,6 +449,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isCreating, setIsCreating] = useState(false);
     const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
     const [workingId, setWorkingId] = useState<string | null>(null);
+    const [pendingDeleteDraftPath, setPendingDeleteDraftPath] = useState<string | null>(null);
     const [settings, setSettings] = useState<SettingsShape>({});
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
@@ -565,7 +568,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             await loadData();
         } catch (importError) {
-            alert(importError instanceof Error ? importError.message : '导入素材失败');
+            void appAlert(importError instanceof Error ? importError.message : '导入素材失败');
         } finally {
             setWorkingId(null);
         }
@@ -582,13 +585,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setQuality(next.image_quality || 'standard');
         } catch (settingsError) {
             console.error('Failed to load image settings:', settingsError);
-            setSettings({});
         }
     }, []);
 
+    const refreshWorkspace = useCallback(async () => {
+        // Keep editor interactions smooth: skip heavy media refresh while actively editing.
+        if (mode === 'editor') {
+            await loadTree();
+            return;
+        }
+        await loadData();
+    }, [loadData, loadTree, mode]);
+
     usePageRefresh({
         isActive,
-        refresh: loadData,
+        refresh: refreshWorkspace,
     });
 
     useEffect(() => {
@@ -665,7 +676,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [currentFiles, fileMetaMap, filter, normalizedQuery]);
 
     const visibleAssets = useMemo(() => {
-        if (activeFolder) return [] as MediaAsset[];
         return assets.filter((asset) => {
             const assetKind = inferAssetKind(asset);
             if (filter === 'media' && !['image', 'video', 'audio'].includes(assetKind)) return false;
@@ -676,9 +686,16 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             const haystack = `${asset.title || ''} ${asset.prompt || ''} ${asset.relativePath || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         });
-    }, [activeFolder, assets, filter, normalizedQuery]);
+    }, [assets, filter, normalizedQuery]);
 
     const activeTrail = useMemo(() => getFolderTrail(activeFolder), [activeFolder]);
+
+    const isSameOrNestedPath = useCallback((targetPath: string, currentPath: string | null | undefined) => {
+        const target = String(targetPath || '').trim().replace(/\/+$/, '');
+        const current = String(currentPath || '').trim().replace(/\/+$/, '');
+        if (!target || !current) return false;
+        return current === target || current.startsWith(`${target}/`);
+    }, []);
 
     const handleCreate = useCallback(async () => {
         const normalizedName = normalizeDraftFileName(createTitle);
@@ -715,38 +732,48 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setCreateTitle('');
         } catch (createError) {
             const message = createError instanceof Error ? createError.message : '创建失败';
-            alert(message);
+            void appAlert(message);
         } finally {
             setIsCreating(false);
         }
     }, [activeFolder, createKind, createTitle, loadData]);
 
     const handleDeleteDraft = useCallback(async (targetPath: string) => {
-        if (!window.confirm('确认删除这个草稿或文件夹吗？')) return;
         setWorkingId(targetPath);
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:delete', targetPath) as { success?: boolean; error?: string };
             if (!result?.success) throw new Error(result?.error || '删除失败');
-            if (activeFolder === targetPath) {
+            if (isSameOrNestedPath(targetPath, activeFolder)) {
                 setActiveFolder('');
             }
+            if (isSameOrNestedPath(targetPath, editorFile)) {
+                setEditorFile(null);
+                setEditorDescriptor(null);
+                setEditorBody('');
+                setEditorMetadata({});
+                setEditorBodyDirty(false);
+                setPackageState(null);
+                setEditorChatSessionId(null);
+                setMode('gallery');
+            }
+            setPendingDeleteDraftPath(null);
             await loadData();
         } catch (deleteError) {
-            alert(deleteError instanceof Error ? deleteError.message : '删除失败');
+            void appAlert(deleteError instanceof Error ? deleteError.message : '删除失败');
         } finally {
             setWorkingId(null);
         }
-    }, [activeFolder, loadData]);
+    }, [activeFolder, editorFile, isSameOrNestedPath, loadData]);
 
     const handleDeleteAsset = useCallback(async (assetId: string) => {
-        if (!window.confirm('确认删除这个媒体资产吗？')) return;
+        if (!(await appConfirm('确认删除这个媒体资产吗？', { title: '删除媒体资产', confirmLabel: '删除', tone: 'danger' }))) return;
         setWorkingId(assetId);
         try {
             const result = await window.ipcRenderer.invoke('media:delete', { assetId }) as { success?: boolean; error?: string };
             if (!result?.success) throw new Error(result?.error || '删除媒体失败');
             await loadData();
         } catch (deleteError) {
-            alert(deleteError instanceof Error ? deleteError.message : '删除媒体失败');
+            void appAlert(deleteError instanceof Error ? deleteError.message : '删除媒体失败');
         } finally {
             setWorkingId(null);
         }
@@ -823,7 +850,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 await refreshPackageState(editorFile);
             }
         } catch (importError) {
-            alert(importError instanceof Error ? importError.message : '导入素材失败');
+            void appAlert(importError instanceof Error ? importError.message : '导入素材失败');
         } finally {
             setWorkingId(null);
         }
@@ -842,7 +869,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             setPackageState(result.state);
         } catch (error) {
-            alert(error instanceof Error ? error.message : '生成 Remotion 动画方案失败');
+            void appAlert(error instanceof Error ? error.message : '生成 Remotion 动画方案失败');
         } finally {
             setIsGeneratingRemotion(false);
         }
@@ -860,7 +887,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             setPackageState(result.state);
         } catch (error) {
-            alert(error instanceof Error ? error.message : '保存 Remotion 动画方案失败');
+            void appAlert(error instanceof Error ? error.message : '保存 Remotion 动画方案失败');
         }
     }, [editorDescriptor?.draftType, editorFile]);
 
@@ -876,7 +903,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             setPackageState(result.state);
         } catch (error) {
-            alert(error instanceof Error ? error.message : '导出 Remotion 视频失败');
+            void appAlert(error instanceof Error ? error.message : '导出 Remotion 视频失败');
         } finally {
             setIsRenderingRemotion(false);
         }
@@ -888,7 +915,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         try {
             await window.ipcRenderer.invoke('app:open-path', { path: outputPath });
         } catch (error) {
-            alert(error instanceof Error ? error.message : '打开导出文件失败');
+            void appAlert(error instanceof Error ? error.message : '打开导出文件失败');
         }
     }, [packageState?.remotion?.render?.outputPath]);
 
@@ -907,7 +934,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setEditorFile(result.newPath);
             await refreshPackageState(result.newPath);
         } catch (upgradeError) {
-            alert(upgradeError instanceof Error ? upgradeError.message : '升级工程稿件失败');
+            void appAlert(upgradeError instanceof Error ? upgradeError.message : '升级工程稿件失败');
         } finally {
             setIsUpgradingDraft(false);
         }
@@ -1057,14 +1084,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             await refreshPackageState(editorFile);
             setIsBindAssetModalOpen(false);
         } catch (bindError) {
-            alert(bindError instanceof Error ? bindError.message : '绑定素材失败');
+            void appAlert(bindError instanceof Error ? bindError.message : '绑定素材失败');
         }
     }, [bindAssetRole, editorFile, loadData, refreshPackageState]);
 
     const openAssetExternally = useCallback(async (assetId: string) => {
         const result = await window.ipcRenderer.invoke('media:open', { assetId }) as { success?: boolean; error?: string };
         if (!result?.success) {
-            alert(result?.error || '打开资产失败');
+            void appAlert(result?.error || '打开资产失败');
         }
     }, []);
 
@@ -1249,6 +1276,16 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
 
     const contentCards = useMemo(() => {
+        const folderCards = visibleFolders.map((folder) => ({
+            id: `folder:${folder.path}`,
+            kind: 'folder' as const,
+            updatedAt: Number(folder.updatedAt || 0) || 0,
+            createdAt: 0,
+            folder,
+            title: folder.title || folder.name,
+            summary: folder.summary || '点击进入',
+        }));
+
         const draftCards = visibleDrafts.map((file) => {
             const meta = fileMetaMap[file.path];
             const draftType = meta?.draftType || 'unknown';
@@ -1256,6 +1293,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 id: `draft:${file.path}`,
                 kind: 'draft' as const,
                 updatedAt: Number(meta?.updatedAt || 0) || 0,
+                createdAt: 0,
                 file,
                 meta,
                 title: meta?.title || stripDraftExtension(file.name),
@@ -1267,19 +1305,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const assetCards = visibleAssets.map((asset) => ({
             id: `asset:${asset.id}`,
             kind: 'asset' as const,
-            updatedAt: Date.parse(asset.updatedAt || asset.createdAt || '') || 0,
+            updatedAt: Date.parse(asset.updatedAt || '') || 0,
+            createdAt: Date.parse(asset.createdAt || '') || 0,
             asset,
             title: asset.title || asset.relativePath || asset.id,
             summary: asset.prompt || asset.relativePath || '',
             assetKind: inferAssetKind(asset),
         }));
 
-        return [...draftCards, ...assetCards].sort((a, b) => {
-            const timeDelta = b.updatedAt - a.updatedAt;
-            if (timeDelta !== 0) return timeDelta;
+        return [...folderCards, ...draftCards, ...assetCards].sort((a, b) => {
+            const updatedDelta = b.updatedAt - a.updatedAt;
+            if (updatedDelta !== 0) return updatedDelta;
+            const createdDelta = b.createdAt - a.createdAt;
+            if (createdDelta !== 0) return createdDelta;
             return a.title.localeCompare(b.title, 'zh-Hans-CN');
         });
-    }, [fileMetaMap, visibleAssets, visibleDrafts]);
+    }, [fileMetaMap, visibleAssets, visibleDrafts, visibleFolders]);
 
     const bindableImageAssets = useMemo(
         () => assets.filter((asset) => inferAssetKind(asset) === 'image'),
@@ -1319,26 +1360,56 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             ...packageAssets.map((item) => String(item.assetId || '').trim()),
             ...timelineClips.map((item) => String(item?.assetId || '').trim()),
         ].filter(Boolean));
-        const packagePreviewAssets = [
-            ...assets.filter((asset) => packageAssetIds.has(asset.id)),
-            ...packageAssets
-                .filter((item) => {
-                    const assetId = String(item.assetId || '').trim();
-                    return assetId && !assets.some((asset) => asset.id === assetId);
-                })
-                .map((item) => ({
-                    id: String(item.assetId || ''),
-                    source: 'external' as const,
-                    title: String(item.title || pathBasenameSafe(String(item.mediaPath || '')) || item.assetId || ''),
-                    mimeType: String(item.mimeType || ''),
-                    relativePath: '',
-                    absolutePath: String(item.absolutePath || item.mediaPath || ''),
-                    previewUrl: String(item.previewUrl || ''),
-                    createdAt: '',
-                    updatedAt: '',
-                    exists: Boolean(item.exists),
-                })),
-        ];
+        const manuscriptBoundAssets = assets
+            .filter((asset) => String(asset.boundManuscriptPath || '').trim() === editorFile)
+            .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+        const timelineFallbackAssets = timelineClips
+            .filter((item) => {
+                const assetId = String(item?.assetId || '').trim();
+                return assetId && !assets.some((asset) => asset.id === assetId);
+            })
+            .map((item) => ({
+                id: String(item?.assetId || ''),
+                source: 'external' as const,
+                title: String(item?.name || pathBasenameSafe(String(item?.mediaPath || '')) || item?.assetId || ''),
+                mimeType: String(item?.mimeType || ''),
+                relativePath: '',
+                absolutePath: String(item?.mediaPath || ''),
+                previewUrl: '',
+                createdAt: '',
+                updatedAt: '',
+                exists: true,
+            }));
+        const packageAssetFallbacks = packageAssets
+            .filter((item) => {
+                const assetId = String(item.assetId || '').trim();
+                return assetId && !assets.some((asset) => asset.id === assetId);
+            })
+            .map((item) => ({
+                id: String(item.assetId || ''),
+                source: 'external' as const,
+                title: String(item.title || pathBasenameSafe(String(item.mediaPath || '')) || item.assetId || ''),
+                mimeType: String(item.mimeType || ''),
+                relativePath: '',
+                absolutePath: String(item.absolutePath || item.mediaPath || ''),
+                previewUrl: String(item.previewUrl || ''),
+                createdAt: '',
+                updatedAt: '',
+                exists: Boolean(item.exists),
+            }));
+        const packagePreviewAssets = Array.from(new Map(
+            [
+                ...timelineClips
+                    .map((item) => String(item?.assetId || '').trim())
+                    .filter(Boolean)
+                    .map((assetId) => assets.find((asset) => asset.id === assetId))
+                    .filter(Boolean),
+                ...manuscriptBoundAssets,
+                ...assets.filter((asset) => packageAssetIds.has(asset.id)),
+                ...timelineFallbackAssets,
+                ...packageAssetFallbacks,
+            ].map((asset) => [asset.id, asset])
+        ).values());
         const articlePreviewHtml = String(packageState?.wechatHtml || packageState?.layoutHtml || '').trim();
         const primaryVideoAsset = packagePreviewAssets.find((asset) => {
             const kind = inferAssetKind(asset);
@@ -1864,16 +1935,57 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             )
                         ) : (
                             <div className="space-y-4">
-                                {activeFolder && visibleAssets.length === 0 && (filter === 'all' || filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio') && (
-                                    <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-text-tertiary">
-                                        媒体素材当前仍统一展示在“全部草稿”根目录。文件夹内目前以稿件为主。
-                                    </div>
-                                )}
                                 {contentCards.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-border px-4 py-12 text-sm text-text-tertiary">当前没有符合筛选条件的内容。</div>
                                 ) : (
                                     <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-x-3.5 gap-y-5' : 'space-y-2')}>
                                         {contentCards.map((card) => {
+                                            if (card.kind === 'folder') {
+                                                const folder = card.folder;
+                                                return (
+                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-2xl border border-border bg-white/75 px-4 py-3')}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setActiveFolder(folder.path)}
+                                                            className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
+                                                        >
+                                                            <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[20px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
+                                                                {layout === 'gallery' ? (
+                                                                    <>
+                                                                        <div className="relative aspect-[5/6] bg-gradient-to-br from-[#fbf6ea] to-[#efe5cd] px-4 py-4 text-[#6b5b37]">
+                                                                            <div className="text-3xl leading-none">📁</div>
+                                                                            <div className="mt-4 text-[10px] uppercase tracking-[0.22em] text-[#8b7a53]">文件夹</div>
+                                                                            <div className="mt-2 line-clamp-2 text-lg font-semibold leading-tight">{card.title}</div>
+                                                                            <div className="absolute inset-x-4 bottom-4 rounded-xl border border-white/40 bg-white/40 px-2.5 py-2 text-[11px] text-[#7b6b45] backdrop-blur-sm">
+                                                                                {card.summary}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="space-y-1.5 px-2 pb-1 pt-2.5">
+                                                                            <div className="truncate text-[13px] font-medium text-text-primary">{card.title}</div>
+                                                                            <div className="flex items-center gap-2 text-[11px]">
+                                                                                <span className="rounded-full bg-[#f6edd7] px-2.5 py-1 font-medium text-[#8b7442]">文件夹</span>
+                                                                                <span className="text-text-tertiary">{formatDateLabel(card.updatedAt)}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    </>
+                                                                ) : (
+                                                                    <div className="flex min-w-0 items-center gap-4">
+                                                                        <div className="text-3xl leading-none">📁</div>
+                                                                        <div className="min-w-0 flex-1">
+                                                                            <div className="truncate text-sm font-medium text-text-primary">{card.title}</div>
+                                                                            <div className="mt-1 truncate text-xs text-text-tertiary">{card.summary}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </button>
+                                                        <div className={clsx('mt-3 flex items-center justify-between gap-2', layout === 'gallery' ? 'px-1' : '')}>
+                                                            <div className="text-xs text-text-tertiary">{folder.path}</div>
+                                                            <div className="text-xs text-text-tertiary">{formatDateLabel(card.updatedAt)}</div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }
                                             if (card.kind === 'draft') {
                                                 const typeTheme = resolveDraftTypeTheme(card.draftType);
                                                 const Icon = card.draftType === 'video'
@@ -1924,14 +2036,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                         <div className={clsx('mt-3 flex items-center justify-between gap-2', layout === 'gallery' ? 'px-1' : '')}>
                                                             <div className="text-xs text-text-tertiary">{card.file.path}</div>
                                                             <div className="flex items-center gap-2">
-                                                                {onNavigateToRedClaw && (
-                                                                    <button type="button" onClick={() => pushToRedClaw(card.file.path)} className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-secondary hover:text-text-primary">
-                                                                        交给 RedClaw
-                                                                    </button>
-                                                                )}
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => void handleDeleteDraft(card.file.path)}
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        setPendingDeleteDraftPath(card.file.path);
+                                                                    }}
                                                                     disabled={isBusy}
                                                                     className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-secondary hover:text-red-600 disabled:opacity-50"
                                                                 >
@@ -2632,6 +2742,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     </div>
                 </div>
             )}
+
+            <ConfirmDialog
+                open={Boolean(pendingDeleteDraftPath)}
+                title="删除草稿"
+                description="确认删除这个草稿或文件夹吗？"
+                confirmLabel="删除"
+                tone="danger"
+                onCancel={() => setPendingDeleteDraftPath(null)}
+                onConfirm={() => {
+                    if (!pendingDeleteDraftPath) return;
+                    void handleDeleteDraft(pendingDeleteDraftPath);
+                }}
+            />
         </>
     );
 }

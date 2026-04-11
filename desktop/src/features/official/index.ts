@@ -1,11 +1,7 @@
 import type { ComponentType } from 'react';
-import GeneratedOfficialAiPanel, {
-  hasOfficialAiPanel as generatedHasOfficialAiPanel,
-  tabLabel as generatedTabLabel,
-} from './generatedOfficialAiPanel';
 
 export interface OfficialAiPanelProps {
-  onReloadSettings: () => Promise<void> | void;
+  onReloadSettings: (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => Promise<void> | void;
 }
 
 export interface OfficialAiPanelModule {
@@ -13,15 +9,21 @@ export interface OfficialAiPanelModule {
   tabLabel?: string;
 }
 
-export const hasOfficialAiPanel = generatedHasOfficialAiPanel;
-export const officialAiPanelTabLabel = generatedTabLabel || '登录';
+export const hasOfficialAiPanel = true;
+export const officialAiPanelTabLabel = '登录';
 
 export const loadOfficialAiPanelModule = async (): Promise<OfficialAiPanelModule | null> => {
-  if (!generatedHasOfficialAiPanel) {
+  try {
+    const module = await import('./generatedOfficialAiPanel');
+    if (!module?.hasOfficialAiPanel || !module?.default) {
+      return null;
+    }
+    return {
+      default: module.default as ComponentType<OfficialAiPanelProps>,
+      tabLabel: module.tabLabel || officialAiPanelTabLabel,
+    };
+  } catch (error) {
+    console.error('Failed to load official AI panel module', error);
     return null;
   }
-  return {
-    default: GeneratedOfficialAiPanel as ComponentType<OfficialAiPanelProps>,
-    tabLabel: officialAiPanelTabLabel,
-  };
 };

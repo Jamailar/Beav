@@ -1,3 +1,4 @@
+use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{with_store, with_store_mut};
 use crate::*;
 use serde_json::{json, Value};
@@ -245,6 +246,7 @@ pub fn handle_generation_channel(
             ));
             Ok(assets)
         })?;
+        persist_media_workspace_catalog(state)?;
         Ok(json!({ "success": true, "assets": created }))
     })())
 }

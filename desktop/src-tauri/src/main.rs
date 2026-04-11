@@ -28,9 +28,9 @@ use commands::chat_state::{
 };
 use commands::redclaw_runtime::execute_redclaw_run;
 use events::{
-    emit_runtime_stream_start, emit_runtime_task_checkpoint_saved, emit_runtime_text_delta,
-    emit_runtime_tool_partial, emit_runtime_tool_request, emit_runtime_tool_result,
-    split_stream_chunks,
+    emit_creative_chat_checkpoint, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
+    emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
+    emit_runtime_tool_result, split_stream_chunks,
 };
 use persistence::{
     build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_knowledge,
@@ -60,7 +60,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
@@ -587,10 +587,31 @@ struct ChatRuntimeStateRecord {
     cancel_requested: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorRuntimeStateRecord {
+    file_path: String,
+    session_id: Option<String>,
+    playhead_seconds: f64,
+    selected_clip_id: Option<String>,
+    selected_scene_id: Option<String>,
+    preview_tab: Option<String>,
+    canvas_ratio_preset: Option<String>,
+    active_panel: Option<String>,
+    drawer_panel: Option<String>,
+    scene_item_transforms: Option<Value>,
+    viewport_scroll_left: f64,
+    viewport_max_scroll_left: f64,
+    timeline_zoom_percent: f64,
+    updated_at: u128,
+}
+
 struct AppState {
     store_path: PathBuf,
     store: Mutex<AppStore>,
+    store_persist_version: Arc<AtomicU64>,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
+    editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
     active_chat_requests: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
     assistant_runtime: Mutex<Option<AssistantRuntime>>,
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
@@ -665,6 +686,16 @@ struct FileNode {
     is_directory: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     children: Option<Vec<FileNode>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
 }
 
 fn now_ms() -> u128 {
@@ -2363,6 +2394,210 @@ fn execute_interactive_tool_call(
                 "timeline_read" | "clips" => {
                     call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
                 }
+                "selection_read" | "playhead_read" => call_manuscript_channel(
+                    "manuscripts:get-editor-runtime-state",
+                    json!({ "filePath": file_path }),
+                ),
+                "timeline_zoom_read" | "timeline-zoom-read" | "timeline_scroll_read" | "timeline-scroll-read" | "panel_read" | "panel-read" => call_manuscript_channel(
+                    "manuscripts:get-editor-runtime-state",
+                    json!({ "filePath": file_path }),
+                ),
+                "selection_set" | "selection-set" => {
+                    let clip_id = payload_string(arguments, "clipId");
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "selectedClipId": clip_id
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.selection_changed",
+                            "editor selection changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "clipId": payload_string(arguments, "clipId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "playhead_seek" | "playhead-seek" => {
+                    let seconds = payload_field(arguments, "seconds")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "playheadSeconds": seconds
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.playhead_changed",
+                            "editor playhead changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "seconds": seconds
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "focus_clip" | "focus-clip" => {
+                    let clip_id = payload_string(arguments, "clipId").unwrap_or_default();
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "selectedClipId": clip_id
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.selection_changed",
+                            "editor selection changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "clipId": payload_string(arguments, "clipId").unwrap_or_default()
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "focus_item" | "focus-item" => {
+                    let clip_id = payload_string(arguments, "clipId");
+                    let scene_id = payload_string(arguments, "sceneId");
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "selectedClipId": clip_id,
+                            "selectedSceneId": scene_id
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.selection_changed",
+                            "editor selection changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "clipId": payload_string(arguments, "clipId"),
+                                "sceneId": payload_string(arguments, "sceneId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "panel_open" | "panel-open" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "previewTab": payload_string(arguments, "previewTab"),
+                            "activePanel": payload_string(arguments, "activePanel"),
+                            "drawerPanel": payload_string(arguments, "drawerPanel")
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.panel_changed",
+                            "editor panel changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "previewTab": payload_string(arguments, "previewTab"),
+                                "activePanel": payload_string(arguments, "activePanel"),
+                                "drawerPanel": payload_string(arguments, "drawerPanel")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "timeline_zoom_set" | "timeline-zoom-set" => {
+                    let zoom_percent = payload_field(arguments, "zoomPercent")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(100.0)
+                        .clamp(25.0, 400.0);
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "timelineZoomPercent": zoom_percent
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.viewport_changed",
+                            "editor viewport changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "zoomPercent": zoom_percent
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "timeline_scroll_set" | "timeline-scroll-set" => {
+                    let scroll_left = payload_field(arguments, "scrollLeft")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let max_scroll_left = payload_field(arguments, "maxScrollLeft")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(scroll_left)
+                        .max(scroll_left);
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-editor-runtime-state",
+                        json!({
+                            "filePath": file_path.clone(),
+                            "sessionId": session_id,
+                            "viewportScrollLeft": scroll_left,
+                            "viewportMaxScrollLeft": max_scroll_left
+                        }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.viewport_changed",
+                            "editor viewport changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "scrollLeft": scroll_left,
+                                "maxScrollLeft": max_scroll_left
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
                 "track_add" | "track-add" => call_manuscript_channel(
                     "manuscripts:add-package-track",
                     editor_tool_payload(file_path, arguments, &["kind"]),
@@ -2375,6 +2610,58 @@ fn execute_interactive_tool_call(
                         &["assetId", "track", "order", "durationMs"],
                     ),
                 ),
+                "clip_insert_at_playhead" | "clip-insert-at-playhead" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:insert-package-clip-at-playhead",
+                        editor_tool_payload(
+                            file_path.clone(),
+                            arguments,
+                            &["assetId", "track", "order", "durationMs"],
+                        ),
+                    )?;
+                    let inserted_clip_id = payload_field(&result, "insertedClipId")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !inserted_clip_id.is_empty() {
+                        let _ = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "selectedClipId": inserted_clip_id.clone()
+                            }),
+                        );
+                    }
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor timeline changed",
+                            Some(json!({
+                                "filePath": file_path.clone(),
+                                "action": "clip_insert_at_playhead",
+                                "clipId": inserted_clip_id.clone()
+                            })),
+                        );
+                        if !inserted_clip_id.is_empty() {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.selection_changed",
+                                "editor selection changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "clipId": inserted_clip_id
+                                })),
+                            );
+                        }
+                    }
+                    Ok(result)
+                }
                 "clip_update" | "clip-update" => call_manuscript_channel(
                     "manuscripts:update-package-clip",
                     editor_tool_payload(
@@ -2390,6 +2677,14 @@ fn execute_interactive_tool_call(
                             "enabled",
                         ],
                     ),
+                ),
+                "clip_move" | "clip-move" => call_manuscript_channel(
+                    "manuscripts:update-package-clip",
+                    editor_tool_payload(file_path, arguments, &["clipId", "track", "order"]),
+                ),
+                "clip_toggle_enabled" | "clip-toggle-enabled" => call_manuscript_channel(
+                    "manuscripts:update-package-clip",
+                    editor_tool_payload(file_path, arguments, &["clipId", "enabled"]),
                 ),
                 "clip_delete" | "clip-delete" => call_manuscript_channel(
                     "manuscripts:delete-package-clip",
@@ -2939,7 +3234,7 @@ packageKind: {package_kind}\n\
 trackNames: {}\n\
 clips: {}\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；再按需使用 clip_add / clip_update / clip_delete / clip_split / track_add / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
+工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / focus_clip / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
     )
@@ -3306,6 +3601,11 @@ fn run_anthropic_interactive_chat_runtime(
     }
 
     for turn in 0..max_turns {
+        if turn > 0 {
+            if let Some(current_session_id) = session_id {
+                emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+            }
+        }
         if session_id
             .map(|value| is_chat_runtime_cancel_requested(state, value))
             .unwrap_or(false)
@@ -3791,6 +4091,11 @@ fn run_gemini_interactive_chat_runtime(
     }
 
     for turn in 0..max_turns {
+        if turn > 0 {
+            if let Some(current_session_id) = session_id {
+                emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+            }
+        }
         if session_id
             .map(|value| is_chat_runtime_cancel_requested(state, value))
             .unwrap_or(false)
@@ -4231,6 +4536,11 @@ fn run_openai_interactive_chat_runtime(
     }
 
     for turn in 0..max_turns {
+        if turn > 0 {
+            if let Some(current_session_id) = session_id {
+                emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+            }
+        }
         if session_id
             .map(|value| is_chat_runtime_cancel_requested(state, value))
             .unwrap_or(false)
@@ -5098,6 +5408,7 @@ fn ipc_send(
     if channel == "chat:send-message"
         || channel == "ai:start-chat"
         || channel == "wander:brainstorm"
+        || channel == "chatrooms:send"
     {
         let app_handle = app.clone();
         let channel_name = channel.clone();
@@ -5140,6 +5451,30 @@ fn ipc_send(
                             }),
                         );
                     }
+                }
+            } else if channel_name == "chatrooms:send" {
+                if let Err(error) = handle_channel(
+                    &app_handle,
+                    &channel_name,
+                    payload_value.clone(),
+                    &managed_state,
+                ) {
+                    let room_id = payload_string(&payload_value, "roomId").unwrap_or_default();
+                    emit_creative_chat_checkpoint(
+                        &app_handle,
+                        &room_id,
+                        "creative_chat.error",
+                        json!({
+                            "roomId": room_id.clone(),
+                            "message": error,
+                        }),
+                    );
+                    emit_creative_chat_checkpoint(
+                        &app_handle,
+                        &room_id,
+                        "creative_chat.done",
+                        json!({ "roomId": room_id }),
+                    );
                 }
             } else if let Err(error) = commands::chat::handle_send_channel(
                 &app_handle,
@@ -5186,7 +5521,9 @@ fn main() {
         .manage(AppState {
             store_path,
             store: Mutex::new(store),
+            store_persist_version: Arc::new(AtomicU64::new(0)),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
+            editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
             active_chat_requests: Mutex::new(HashMap::new()),
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),

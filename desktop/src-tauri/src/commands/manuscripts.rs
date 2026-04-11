@@ -1,8 +1,257 @@
+use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{with_store, with_store_mut};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, State};
+
+const DEFAULT_TIMELINE_CLIP_MS: i64 = 4000;
+const IMAGE_TIMELINE_CLIP_MS: i64 = 500;
+const DEFAULT_MIN_CLIP_MS: i64 = 1000;
+
+fn min_clip_duration_ms_for_asset_kind(asset_kind: &str) -> i64 {
+    if asset_kind.eq_ignore_ascii_case("image") {
+        IMAGE_TIMELINE_CLIP_MS
+    } else {
+        DEFAULT_MIN_CLIP_MS
+    }
+}
+
+fn default_clip_duration_ms_for_asset(asset: &MediaAssetRecord) -> i64 {
+    if media_asset_kind(asset) == "image" {
+        IMAGE_TIMELINE_CLIP_MS
+    } else {
+        DEFAULT_TIMELINE_CLIP_MS
+    }
+}
+
+fn timeline_clip_asset_kind(clip: &Value) -> String {
+    clip.get("metadata")
+        .and_then(|value| value.get("assetKind"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            clip.pointer("/media_references/DEFAULT_MEDIA/metadata/mimeType")
+                .and_then(|value| value.as_str())
+                .map(|mime_type| {
+                    if mime_type.starts_with("audio/") {
+                        "audio".to_string()
+                    } else if mime_type.starts_with("video/") {
+                        "video".to_string()
+                    } else {
+                        "image".to_string()
+                    }
+                })
+        })
+        .unwrap_or_else(|| "video".to_string())
+}
+
+fn editor_runtime_state_value(
+    state: &State<'_, AppState>,
+    file_path: &str,
+) -> Result<Value, String> {
+    let guard = state
+        .editor_runtime_states
+        .lock()
+        .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+    let record = guard.get(file_path).cloned();
+    Ok(match record {
+        Some(record) => json!({
+            "filePath": record.file_path,
+            "sessionId": record.session_id,
+            "playheadSeconds": record.playhead_seconds,
+            "selectedClipId": record.selected_clip_id,
+            "selectedSceneId": record.selected_scene_id,
+            "previewTab": record.preview_tab,
+            "canvasRatioPreset": record.canvas_ratio_preset,
+            "activePanel": record.active_panel,
+            "drawerPanel": record.drawer_panel,
+            "sceneItemTransforms": record.scene_item_transforms,
+            "viewportScrollLeft": record.viewport_scroll_left,
+            "viewportMaxScrollLeft": record.viewport_max_scroll_left,
+            "timelineZoomPercent": record.timeline_zoom_percent,
+            "updatedAt": record.updated_at,
+        }),
+        None => json!({
+            "filePath": file_path,
+            "sessionId": Value::Null,
+            "playheadSeconds": 0.0,
+            "selectedClipId": Value::Null,
+            "selectedSceneId": Value::Null,
+            "previewTab": Value::Null,
+            "canvasRatioPreset": Value::Null,
+            "activePanel": Value::Null,
+            "drawerPanel": Value::Null,
+            "sceneItemTransforms": Value::Null,
+            "viewportScrollLeft": 0.0,
+            "viewportMaxScrollLeft": 0.0,
+            "timelineZoomPercent": 100.0,
+            "updatedAt": now_ms(),
+        }),
+    })
+}
+
+fn editor_runtime_state_record(
+    state: &State<'_, AppState>,
+    file_path: &str,
+) -> Result<Option<EditorRuntimeStateRecord>, String> {
+    let guard = state
+        .editor_runtime_states
+        .lock()
+        .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+    Ok(guard.get(file_path).cloned())
+}
+
+pub(crate) fn timeline_clip_duration_ms(clip: &Value) -> i64 {
+    let asset_kind = timeline_clip_asset_kind(clip);
+    let min_duration_ms = min_clip_duration_ms_for_asset_kind(&asset_kind);
+    clip.get("metadata")
+        .and_then(|value| value.get("durationMs"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or_else(|| {
+            if asset_kind.eq_ignore_ascii_case("image") {
+                IMAGE_TIMELINE_CLIP_MS
+            } else {
+                DEFAULT_TIMELINE_CLIP_MS
+            }
+        })
+        .max(min_duration_ms)
+}
+
+fn media_asset_kind(asset: &MediaAssetRecord) -> &'static str {
+    let mime_type = asset.mime_type.clone().unwrap_or_default();
+    if mime_type.starts_with("audio/") {
+        "audio"
+    } else if mime_type.starts_with("video/") {
+        "video"
+    } else {
+        "image"
+    }
+}
+
+fn default_track_name_for_asset(asset: &MediaAssetRecord) -> &'static str {
+    if media_asset_kind(asset) == "audio" {
+        "A1"
+    } else {
+        "V1"
+    }
+}
+
+fn timeline_track_kind(track_name: &str) -> &'static str {
+    if track_name.starts_with('A') {
+        "Audio"
+    } else if track_name.starts_with('S') || track_name.starts_with('T') || track_name.starts_with('C') {
+        "Subtitle"
+    } else {
+        "Video"
+    }
+}
+
+fn build_timeline_clip_from_asset(
+    asset: &MediaAssetRecord,
+    desired_order: usize,
+    duration_ms: Option<i64>,
+) -> Value {
+    let duration_value = duration_ms
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| default_clip_duration_ms_for_asset(asset))
+        .max(min_clip_duration_ms_for_asset_kind(media_asset_kind(asset)));
+    json!({
+        "OTIO_SCHEMA": "Clip.2",
+        "name": asset.title.clone().unwrap_or_else(|| asset.id.clone()),
+        "source_range": Value::Null,
+        "media_references": {
+            "DEFAULT_MEDIA": {
+                "OTIO_SCHEMA": "ExternalReference.1",
+                "target_url": asset.absolute_path.clone().or(asset.relative_path.clone()).unwrap_or_default(),
+                "available_range": Value::Null,
+                "metadata": {
+                    "assetId": asset.id,
+                    "mimeType": asset.mime_type
+                }
+            }
+        },
+        "active_media_reference_key": "DEFAULT_MEDIA",
+        "metadata": {
+            "clipId": create_timeline_clip_id(),
+            "assetId": asset.id,
+            "assetKind": media_asset_kind(asset),
+            "source": "media-library",
+            "order": desired_order,
+            "durationMs": json!(duration_value),
+            "trimInMs": 0,
+            "trimOutMs": 0,
+            "enabled": true,
+            "addedAt": now_iso()
+        }
+    })
+}
+
+fn ensure_package_asset_entry(
+    package_path: &std::path::Path,
+    asset: &MediaAssetRecord,
+) -> Result<(), String> {
+    let mut assets = read_json_value_or(&package_assets_path(package_path), json!({ "items": [] }));
+    let Some(items) = assets.get_mut("items").and_then(Value::as_array_mut) else {
+        return Err("Package assets items missing".to_string());
+    };
+    let next_entry = json!({
+        "assetId": asset.id,
+        "title": asset.title.clone(),
+        "mimeType": asset.mime_type.clone(),
+        "relativePath": asset.relative_path.clone(),
+        "absolutePath": asset.absolute_path.clone(),
+        "mediaPath": asset.absolute_path.clone().or(asset.relative_path.clone()),
+        "previewUrl": asset.preview_url.clone(),
+        "boundManuscriptPath": asset.bound_manuscript_path.clone(),
+        "exists": asset.exists,
+        "updatedAt": asset.updated_at.clone(),
+    });
+    if let Some(existing) = items.iter_mut().find(|item| {
+        item.get("assetId")
+            .and_then(|value| value.as_str())
+            .map(|value| value == asset.id)
+            .unwrap_or(false)
+    }) {
+        *existing = next_entry;
+    } else {
+        items.push(next_entry);
+    }
+    write_json_value(&package_assets_path(package_path), &assets)
+}
+
+fn split_timeline_clip_value(clip: &Value, clip_id: &str, split_ratio: f64) -> (Value, Value) {
+    let min_duration = min_clip_duration_ms_for_asset_kind(&timeline_clip_asset_kind(clip));
+    let current_duration = timeline_clip_duration_ms(clip);
+    let first_duration = ((current_duration as f64) * split_ratio).round() as i64;
+    let first_duration = first_duration.max(min_duration);
+    let second_duration = (current_duration - first_duration).max(min_duration);
+
+    let mut first_clip = clip.clone();
+    if let Some(object) = first_clip
+        .get_mut("metadata")
+        .and_then(Value::as_object_mut)
+    {
+        object.insert("clipId".to_string(), json!(clip_id));
+        object.insert("durationMs".to_string(), json!(first_duration));
+    }
+
+    let mut second_clip = clip.clone();
+    if let Some(object) = second_clip
+        .get_mut("metadata")
+        .and_then(Value::as_object_mut)
+    {
+        let trim_in = object
+            .get("trimInMs")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        object.insert("clipId".to_string(), json!(create_timeline_clip_id()));
+        object.insert("durationMs".to_string(), json!(second_duration));
+        object.insert("trimInMs".to_string(), json!(trim_in + first_duration));
+    }
+
+    (first_clip, second_clip)
+}
 
 pub fn handle_manuscripts_channel(
     app: &AppHandle,
@@ -225,6 +474,61 @@ pub fn handle_manuscripts_channel(
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
             }
+            "manuscripts:get-editor-runtime-state" => {
+                let file_path = payload_value_as_string(&payload)
+                    .or_else(|| payload_string(&payload, "filePath"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                Ok(json!({
+                    "success": true,
+                    "state": editor_runtime_state_value(state, &file_path)?
+                }))
+            }
+            "manuscripts:update-editor-runtime-state" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let mut guard = state
+                    .editor_runtime_states
+                    .lock()
+                    .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+                let updated_at = now_ms();
+                guard.insert(
+                    file_path.clone(),
+                    EditorRuntimeStateRecord {
+                        file_path: file_path.clone(),
+                        session_id: payload_string(&payload, "sessionId"),
+                        playhead_seconds: payload_field(&payload, "playheadSeconds")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        selected_clip_id: payload_string(&payload, "selectedClipId"),
+                        selected_scene_id: payload_string(&payload, "selectedSceneId"),
+                        preview_tab: payload_string(&payload, "previewTab"),
+                        canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
+                        active_panel: payload_string(&payload, "activePanel"),
+                        drawer_panel: payload_string(&payload, "drawerPanel"),
+                        scene_item_transforms: payload_field(&payload, "sceneItemTransforms").cloned(),
+                        viewport_scroll_left: payload_field(&payload, "viewportScrollLeft")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        viewport_max_scroll_left: payload_field(&payload, "viewportMaxScrollLeft")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        timeline_zoom_percent: payload_field(&payload, "timelineZoomPercent")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(100.0),
+                        updated_at,
+                    },
+                );
+                drop(guard);
+                Ok(json!({
+                    "success": true,
+                    "state": editor_runtime_state_value(state, &file_path)?
+                }))
+            }
             "manuscripts:add-package-track" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let kind = payload_string(&payload, "kind").unwrap_or_else(|| "video".to_string());
@@ -241,8 +545,11 @@ pub fn handle_manuscripts_channel(
                             .unwrap_or("Untitled"),
                     ),
                 );
-                let prefix = if kind == "audio" { "A" } else { "V" };
-                let kind_label = if kind == "audio" { "Audio" } else { "Video" };
+                let (prefix, kind_label) = match kind.as_str() {
+                    "audio" => ("A", "Audio"),
+                    "subtitle" | "caption" | "text" => ("S", "Subtitle"),
+                    _ => ("V", "Video"),
+                };
                 let existing_indexes = timeline
                     .pointer("/tracks/children")
                     .and_then(Value::as_array)
@@ -264,6 +571,107 @@ pub fn handle_manuscripts_channel(
                     &format!("{prefix}{next_index}"),
                     kind_label,
                 );
+                normalize_package_timeline(&mut timeline);
+                write_json_value(&package_timeline_path(&full_path), &timeline)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:delete-package-track" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let track_id = payload_string(&payload, "trackId").unwrap_or_default();
+                if file_path.is_empty() || track_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath and trackId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let mut timeline = read_json_value_or(
+                    &package_timeline_path(&full_path),
+                    create_empty_otio_timeline(
+                        full_path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Untitled"),
+                    ),
+                );
+                let tracks = timeline
+                    .pointer_mut("/tracks/children")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Timeline tracks missing".to_string())?;
+                let Some(track_index) = tracks.iter().position(|track| {
+                    track
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value == track_id)
+                        .unwrap_or(false)
+                }) else {
+                    return Ok(json!({ "success": false, "error": "Track not found in timeline" }));
+                };
+                let track_kind = timeline_track_kind(&track_id);
+                let same_kind_count = tracks
+                    .iter()
+                    .filter(|track| {
+                        track
+                            .get("name")
+                            .and_then(|value| value.as_str())
+                            .map(timeline_track_kind)
+                            .unwrap_or("Video")
+                            == track_kind
+                    })
+                    .count();
+                if same_kind_count <= 1 {
+                    return Ok(json!({ "success": false, "error": "At least one track per media kind must remain" }));
+                }
+                let has_children = tracks[track_index]
+                    .get("children")
+                    .and_then(Value::as_array)
+                    .map(|children| !children.is_empty())
+                    .unwrap_or(false);
+                if has_children {
+                    return Ok(json!({ "success": false, "error": "Only empty tracks can be deleted" }));
+                }
+                tracks.remove(track_index);
+                normalize_package_timeline(&mut timeline);
+                write_json_value(&package_timeline_path(&full_path), &timeline)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:move-package-track" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let track_id = payload_string(&payload, "trackId").unwrap_or_default();
+                let direction = payload_string(&payload, "direction").unwrap_or_else(|| "up".to_string());
+                if file_path.is_empty() || track_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath and trackId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let mut timeline = read_json_value_or(
+                    &package_timeline_path(&full_path),
+                    create_empty_otio_timeline(
+                        full_path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Untitled"),
+                    ),
+                );
+                let tracks = timeline
+                    .pointer_mut("/tracks/children")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Timeline tracks missing".to_string())?;
+                let Some(track_index) = tracks.iter().position(|track| {
+                    track
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value == track_id)
+                        .unwrap_or(false)
+                }) else {
+                    return Ok(json!({ "success": false, "error": "Track not found in timeline" }));
+                };
+                let target_index = if direction == "down" {
+                    (track_index + 1).min(tracks.len().saturating_sub(1))
+                } else {
+                    track_index.saturating_sub(1)
+                };
+                if target_index == track_index {
+                    return Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }));
+                }
+                let track = tracks.remove(track_index);
+                tracks.insert(target_index, track);
                 normalize_package_timeline(&mut timeline);
                 write_json_value(&package_timeline_path(&full_path), &timeline)?;
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
@@ -296,18 +704,8 @@ pub fn handle_manuscripts_channel(
                             .unwrap_or("Untitled"),
                     ),
                 );
-                let preferred_track_name = payload_string(&payload, "track").unwrap_or_else(|| {
-                    if asset
-                        .mime_type
-                        .clone()
-                        .unwrap_or_default()
-                        .starts_with("audio/")
-                    {
-                        "A1".to_string()
-                    } else {
-                        "V1".to_string()
-                    }
-                });
+                let preferred_track_name = payload_string(&payload, "track")
+                    .unwrap_or_else(|| default_track_name_for_asset(&asset).to_string());
                 let kind_label = if preferred_track_name.starts_with('A') {
                     "Audio"
                 } else {
@@ -324,56 +722,161 @@ pub fn handle_manuscripts_channel(
                     .unwrap_or(target_children.len() as i64)
                     .clamp(0, target_children.len() as i64)
                     as usize;
-                let asset_kind = if asset
-                    .mime_type
-                    .clone()
-                    .unwrap_or_default()
-                    .starts_with("audio/")
-                {
-                    "audio"
-                } else if asset
-                    .mime_type
-                    .clone()
-                    .unwrap_or_default()
-                    .starts_with("video/")
-                {
-                    "video"
-                } else {
-                    "image"
-                };
-                let clip = json!({
-                    "OTIO_SCHEMA": "Clip.2",
-                    "name": asset.title.clone().unwrap_or_else(|| asset.id.clone()),
-                    "source_range": Value::Null,
-                    "media_references": {
-                        "DEFAULT_MEDIA": {
-                            "OTIO_SCHEMA": "ExternalReference.1",
-                            "target_url": asset.absolute_path.clone().or(asset.relative_path.clone()).unwrap_or_default(),
-                            "available_range": Value::Null,
-                            "metadata": {
-                                "assetId": asset.id,
-                                "mimeType": asset.mime_type
-                            }
-                        }
-                    },
-                    "active_media_reference_key": "DEFAULT_MEDIA",
-                    "metadata": {
-                        "clipId": create_timeline_clip_id(),
-                        "assetId": asset.id,
-                        "assetKind": asset_kind,
-                        "source": "media-library",
-                        "order": desired_order,
-                        "durationMs": payload_field(&payload, "durationMs").cloned().unwrap_or(json!(Value::Null)),
-                        "trimInMs": 0,
-                        "trimOutMs": 0,
-                        "enabled": true,
-                        "addedAt": now_iso()
-                    }
-                });
+                let clip = build_timeline_clip_from_asset(
+                    &asset,
+                    desired_order,
+                    payload_field(&payload, "durationMs").and_then(|value| value.as_i64()),
+                );
+                let inserted_clip_id = clip
+                    .get("metadata")
+                    .and_then(|value| value.get("clipId"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 target_children.insert(desired_order, clip);
                 normalize_package_timeline(&mut timeline);
                 write_json_value(&package_timeline_path(&full_path), &timeline)?;
-                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+                ensure_package_asset_entry(&full_path, &asset)?;
+                Ok(json!({
+                    "success": true,
+                    "insertedClipId": inserted_clip_id,
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
+            }
+            "manuscripts:insert-package-clip-at-playhead" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let asset_id = payload_string(&payload, "assetId").unwrap_or_default();
+                if file_path.is_empty() || asset_id.is_empty() {
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and assetId are required" }),
+                    );
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let asset = with_store(state, |store| {
+                    Ok(store
+                        .media_assets
+                        .iter()
+                        .find(|item| item.id == asset_id)
+                        .cloned())
+                })?;
+                let Some(asset) = asset else {
+                    return Ok(json!({ "success": false, "error": "Media asset not found" }));
+                };
+
+                let playhead_seconds = editor_runtime_state_record(state, &file_path)?
+                    .map(|record| record.playhead_seconds)
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let playhead_ms = (playhead_seconds * 1000.0).round() as i64;
+
+                let mut timeline = read_json_value_or(
+                    &package_timeline_path(&full_path),
+                    create_empty_otio_timeline(
+                        full_path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Untitled"),
+                    ),
+                );
+                let requested_track = payload_string(&payload, "track")
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let default_track_name = default_track_name_for_asset(&asset).to_string();
+                let track_prefix = if default_track_name.starts_with('A') {
+                    'A'
+                } else {
+                    'V'
+                };
+                let preferred_track_name = requested_track.unwrap_or_else(|| {
+                    timeline
+                        .pointer("/tracks/children")
+                        .and_then(Value::as_array)
+                        .and_then(|tracks| {
+                            tracks
+                                .iter()
+                                .filter_map(|track| {
+                                    track
+                                        .get("name")
+                                        .and_then(|value| value.as_str())
+                                        .map(ToString::to_string)
+                                })
+                                .filter(|name| name.starts_with(track_prefix))
+                                .last()
+                        })
+                        .unwrap_or(default_track_name)
+                });
+                let kind_label = if preferred_track_name.starts_with('A') {
+                    "Audio"
+                } else {
+                    "Video"
+                };
+                let target_track =
+                    ensure_timeline_track(&mut timeline, &preferred_track_name, kind_label);
+                let target_children = target_track
+                    .get_mut("children")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Timeline track children missing".to_string())?;
+
+                let mut desired_order = target_children.len();
+                let mut split_target: Option<(usize, f64)> = None;
+                if let Some(order) =
+                    payload_field(&payload, "order").and_then(|value| value.as_i64())
+                {
+                    desired_order = order.clamp(0, target_children.len() as i64) as usize;
+                } else {
+                    let mut cursor_ms = 0_i64;
+                    for (index, clip) in target_children.iter().enumerate() {
+                        let next_cursor_ms = cursor_ms + timeline_clip_duration_ms(clip);
+                        if playhead_ms > cursor_ms && playhead_ms < next_cursor_ms {
+                            let duration_ms = (next_cursor_ms - cursor_ms).max(1000);
+                            let split_ratio = ((playhead_ms - cursor_ms) as f64
+                                / duration_ms as f64)
+                                .clamp(0.1, 0.9);
+                            split_target = Some((index, split_ratio));
+                            desired_order = index + 1;
+                            break;
+                        }
+                        if playhead_ms <= cursor_ms {
+                            desired_order = index;
+                            break;
+                        }
+                        desired_order = index + 1;
+                        cursor_ms = next_cursor_ms;
+                    }
+                }
+
+                if let Some((split_index, split_ratio)) = split_target {
+                    let original_clip = target_children.remove(split_index);
+                    let original_clip_id =
+                        timeline_clip_identity(&original_clip, &preferred_track_name, split_index);
+                    let (first_clip, second_clip) =
+                        split_timeline_clip_value(&original_clip, &original_clip_id, split_ratio);
+                    target_children.insert(split_index, first_clip);
+                    target_children.insert(split_index + 1, second_clip);
+                }
+
+                let clip = build_timeline_clip_from_asset(
+                    &asset,
+                    desired_order,
+                    payload_field(&payload, "durationMs").and_then(|value| value.as_i64()),
+                );
+                let inserted_clip_id = clip
+                    .get("metadata")
+                    .and_then(|value| value.get("clipId"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let safe_order = desired_order.min(target_children.len());
+                target_children.insert(safe_order, clip);
+                normalize_package_timeline(&mut timeline);
+                write_json_value(&package_timeline_path(&full_path), &timeline)?;
+                ensure_package_asset_entry(&full_path, &asset)?;
+                Ok(json!({
+                    "success": true,
+                    "insertedClipId": inserted_clip_id,
+                    "playheadSeconds": playhead_seconds,
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
             }
             "manuscripts:attach-external-files" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
@@ -429,6 +932,8 @@ pub fn handle_manuscripts_channel(
                         store.media_assets.push(asset.clone());
                         Ok(asset)
                     })?;
+                    persist_media_workspace_catalog(state)?;
+                    ensure_package_asset_entry(&full_path, &asset)?;
                     let track = if mime_type.starts_with("audio/") {
                         "A1"
                     } else {
@@ -629,16 +1134,13 @@ pub fn handle_manuscripts_channel(
                         if timeline_clip_identity(clip, &track_name, 0) != clip_id {
                             continue;
                         }
-                        let metadata = clip.get("metadata").cloned().unwrap_or_else(|| json!({}));
-                        let current_duration = metadata
-                            .get("durationMs")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(4000)
-                            .max(1000);
+                        let min_duration =
+                            min_clip_duration_ms_for_asset_kind(&timeline_clip_asset_kind(clip));
+                        let current_duration = timeline_clip_duration_ms(clip);
                         let first_duration =
                             ((current_duration as f64) * split_ratio).round() as i64;
-                        let first_duration = first_duration.max(1000);
-                        let second_duration = (current_duration - first_duration).max(1000);
+                        let first_duration = first_duration.max(min_duration);
+                        let second_duration = (current_duration - first_duration).max(min_duration);
                         if let Some(obj) = clip_value
                             .get_mut("metadata")
                             .and_then(Value::as_object_mut)

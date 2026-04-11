@@ -1,419 +1,22 @@
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{atomic::AtomicBool, Arc};
-use std::thread::JoinHandle;
-
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{make_id, now_i64, AppStore};
+#[path = "runtime/agent_engine.rs"]
+mod agent_engine;
+#[path = "runtime/events.rs"]
+mod events;
+#[path = "runtime/session_runtime.rs"]
+mod session_runtime;
+#[path = "runtime/task_runtime.rs"]
+mod task_runtime;
+#[path = "runtime/types.rs"]
+mod types;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpServerRecord {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub transport: String,
-    pub command: Option<String>,
-    pub args: Option<Vec<String>>,
-    pub env: Option<HashMap<String, String>>,
-    pub url: Option<String>,
-    pub oauth: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeHookRecord {
-    pub id: String,
-    pub event: String,
-    pub r#type: String,
-    pub matcher: Option<String>,
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillRecord {
-    pub name: String,
-    pub description: String,
-    pub location: String,
-    pub body: String,
-    pub source_scope: Option<String>,
-    pub is_builtin: Option<bool>,
-    pub disabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionTranscriptRecord {
-    pub id: String,
-    pub session_id: String,
-    pub record_type: String,
-    pub role: String,
-    pub content: String,
-    pub payload: Option<Value>,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawScheduledTaskRecord {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub mode: String,
-    pub prompt: String,
-    pub project_id: Option<String>,
-    pub interval_minutes: Option<i64>,
-    pub time: Option<String>,
-    pub weekdays: Option<Vec<i64>>,
-    pub run_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub last_run_at: Option<String>,
-    pub last_result: Option<String>,
-    pub last_error: Option<String>,
-    pub next_run_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawLongCycleTaskRecord {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub status: String,
-    pub objective: String,
-    pub step_prompt: String,
-    pub project_id: Option<String>,
-    pub interval_minutes: i64,
-    pub total_rounds: i64,
-    pub completed_rounds: i64,
-    pub created_at: String,
-    pub updated_at: String,
-    pub last_run_at: Option<String>,
-    pub last_result: Option<String>,
-    pub last_error: Option<String>,
-    pub next_run_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawProjectRecord {
-    pub id: String,
-    pub goal: String,
-    pub platform: Option<String>,
-    pub task_type: Option<String>,
-    pub status: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawJobDefinitionRecord {
-    pub id: String,
-    pub source_kind: Option<String>,
-    pub source_task_id: Option<String>,
-    pub kind: String,
-    pub title: String,
-    pub enabled: bool,
-    pub owner_context_id: Option<String>,
-    pub runtime_mode: String,
-    pub trigger_kind: String,
-    pub progression_kind: String,
-    pub payload: Value,
-    pub next_due_at: Option<String>,
-    pub last_enqueued_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawJobExecutionRecord {
-    pub id: String,
-    pub definition_id: String,
-    pub status: String,
-    pub attempt_count: i64,
-    pub worker_id: Option<String>,
-    pub worker_mode: String,
-    pub session_id: Option<String>,
-    pub runtime_task_id: Option<String>,
-    pub started_at: Option<String>,
-    pub last_heartbeat_at: Option<String>,
-    pub heartbeat_timeout_ms: Option<i64>,
-    pub completed_at: Option<String>,
-    pub last_error: Option<String>,
-    pub input_snapshot: Option<Value>,
-    pub output_summary: Option<String>,
-    pub artifacts: Vec<Value>,
-    pub checkpoints: Vec<Value>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedclawStateRecord {
-    pub enabled: bool,
-    pub lock_state: String,
-    pub blocked_by: Option<String>,
-    pub interval_minutes: i64,
-    pub keep_alive_when_no_window: bool,
-    pub max_projects_per_tick: i64,
-    pub max_automation_per_tick: i64,
-    pub is_ticking: bool,
-    pub current_project_id: Option<String>,
-    pub current_automation_task_id: Option<String>,
-    pub next_automation_fire_at: Option<String>,
-    pub in_flight_task_ids: Vec<String>,
-    pub in_flight_long_cycle_task_ids: Vec<String>,
-    pub heartbeat_in_flight: bool,
-    pub last_tick_at: Option<String>,
-    pub next_tick_at: Option<String>,
-    pub next_maintenance_at: Option<String>,
-    pub last_error: Option<String>,
-    pub heartbeat: Value,
-    pub scheduled_tasks: Vec<RedclawScheduledTaskRecord>,
-    pub long_cycle_tasks: Vec<RedclawLongCycleTaskRecord>,
-    pub projects: Vec<RedclawProjectRecord>,
-}
-
-impl Default for RedclawStateRecord {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            lock_state: "owner".to_string(),
-            blocked_by: None,
-            interval_minutes: 20,
-            keep_alive_when_no_window: true,
-            max_projects_per_tick: 1,
-            max_automation_per_tick: 2,
-            is_ticking: false,
-            current_project_id: None,
-            current_automation_task_id: None,
-            next_automation_fire_at: None,
-            in_flight_task_ids: Vec::new(),
-            in_flight_long_cycle_task_ids: Vec::new(),
-            heartbeat_in_flight: false,
-            last_tick_at: None,
-            next_tick_at: None,
-            next_maintenance_at: None,
-            last_error: Some("RedClaw runner is idle.".to_string()),
-            heartbeat: json!({
-                "enabled": true,
-                "intervalMinutes": 30,
-                "suppressEmptyReport": true,
-                "reportToMainSession": true
-            }),
-            scheduled_tasks: Vec::new(),
-            long_cycle_tasks: Vec::new(),
-            projects: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionCheckpointRecord {
-    pub id: String,
-    pub session_id: String,
-    pub checkpoint_type: String,
-    pub summary: String,
-    pub payload: Option<Value>,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionToolResultRecord {
-    pub id: String,
-    pub session_id: String,
-    pub call_id: String,
-    pub tool_name: String,
-    pub command: Option<String>,
-    pub success: bool,
-    pub result_text: Option<String>,
-    pub summary_text: Option<String>,
-    pub prompt_text: Option<String>,
-    pub original_chars: Option<i64>,
-    pub prompt_chars: Option<i64>,
-    pub truncated: bool,
-    pub payload: Option<Value>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeTaskRecord {
-    pub id: String,
-    pub task_type: String,
-    pub status: String,
-    pub runtime_mode: String,
-    pub owner_session_id: Option<String>,
-    pub intent: Option<String>,
-    pub role_id: Option<String>,
-    pub goal: Option<String>,
-    pub current_node: Option<String>,
-    pub route: Option<Value>,
-    pub graph: Vec<Value>,
-    pub artifacts: Vec<Value>,
-    pub checkpoints: Vec<Value>,
-    pub metadata: Option<Value>,
-    pub last_error: Option<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub started_at: Option<i64>,
-    pub completed_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeTaskTraceRecord {
-    pub id: i64,
-    pub task_id: String,
-    pub node_id: Option<String>,
-    pub event_type: String,
-    pub payload: Option<Value>,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeRouteRecord {
-    pub intent: String,
-    pub secondary_intents: Vec<String>,
-    pub goal: String,
-    pub deliverables: Vec<String>,
-    pub required_capabilities: Vec<String>,
-    pub recommended_role: String,
-    pub requires_long_running_task: bool,
-    pub requires_multi_agent: bool,
-    pub requires_human_approval: bool,
-    pub confidence: f64,
-    pub reasoning: String,
-    pub source: String,
-}
-
-impl RuntimeRouteRecord {
-    pub fn from_value(route: &Value) -> Option<Self> {
-        serde_json::from_value(route.clone()).ok()
-    }
-
-    pub fn into_value(self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeGraphNodeRecord {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub node_type: String,
-    pub status: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl RuntimeGraphNodeRecord {
-    pub fn into_value(self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChatExecutionResult {
-    pub session_id: String,
-    pub response: String,
-    pub title_update: Option<(String, String)>,
-    pub emitted_live_events: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedChatConfig {
-    pub protocol: String,
-    pub base_url: String,
-    pub api_key: Option<String>,
-    pub model_name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct InteractiveToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: Value,
-    pub raw: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeSubagentRoleSpec {
-    pub role_id: String,
-    pub purpose: String,
-    pub handoff_contract: String,
-    pub output_schema: String,
-    pub system_prompt: String,
-}
-
-#[derive(Clone, Default)]
-pub struct RuntimeWarmEntry {
-    pub mode: String,
-    pub system_prompt: String,
-    pub model_config: Option<Value>,
-    pub long_term_context: Option<String>,
-    pub warmed_at: i64,
-}
-
-#[derive(Default)]
-pub struct RuntimeWarmState {
-    pub entries: HashMap<String, RuntimeWarmEntry>,
-    pub settings_fingerprint: String,
-    pub last_warmed_at: i64,
-}
-
-pub struct RedclawRuntime {
-    pub stop: Arc<AtomicBool>,
-    pub join: Option<JoinHandle<()>>,
-}
-
-pub fn append_session_checkpoint(
-    store: &mut AppStore,
-    session_id: &str,
-    checkpoint_type: &str,
-    summary: String,
-    payload: Option<Value>,
-) {
-    store.session_checkpoints.push(SessionCheckpointRecord {
-        id: make_id("checkpoint"),
-        session_id: session_id.to_string(),
-        checkpoint_type: checkpoint_type.to_string(),
-        summary,
-        payload,
-        created_at: now_i64(),
-    });
-}
-
-pub fn append_runtime_task_trace(
-    store: &mut AppStore,
-    task_id: &str,
-    event_type: &str,
-    payload: Option<Value>,
-) {
-    store.runtime_task_traces.push(RuntimeTaskTraceRecord {
-        id: now_i64(),
-        task_id: task_id.to_string(),
-        node_id: None,
-        event_type: event_type.to_string(),
-        payload,
-        created_at: now_i64(),
-    });
-}
+pub use agent_engine::*;
+pub use events::*;
+pub use session_runtime::*;
+pub use task_runtime::*;
+pub use types::*;
 
 pub const RUNTIME_INTENT_NAMES: &[&str] = &[
     "direct_answer",
@@ -712,11 +315,8 @@ pub fn runtime_route_from_llm_parsed(
     })
 }
 
-pub fn runtime_graph_for_route(route: &Value) -> Vec<Value> {
+pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {
     runtime_graph_for_route_record(route)
-        .into_iter()
-        .map(RuntimeGraphNodeRecord::into_value)
-        .collect()
 }
 
 pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeRecord> {
@@ -744,6 +344,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
             node_type: "plan".to_string(),
             status: "pending".to_string(),
             title: "Plan".to_string(),
+            started_at: None,
+            completed_at: None,
             summary: None,
             error: None,
         },
@@ -752,6 +354,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
             node_type: "retrieve".to_string(),
             status: "pending".to_string(),
             title: "Retrieve".to_string(),
+            started_at: None,
+            completed_at: None,
             summary: None,
             error: None,
         },
@@ -762,6 +366,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
             node_type: "spawn_agents".to_string(),
             status: "pending".to_string(),
             title: "Spawn Agents".to_string(),
+            started_at: None,
+            completed_at: None,
             summary: None,
             error: None,
         });
@@ -770,6 +376,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
             node_type: "handoff".to_string(),
             status: "pending".to_string(),
             title: "Handoff".to_string(),
+            started_at: None,
+            completed_at: None,
             summary: None,
             error: None,
         });
@@ -778,6 +386,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
             node_type: "review".to_string(),
             status: "pending".to_string(),
             title: "Review".to_string(),
+            started_at: None,
+            completed_at: None,
             summary: None,
             error: None,
         });
@@ -787,6 +397,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
         node_type: "execute_tools".to_string(),
         status: "pending".to_string(),
         title: "Execute".to_string(),
+        started_at: None,
+        completed_at: None,
         summary: None,
         error: None,
     });
@@ -795,6 +407,8 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
         node_type: "save_artifact".to_string(),
         status: "pending".to_string(),
         title: "Save Artifact".to_string(),
+        started_at: None,
+        completed_at: None,
         summary: None,
         error: None,
     });
@@ -802,24 +416,25 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
 }
 
 pub fn set_runtime_graph_node(
-    graph: &mut [Value],
+    graph: &mut [RuntimeGraphNodeRecord],
     node_id: &str,
     status: &str,
     summary: Option<String>,
     error: Option<String>,
 ) {
-    if let Some(node) = graph
-        .iter_mut()
-        .find(|item| item.get("id").and_then(Value::as_str) == Some(node_id))
-    {
-        if let Some(object) = node.as_object_mut() {
-            object.insert("status".to_string(), json!(status));
-            if let Some(summary) = summary {
-                object.insert("summary".to_string(), json!(summary));
-            }
-            if let Some(error) = error {
-                object.insert("error".to_string(), json!(error));
-            }
+    if let Some(node) = graph.iter_mut().find(|item| item.id == node_id) {
+        node.status = status.to_string();
+        if status == "running" && node.started_at.is_none() {
+            node.started_at = Some(crate::now_i64());
+        }
+        if matches!(status, "completed" | "failed" | "skipped") {
+            node.completed_at = Some(crate::now_i64());
+        }
+        if let Some(summary) = summary {
+            node.summary = Some(summary);
+        }
+        if let Some(error) = error {
+            node.error = Some(error);
         }
     }
 }
@@ -856,27 +471,7 @@ pub fn role_sequence_for_route(route: &Value) -> Vec<String> {
 }
 
 pub fn runtime_task_value(task: &RuntimeTaskRecord) -> Value {
-    json!({
-        "id": task.id,
-        "taskType": task.task_type,
-        "status": task.status,
-        "runtimeMode": task.runtime_mode,
-        "ownerSessionId": task.owner_session_id,
-        "intent": task.intent,
-        "roleId": task.role_id,
-        "goal": task.goal,
-        "currentNode": task.current_node,
-        "route": task.route,
-        "graph": task.graph,
-        "artifacts": task.artifacts,
-        "checkpoints": task.checkpoints,
-        "metadata": task.metadata,
-        "lastError": task.last_error,
-        "createdAt": task.created_at,
-        "updatedAt": task.updated_at,
-        "startedAt": task.started_at,
-        "completedAt": task.completed_at,
-    })
+    json!(task)
 }
 
 pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path) -> String {
@@ -1217,10 +812,7 @@ mod tests {
             "requiresMultiAgent": true,
             "requiresLongRunningTask": false
         }));
-        let ids = graph
-            .iter()
-            .filter_map(|node| node.get("id").and_then(Value::as_str))
-            .collect::<Vec<_>>();
+        let ids = graph.iter().map(|node| node.id.as_str()).collect::<Vec<_>>();
         assert!(ids.contains(&"spawn_agents"));
         assert!(ids.contains(&"handoff"));
         assert!(ids.contains(&"review"));
@@ -1248,19 +840,10 @@ mod tests {
             Some("route resolved".to_string()),
             Some("none".to_string()),
         );
-        let plan = graph
-            .iter()
-            .find(|node| node.get("id").and_then(Value::as_str) == Some("plan"))
-            .unwrap();
-        assert_eq!(
-            plan.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        assert_eq!(
-            plan.get("summary").and_then(Value::as_str),
-            Some("route resolved")
-        );
-        assert_eq!(plan.get("error").and_then(Value::as_str), Some("none"));
+        let plan = graph.iter().find(|node| node.id == "plan").unwrap();
+        assert_eq!(plan.status, "completed");
+        assert_eq!(plan.summary.as_deref(), Some("route resolved"));
+        assert_eq!(plan.error.as_deref(), Some("none"));
     }
 
     #[test]

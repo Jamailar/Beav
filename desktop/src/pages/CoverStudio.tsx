@@ -11,6 +11,7 @@ import {
     Type,
     Layers,
 } from 'lucide-react';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 
@@ -487,7 +488,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
 
     const saveTemplate = useCallback(() => {
         if (!templateImage?.dataUrl) {
-            alert('请先上传模板图');
+            void appAlert('请先上传模板图');
             return;
         }
 
@@ -530,10 +531,10 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         });
     }, [activeTemplateId, count, model, promptSwitches, quality, templateImage, templates]);
 
-    const deleteTemplate = useCallback((templateId: string) => {
+    const deleteTemplate = useCallback(async (templateId: string) => {
         const target = templates.find((item) => item.id === templateId);
         if (!target) return;
-        if (!confirm(`确认删除模板「${target.name}」吗？`)) return;
+        if (!(await appConfirm(`确认删除模板「${target.name}」吗？`, { title: '删除模板', confirmLabel: '删除', tone: 'danger' }))) return;
         setTemplates((prev) => prev.filter((item) => item.id !== templateId));
         if (activeTemplateId === templateId) {
             resetEditor();

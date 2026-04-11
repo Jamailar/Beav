@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import 'tippy.js/dist/tippy.css'
 import './index.css'
+import { appAlert } from './utils/appDialogs'
 
 const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
 
@@ -22,6 +23,10 @@ const initializeThemeMode = () => {
 };
 
 initializeThemeMode();
+
+window.alert = ((message?: unknown) => {
+  void appAlert(String(message ?? ''));
+}) as typeof window.alert;
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
