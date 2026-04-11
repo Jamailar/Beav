@@ -10,8 +10,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
     list_runtime_tasks, mark_task_running, reviewer_rejected, route_for_task_snapshot,
-    runtime_task_value, set_runtime_graph_node, build_repair_goal, RuntimeArtifact,
-    RuntimeCheckpointRecord,
+    runtime_task_value, build_repair_goal, record_runtime_checkpoint, record_runtime_node,
+    RuntimeArtifact, RuntimeCheckpointEvent, RuntimeCheckpointRecord, RuntimeNodeEvent,
 };
 use crate::{
     create_work_item, log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState,
@@ -189,10 +189,8 @@ pub fn handle_runtime_task_channel(
                     )?)
                 };
 
-                let mut runtime_node_events: Vec<(String, String, Option<String>, Option<String>)> =
-                    Vec::new();
-                let mut runtime_checkpoint_events: Vec<(String, String, Option<Value>)> =
-                    Vec::new();
+                let mut runtime_node_events: Vec<RuntimeNodeEvent> = Vec::new();
+                let mut runtime_checkpoint_events: Vec<RuntimeCheckpointEvent> = Vec::new();
                 let result = with_store_mut(state, |store| {
                     let Some(task) = store
                         .runtime_tasks
@@ -207,8 +205,9 @@ pub fn handle_runtime_task_channel(
                     task.route = Some(route.clone());
                     task.current_node = Some("execute_tools".to_string());
 
-                    set_runtime_graph_node(
-                        &mut task.graph,
+                    record_runtime_node(
+                        task,
+                        &mut runtime_node_events,
                         "plan",
                         "completed",
                         Some(if route.reasoning.trim().is_empty() {
@@ -218,45 +217,25 @@ pub fn handle_runtime_task_channel(
                         }),
                         None,
                     );
-                    runtime_node_events.push((
-                        "plan".to_string(),
-                        "completed".to_string(),
-                        Some(if route.reasoning.trim().is_empty() {
-                            "route resolved".to_string()
-                        } else {
-                            route.reasoning.clone()
-                        }),
-                        None,
-                    ));
 
-                    set_runtime_graph_node(
-                        &mut task.graph,
+                    record_runtime_node(
+                        task,
+                        &mut runtime_node_events,
                         "retrieve",
                         "completed",
                         Some("runtime context prepared".to_string()),
                         None,
                     );
-                    runtime_node_events.push((
-                        "retrieve".to_string(),
-                        "completed".to_string(),
-                        Some("runtime context prepared".to_string()),
-                        None,
-                    ));
 
                     if let Some(orchestration_value) = orchestration.clone() {
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "spawn_agents",
                             "completed",
                             Some("subagent orchestration completed".to_string()),
                             None,
                         );
-                        runtime_node_events.push((
-                            "spawn_agents".to_string(),
-                            "completed".to_string(),
-                            Some("subagent orchestration completed".to_string()),
-                            None,
-                        ));
                         task.artifacts.push(RuntimeArtifact::new(
                             "subagent-orchestration",
                             "Subagent Orchestration",
@@ -270,28 +249,22 @@ pub fn handle_runtime_task_channel(
                             "subagent orchestration completed",
                             Some(orchestration_value),
                         );
-                        runtime_checkpoint_events.push((
-                            "orchestration".to_string(),
-                            checkpoint.summary.clone(),
-                            checkpoint.payload.clone(),
-                        ));
-                        task.checkpoints.push(checkpoint);
+                        record_runtime_checkpoint(
+                            task,
+                            &mut runtime_checkpoint_events,
+                            checkpoint,
+                        );
                     }
 
                     if let Some(repair_value) = repair_plan.clone() {
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "review",
                             "failed",
                             Some("reviewer requested repair".to_string()),
                             Some("reviewer rejected execution".to_string()),
                         );
-                        runtime_node_events.push((
-                            "review".to_string(),
-                            "failed".to_string(),
-                            Some("reviewer requested repair".to_string()),
-                            Some("reviewer rejected execution".to_string()),
-                        ));
                         task.artifacts.push(RuntimeArtifact::new(
                             "repair-plan",
                             "Repair Plan",
@@ -306,28 +279,22 @@ pub fn handle_runtime_task_channel(
                                 .unwrap_or_else(|| "review repair plan generated".to_string()),
                             Some(repair_value.clone()),
                         );
-                        runtime_checkpoint_events.push((
-                            "repair".to_string(),
-                            checkpoint.summary.clone(),
-                            checkpoint.payload.clone(),
-                        ));
-                        task.checkpoints.push(checkpoint);
+                        record_runtime_checkpoint(
+                            task,
+                            &mut runtime_checkpoint_events,
+                            checkpoint,
+                        );
                     }
 
                     if let Some(repair_value) = repair_orchestration.clone() {
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "handoff",
                             "completed",
                             Some("repair pass completed".to_string()),
                             None,
                         );
-                        runtime_node_events.push((
-                            "handoff".to_string(),
-                            "completed".to_string(),
-                            Some("repair pass completed".to_string()),
-                            None,
-                        ));
                         task.artifacts.push(RuntimeArtifact::new(
                             "repair-pass",
                             "Repair Pass",
@@ -341,28 +308,22 @@ pub fn handle_runtime_task_channel(
                             "repair pass completed",
                             Some(repair_value),
                         );
-                        runtime_checkpoint_events.push((
-                            "repair_pass".to_string(),
-                            checkpoint.summary.clone(),
-                            checkpoint.payload.clone(),
-                        ));
-                        task.checkpoints.push(checkpoint);
+                        record_runtime_checkpoint(
+                            task,
+                            &mut runtime_checkpoint_events,
+                            checkpoint,
+                        );
                     }
 
                     if let Some(artifact) = saved_artifact.clone() {
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "save_artifact",
                             "completed",
                             Some("artifact saved".to_string()),
                             None,
                         );
-                        runtime_node_events.push((
-                            "save_artifact".to_string(),
-                            "completed".to_string(),
-                            Some("artifact saved".to_string()),
-                            None,
-                        ));
                         task.artifacts.push(artifact.clone());
                         let checkpoint = RuntimeCheckpointRecord::new(
                             "save_artifact",
@@ -370,12 +331,11 @@ pub fn handle_runtime_task_channel(
                             "artifact saved",
                             Some(serde_json::to_value(&artifact).unwrap_or_else(|_| Value::Null)),
                         );
-                        runtime_checkpoint_events.push((
-                            "save_artifact".to_string(),
-                            checkpoint.summary.clone(),
-                            checkpoint.payload.clone(),
-                        ));
-                        task.checkpoints.push(checkpoint);
+                        record_runtime_checkpoint(
+                            task,
+                            &mut runtime_checkpoint_events,
+                            checkpoint,
+                        );
 
                         let mut work_item = create_work_item(
                             "runtime-artifact",
@@ -407,19 +367,14 @@ pub fn handle_runtime_task_channel(
                     if reviewer_blocked && repair_pass_failed {
                         task.status = "failed".to_string();
                         task.last_error = Some("reviewer rejected execution".to_string());
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "execute_tools",
                             "failed",
                             Some("execution blocked by reviewer".to_string()),
                             Some("reviewer rejected execution".to_string()),
                         );
-                        runtime_node_events.push((
-                            "execute_tools".to_string(),
-                            "failed".to_string(),
-                            Some("execution blocked by reviewer".to_string()),
-                            Some("reviewer rejected execution".to_string()),
-                        ));
                         if let Some(repair_value) = repair_plan.clone() {
                             let mut work_item = create_work_item(
                                 "runtime-repair",
@@ -453,32 +408,22 @@ pub fn handle_runtime_task_channel(
                     } else {
                         task.status = "completed".to_string();
                         task.last_error = None;
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "review",
                             "completed",
                             Some("reviewer approved execution".to_string()),
                             None,
                         );
-                        runtime_node_events.push((
-                            "review".to_string(),
-                            "completed".to_string(),
-                            Some("reviewer approved execution".to_string()),
-                            None,
-                        ));
-                        set_runtime_graph_node(
-                            &mut task.graph,
+                        record_runtime_node(
+                            task,
+                            &mut runtime_node_events,
                             "execute_tools",
                             "completed",
                             Some("execution completed".to_string()),
                             None,
                         );
-                        runtime_node_events.push((
-                            "execute_tools".to_string(),
-                            "completed".to_string(),
-                            Some("execution completed".to_string()),
-                            None,
-                        ));
                     }
 
                     task.completed_at = Some(now_i64());

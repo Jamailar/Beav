@@ -6,6 +6,9 @@ use crate::runtime::{
 };
 use crate::{make_id, now_i64, payload_string, AppStore};
 
+pub type RuntimeNodeEvent = (String, String, Option<String>, Option<String>);
+pub type RuntimeCheckpointEvent = (String, String, Option<Value>);
+
 pub fn build_route_checkpoint(route: &RuntimeRouteRecord) -> RuntimeCheckpointRecord {
     RuntimeCheckpointRecord::new(
         "route",
@@ -112,6 +115,42 @@ pub fn set_runtime_graph_node(
 
 pub fn runtime_task_value(task: &RuntimeTaskRecord) -> Value {
     serde_json::json!(task)
+}
+
+pub fn record_runtime_node(
+    task: &mut RuntimeTaskRecord,
+    runtime_node_events: &mut Vec<RuntimeNodeEvent>,
+    node_id: &str,
+    status: &str,
+    summary: Option<String>,
+    error: Option<String>,
+) {
+    set_runtime_graph_node(
+        &mut task.graph,
+        node_id,
+        status,
+        summary.clone(),
+        error.clone(),
+    );
+    runtime_node_events.push((
+        node_id.to_string(),
+        status.to_string(),
+        summary,
+        error,
+    ));
+}
+
+pub fn record_runtime_checkpoint(
+    task: &mut RuntimeTaskRecord,
+    runtime_checkpoint_events: &mut Vec<RuntimeCheckpointEvent>,
+    checkpoint: RuntimeCheckpointRecord,
+) {
+    runtime_checkpoint_events.push((
+        checkpoint.checkpoint_type.clone(),
+        checkpoint.summary.clone(),
+        checkpoint.payload.clone(),
+    ));
+    task.checkpoints.push(checkpoint);
 }
 
 pub fn runtime_graph_for_route(route: &Value) -> RuntimeGraph {
