@@ -6,7 +6,10 @@ use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{append_session_checkpoint, prepare_runtime_query_execution};
+use crate::runtime::{
+    persist_runtime_query_checkpoints, prepare_runtime_query_execution,
+    runtime_query_checkpoint_events,
+};
 use crate::{
     payload_field, payload_string, resolve_runtime_mode_for_session, AppState,
 };
@@ -58,48 +61,27 @@ pub fn handle_runtime_query(
         "Runtime query completed",
     )?;
     let _ = with_store_mut(state, |store| {
-        append_session_checkpoint(
+        persist_runtime_query_checkpoints(
             store,
             &execution.session_id,
-            "runtime.route",
-            if route.reasoning.trim().is_empty() {
-                "runtime route".to_string()
-            } else {
-                prepared.route.reasoning.clone()
-            },
-            Some(route_value.clone()),
+            &prepared.route.reasoning,
+            route_value.clone(),
+            prepared.orchestration.clone(),
         );
-        if let Some(orchestration_value) = prepared.orchestration.clone() {
-            append_session_checkpoint(
-                store,
-                &execution.session_id,
-                "runtime.orchestration",
-                "subagent orchestration completed".to_string(),
-                Some(orchestration_value),
-            );
-        }
         Ok(())
     });
-    emit_runtime_task_checkpoint_saved(
-        app,
-        None,
-        Some(&execution.session_id),
-        "runtime.route",
-        if route.reasoning.trim().is_empty() {
-            "runtime route"
-        } else {
-            prepared.route.reasoning.as_str()
-        },
-        Some(route_value.clone()),
-    );
-    if let Some(orchestration_value) = prepared.orchestration.clone() {
+    for (checkpoint_type, summary, payload) in runtime_query_checkpoint_events(
+        &prepared.route.reasoning,
+        route_value.clone(),
+        prepared.orchestration.clone(),
+    ) {
         emit_runtime_task_checkpoint_saved(
             app,
             None,
             Some(&execution.session_id),
-            "runtime.orchestration",
-            "subagent orchestration completed",
-            Some(orchestration_value),
+            &checkpoint_type,
+            &summary,
+            payload,
         );
     }
     emit_chat_sequence(

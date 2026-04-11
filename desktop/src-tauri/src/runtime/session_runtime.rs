@@ -1,6 +1,6 @@
 use crate::runtime::{
-    runtime_task_value, PreparedExecution, RuntimeRouteRecord, SessionCheckpointRecord,
-    SessionToolResultRecord, SessionTranscriptRecord,
+    append_session_checkpoint, runtime_task_value, PreparedExecution, RuntimeRouteRecord,
+    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
 };
 use crate::{payload_string, AppStore, ChatSessionRecord};
 use serde_json::{json, Value};
@@ -206,6 +206,59 @@ pub fn prepare_runtime_query_execution(
     }
 }
 
+pub fn persist_runtime_query_checkpoints(
+    store: &mut AppStore,
+    session_id: &str,
+    route_reasoning: &str,
+    route_value: Value,
+    orchestration: Option<Value>,
+) {
+    append_session_checkpoint(
+        store,
+        session_id,
+        "runtime.route",
+        if route_reasoning.trim().is_empty() {
+            "runtime route".to_string()
+        } else {
+            route_reasoning.to_string()
+        },
+        Some(route_value),
+    );
+    if let Some(orchestration_value) = orchestration {
+        append_session_checkpoint(
+            store,
+            session_id,
+            "runtime.orchestration",
+            "subagent orchestration completed".to_string(),
+            Some(orchestration_value),
+        );
+    }
+}
+
+pub fn runtime_query_checkpoint_events(
+    route_reasoning: &str,
+    route_value: Value,
+    orchestration: Option<Value>,
+) -> Vec<(String, String, Option<Value>)> {
+    let mut events = vec![(
+        "runtime.route".to_string(),
+        if route_reasoning.trim().is_empty() {
+            "runtime route".to_string()
+        } else {
+            route_reasoning.to_string()
+        },
+        Some(route_value),
+    )];
+    if let Some(orchestration_value) = orchestration {
+        events.push((
+            "runtime.orchestration".to_string(),
+            "subagent orchestration completed".to_string(),
+            Some(orchestration_value),
+        ));
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +371,17 @@ mod tests {
         let route = crate::runtime::runtime_direct_route_record("default", "draft", None);
         let prepared = prepare_runtime_query_execution(route, Some(json!({ "outputs": [] })), "help me");
         assert_eq!(prepared.effective_message, "help me");
+    }
+
+    #[test]
+    fn runtime_query_checkpoint_events_include_route_and_optional_orchestration() {
+        let events = runtime_query_checkpoint_events(
+            "route resolved",
+            json!({ "intent": "direct_answer" }),
+            Some(json!({ "outputs": [{"roleId": "planner"}] })),
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, "runtime.route");
+        assert_eq!(events[1].0, "runtime.orchestration");
     }
 }
