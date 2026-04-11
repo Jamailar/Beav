@@ -61,6 +61,11 @@ struct ChatExchangeContext {
     allow_redclaw_onboarding: bool,
 }
 
+struct ChatExchangeResponseStage {
+    response: String,
+    emitted_live_events: bool,
+}
+
 impl<'a> ChatExchangeRequest<'a> {
     pub fn chat_send(
         session_id: Option<String>,
@@ -142,64 +147,15 @@ pub fn execute_chat_exchange(
     } else {
         None
     };
-    let mut emitted_live_events = false;
-    let response = if let Some((local_response, _completed)) = onboarding_response {
-        local_response
-    } else if let (Some(app), Some(config)) =
-        (app, resolve_chat_config(&context.settings_snapshot, model_config))
-    {
-        if matches!(config.protocol.as_str(), "openai" | "anthropic" | "gemini") {
-            emitted_live_events = context.runtime_mode != "wander";
-            let interactive_result = match config.protocol.as_str() {
-                "openai" => run_openai_interactive_chat_runtime(
-                    app,
-                    state,
-                    Some(context.working_session_id.as_str()),
-                    &config,
-                    &message,
-                    &context.runtime_mode,
-                ),
-                "anthropic" => run_anthropic_interactive_chat_runtime(
-                    app,
-                    state,
-                    Some(context.working_session_id.as_str()),
-                    &config,
-                    &message,
-                    &context.runtime_mode,
-                ),
-                "gemini" => run_gemini_interactive_chat_runtime(
-                    app,
-                    state,
-                    Some(context.working_session_id.as_str()),
-                    &config,
-                    &message,
-                    &context.runtime_mode,
-                ),
-                _ => unreachable!(),
-            };
-            match interactive_result {
-                Ok(response) => response,
-                Err(error) => {
-                    emitted_live_events = false;
-                    append_debug_log_state(
-                        state,
-                        format!(
-                            "[runtime][{}][{}] interactive-runtime-failed | {}",
-                            context.runtime_mode, context.working_session_id, error
-                        ),
-                    );
-                    if context.runtime_mode == "wander" {
-                        return Err(error);
-                    }
-                    generate_chat_response(&context.settings_snapshot, model_config, &message)
-                }
-            }
-        } else {
-            generate_chat_response(&context.settings_snapshot, model_config, &message)
-        }
-    } else {
-        generate_chat_response(&context.settings_snapshot, model_config, &message)
-    };
+    let response_stage = resolve_chat_exchange_response_stage(
+        app,
+        state,
+        &context,
+        &message,
+        model_config,
+        onboarding_response,
+    )?;
+    let response = response_stage.response;
     if is_chat_runtime_cancel_requested(state, &context.working_session_id) {
         let _ = update_chat_runtime_state(
             state,
@@ -342,7 +298,7 @@ pub fn execute_chat_exchange(
         session_id: final_session_id,
         response,
         title_update,
-        emitted_live_events,
+        emitted_live_events: response_stage.emitted_live_events,
     })
 }
 
@@ -371,6 +327,79 @@ fn resolve_chat_exchange_context(
         runtime_mode,
         should_handle_redclaw_onboarding,
         allow_redclaw_onboarding,
+    })
+}
+
+fn resolve_chat_exchange_response_stage(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    context: &ChatExchangeContext,
+    message: &str,
+    model_config: Option<&Value>,
+    onboarding_response: Option<(String, bool)>,
+) -> Result<ChatExchangeResponseStage, String> {
+    if let Some((local_response, _completed)) = onboarding_response {
+        return Ok(ChatExchangeResponseStage {
+            response: local_response,
+            emitted_live_events: false,
+        });
+    }
+
+    if let (Some(app), Some(config)) = (app, resolve_chat_config(&context.settings_snapshot, model_config)) {
+        if matches!(config.protocol.as_str(), "openai" | "anthropic" | "gemini") {
+            let interactive_result = match config.protocol.as_str() {
+                "openai" => run_openai_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(context.working_session_id.as_str()),
+                    &config,
+                    message,
+                    &context.runtime_mode,
+                ),
+                "anthropic" => run_anthropic_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(context.working_session_id.as_str()),
+                    &config,
+                    message,
+                    &context.runtime_mode,
+                ),
+                "gemini" => run_gemini_interactive_chat_runtime(
+                    app,
+                    state,
+                    Some(context.working_session_id.as_str()),
+                    &config,
+                    message,
+                    &context.runtime_mode,
+                ),
+                _ => unreachable!(),
+            };
+            match interactive_result {
+                Ok(response) => {
+                    return Ok(ChatExchangeResponseStage {
+                        response,
+                        emitted_live_events: context.runtime_mode != "wander",
+                    })
+                }
+                Err(error) => {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[runtime][{}][{}] interactive-runtime-failed | {}",
+                            context.runtime_mode, context.working_session_id, error
+                        ),
+                    );
+                    if context.runtime_mode == "wander" {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(ChatExchangeResponseStage {
+        response: generate_chat_response(&context.settings_snapshot, model_config, message),
+        emitted_live_events: false,
     })
 }
 
