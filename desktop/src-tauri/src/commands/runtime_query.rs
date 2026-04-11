@@ -52,15 +52,12 @@ pub fn handle_runtime_query(
     let execution = execute_chat_exchange_request(
         Some(app),
         state,
-        ChatExchangeRequest {
+        ChatExchangeRequest::runtime_query(
             session_id,
-            message: prepared.effective_message,
-            display_content: message.clone(),
-            model_config: payload_field(payload, "modelConfig"),
-            attachment: None,
-            checkpoint_type: "runtime-query",
-            checkpoint_summary: "Runtime query completed",
-        },
+            prepared.effective_message,
+            message.clone(),
+            payload_field(payload, "modelConfig"),
+        ),
     )?;
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(

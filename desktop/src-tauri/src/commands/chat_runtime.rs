@@ -29,6 +29,55 @@ pub struct ChatExchangeRequest<'a> {
     pub checkpoint_summary: &'a str,
 }
 
+impl<'a> ChatExchangeRequest<'a> {
+    pub fn chat_send(
+        session_id: Option<String>,
+        message: String,
+        display_content: String,
+        model_config: Option<&'a Value>,
+        attachment: Option<Value>,
+    ) -> Self {
+        Self {
+            session_id,
+            message,
+            display_content,
+            model_config,
+            attachment,
+            checkpoint_type: "chat-send",
+            checkpoint_summary: "Chat response completed",
+        }
+    }
+
+    pub fn runtime_query(
+        session_id: Option<String>,
+        effective_message: String,
+        display_content: String,
+        model_config: Option<&'a Value>,
+    ) -> Self {
+        Self {
+            session_id,
+            message: effective_message,
+            display_content,
+            model_config,
+            attachment: None,
+            checkpoint_type: "runtime-query",
+            checkpoint_summary: "Runtime query completed",
+        }
+    }
+
+    pub fn session_bridge(session_id: String, message: String) -> Self {
+        Self {
+            session_id: Some(session_id),
+            display_content: message.clone(),
+            message,
+            model_config: None,
+            attachment: None,
+            checkpoint_type: "session-bridge",
+            checkpoint_summary: "Session bridge message completed",
+        }
+    }
+}
+
 pub fn execute_chat_exchange_request(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,

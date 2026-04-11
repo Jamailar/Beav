@@ -32,15 +32,13 @@ pub fn handle_send_channel(
             let execution = execute_chat_exchange_request(
                 Some(app),
                 state,
-                ChatExchangeRequest {
+                ChatExchangeRequest::chat_send(
                     session_id,
-                    message: message.clone(),
-                    display_content: display_content.clone(),
-                    model_config: payload_field(&payload, "modelConfig"),
-                    attachment: payload_field(&payload, "attachment").cloned(),
-                    checkpoint_type: "chat-send",
-                    checkpoint_summary: "Chat response completed",
-                },
+                    message.clone(),
+                    display_content.clone(),
+                    payload_field(&payload, "modelConfig"),
+                    payload_field(&payload, "attachment").cloned(),
+                ),
             )?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;

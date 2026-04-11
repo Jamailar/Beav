@@ -65,15 +65,7 @@ pub fn handle_bridge_channel(
             execute_chat_exchange_request(
                 None,
                 state,
-                ChatExchangeRequest {
-                    session_id: Some(session_id.clone()),
-                    message: message.clone(),
-                    display_content: message,
-                    model_config: None,
-                    attachment: None,
-                    checkpoint_type: "session-bridge",
-                    checkpoint_summary: "Session bridge message completed",
-                },
+                ChatExchangeRequest::session_bridge(session_id.clone(), message),
             )
             .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id }))
         }
