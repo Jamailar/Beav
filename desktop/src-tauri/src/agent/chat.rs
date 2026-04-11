@@ -4,7 +4,6 @@ use crate::agent::ChatExchangeRequest;
 
 pub struct PreparedChatSendTurn<'a> {
     pub request: ChatExchangeRequest<'a>,
-    pub display_content: String,
     pub is_redclaw_session: bool,
 }
 
@@ -27,7 +26,6 @@ pub fn build_chat_send_turn<'a>(
             model_config,
             attachment,
         ),
-        display_content,
         is_redclaw_session,
     }
 }

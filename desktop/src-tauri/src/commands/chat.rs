@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::build_chat_send_turn;
+use crate::agent::{build_chat_send_turn, PreparedSessionAgentTurn};
 use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
@@ -33,15 +33,16 @@ pub fn handle_send_channel(
                 payload_field(&payload, "modelConfig"),
                 payload_field(&payload, "attachment").cloned(),
             );
+            let prepared_turn = PreparedSessionAgentTurn::ChatSend(turn);
             let execution = execute_session_agent_turn_request(
                 Some(app),
                 state,
-                turn.request,
+                prepared_turn.request().clone(),
             )?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;
 
-            if turn.is_redclaw_session {
+            if prepared_turn.is_redclaw_session() {
                 let project_id = with_store(state, |store| {
                     Ok(store
                         .redclaw_state
@@ -66,7 +67,7 @@ pub fn handle_send_channel(
                         "redclaw-note",
                         format!("RedClaw Chat {}", artifact_kind),
                         Some("RedClaw fixed session generated a persisted artifact.".to_string()),
-                        Some(turn.display_content.clone()),
+                        Some(prepared_turn.display_content().to_string()),
                         Some(json!({
                             "sessionId": execution.session_id,
                             "artifactKind": artifact_kind,
@@ -105,7 +106,7 @@ pub fn handle_send_channel(
                     execution.title_update,
                 );
             }
-            if turn.is_redclaw_session {
+            if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
                     json!({

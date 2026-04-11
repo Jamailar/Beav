@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::build_session_bridge_turn;
+use crate::agent::{build_session_bridge_turn, PreparedSessionAgentTurn};
 use crate::commands::chat_runtime::execute_session_agent_turn_request;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
@@ -63,11 +63,13 @@ pub fn handle_bridge_channel(
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             let message = payload_string(payload, "message").unwrap_or_default();
-            let turn = build_session_bridge_turn(session_id.clone(), message);
+            let turn = PreparedSessionAgentTurn::SessionBridge(
+                build_session_bridge_turn(session_id.clone(), message),
+            );
             execute_session_agent_turn_request(
                 None,
                 state,
-                turn.request,
+                turn.request().clone(),
             )
             .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id }))
         }

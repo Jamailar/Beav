@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::agent::{PreparedChatSendTurn, PreparedRuntimeQueryTurn, PreparedSessionBridgeTurn};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAgentTurnKind {
     ChatSend,
@@ -25,6 +27,7 @@ impl SessionAgentTurnKind {
     }
 }
 
+#[derive(Clone)]
 pub struct ChatExchangeRequest<'a> {
     pub session_id: Option<String>,
     pub message: String,
@@ -98,6 +101,30 @@ pub struct ChatExchangePersistenceStage {
     pub title_update: Option<(String, String)>,
 }
 
+pub enum PreparedSessionAgentTurn<'a> {
+    ChatSend(PreparedChatSendTurn<'a>),
+    RuntimeQuery(PreparedRuntimeQueryTurn<'a>),
+    SessionBridge(PreparedSessionBridgeTurn<'a>),
+}
+
+impl<'a> PreparedSessionAgentTurn<'a> {
+    pub fn request(&self) -> &ChatExchangeRequest<'a> {
+        match self {
+            Self::ChatSend(turn) => &turn.request,
+            Self::RuntimeQuery(turn) => &turn.request,
+            Self::SessionBridge(turn) => &turn.request,
+        }
+    }
+
+    pub fn display_content(&self) -> &str {
+        self.request().display_content.as_str()
+    }
+
+    pub fn is_redclaw_session(&self) -> bool {
+        matches!(self, Self::ChatSend(turn) if turn.is_redclaw_session)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +163,15 @@ mod tests {
             ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()).turn_kind,
             SessionAgentTurnKind::SessionBridge
         );
+    }
+
+    #[test]
+    fn prepared_session_agent_turn_exposes_common_request_surface() {
+        let turn = PreparedSessionAgentTurn::SessionBridge(PreparedSessionBridgeTurn {
+            request: ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()),
+        });
+        assert_eq!(turn.request().session_id.as_deref(), Some("s"));
+        assert_eq!(turn.display_content(), "m");
+        assert!(!turn.is_redclaw_session());
     }
 }
