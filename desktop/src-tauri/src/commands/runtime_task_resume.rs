@@ -24,6 +24,13 @@ pub struct PreparedTaskResumeExecution {
     pub repair_pass_failed: bool,
 }
 
+#[derive(Debug)]
+pub struct AppliedTaskResumeExecution {
+    pub response: Value,
+    pub runtime_node_events: Vec<RuntimeNodeEvent>,
+    pub runtime_checkpoint_events: Vec<RuntimeCheckpointEvent>,
+}
+
 pub fn prepare_task_resume_execution(
     app: &AppHandle,
     settings_snapshot: &Value,
@@ -128,9 +135,9 @@ pub fn apply_task_resume_execution(
     task_id: &str,
     prepared: &PreparedTaskResumeExecution,
     saved_artifact: Option<RuntimeArtifact>,
-    runtime_node_events: &mut Vec<RuntimeNodeEvent>,
-    runtime_checkpoint_events: &mut Vec<RuntimeCheckpointEvent>,
-) -> Result<Value, String> {
+) -> Result<AppliedTaskResumeExecution, String> {
+    let mut runtime_node_events = Vec::new();
+    let mut runtime_checkpoint_events = Vec::new();
     let mut work_items_to_push = Vec::new();
     {
         let Some(task) = store
@@ -138,7 +145,11 @@ pub fn apply_task_resume_execution(
             .iter_mut()
             .find(|item| item.id == task_id)
         else {
-            return Ok(json!({ "success": false, "error": "任务不存在" }));
+            return Ok(AppliedTaskResumeExecution {
+                response: json!({ "success": false, "error": "任务不存在" }),
+                runtime_node_events,
+                runtime_checkpoint_events,
+            });
         };
 
         task.intent = Some(prepared.route.intent.clone());
@@ -148,7 +159,7 @@ pub fn apply_task_resume_execution(
 
         record_runtime_node(
             task,
-            runtime_node_events,
+            &mut runtime_node_events,
             "plan",
             "completed",
             Some(if prepared.route.reasoning.trim().is_empty() {
@@ -161,7 +172,7 @@ pub fn apply_task_resume_execution(
 
         record_runtime_node(
             task,
-            runtime_node_events,
+            &mut runtime_node_events,
             "retrieve",
             "completed",
             Some("runtime context prepared".to_string()),
@@ -171,7 +182,7 @@ pub fn apply_task_resume_execution(
         if let Some(orchestration_value) = prepared.orchestration.clone() {
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "spawn_agents",
                 "completed",
                 Some("subagent orchestration completed".to_string()),
@@ -190,13 +201,13 @@ pub fn apply_task_resume_execution(
                 "subagent orchestration completed",
                 Some(orchestration_value),
             );
-            record_runtime_checkpoint(task, runtime_checkpoint_events, checkpoint);
+            record_runtime_checkpoint(task, &mut runtime_checkpoint_events, checkpoint);
         }
 
         if let Some(repair_value) = prepared.repair_plan.clone() {
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "review",
                 "failed",
                 Some("reviewer requested repair".to_string()),
@@ -216,13 +227,13 @@ pub fn apply_task_resume_execution(
                     .unwrap_or_else(|| "review repair plan generated".to_string()),
                 Some(repair_value.clone()),
             );
-            record_runtime_checkpoint(task, runtime_checkpoint_events, checkpoint);
+            record_runtime_checkpoint(task, &mut runtime_checkpoint_events, checkpoint);
         }
 
         if let Some(repair_value) = prepared.repair_orchestration.clone() {
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "handoff",
                 "completed",
                 Some("repair pass completed".to_string()),
@@ -241,13 +252,13 @@ pub fn apply_task_resume_execution(
                 "repair pass completed",
                 Some(repair_value),
             );
-            record_runtime_checkpoint(task, runtime_checkpoint_events, checkpoint);
+            record_runtime_checkpoint(task, &mut runtime_checkpoint_events, checkpoint);
         }
 
         if let Some(artifact) = saved_artifact.clone() {
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "save_artifact",
                 "completed",
                 Some("artifact saved".to_string()),
@@ -260,7 +271,7 @@ pub fn apply_task_resume_execution(
                 "artifact saved",
                 Some(serde_json::to_value(&artifact).unwrap_or_else(|_| Value::Null)),
             );
-            record_runtime_checkpoint(task, runtime_checkpoint_events, checkpoint);
+            record_runtime_checkpoint(task, &mut runtime_checkpoint_events, checkpoint);
             work_items_to_push.push(build_runtime_artifact_work_item(
                 task_id,
                 task.owner_session_id.as_deref(),
@@ -274,7 +285,7 @@ pub fn apply_task_resume_execution(
             task.last_error = Some("reviewer rejected execution".to_string());
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "execute_tools",
                 "failed",
                 Some("execution blocked by reviewer".to_string()),
@@ -293,7 +304,7 @@ pub fn apply_task_resume_execution(
             task.last_error = None;
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "review",
                 "completed",
                 Some("reviewer approved execution".to_string()),
@@ -301,7 +312,7 @@ pub fn apply_task_resume_execution(
             );
             record_runtime_node(
                 task,
-                runtime_node_events,
+                &mut runtime_node_events,
                 "execute_tools",
                 "completed",
                 Some("execution completed".to_string()),
@@ -323,15 +334,19 @@ pub fn apply_task_resume_execution(
         prepared.reviewer_blocked && prepared.repair_pass_failed,
     );
 
-    Ok(json!({
-        "success": !(prepared.reviewer_blocked && prepared.repair_pass_failed),
-        "taskId": task_id,
-        "error": if prepared.reviewer_blocked && prepared.repair_pass_failed {
-            Value::String("reviewer rejected execution".to_string())
-        } else {
-            Value::Null
-        }
-    }))
+    Ok(AppliedTaskResumeExecution {
+        response: json!({
+            "success": !(prepared.reviewer_blocked && prepared.repair_pass_failed),
+            "taskId": task_id,
+            "error": if prepared.reviewer_blocked && prepared.repair_pass_failed {
+                Value::String("reviewer rejected execution".to_string())
+            } else {
+                Value::Null
+            }
+        }),
+        runtime_node_events,
+        runtime_checkpoint_events,
+    })
 }
 
 pub fn emit_task_resume_events(

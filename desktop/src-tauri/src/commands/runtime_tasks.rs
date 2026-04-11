@@ -8,8 +8,7 @@ use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
-    list_runtime_tasks, mark_task_running, runtime_task_value, RuntimeCheckpointEvent,
-    RuntimeNodeEvent,
+    list_runtime_tasks, mark_task_running, runtime_task_value,
 };
 use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
 use runtime_task_resume::{
@@ -117,26 +116,17 @@ pub fn handle_runtime_task_channel(
                 let saved_artifact =
                     maybe_save_task_resume_artifact(state, &task_snapshot, &prepared)?;
 
-                let mut runtime_node_events: Vec<RuntimeNodeEvent> = Vec::new();
-                let mut runtime_checkpoint_events: Vec<RuntimeCheckpointEvent> = Vec::new();
-                let result = with_store_mut(state, |store| {
-                    apply_task_resume_execution(
-                        store,
-                        &task_id,
-                        &prepared,
-                        saved_artifact.clone(),
-                        &mut runtime_node_events,
-                        &mut runtime_checkpoint_events,
-                    )
+                let applied = with_store_mut(state, |store| {
+                    apply_task_resume_execution(store, &task_id, &prepared, saved_artifact.clone())
                 })?;
                 emit_task_resume_events(
                     app,
                     &task_id,
                     task_snapshot.owner_session_id.as_deref(),
-                    runtime_node_events,
-                    runtime_checkpoint_events,
+                    applied.runtime_node_events,
+                    applied.runtime_checkpoint_events,
                 );
-                Ok(result)
+                Ok(applied.response)
             }
             "tasks:cancel" => {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
