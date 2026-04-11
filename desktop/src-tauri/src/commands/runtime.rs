@@ -14,13 +14,6 @@ pub fn handle_runtime_channel(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
-    if let Some(result) =
-        runtime_session::handle_runtime_session_channel(app, state, channel, payload)
-    {
-        return Some(result);
-    }
-    if let Some(result) = runtime_tasks::handle_runtime_task_channel(app, state, channel, payload) {
-        return Some(result);
-    }
-    None
+    runtime_session::handle_runtime_session_channel(app, state, channel, payload)
+        .or_else(|| runtime_tasks::handle_runtime_task_channel(app, state, channel, payload))
 }
