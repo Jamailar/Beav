@@ -1,9 +1,8 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    chat_session_summary_value, checkpoint_count_for_session, checkpoints_for_session,
-    last_checkpoint_for_session, runtime_direct_route_record, tool_results_for_session,
-    trace_for_session, transcript_count_for_session, RuntimeArtifact,
-    RuntimeCheckpointRecord, RuntimeRouteRecord,
+    checkpoint_count_for_session, runtime_direct_route_record, session_detail_value,
+    session_list_item_value, session_resume_value, tool_results_for_session, trace_for_session,
+    transcript_count_for_session, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -99,16 +98,7 @@ pub fn handle_chat_sessions_wander_channel(
                 sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 let items: Vec<Value> = sessions
                     .into_iter()
-                    .map(|session| {
-                        let transcript_count = transcript_count_for_session(&store, &session.id);
-                        let checkpoint_count = checkpoint_count_for_session(&store, &session.id);
-                        json!({
-                            "id": session.id,
-                            "transcriptCount": transcript_count,
-                            "checkpointCount": checkpoint_count,
-                            "chatSession": chat_session_summary_value(&session)
-                        })
-                    })
+                    .map(|session| session_list_item_value(&store, &session))
                     .collect();
                 log_timing_event(
                     state,
@@ -122,45 +112,11 @@ pub fn handle_chat_sessions_wander_channel(
             }),
             "sessions:get" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let chat_session = store
-                        .chat_sessions
-                        .iter()
-                        .find(|item| item.id == session_id)
-                        .cloned();
-                    let transcript = trace_for_session(&store, &session_id);
-                    let checkpoints = checkpoints_for_session(&store, &session_id);
-                    let tool_results = tool_results_for_session(&store, &session_id);
-                    Ok(if let Some(session) = chat_session {
-                        json!({
-                            "chatSession": chat_session_summary_value(&session),
-                            "transcript": transcript,
-                            "checkpoints": checkpoints,
-                            "toolResults": tool_results,
-                        })
-                    } else {
-                        Value::Null
-                    })
-                })
+                with_store(state, |store| Ok(session_detail_value(&store, &session_id)))
             }
             "sessions:resume" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| {
-                    let chat_session = store
-                        .chat_sessions
-                        .iter()
-                        .find(|item| item.id == session_id)
-                        .cloned();
-                    let last_checkpoint = last_checkpoint_for_session(&store, &session_id);
-                    Ok(if let Some(session) = chat_session {
-                        json!({
-                            "chatSession": chat_session_summary_value(&session),
-                            "lastCheckpoint": last_checkpoint,
-                        })
-                    } else {
-                        Value::Null
-                    })
-                })
+                with_store(state, |store| Ok(session_resume_value(&store, &session_id)))
             }
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
