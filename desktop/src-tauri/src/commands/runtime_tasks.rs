@@ -146,28 +146,13 @@ pub fn handle_runtime_task_channel(
                         &mut runtime_checkpoint_events,
                     )
                 })?;
-
-                for (node_id, status, summary, error) in runtime_node_events {
-                    emit_runtime_task_node_changed(
-                        app,
-                        &task_id,
-                        task_snapshot.owner_session_id.as_deref(),
-                        &node_id,
-                        &status,
-                        summary.as_deref(),
-                        error.as_deref(),
-                    );
-                }
-                for (checkpoint_type, summary, payload) in runtime_checkpoint_events {
-                    emit_runtime_task_checkpoint_saved(
-                        app,
-                        Some(&task_id),
-                        task_snapshot.owner_session_id.as_deref(),
-                        &checkpoint_type,
-                        &summary,
-                        payload,
-                    );
-                }
+                emit_task_resume_events(
+                    app,
+                    &task_id,
+                    task_snapshot.owner_session_id.as_deref(),
+                    runtime_node_events,
+                    runtime_checkpoint_events,
+                );
                 Ok(result)
             }
             "tasks:cancel" => {
@@ -484,4 +469,34 @@ fn apply_task_resume_execution(
             Value::Null
         }
     }))
+}
+
+fn emit_task_resume_events(
+    app: &AppHandle,
+    task_id: &str,
+    owner_session_id: Option<&str>,
+    runtime_node_events: Vec<RuntimeNodeEvent>,
+    runtime_checkpoint_events: Vec<RuntimeCheckpointEvent>,
+) {
+    for (node_id, status, summary, error) in runtime_node_events {
+        emit_runtime_task_node_changed(
+            app,
+            task_id,
+            owner_session_id,
+            &node_id,
+            &status,
+            summary.as_deref(),
+            error.as_deref(),
+        );
+    }
+    for (checkpoint_type, summary, payload) in runtime_checkpoint_events {
+        emit_runtime_task_checkpoint_saved(
+            app,
+            Some(task_id),
+            owner_session_id,
+            &checkpoint_type,
+            &summary,
+            payload,
+        );
+    }
 }
