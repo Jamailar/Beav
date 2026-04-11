@@ -968,6 +968,78 @@ mod tests {
     }
 
     #[test]
+    fn runtime_task_value_preserves_frontend_shape_for_typed_runtime_task() {
+        let route = runtime_direct_route_record("knowledge", "search it", None);
+        let task = RuntimeTaskRecord {
+            id: "task-1".to_string(),
+            task_type: "manual".to_string(),
+            status: "pending".to_string(),
+            runtime_mode: "knowledge".to_string(),
+            owner_session_id: Some("session-1".to_string()),
+            intent: Some(route.intent.clone()),
+            role_id: Some(route.recommended_role.clone()),
+            goal: Some("search it".to_string()),
+            current_node: Some("plan".to_string()),
+            route: Some(route),
+            graph: runtime_graph_for_route(&json!({
+                "requiresMultiAgent": false,
+                "requiresLongRunningTask": false
+            })),
+            artifacts: vec![RuntimeArtifact::new(
+                "saved-artifact",
+                "Saved Artifact",
+                Some("/tmp/task-1.md".to_string()),
+                Some(json!({ "origin": "test" })),
+                None,
+            )],
+            checkpoints: vec![RuntimeCheckpointRecord::new(
+                "route",
+                "plan",
+                "route resolved",
+                Some(json!({ "intent": "knowledge_retrieval" })),
+            )],
+            metadata: Some(json!({ "contextType": "knowledge" })),
+            last_error: None,
+            created_at: 1,
+            updated_at: 2,
+            started_at: Some(3),
+            completed_at: Some(4),
+        };
+        let value = runtime_task_value(&task);
+
+        assert_eq!(value.get("taskType").and_then(Value::as_str), Some("manual"));
+        assert_eq!(
+            value.get("route")
+                .and_then(|item| item.get("recommendedRole"))
+                .and_then(Value::as_str),
+            Some("researcher")
+        );
+        assert_eq!(
+            value.get("graph")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("startedAt")),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            value.get("artifacts")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("label"))
+                .and_then(Value::as_str),
+            Some("Saved Artifact")
+        );
+        assert_eq!(
+            value.get("checkpoints")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("nodeId"))
+                .and_then(Value::as_str),
+            Some("plan")
+        );
+    }
+
+    #[test]
     fn session_title_from_message_trims_and_limits_length() {
         assert_eq!(session_title_from_message("   "), "New Chat");
         assert_eq!(
