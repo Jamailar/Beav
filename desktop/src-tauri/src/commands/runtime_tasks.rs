@@ -9,8 +9,9 @@ use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_task_node_c
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_runtime_task_trace, create_runtime_task, get_runtime_task, list_runtime_task_traces,
-    list_runtime_tasks, mark_task_running, route_for_task_snapshot, runtime_task_value,
-    set_runtime_graph_node, RuntimeArtifact, RuntimeCheckpointRecord,
+    list_runtime_tasks, mark_task_running, reviewer_rejected, route_for_task_snapshot,
+    runtime_task_value, set_runtime_graph_node, build_repair_goal, RuntimeArtifact,
+    RuntimeCheckpointRecord,
 };
 use crate::{
     create_work_item, log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState,
@@ -135,7 +136,7 @@ pub fn handle_runtime_task_channel(
                 } else {
                     None
                 };
-                let reviewer_blocked = reviewer_rejected(orchestration.as_ref()).unwrap_or(false);
+                let reviewer_blocked = reviewer_rejected(orchestration.as_ref());
                 let repair_plan = if reviewer_blocked {
                     orchestration
                         .as_ref()
@@ -156,11 +157,9 @@ pub fn handle_runtime_task_channel(
                     repair_plan
                         .as_ref()
                         .map(|repair| {
-                            let repair_goal = format!(
-                                "{}\n\nRepair instructions:\n{}",
+                            let repair_goal = build_repair_goal(
                                 task_snapshot.goal.as_deref().unwrap_or(""),
-                                payload_string(repair, "summary")
-                                    .unwrap_or_else(|| repair.to_string())
+                                repair,
                             );
                             run_subagent_orchestration_for_task(
                                 Some(app),
@@ -176,8 +175,7 @@ pub fn handle_runtime_task_channel(
                 } else {
                     None
                 };
-                let repair_pass_failed =
-                    reviewer_rejected(repair_orchestration.as_ref()).unwrap_or(reviewer_blocked);
+                let repair_pass_failed = reviewer_rejected(repair_orchestration.as_ref());
                 let final_orchestration = repair_orchestration.as_ref().or(orchestration.as_ref());
                 let saved_artifact = if reviewer_blocked && repair_pass_failed {
                     None
@@ -586,27 +584,4 @@ pub fn handle_runtime_task_channel(
         }
     })();
     Some(result)
-}
-
-fn reviewer_rejected(orchestration: Option<&Value>) -> Option<bool> {
-    orchestration
-        .and_then(|value| value.get("outputs"))
-        .and_then(|value| value.as_array())
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-            })
-        })
-        .map(|review| {
-            let approved = review
-                .get("approved")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(true);
-            let issue_count = review
-                .get("issues")
-                .and_then(|value| value.as_array())
-                .map(|items| items.len())
-                .unwrap_or(0);
-            !approved || issue_count > 0
-        })
 }

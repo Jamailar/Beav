@@ -129,6 +129,38 @@ pub fn build_runtime_task_artifact_content(
     Ok(content)
 }
 
+pub fn reviewer_rejected(orchestration: Option<&Value>) -> bool {
+    orchestration
+        .and_then(|value| value.get("outputs"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
+            })
+        })
+        .map(|review| {
+            let approved = review
+                .get("approved")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
+            let issue_count = review
+                .get("issues")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            !approved || issue_count > 0
+        })
+        .unwrap_or(false)
+}
+
+pub fn build_repair_goal(goal: &str, repair: &Value) -> String {
+    format!(
+        "{}\n\nRepair instructions:\n{}",
+        goal,
+        payload_string(repair, "summary").unwrap_or_else(|| repair.to_string())
+    )
+}
+
 fn orchestration_outputs(orchestration: Option<&Value>) -> Vec<Value> {
     orchestration
         .and_then(|value| value.get("outputs"))
@@ -148,4 +180,34 @@ fn orchestration_summary_lines(outputs: &[Value]) -> Vec<String> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reviewer_rejected_returns_false_without_reviewer_output() {
+        assert!(!reviewer_rejected(Some(&json!({
+            "outputs": [{"roleId": "planner", "summary": "ok"}]
+        }))));
+    }
+
+    #[test]
+    fn reviewer_rejected_returns_true_for_disapproval_or_issues() {
+        assert!(reviewer_rejected(Some(&json!({
+            "outputs": [{"roleId": "reviewer", "approved": false, "issues": []}]
+        }))));
+        assert!(reviewer_rejected(Some(&json!({
+            "outputs": [{"roleId": "reviewer", "approved": true, "issues": [{}]}]
+        }))));
+    }
+
+    #[test]
+    fn build_repair_goal_prefers_summary_field() {
+        let goal = build_repair_goal("Write draft", &json!({"summary": "Fix missing citations"}));
+        assert!(goal.contains("Write draft"));
+        assert!(goal.contains("Fix missing citations"));
+    }
 }
