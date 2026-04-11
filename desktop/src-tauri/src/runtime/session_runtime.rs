@@ -2,8 +2,8 @@ use crate::runtime::{
     PreparedExecution, RuntimeRouteRecord, SessionCheckpointRecord, SessionToolResultRecord,
     SessionTranscriptRecord,
 };
-use crate::{payload_string, AppStore};
-use serde_json::Value;
+use crate::{payload_string, AppStore, ChatSessionRecord};
+use serde_json::{json, Value};
 
 pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTranscriptRecord> {
     let mut items: Vec<SessionTranscriptRecord> = store
@@ -41,6 +41,39 @@ pub fn tool_results_for_session(
     items
 }
 
+pub fn transcript_count_for_session(store: &AppStore, session_id: &str) -> i64 {
+    store
+        .session_transcript_records
+        .iter()
+        .filter(|item| item.session_id == session_id)
+        .count() as i64
+}
+
+pub fn checkpoint_count_for_session(store: &AppStore, session_id: &str) -> i64 {
+    store
+        .session_checkpoints
+        .iter()
+        .filter(|item| item.session_id == session_id)
+        .count() as i64
+}
+
+pub fn last_checkpoint_for_session(
+    store: &AppStore,
+    session_id: &str,
+) -> Option<SessionCheckpointRecord> {
+    checkpoints_for_session(store, session_id)
+        .into_iter()
+        .max_by_key(|item| item.created_at)
+}
+
+pub fn chat_session_summary_value(session: &ChatSessionRecord) -> Value {
+    json!({
+        "id": session.id,
+        "title": session.title,
+        "updatedAt": session.updated_at,
+    })
+}
+
 pub fn prepare_runtime_query_execution(
     route: RuntimeRouteRecord,
     orchestration: Option<Value>,
@@ -72,4 +105,3 @@ pub fn prepare_runtime_query_execution(
         effective_message,
     }
 }
-

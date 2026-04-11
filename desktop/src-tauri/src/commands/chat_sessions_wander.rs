@@ -1,7 +1,9 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    checkpoints_for_session, runtime_direct_route_record, tool_results_for_session,
-    trace_for_session, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    chat_session_summary_value, checkpoint_count_for_session, checkpoints_for_session,
+    last_checkpoint_for_session, runtime_direct_route_record, tool_results_for_session,
+    trace_for_session, transcript_count_for_session, RuntimeArtifact,
+    RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -95,32 +97,16 @@ pub fn handle_chat_sessions_wander_channel(
                 let request_id = format!("sessions:list:{}", started_at);
                 let mut sessions = store.chat_sessions.clone();
                 sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                let mut transcript_count_by_session = std::collections::HashMap::<String, i64>::new();
-                let mut checkpoint_count_by_session = std::collections::HashMap::<String, i64>::new();
-                for item in &store.session_transcript_records {
-                    *transcript_count_by_session
-                        .entry(item.session_id.clone())
-                        .or_insert(0) += 1;
-                }
-                for item in &store.session_checkpoints {
-                    *checkpoint_count_by_session
-                        .entry(item.session_id.clone())
-                        .or_insert(0) += 1;
-                }
                 let items: Vec<Value> = sessions
                     .into_iter()
                     .map(|session| {
-                        let transcript_count = transcript_count_by_session.get(&session.id).copied().unwrap_or(0);
-                        let checkpoint_count = checkpoint_count_by_session.get(&session.id).copied().unwrap_or(0);
+                        let transcript_count = transcript_count_for_session(&store, &session.id);
+                        let checkpoint_count = checkpoint_count_for_session(&store, &session.id);
                         json!({
                             "id": session.id,
                             "transcriptCount": transcript_count,
                             "checkpointCount": checkpoint_count,
-                            "chatSession": {
-                                "id": session.id,
-                                "title": session.title,
-                                "updatedAt": session.updated_at,
-                            }
+                            "chatSession": chat_session_summary_value(&session)
                         })
                     })
                     .collect();
@@ -147,11 +133,7 @@ pub fn handle_chat_sessions_wander_channel(
                     let tool_results = tool_results_for_session(&store, &session_id);
                     Ok(if let Some(session) = chat_session {
                         json!({
-                            "chatSession": {
-                                "id": session.id,
-                                "title": session.title,
-                                "updatedAt": session.updated_at,
-                            },
+                            "chatSession": chat_session_summary_value(&session),
                             "transcript": transcript,
                             "checkpoints": checkpoints,
                             "toolResults": tool_results,
@@ -169,16 +151,10 @@ pub fn handle_chat_sessions_wander_channel(
                         .iter()
                         .find(|item| item.id == session_id)
                         .cloned();
-                    let last_checkpoint = checkpoints_for_session(&store, &session_id)
-                        .into_iter()
-                        .max_by_key(|item| item.created_at);
+                    let last_checkpoint = last_checkpoint_for_session(&store, &session_id);
                     Ok(if let Some(session) = chat_session {
                         json!({
-                            "chatSession": {
-                                "id": session.id,
-                                "title": session.title,
-                                "updatedAt": session.updated_at,
-                            },
+                            "chatSession": chat_session_summary_value(&session),
                             "lastCheckpoint": last_checkpoint,
                         })
                     } else {
@@ -224,8 +200,8 @@ pub fn handle_chat_sessions_wander_channel(
                         "success": true,
                         "session": {
                             "id": new_session.id,
-                            "transcriptCount": store.session_transcript_records.iter().filter(|item| item.session_id == source.id).count(),
-                            "checkpointCount": store.session_checkpoints.iter().filter(|item| item.session_id == source.id).count(),
+                            "transcriptCount": transcript_count_for_session(store, &source.id),
+                            "checkpointCount": checkpoint_count_for_session(store, &source.id),
                         }
                     }))
                 })?;
