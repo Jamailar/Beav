@@ -206,138 +206,140 @@ pub fn handle_runtime_task_channel(
                         task.route = Some(route.clone());
                         task.current_node = Some("execute_tools".to_string());
 
-                    record_runtime_node(
-                        task,
-                        &mut runtime_node_events,
-                        "plan",
-                        "completed",
-                        Some(if route.reasoning.trim().is_empty() {
-                            "route resolved".to_string()
-                        } else {
-                            route.reasoning.clone()
-                        }),
-                        None,
-                    );
-
-                    record_runtime_node(
-                        task,
-                        &mut runtime_node_events,
-                        "retrieve",
-                        "completed",
-                        Some("runtime context prepared".to_string()),
-                        None,
-                    );
-
-                        if let Some(orchestration_value) = orchestration.clone() {
                         record_runtime_node(
                             task,
                             &mut runtime_node_events,
-                            "spawn_agents",
+                            "plan",
                             "completed",
-                            Some("subagent orchestration completed".to_string()),
+                            Some(if route.reasoning.trim().is_empty() {
+                                "route resolved".to_string()
+                            } else {
+                                route.reasoning.clone()
+                            }),
                             None,
                         );
-                        task.artifacts.push(RuntimeArtifact::new(
-                            "subagent-orchestration",
-                            "Subagent Orchestration",
-                            None,
-                            None,
-                            Some(orchestration_value.clone()),
-                        ));
-                        let checkpoint = RuntimeCheckpointRecord::new(
-                            "orchestration",
-                            "spawn_agents",
-                            "subagent orchestration completed",
-                            Some(orchestration_value),
-                        );
-                        record_runtime_checkpoint(
+
+                        record_runtime_node(
                             task,
-                            &mut runtime_checkpoint_events,
-                            checkpoint,
+                            &mut runtime_node_events,
+                            "retrieve",
+                            "completed",
+                            Some("runtime context prepared".to_string()),
+                            None,
                         );
+
+                        if let Some(orchestration_value) = orchestration.clone() {
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "spawn_agents",
+                                "completed",
+                                Some("subagent orchestration completed".to_string()),
+                                None,
+                            );
+                            task.artifacts.push(RuntimeArtifact::new(
+                                "subagent-orchestration",
+                                "Subagent Orchestration",
+                                None,
+                                None,
+                                Some(orchestration_value.clone()),
+                            ));
+                            let checkpoint = RuntimeCheckpointRecord::new(
+                                "orchestration",
+                                "spawn_agents",
+                                "subagent orchestration completed",
+                                Some(orchestration_value),
+                            );
+                            record_runtime_checkpoint(
+                                task,
+                                &mut runtime_checkpoint_events,
+                                checkpoint,
+                            );
                         }
 
                         if let Some(repair_value) = repair_plan.clone() {
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "review",
-                            "failed",
-                            Some("reviewer requested repair".to_string()),
-                            Some("reviewer rejected execution".to_string()),
-                        );
-                        task.artifacts.push(RuntimeArtifact::new(
-                            "repair-plan",
-                            "Repair Plan",
-                            None,
-                            None,
-                            Some(repair_value.clone()),
-                        ));
-                        let checkpoint = RuntimeCheckpointRecord::new(
-                            "repair",
-                            "review",
-                            payload_string(&repair_value, "summary")
-                                .unwrap_or_else(|| "review repair plan generated".to_string()),
-                            Some(repair_value.clone()),
-                        );
-                        record_runtime_checkpoint(
-                            task,
-                            &mut runtime_checkpoint_events,
-                            checkpoint,
-                        );
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "review",
+                                "failed",
+                                Some("reviewer requested repair".to_string()),
+                                Some("reviewer rejected execution".to_string()),
+                            );
+                            task.artifacts.push(RuntimeArtifact::new(
+                                "repair-plan",
+                                "Repair Plan",
+                                None,
+                                None,
+                                Some(repair_value.clone()),
+                            ));
+                            let checkpoint = RuntimeCheckpointRecord::new(
+                                "repair",
+                                "review",
+                                payload_string(&repair_value, "summary")
+                                    .unwrap_or_else(|| "review repair plan generated".to_string()),
+                                Some(repair_value.clone()),
+                            );
+                            record_runtime_checkpoint(
+                                task,
+                                &mut runtime_checkpoint_events,
+                                checkpoint,
+                            );
                         }
 
                         if let Some(repair_value) = repair_orchestration.clone() {
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "handoff",
-                            "completed",
-                            Some("repair pass completed".to_string()),
-                            None,
-                        );
-                        task.artifacts.push(RuntimeArtifact::new(
-                            "repair-pass",
-                            "Repair Pass",
-                            None,
-                            None,
-                            Some(repair_value.clone()),
-                        ));
-                        let checkpoint = RuntimeCheckpointRecord::new(
-                            "repair_pass",
-                            "handoff",
-                            "repair pass completed",
-                            Some(repair_value),
-                        );
-                        record_runtime_checkpoint(
-                            task,
-                            &mut runtime_checkpoint_events,
-                            checkpoint,
-                        );
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "handoff",
+                                "completed",
+                                Some("repair pass completed".to_string()),
+                                None,
+                            );
+                            task.artifacts.push(RuntimeArtifact::new(
+                                "repair-pass",
+                                "Repair Pass",
+                                None,
+                                None,
+                                Some(repair_value.clone()),
+                            ));
+                            let checkpoint = RuntimeCheckpointRecord::new(
+                                "repair_pass",
+                                "handoff",
+                                "repair pass completed",
+                                Some(repair_value),
+                            );
+                            record_runtime_checkpoint(
+                                task,
+                                &mut runtime_checkpoint_events,
+                                checkpoint,
+                            );
                         }
 
                         if let Some(artifact) = saved_artifact.clone() {
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "save_artifact",
-                            "completed",
-                            Some("artifact saved".to_string()),
-                            None,
-                        );
-                        task.artifacts.push(artifact.clone());
-                        let checkpoint = RuntimeCheckpointRecord::new(
-                            "save_artifact",
-                            "save_artifact",
-                            "artifact saved",
-                            Some(serde_json::to_value(&artifact).unwrap_or_else(|_| Value::Null)),
-                        );
-                        record_runtime_checkpoint(
-                            task,
-                            &mut runtime_checkpoint_events,
-                            checkpoint,
-                        );
-
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "save_artifact",
+                                "completed",
+                                Some("artifact saved".to_string()),
+                                None,
+                            );
+                            task.artifacts.push(artifact.clone());
+                            let checkpoint = RuntimeCheckpointRecord::new(
+                                "save_artifact",
+                                "save_artifact",
+                                "artifact saved",
+                                Some(
+                                    serde_json::to_value(&artifact)
+                                        .unwrap_or_else(|_| Value::Null),
+                                ),
+                            );
+                            record_runtime_checkpoint(
+                                task,
+                                &mut runtime_checkpoint_events,
+                                checkpoint,
+                            );
                             work_items_to_push.push(build_runtime_artifact_work_item(
                                 &task_id,
                                 task.owner_session_id.as_deref(),
@@ -347,16 +349,16 @@ pub fn handle_runtime_task_channel(
                         }
 
                         if reviewer_blocked && repair_pass_failed {
-                        task.status = "failed".to_string();
-                        task.last_error = Some("reviewer rejected execution".to_string());
-                        record_runtime_node(
-                            task,
-                            &mut runtime_node_events,
-                            "execute_tools",
-                            "failed",
-                            Some("execution blocked by reviewer".to_string()),
-                            Some("reviewer rejected execution".to_string()),
-                        );
+                            task.status = "failed".to_string();
+                            task.last_error = Some("reviewer rejected execution".to_string());
+                            record_runtime_node(
+                                task,
+                                &mut runtime_node_events,
+                                "execute_tools",
+                                "failed",
+                                Some("execution blocked by reviewer".to_string()),
+                                Some("reviewer rejected execution".to_string()),
+                            );
                             if let Some(repair_value) = repair_plan.clone() {
                                 work_items_to_push.push(build_runtime_repair_work_item(
                                     &task_id,
