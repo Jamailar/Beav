@@ -338,6 +338,12 @@ function createIpcRenderer() {
       save: (servers: unknown[]) => invokeChannel('mcp:save', { servers }),
       test: (server: unknown) => invokeChannel('mcp:test', { server }),
       call: (server: unknown, method: string, params?: unknown) => invokeChannel('mcp:call', { server, method, params: params ?? {} }),
+      sessions: () => invokeChannel('mcp:sessions'),
+      listTools: (server: unknown) => invokeChannel('mcp:list-tools', { server }),
+      listResources: (server: unknown) => invokeChannel('mcp:list-resources', { server }),
+      listResourceTemplates: (server: unknown) => invokeChannel('mcp:list-resource-templates', { server }),
+      disconnect: (server: unknown) => invokeChannel('mcp:disconnect', { server }),
+      disconnectAll: () => invokeChannel('mcp:disconnect-all'),
       discoverLocal: () => invokeChannel('mcp:discover-local'),
       importLocal: () => invokeChannel('mcp:import-local'),
       oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })

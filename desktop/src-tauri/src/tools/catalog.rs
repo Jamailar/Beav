@@ -168,7 +168,21 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list", "save", "test", "call", "discover_local", "import_local", "oauth_status"]
+                            "enum": [
+                                "list",
+                                "save",
+                                "test",
+                                "call",
+                                "list_tools",
+                                "list_resources",
+                                "list_resource_templates",
+                                "sessions",
+                                "disconnect",
+                                "disconnect_all",
+                                "discover_local",
+                                "import_local",
+                                "oauth_status"
+                            ]
                         },
                         "server": { "type": "object" },
                         "servers": { "type": "array", "items": { "type": "object" } },

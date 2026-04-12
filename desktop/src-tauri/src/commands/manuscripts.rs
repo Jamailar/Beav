@@ -396,7 +396,7 @@ pub fn handle_manuscripts_channel(
         match channel {
             "manuscripts:list" => {
                 let root = manuscripts_root(state)?;
-                serde_json::to_value(list_tree(&root, &root)).map_err(|error| error.to_string())
+                serde_json::to_value(list_tree(&root, &root)?).map_err(|error| error.to_string())
             }
             "manuscripts:read" => {
                 let relative = payload_value_as_string(&payload).unwrap_or_default();

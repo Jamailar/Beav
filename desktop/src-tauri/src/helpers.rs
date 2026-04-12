@@ -416,10 +416,10 @@ fn list_tree_internal(
         return Ok(Vec::new());
     }
 
-    let mut entries = fs::read_dir(current)
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+    let Ok(entries_iter) = fs::read_dir(current) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = entries_iter.flatten().collect::<Vec<_>>();
 
     entries.sort_by_key(|entry| entry.file_name());
 
@@ -427,16 +427,16 @@ fn list_tree_internal(
     for entry in entries {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
-        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_symlink() {
             continue;
         }
-        let relative = normalize_relative_path(
-            path.strip_prefix(root)
-                .map_err(|error| error.to_string())?
-                .to_string_lossy()
-                .as_ref(),
-        );
+        let Ok(stripped_path) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = normalize_relative_path(stripped_path.to_string_lossy().as_ref());
 
         if file_type.is_dir() && is_manuscript_package_name(&file_name) {
             nodes.push(file_node_from_package(&path, &file_name, relative));

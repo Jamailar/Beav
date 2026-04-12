@@ -2,12 +2,12 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
     ArrowLeft,
     AudioLines,
-    ChevronRight,
     Clapperboard,
     ExternalLink,
     FileAudio,
     FileImage,
     FileText,
+    Folder,
     FolderOpen,
     FolderPlus,
     Grid2X2,
@@ -272,6 +272,12 @@ function getFolderTrail(folderPath: string): Array<{ label: string; path: string
     return trail;
 }
 
+function getParentFolderPath(folderPath: string): string {
+    const parts = folderPath.split('/').filter(Boolean);
+    if (parts.length <= 1) return '';
+    return parts.slice(0, -1).join('/');
+}
+
 function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>): string {
     const ts = Date.now();
     const safeTitle = title.trim() || DEFAULT_UNTITLED_DRAFT_TITLE;
@@ -446,7 +452,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [error, setError] = useState('');
     const [activeFolder, setActiveFolder] = useState('');
     const [query, setQuery] = useState('');
-    const [filter, setFilter] = useState<DraftFilter>('drafts');
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
+    const [filter, setFilter] = useState<DraftFilter>('all');
     const [layout, setLayout] = useState<DraftLayout>('gallery');
     const [createOpen, setCreateOpen] = useState(false);
     const [createKind, setCreateKind] = useState<CreateKind>('longform');
@@ -501,6 +508,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const assetsRequestIdRef = useRef(0);
     const hasLoadedSnapshotRef = useRef(false);
     const deferredAssetsTimerRef = useRef<number | null>(null);
+    const searchPopoverRef = useRef<HTMLDivElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
 
     const loadTree = useCallback(async () => {
@@ -690,6 +699,31 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
         };
     }, []);
+
+    useEffect(() => {
+        if (!isSearchOpen) return;
+        const timer = window.setTimeout(() => {
+            searchInputRef.current?.focus();
+            searchInputRef.current?.select();
+        }, 140);
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!searchPopoverRef.current?.contains(event.target as Node)) {
+                setIsSearchOpen(false);
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsSearchOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.clearTimeout(timer);
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isSearchOpen]);
 
     useEffect(() => {
         return () => {
@@ -1352,16 +1386,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
 
     const contentCards = useMemo(() => {
-        const folderCards = visibleFolders.map((folder) => ({
-            id: `folder:${folder.path}`,
-            kind: 'folder' as const,
-            updatedAt: Number(folder.updatedAt || 0) || 0,
-            createdAt: 0,
-            folder,
-            title: folder.title || folder.name,
-            summary: folder.summary || '点击进入',
-        }));
-
         const draftCards = visibleDrafts.map((file) => {
             const meta = fileMetaMap[file.path];
             const draftType = meta?.draftType || 'unknown';
@@ -1389,14 +1413,30 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             assetKind: inferAssetKind(asset),
         }));
 
-        return [...folderCards, ...draftCards, ...assetCards].sort((a, b) => {
+        const compareCards = (
+            a: typeof draftCards[number] | typeof assetCards[number],
+            b: typeof draftCards[number] | typeof assetCards[number],
+        ) => {
             const updatedDelta = b.updatedAt - a.updatedAt;
             if (updatedDelta !== 0) return updatedDelta;
             const createdDelta = b.createdAt - a.createdAt;
             if (createdDelta !== 0) return createdDelta;
             return a.title.localeCompare(b.title, 'zh-Hans-CN');
-        }).slice(0, MANUSCRIPTS_CARD_RENDER_LIMIT);
-    }, [fileMetaMap, visibleAssets, visibleDrafts, visibleFolders]);
+        };
+
+        if (filter === 'all') {
+            const primaryCards = [...draftCards].sort(compareCards);
+            const remainingSlots = Math.max(MANUSCRIPTS_CARD_RENDER_LIMIT - primaryCards.length, 0);
+            const secondaryCards = assetCards
+                .sort(compareCards)
+                .slice(0, remainingSlots);
+            return [...primaryCards, ...secondaryCards];
+        }
+
+        return [...draftCards, ...assetCards]
+            .sort(compareCards)
+            .slice(0, MANUSCRIPTS_CARD_RENDER_LIMIT);
+    }, [fileMetaMap, visibleAssets, visibleDrafts]);
 
     const bindableImageAssets = useMemo(
         () => assets.filter((asset) => inferAssetKind(asset) === 'image'),
@@ -1803,16 +1843,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     </button>
                                 ))}
                             </div>
-                            <div className="flex flex-wrap items-center gap-3">
-                                <label className="relative w-[420px] max-w-[60vw] min-w-[260px]">
-                                    <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                                    <input
-                                        value={query}
-                                        onChange={(event) => setQuery(event.target.value)}
-                                        placeholder="搜索我的空间"
-                                        className="h-11 w-full rounded-2xl border border-border/60 bg-white/70 pl-11 pr-4 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] focus:border-accent-primary focus:outline-none"
-                                    />
-                                </label>
+                            <div className="relative flex flex-wrap items-center gap-3">
                                 <button
                                     type="button"
                                     onClick={() => setFilter('folders')}
@@ -1820,6 +1851,49 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 >
                                     <FolderOpen className="h-4 w-4" />
                                     空间目录
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsImageModalOpen(true);
+                                        void loadSettings();
+                                    }}
+                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                >
+                                    <ImageIcon className="h-4 w-4" />
+                                    生图
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsVideoModalOpen(true);
+                                        void loadSettings();
+                                    }}
+                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                >
+                                    <Clapperboard className="h-4 w-4" />
+                                    生视频
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void loadData()}
+                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                >
+                                    <RefreshCw className={clsx('h-4 w-4', isRefreshing && 'animate-spin')} />
+                                    {isRefreshing ? '刷新中' : '刷新'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSearchOpen((prev) => !prev)}
+                                    className={clsx(
+                                        'inline-flex items-center justify-center rounded-2xl border px-3.5 py-2.5 text-sm transition-all',
+                                        isSearchOpen
+                                            ? 'border-accent-primary bg-accent-primary/8 text-accent-primary shadow-[0_12px_24px_rgba(37,99,235,0.14)]'
+                                            : 'border-border bg-white/70 text-text-secondary hover:text-text-primary'
+                                    )}
+                                    aria-label="搜索稿件"
+                                >
+                                    <Search className="h-4 w-4" />
                                 </button>
                                 <div className="flex items-center gap-2 rounded-2xl bg-accent-primary px-2 py-2 text-white shadow-[0_16px_36px_rgba(37,99,235,0.24)]">
                                     <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium">
@@ -1836,76 +1910,63 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         {workingId === 'media-import' ? '导入中' : '上传'}
                                     </button>
                                 </div>
+                                <div
+                                    ref={searchPopoverRef}
+                                    className={clsx(
+                                        'absolute right-0 top-[calc(100%+14px)] z-20 w-[min(460px,calc(100vw-3rem))] origin-top-right transition-all duration-200',
+                                        isSearchOpen
+                                            ? 'pointer-events-auto translate-y-0 scale-100 opacity-100'
+                                            : 'pointer-events-none -translate-y-2 scale-95 opacity-0'
+                                    )}
+                                >
+                                    <div className="rounded-[28px] border border-border/70 bg-white/95 p-3 shadow-[0_24px_60px_rgba(15,23,42,0.16)] backdrop-blur-xl">
+                                        <div className="flex items-center gap-3 rounded-[22px] border border-border/60 bg-[#fbfaf6] px-4 py-3">
+                                            <Search className="h-4 w-4 text-text-tertiary" />
+                                            <input
+                                                ref={searchInputRef}
+                                                value={query}
+                                                onChange={(event) => setQuery(event.target.value)}
+                                                placeholder="搜索稿件、摘要、素材提示词"
+                                                className="h-7 w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none"
+                                            />
+                                            {query ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setQuery('')}
+                                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
+                                                    aria-label="清空搜索"
+                                                >
+                                                    <X className="h-4 w-4" />
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                        <div className="px-1 pt-2 text-[11px] text-text-tertiary">
+                                            按标题、摘要、路径和素材提示词搜索
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <div className="border-b border-border/60 px-2 py-4">
-                        <div className="flex items-center justify-between gap-4">
-                            <div className="flex min-w-0 items-center gap-2 text-sm text-text-secondary">
-                                {activeTrail.map((crumb, index) => (
-                                    <div key={crumb.path || 'root'} className="flex min-w-0 items-center gap-2">
-                                        {index > 0 && <ChevronRight className="h-3.5 w-3.5 text-text-tertiary" />}
-                                        <button
-                                            type="button"
-                                            onClick={() => setActiveFolder(crumb.path)}
-                                            className={clsx('truncate transition-colors hover:text-text-primary', crumb.path === activeFolder && 'font-medium text-text-primary')}
-                                        >
-                                            {crumb.label}
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsImageModalOpen(true);
-                                        void loadSettings();
-                                    }}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-white/70 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                >
-                                    <ImageIcon className="h-4 w-4" />
-                                    生图
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsVideoModalOpen(true);
-                                        void loadSettings();
-                                    }}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-white/70 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                >
-                                    <Clapperboard className="h-4 w-4" />
-                                    生视频
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void loadData()}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-white/70 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                >
-                                    <RefreshCw className={clsx('h-4 w-4', isRefreshing && 'animate-spin')} />
-                                    {isRefreshing ? '刷新中' : '刷新'}
-                                </button>
-                                {activeFolder === '' && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void window.ipcRenderer.invoke('media:open-root')}
-                                        className="inline-flex items-center gap-2 rounded-xl border border-border bg-white/70 px-3 py-2 text-sm text-text-secondary hover:text-text-primary"
-                                    >
-                                        <ExternalLink className="h-4 w-4" />
-                                        打开媒体目录
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-
                         <div className="mt-4">
-                            <div className="mb-2 flex items-center justify-between">
+                            <div className="mb-2 flex items-center">
                                 <div className="text-sm font-semibold text-text-primary">文件夹 ({visibleFolders.length})</div>
-                                <div className="text-xs text-text-tertiary">内容已经汇总进画廊，文件夹只负责整理。</div>
                             </div>
                             <div className="flex gap-3 overflow-x-auto pb-1">
+                                {activeFolder ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setActiveFolder(getParentFolderPath(activeFolder))}
+                                        className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
+                                        aria-label="返回上一级"
+                                    >
+                                        <div className="flex h-16 w-16 items-center justify-center text-[#6b7280] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-text-primary">
+                                            <ArrowLeft className="h-8 w-8" strokeWidth={2.05} />
+                                        </div>
+                                    </button>
+                                ) : null}
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -1913,16 +1974,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         setCreateTitle('');
                                         setCreateOpen(true);
                                     }}
-                                    className="group min-w-[156px] rounded-2xl border border-dashed border-border bg-white/60 px-4 py-4 text-left hover:border-accent-primary/40 hover:bg-white"
+                                    className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
+                                    aria-label="新建文件夹"
                                 >
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-surface-secondary text-text-secondary">
-                                            <FolderPlus className="h-4.5 w-4.5" />
-                                        </div>
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary">新建文件夹</div>
-                                            <div className="mt-0.5 text-[11px] text-text-tertiary">整理内容</div>
-                                        </div>
+                                    <div className="flex h-16 w-16 items-center justify-center text-[#4b72b8] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-[#315d9e]">
+                                        <FolderPlus className="h-9 w-9" strokeWidth={1.85} />
                                     </div>
                                 </button>
                                 {visibleFolders.map((folder) => (
@@ -1930,14 +1986,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         key={folder.path}
                                         type="button"
                                         onClick={() => setActiveFolder(folder.path)}
-                                        className="min-w-[172px] rounded-2xl border border-border bg-white/70 px-4 py-4 text-left hover:bg-white"
+                                        className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-start px-2 py-2 text-center"
                                     >
-                                        <div className="flex items-center gap-3">
-                                            <div className="text-3xl leading-none">📁</div>
-                                            <div className="min-w-0">
-                                                <div className="truncate text-sm font-medium text-text-primary">{folder.name}</div>
-                                                <div className="mt-0.5 text-[11px] text-text-tertiary">点击进入</div>
-                                            </div>
+                                        <div className="flex h-16 w-16 items-center justify-center text-[#5d7fb8] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-[#3d67ab]">
+                                            <Folder className="h-10 w-10" strokeWidth={1.8} />
+                                        </div>
+                                        <div className="mt-2 line-clamp-2 text-[11px] leading-4 text-text-secondary group-hover:text-text-primary">
+                                            {folder.name}
                                         </div>
                                     </button>
                                 ))}
@@ -2017,52 +2072,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 ) : (
                                     <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-x-3.5 gap-y-5' : 'space-y-2')}>
                                         {contentCards.map((card) => {
-                                            if (card.kind === 'folder') {
-                                                const folder = card.folder;
-                                                return (
-                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-2xl border border-border bg-white/75 px-4 py-3')}>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setActiveFolder(folder.path)}
-                                                            className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
-                                                        >
-                                                            <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[20px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
-                                                                {layout === 'gallery' ? (
-                                                                    <>
-                                                                        <div className="relative aspect-[5/6] bg-gradient-to-br from-[#fbf6ea] to-[#efe5cd] px-4 py-4 text-[#6b5b37]">
-                                                                            <div className="text-3xl leading-none">📁</div>
-                                                                            <div className="mt-4 text-[10px] uppercase tracking-[0.22em] text-[#8b7a53]">文件夹</div>
-                                                                            <div className="mt-2 line-clamp-2 text-lg font-semibold leading-tight">{card.title}</div>
-                                                                            <div className="absolute inset-x-4 bottom-4 rounded-xl border border-white/40 bg-white/40 px-2.5 py-2 text-[11px] text-[#7b6b45] backdrop-blur-sm">
-                                                                                {card.summary}
-                                                                            </div>
-                                                                        </div>
-                                                                        <div className="space-y-1.5 px-2 pb-1 pt-2.5">
-                                                                            <div className="truncate text-[13px] font-medium text-text-primary">{card.title}</div>
-                                                                            <div className="flex items-center gap-2 text-[11px]">
-                                                                                <span className="rounded-full bg-[#f6edd7] px-2.5 py-1 font-medium text-[#8b7442]">文件夹</span>
-                                                                                <span className="text-text-tertiary">{formatDateLabel(card.updatedAt)}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    </>
-                                                                ) : (
-                                                                    <div className="flex min-w-0 items-center gap-4">
-                                                                        <div className="text-3xl leading-none">📁</div>
-                                                                        <div className="min-w-0 flex-1">
-                                                                            <div className="truncate text-sm font-medium text-text-primary">{card.title}</div>
-                                                                            <div className="mt-1 truncate text-xs text-text-tertiary">{card.summary}</div>
-                                                                        </div>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </button>
-                                                        <div className={clsx('mt-3 flex items-center justify-between gap-2', layout === 'gallery' ? 'px-1' : '')}>
-                                                            <div className="text-xs text-text-tertiary">{folder.path}</div>
-                                                            <div className="text-xs text-text-tertiary">{formatDateLabel(card.updatedAt)}</div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            }
                                             if (card.kind === 'draft') {
                                                 const typeTheme = resolveDraftTypeTheme(card.draftType);
                                                 const Icon = card.draftType === 'video'

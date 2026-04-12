@@ -21,7 +21,9 @@ import {
   type BackgroundWorkerPoolState,
   type CreateAiSourceDraft,
   type LocalAiGuide,
+  type McpServerRuntimeItem,
   type McpServerConfig,
+  type McpSessionState,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
   AiPresetLogo,
@@ -689,6 +691,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isSyncingMcp, setIsSyncingMcp] = useState(false);
   const [mcpTestingId, setMcpTestingId] = useState('');
   const [mcpOauthState, setMcpOauthState] = useState<Record<string, { connected: boolean; tokenPath?: string }>>({});
+  const [mcpLiveSessions, setMcpLiveSessions] = useState<McpSessionState[]>([]);
+  const [mcpRuntimeItems, setMcpRuntimeItems] = useState<McpServerRuntimeItem[]>([]);
+  const [mcpInspectingId, setMcpInspectingId] = useState('');
 
   // Knowledge State
   const [vectorStats, setVectorStats] = useState<{ vectors: number; documents: number } | null>(null);
@@ -948,10 +953,22 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   useEffect(() => {
     if (activeTab !== 'tools') return;
+    void loadMcpRuntimeData();
     for (const server of mcpServers) {
       void handleRefreshMcpOAuth(server);
     }
   }, [activeTab, mcpServers]);
+
+  const loadMcpRuntimeData = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.mcp.list();
+      if (!result?.success) return;
+      setMcpLiveSessions(Array.isArray(result.sessions) ? (result.sessions as McpSessionState[]) : []);
+      setMcpRuntimeItems(Array.isArray(result.items) ? (result.items as McpServerRuntimeItem[]) : []);
+    } catch (error) {
+      console.error('Failed to load MCP runtime state:', error);
+    }
+  }, []);
 
   useEffect(() => {
     if (!activeAiSource) return;
@@ -1371,7 +1388,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     fetchImageModels,
   ]);
 
-  const persistMcpServers = async (nextServers: McpServerConfig[], tip?: string) => {
+  const persistMcpServers = useCallback(async (nextServers: McpServerConfig[], tip?: string) => {
     setIsSyncingMcp(true);
     try {
       const result = await window.ipcRenderer.mcp.save(nextServers);
@@ -1380,6 +1397,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return false;
       }
       setMcpServers((result.servers || nextServers) as McpServerConfig[]);
+      await loadMcpRuntimeData();
       if (tip) setMcpStatusMessage(tip);
       return true;
     } catch (error) {
@@ -1389,7 +1407,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } finally {
       setIsSyncingMcp(false);
     }
-  };
+  }, [loadMcpRuntimeData]);
 
   const handleAddMcpServer = async () => {
     const next = [...mcpServers, createDefaultMcpServer()];
@@ -1409,7 +1427,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     await persistMcpServers(mcpServers, 'MCP 配置已保存');
   };
 
-  const handleDiscoverAndImportMcp = async () => {
+  const handleDiscoverAndImportMcp = useCallback(async () => {
     setIsSyncingMcp(true);
     try {
       const result = await window.ipcRenderer.mcp.importLocal();
@@ -1418,6 +1436,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       setMcpServers((result.servers || []) as McpServerConfig[]);
+      await loadMcpRuntimeData();
       setMcpStatusMessage(`已导入 ${result.imported || 0} 个 MCP Server（共 ${result.total || 0} 个）`);
     } catch (error) {
       console.error('Failed to import local MCP configs:', error);
@@ -1425,20 +1444,55 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } finally {
       setIsSyncingMcp(false);
     }
-  };
+  }, [loadMcpRuntimeData]);
 
-  const handleTestMcpServer = async (server: McpServerConfig) => {
+  const handleTestMcpServer = useCallback(async (server: McpServerConfig) => {
     setMcpTestingId(server.id);
     try {
       const result = await window.ipcRenderer.mcp.test(server);
       setMcpStatusMessage(`${server.name}：${result.message}`);
+      await loadMcpRuntimeData();
     } catch (error) {
       console.error('Failed to test MCP server:', error);
       setMcpStatusMessage(`${server.name}：测试失败`);
     } finally {
       setMcpTestingId('');
     }
-  };
+  }, [loadMcpRuntimeData]);
+
+  const handleDisconnectMcpServer = useCallback(async (server: McpServerConfig) => {
+    setMcpInspectingId(server.id);
+    try {
+      const result = await window.ipcRenderer.mcp.disconnect(server);
+      if (result?.success) {
+        setMcpLiveSessions(Array.isArray(result.sessions) ? (result.sessions as McpSessionState[]) : []);
+        await loadMcpRuntimeData();
+        setMcpStatusMessage(`${server.name}：连接已断开`);
+      }
+    } catch (error) {
+      console.error('Failed to disconnect MCP server:', error);
+      setMcpStatusMessage(`${server.name}：断开连接失败`);
+    } finally {
+      setMcpInspectingId('');
+    }
+  }, [loadMcpRuntimeData]);
+
+  const handleDisconnectAllMcpSessions = useCallback(async () => {
+    setMcpInspectingId('__all__');
+    try {
+      const result = await window.ipcRenderer.mcp.disconnectAll();
+      if (result?.success) {
+        setMcpLiveSessions(Array.isArray(result.sessions) ? (result.sessions as McpSessionState[]) : []);
+        await loadMcpRuntimeData();
+        setMcpStatusMessage('已断开全部 MCP 会话');
+      }
+    } catch (error) {
+      console.error('Failed to disconnect all MCP sessions:', error);
+      setMcpStatusMessage('断开全部 MCP 会话失败');
+    } finally {
+      setMcpInspectingId('');
+    }
+  }, [loadMcpRuntimeData]);
 
   const handleRefreshMcpOAuth = async (server: McpServerConfig) => {
     try {
@@ -2317,6 +2371,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         await Promise.all([
           checkTools(),
           loadBrowserPluginStatus(),
+          loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
           await loadToolDiagnostics();
@@ -2355,6 +2410,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
+    loadMcpRuntimeData,
     loadRecentDebugLogs,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -3493,14 +3549,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleSaveMcpServers={handleSaveMcpServers}
                 mcpStatusMessage={mcpStatusMessage}
                 mcpServers={mcpServers}
+                mcpRuntimeItems={mcpRuntimeItems}
+                mcpLiveSessions={mcpLiveSessions}
                 handleUpdateMcpServer={handleUpdateMcpServer}
                 handleDeleteMcpServer={handleDeleteMcpServer}
+                handleDisconnectMcpServer={handleDisconnectMcpServer}
+                handleDisconnectAllMcpSessions={handleDisconnectAllMcpSessions}
                 stringifyEnvRecord={stringifyEnvRecord}
                 parseEnvText={parseEnvText}
                 mcpOauthState={mcpOauthState}
                 handleRefreshMcpOAuth={handleRefreshMcpOAuth}
                 handleTestMcpServer={handleTestMcpServer}
                 mcpTestingId={mcpTestingId}
+                mcpInspectingId={mcpInspectingId}
                 ytdlpStatus={ytdlpStatus}
                 handleInstallYtdlp={handleInstallYtdlp}
                 handleUpdateYtdlp={handleUpdateYtdlp}
