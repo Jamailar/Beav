@@ -17,6 +17,12 @@ pub struct PreparedRuntimeQueryTurn<'a> {
     pub request: ChatExchangeRequest<'a>,
 }
 
+pub struct RuntimeQueryCheckpointBundle {
+    pub route_reasoning: String,
+    pub route_value: Value,
+    pub orchestration: Option<Value>,
+}
+
 pub fn prepare_runtime_query_execution(
     route: RuntimeRouteRecord,
     orchestration: Option<Value>,
@@ -69,6 +75,16 @@ pub fn build_runtime_query_turn<'a>(
         route_value,
         orchestration: prepared.orchestration,
         request,
+    }
+}
+
+pub fn build_runtime_query_checkpoint_bundle(
+    turn: &PreparedRuntimeQueryTurn<'_>,
+) -> RuntimeQueryCheckpointBundle {
+    RuntimeQueryCheckpointBundle {
+        route_reasoning: turn.route.reasoning.clone(),
+        route_value: turn.route_value.clone(),
+        orchestration: turn.orchestration.clone(),
     }
 }
 
@@ -129,5 +145,27 @@ mod tests {
             .request
             .message
             .contains("Subagent orchestration summary"));
+    }
+
+    #[test]
+    fn build_runtime_query_checkpoint_bundle_preserves_reasoning_route_and_orchestration() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let turn = build_runtime_query_turn(
+            Some("session-1".to_string()),
+            route,
+            Some(json!({
+                "outputs": [{ "roleId": "planner", "summary": "break into steps" }]
+            })),
+            "help me",
+            None,
+        );
+        let bundle = build_runtime_query_checkpoint_bundle(&turn);
+
+        assert!(!bundle.route_reasoning.is_empty());
+        assert_eq!(
+            bundle.route_value.get("intent").and_then(Value::as_str),
+            turn.route_value.get("intent").and_then(Value::as_str)
+        );
+        assert!(bundle.orchestration.is_some());
     }
 }

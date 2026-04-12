@@ -52,21 +52,38 @@ pub fn handle_runtime_query(
         payload_field(payload, "modelConfig"),
     );
     let turn = PreparedSessionAgentTurn::RuntimeQuery(prepared);
+    let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(
             store,
             execution.session_id(),
-            turn.route_reasoning().unwrap_or_default(),
-            turn.route_value().cloned().unwrap_or(Value::Null),
-            turn.orchestration().cloned(),
+            checkpoint_bundle
+                .as_ref()
+                .map(|bundle| bundle.route_reasoning.as_str())
+                .unwrap_or_default(),
+            checkpoint_bundle
+                .as_ref()
+                .map(|bundle| bundle.route_value.clone())
+                .unwrap_or(Value::Null),
+            checkpoint_bundle
+                .as_ref()
+                .and_then(|bundle| bundle.orchestration.clone()),
         );
         Ok(())
     });
     for (checkpoint_type, summary, payload) in runtime_query_checkpoint_events(
-        turn.route_reasoning().unwrap_or_default(),
-        turn.route_value().cloned().unwrap_or(Value::Null),
-        turn.orchestration().cloned(),
+        checkpoint_bundle
+            .as_ref()
+            .map(|bundle| bundle.route_reasoning.as_str())
+            .unwrap_or_default(),
+        checkpoint_bundle
+            .as_ref()
+            .map(|bundle| bundle.route_value.clone())
+            .unwrap_or(Value::Null),
+        checkpoint_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.orchestration.clone()),
     ) {
         emit_runtime_task_checkpoint_saved(
             app,
@@ -89,7 +106,12 @@ pub fn handle_runtime_query(
         "success": true,
         "sessionId": execution.session_id(),
         "response": execution.response(),
-        "route": turn.route_value().cloned().unwrap_or(Value::Null),
-        "orchestration": turn.orchestration().cloned()
+        "route": checkpoint_bundle
+            .as_ref()
+            .map(|bundle| bundle.route_value.clone())
+            .unwrap_or(Value::Null),
+        "orchestration": checkpoint_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.orchestration.clone())
     }))
 }

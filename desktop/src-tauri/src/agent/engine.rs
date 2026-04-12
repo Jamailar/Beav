@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-use crate::agent::{PreparedChatSendTurn, PreparedRuntimeQueryTurn, PreparedSessionBridgeTurn};
+use crate::agent::{
+    build_runtime_query_checkpoint_bundle, PreparedChatSendTurn, PreparedRuntimeQueryTurn,
+    PreparedSessionBridgeTurn, RuntimeQueryCheckpointBundle,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAgentTurnKind {
@@ -153,23 +156,9 @@ impl<'a> PreparedSessionAgentTurn<'a> {
         matches!(self, Self::ChatSend(turn) if turn.is_redclaw_session)
     }
 
-    pub fn route_value(&self) -> Option<&Value> {
+    pub fn runtime_query_checkpoint_bundle(&self) -> Option<RuntimeQueryCheckpointBundle> {
         match self {
-            Self::RuntimeQuery(turn) => Some(&turn.route_value),
-            _ => None,
-        }
-    }
-
-    pub fn orchestration(&self) -> Option<&Value> {
-        match self {
-            Self::RuntimeQuery(turn) => turn.orchestration.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn route_reasoning(&self) -> Option<&str> {
-        match self {
-            Self::RuntimeQuery(turn) => Some(turn.route.reasoning.as_str()),
+            Self::RuntimeQuery(turn) => Some(build_runtime_query_checkpoint_bundle(turn)),
             _ => None,
         }
     }
@@ -224,9 +213,7 @@ mod tests {
         assert_eq!(turn.request_cloned().message, "m");
         assert_eq!(turn.display_content(), "m");
         assert!(!turn.is_redclaw_session());
-        assert!(turn.route_value().is_none());
-        assert!(turn.orchestration().is_none());
-        assert!(turn.route_reasoning().is_none());
+        assert!(turn.runtime_query_checkpoint_bundle().is_none());
     }
 
     #[test]
@@ -244,13 +231,13 @@ mod tests {
         });
 
         assert_eq!(
-            turn.route_value()
-                .and_then(|value| value.get("intent"))
+            turn.runtime_query_checkpoint_bundle()
+                .as_ref()
+                .and_then(|bundle| bundle.route_value.get("intent"))
                 .and_then(Value::as_str),
             Some("direct_answer")
         );
-        assert!(turn.orchestration().is_some());
-        assert!(turn.route_reasoning().is_some());
+        assert!(turn.runtime_query_checkpoint_bundle().is_some());
     }
 
     #[test]
