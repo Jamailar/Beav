@@ -1,17 +1,24 @@
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
-use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage, SessionAgentTurnKind};
+use crate::agent::{
+    ChatExchangeContext, ChatExchangeRequest, ChatExchangeResponseStage,
+    PreparedSessionAgentTurn, SessionAgentTurnExecution, SessionAgentTurnKind,
+};
 use crate::commands::chat_state::{
-    is_first_assistant_turn_for_session, resolve_runtime_mode_for_session,
-    should_handle_redclaw_onboarding_for_session,
+    is_chat_runtime_cancel_requested, is_first_assistant_turn_for_session,
+    resolve_runtime_mode_for_session, should_handle_redclaw_onboarding_for_session,
+    update_chat_runtime_state,
 };
 use crate::persistence::with_store;
 use crate::{
-    append_debug_log_state, generate_chat_response, make_id, resolve_chat_config,
+    append_debug_log_state, ensure_redclaw_onboarding_completed_with_defaults,
+    generate_chat_response, make_id, resolve_chat_config,
     run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
     run_openai_interactive_chat_runtime, AppState,
 };
+use crate::{handle_redclaw_onboarding_turn};
+use crate::agent::{persist_chat_exchange, update_post_exchange_maintenance};
 
 pub fn resolve_chat_exchange_context(
     state: &State<'_, AppState>,
@@ -117,6 +124,86 @@ pub fn resolve_chat_exchange_response_stage(
     Ok(ChatExchangeResponseStage {
         response: generate_chat_response(&context.settings_snapshot, model_config, message),
         emitted_live_events: false,
+    })
+}
+
+pub fn execute_prepared_session_agent_turn(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    turn: &PreparedSessionAgentTurn<'_>,
+) -> Result<SessionAgentTurnExecution, String> {
+    execute_session_agent_turn(app, state, turn.request_cloned())
+}
+
+pub fn execute_session_agent_turn(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: ChatExchangeRequest<'_>,
+) -> Result<SessionAgentTurnExecution, String> {
+    let ChatExchangeRequest {
+        session_id,
+        message,
+        display_content,
+        model_config,
+        attachment,
+        turn_kind,
+    } = request;
+    let context = resolve_chat_exchange_context(state, session_id, turn_kind)?;
+    let _ = update_chat_runtime_state(state, &context.working_session_id, true, String::new(), None);
+
+    if context.runtime_mode == "redclaw"
+        && context.should_handle_redclaw_onboarding
+        && !context.allow_redclaw_onboarding
+    {
+        let _ = ensure_redclaw_onboarding_completed_with_defaults(state);
+    }
+    let onboarding_response = if context.allow_redclaw_onboarding {
+        handle_redclaw_onboarding_turn(state, &message)?
+    } else {
+        None
+    };
+    let response_stage = resolve_chat_exchange_response_stage(
+        app,
+        state,
+        &context,
+        &message,
+        model_config,
+        onboarding_response,
+    )?;
+    let response = response_stage.response;
+    if is_chat_runtime_cancel_requested(state, &context.working_session_id) {
+        let _ = update_chat_runtime_state(
+            state,
+            &context.working_session_id,
+            false,
+            String::new(),
+            Some("cancelled".to_string()),
+        );
+        return Err("chat generation cancelled".to_string());
+    }
+    let persistence = persist_chat_exchange(
+        state,
+        &context,
+        &message,
+        &display_content,
+        attachment.clone(),
+        &response,
+        turn_kind,
+    )?;
+    let _ = update_chat_runtime_state(
+        state,
+        &persistence.final_session_id,
+        false,
+        response.clone(),
+        None,
+    );
+    let _ = update_post_exchange_maintenance(state, &response);
+
+    Ok(SessionAgentTurnExecution {
+        session_id: persistence.final_session_id,
+        response,
+        title_update: persistence.title_update,
+        emitted_live_events: response_stage.emitted_live_events,
     })
 }
 
