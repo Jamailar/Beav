@@ -62,34 +62,16 @@ pub fn handle_runtime_query(
         persist_runtime_query_checkpoints(
             store,
             &execution.session_id,
-            &match &turn {
-                PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route.reasoning.clone(),
-                _ => unreachable!(),
-            },
-            match &turn {
-                PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route_value.clone(),
-                _ => unreachable!(),
-            },
-            match &turn {
-                PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.orchestration.clone(),
-                _ => unreachable!(),
-            },
+            &prepared_route_reasoning(&turn),
+            turn.route_value().cloned().unwrap_or(Value::Null),
+            turn.orchestration().cloned(),
         );
         Ok(())
     });
     for (checkpoint_type, summary, payload) in runtime_query_checkpoint_events(
-        &match &turn {
-            PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route.reasoning.clone(),
-            _ => unreachable!(),
-        },
-        match &turn {
-            PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route_value.clone(),
-            _ => unreachable!(),
-        },
-        match &turn {
-            PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.orchestration.clone(),
-            _ => unreachable!(),
-        },
+        &prepared_route_reasoning(&turn),
+        turn.route_value().cloned().unwrap_or(Value::Null),
+        turn.orchestration().cloned(),
     ) {
         emit_runtime_task_checkpoint_saved(
             app,
@@ -112,13 +94,14 @@ pub fn handle_runtime_query(
         "success": true,
         "sessionId": execution.session_id,
         "response": execution.response,
-        "route": match &turn {
-            PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route_value.clone(),
-            _ => unreachable!(),
-        },
-        "orchestration": match &turn {
-            PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.orchestration.clone(),
-            _ => unreachable!(),
-        }
+        "route": turn.route_value().cloned().unwrap_or(Value::Null),
+        "orchestration": turn.orchestration().cloned()
     }))
+}
+
+fn prepared_route_reasoning(turn: &PreparedSessionAgentTurn<'_>) -> String {
+    match turn {
+        PreparedSessionAgentTurn::RuntimeQuery(prepared) => prepared.route.reasoning.clone(),
+        _ => String::new(),
+    }
 }

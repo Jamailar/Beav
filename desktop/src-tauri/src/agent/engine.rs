@@ -123,6 +123,20 @@ impl<'a> PreparedSessionAgentTurn<'a> {
     pub fn is_redclaw_session(&self) -> bool {
         matches!(self, Self::ChatSend(turn) if turn.is_redclaw_session)
     }
+
+    pub fn route_value(&self) -> Option<&Value> {
+        match self {
+            Self::RuntimeQuery(turn) => Some(&turn.route_value),
+            _ => None,
+        }
+    }
+
+    pub fn orchestration(&self) -> Option<&Value> {
+        match self {
+            Self::RuntimeQuery(turn) => turn.orchestration.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +187,7 @@ mod tests {
         assert_eq!(turn.request().session_id.as_deref(), Some("s"));
         assert_eq!(turn.display_content(), "m");
         assert!(!turn.is_redclaw_session());
+        assert!(turn.route_value().is_none());
+        assert!(turn.orchestration().is_none());
     }
 }
