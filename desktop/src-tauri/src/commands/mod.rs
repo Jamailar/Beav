@@ -2,7 +2,6 @@ pub mod advisor_ops;
 pub mod assistant_daemon;
 pub mod bridge;
 pub mod chat;
-pub mod chat_runtime;
 pub mod chat_sessions_wander;
 pub mod chat_state;
 pub mod chatrooms;

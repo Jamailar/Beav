@@ -1,8 +1,7 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{build_session_bridge_turn, PreparedSessionAgentTurn};
-use crate::commands::chat_runtime::execute_prepared_session_agent_turn;
+use crate::agent::{build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     session_bridge_detail_value, session_bridge_summary_value,
