@@ -16,6 +16,8 @@ mod query;
 mod session;
 #[path = "loop.rs"]
 mod agent_loop;
+#[path = "wander.rs"]
+mod wander;
 
 pub use bridge::*;
 pub use chat::*;
@@ -26,3 +28,4 @@ pub use provider::*;
 pub use persistence::*;
 pub use query::*;
 pub use session::*;
+pub use wander::*;

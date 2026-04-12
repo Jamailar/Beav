@@ -12,6 +12,7 @@ pub enum SessionAgentTurnKind {
     SessionBridge,
     AssistantDaemon,
     RedclawRun,
+    Wander,
 }
 
 impl SessionAgentTurnKind {
@@ -22,6 +23,7 @@ impl SessionAgentTurnKind {
             Self::SessionBridge => "session-bridge",
             Self::AssistantDaemon => "assistant-daemon",
             Self::RedclawRun => "redclaw-run",
+            Self::Wander => "wander-brainstorm",
         }
     }
 
@@ -32,6 +34,7 @@ impl SessionAgentTurnKind {
             Self::SessionBridge => "Session bridge message completed",
             Self::AssistantDaemon => "Assistant daemon handled request",
             Self::RedclawRun => "RedClaw run completed",
+            Self::Wander => "Wander brainstorm completed",
         }
     }
 }
@@ -99,6 +102,23 @@ impl<'a> ChatExchangeRequest<'a> {
         }
     }
 
+    pub fn wander(
+        session_id: String,
+        prompt: String,
+        model_config: Option<&'a Value>,
+    ) -> Self {
+        Self {
+            session_id: Some(session_id),
+            display_content: prompt.clone(),
+            message: prompt,
+            model_config,
+            attachment: None,
+            turn_kind: SessionAgentTurnKind::Wander,
+            checkpoint_summary_override: Some("Wander brainstorm completed".to_string()),
+            session_title_override: Some("Wander Deep Think".to_string()),
+        }
+    }
+
     pub fn assistant_daemon(session_id: String, prompt: String, route_kind: &str) -> Self {
         Self {
             session_id: Some(session_id),
@@ -146,6 +166,11 @@ pub struct RedclawRunTurn {
     pub request: ChatExchangeRequest<'static>,
 }
 
+#[derive(Clone)]
+pub struct PreparedWanderTurn<'a> {
+    pub request: ChatExchangeRequest<'a>,
+}
+
 impl AssistantDaemonTurn {
     pub fn new(route_kind: &str, session_id: String, prompt: String) -> Self {
         Self {
@@ -158,6 +183,14 @@ impl RedclawRunTurn {
     pub fn new(source_label: &str, session_id: String, prompt: String) -> Self {
         Self {
             request: ChatExchangeRequest::redclaw_run(session_id, prompt, source_label),
+        }
+    }
+}
+
+impl<'a> PreparedWanderTurn<'a> {
+    pub fn new(session_id: String, prompt: String, model_config: Option<&'a Value>) -> Self {
+        Self {
+            request: ChatExchangeRequest::wander(session_id, prompt, model_config),
         }
     }
 }
@@ -211,6 +244,7 @@ pub enum PreparedSessionAgentTurn<'a> {
     SessionBridge(PreparedSessionBridgeTurn<'a>),
     AssistantDaemon(AssistantDaemonTurn),
     RedclawRun(RedclawRunTurn),
+    Wander(PreparedWanderTurn<'a>),
 }
 
 impl<'a> PreparedSessionAgentTurn<'a> {
@@ -234,6 +268,10 @@ impl<'a> PreparedSessionAgentTurn<'a> {
         Self::RedclawRun(turn)
     }
 
+    pub fn wander(turn: PreparedWanderTurn<'a>) -> Self {
+        Self::Wander(turn)
+    }
+
     pub fn request(&self) -> &ChatExchangeRequest<'a> {
         match self {
             Self::ChatSend(turn) => &turn.request,
@@ -241,6 +279,7 @@ impl<'a> PreparedSessionAgentTurn<'a> {
             Self::SessionBridge(turn) => &turn.request,
             Self::AssistantDaemon(turn) => &turn.request,
             Self::RedclawRun(turn) => &turn.request,
+            Self::Wander(turn) => &turn.request,
         }
     }
 
@@ -314,6 +353,10 @@ mod tests {
         assert_eq!(
             ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler").turn_kind,
             SessionAgentTurnKind::RedclawRun
+        );
+        assert_eq!(
+            ChatExchangeRequest::wander("s".to_string(), "m".to_string(), None).turn_kind,
+            SessionAgentTurnKind::Wander
         );
     }
 

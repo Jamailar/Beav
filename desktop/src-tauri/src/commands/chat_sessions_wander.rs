@@ -691,6 +691,7 @@ pub fn handle_chat_sessions_wander_channel(
                 let execution_started_at = now_ms();
                 let model_result = generate_wander_response(
                     state,
+                    &wander_session_id,
                     warm_wander
                         .model_config
                         .as_ref()

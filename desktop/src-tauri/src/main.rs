@@ -23,6 +23,7 @@ mod scheduler;
 mod tools;
 mod workspace_loaders;
 
+use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
     resolve_runtime_mode_for_session,
@@ -2178,60 +2179,16 @@ fn resolve_wander_model_config(settings: &Value) -> Value {
 
 fn generate_wander_response(
     state: &State<'_, AppState>,
+    session_id: &str,
     config: &Value,
     prompt: &str,
 ) -> Result<String, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let resolved = resolve_chat_config(&settings_snapshot, Some(config))
-        .ok_or_else(|| "wander model config is unavailable".to_string())?;
-    if resolved.protocol != "openai" {
-        return Ok(invoke_chat_by_protocol(
-            &resolved.protocol,
-            &resolved.base_url,
-            resolved.api_key.as_deref(),
-            &resolved.model_name,
-            prompt,
-        )?);
-    }
-    let lower_model_hint = format!("{} {}", resolved.model_name, resolved.base_url).to_lowercase();
-    let disable_qwen_thinking =
-        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
-    let mut body = json!({
-        "model": resolved.model_name,
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是 RedClaw 的漫步选题 Agent。基于给定素材和关键文件摘录，快速生成高质量结构化选题结果。只输出 JSON。"
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        "stream": false,
-        "temperature": 0.7,
-        "max_tokens": 900,
-    });
-    if disable_qwen_thinking {
-        body["enable_thinking"] = json!(false);
-    }
-    let response = run_curl_json_with_timeout(
-        "POST",
-        &format!(
-            "{}/chat/completions",
-            normalize_base_url(&resolved.base_url)
-        ),
-        resolved.api_key.as_deref(),
-        &[],
-        Some(body),
-        Some(25),
-    )?;
-    response
-        .pointer("/choices/0/message/content")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "wander completion returned empty content".to_string())
+    let turn = PreparedWanderTurn::new(
+        session_id.to_string(),
+        prompt.to_string(),
+        Some(config),
+    );
+    execute_prepared_wander_turn(state, &turn).map(|execution| execution.response)
 }
 
 fn write_placeholder_svg(
