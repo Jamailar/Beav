@@ -1,13 +1,16 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{build_chat_send_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn};
+use crate::agent::{
+    build_chat_send_turn, emit_session_agent_turn_postprocess,
+    execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+};
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::events::{
-    emit_chat_sequence, emit_runtime_task_checkpoint_saved, emit_runtime_tool_result,
+    emit_runtime_task_checkpoint_saved, emit_runtime_tool_result,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
@@ -80,27 +83,12 @@ pub fn handle_send_channel(
                 ))
             })?;
 
-            if execution.emitted_live_events() {
-                if let Some((sid, title)) = execution.title_update().cloned() {
-                    emit_runtime_task_checkpoint_saved(
-                        app,
-                        None,
-                        Some(&sid),
-                        "chat.session_title_updated",
-                        "session title updated",
-                        Some(json!({ "sessionId": sid, "title": title })),
-                    );
-                }
-            } else {
-                emit_chat_sequence(
-                    app,
-                    execution.session_id(),
-                    execution.response(),
-                    "正在分析输入并生成回答。",
-                    &runtime_mode,
-                    execution.title_update().cloned(),
-                );
-            }
+            emit_session_agent_turn_postprocess(
+                app,
+                &execution,
+                &runtime_mode,
+                "正在分析输入并生成回答。",
+            );
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",

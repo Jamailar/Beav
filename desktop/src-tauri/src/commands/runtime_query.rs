@@ -1,10 +1,13 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::agent::{build_runtime_query_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn};
+use crate::agent::{
+    build_runtime_query_turn, emit_session_agent_turn_postprocess,
+    execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+};
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
-use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
+use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::{
@@ -94,13 +97,11 @@ pub fn handle_runtime_query(
             payload,
         );
     }
-    emit_chat_sequence(
+    emit_session_agent_turn_postprocess(
         app,
-        execution.session_id(),
-        execution.response(),
-        "正在规划并调用模型生成响应。",
+        &execution,
         &runtime_mode,
-        execution.title_update().cloned(),
+        "正在规划并调用模型生成响应。",
     );
     Ok(json!({
         "success": true,
