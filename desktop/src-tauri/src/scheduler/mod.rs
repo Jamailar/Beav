@@ -1,9 +1,28 @@
+mod dead_letter;
+mod heartbeat;
+mod job_runtime;
+mod lease;
+mod retry;
+
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::{self, JoinHandle};
+
 use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
 };
-use crate::AppStore;
+use crate::{run_memory_maintenance_with_reason, AppState, AppStore};
+
+pub use job_runtime::{
+    background_status, cancel_job_execution, emit_scheduler_snapshot, enqueue_due_job_executions,
+    enqueue_manual_job_execution_for_source, recover_stale_job_executions,
+    requeue_retrying_job_executions, run_due_job_executions, run_job_queue_once,
+};
 
 pub fn parse_millis_string(value: Option<&str>) -> Option<i64> {
     value.and_then(|item| item.trim().parse::<i64>().ok())
@@ -136,34 +155,16 @@ fn background_phase_from_status(status: &str) -> &str {
     }
 }
 
+fn definition_kind_for_background(kind: &str) -> &str {
+    match kind {
+        "long_cycle" => "long-cycle",
+        "scheduled" => "scheduled-task",
+        other => other,
+    }
+}
+
 pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
     let mut tasks = Vec::new();
-    let definition_by_scheduled_source: std::collections::HashMap<String, String> = store
-        .redclaw_job_definitions
-        .iter()
-        .filter_map(|item| {
-            if item.source_kind.as_deref() == Some("scheduled") {
-                item.source_task_id
-                    .as_ref()
-                    .map(|source_task_id| (source_task_id.clone(), item.id.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-    let definition_by_long_cycle_source: std::collections::HashMap<String, String> = store
-        .redclaw_job_definitions
-        .iter()
-        .filter_map(|item| {
-            if item.source_kind.as_deref() == Some("long_cycle") {
-                item.source_task_id
-                    .as_ref()
-                    .map(|source_task_id| (source_task_id.clone(), item.id.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
     let latest_execution_by_definition: std::collections::HashMap<
         String,
         &crate::RedclawJobExecutionRecord,
@@ -180,85 +181,170 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             acc
         },
     );
-    for task in &store.redclaw_state.scheduled_tasks {
-        let definition_id = definition_by_scheduled_source.get(&task.id).cloned();
-        let execution = definition_id
-            .as_ref()
-            .and_then(|definition_id| latest_execution_by_definition.get(definition_id).copied());
-        let status = execution
-            .map(|item| item.status.as_str())
-            .unwrap_or(if task.enabled { "running" } else { "cancelled" });
+
+    for definition in &store.redclaw_job_definitions {
+        let execution = latest_execution_by_definition.get(&definition.id).copied();
+        let worker_state = execution
+            .map(|item| item.status.clone())
+            .unwrap_or_else(|| {
+                if definition.enabled {
+                    "idle".to_string()
+                } else {
+                    "cancelled".to_string()
+                }
+            });
+        let status = background_status(&worker_state);
+        let summary = definition
+            .payload
+            .get("objective")
+            .or_else(|| definition.payload.get("prompt"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let latest_text = execution
+            .and_then(|item| item.output_summary.clone())
+            .or_else(|| {
+                definition
+                    .payload
+                    .get("stepPrompt")
+                    .or_else(|| definition.payload.get("prompt"))
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string())
+            });
         tasks.push(json!({
-            "id": task.id,
-            "definitionId": definition_id,
+            "id": definition
+                .source_task_id
+                .clone()
+                .unwrap_or_else(|| execution.map(|item| item.id.clone()).unwrap_or_else(|| definition.id.clone())),
+            "definitionId": definition.id,
             "executionId": execution.map(|item| item.id.clone()),
-            "kind": "scheduled-task",
-            "title": task.name,
+            "kind": definition_kind_for_background(&definition.kind),
+            "title": definition.title,
             "status": status,
-            "phase": background_phase_from_status(status),
+            "phase": background_phase_from_status(&worker_state),
             "sessionId": execution.and_then(|item| item.session_id.clone()),
-            "contextId": task.project_id,
+            "contextId": definition.owner_context_id,
             "error": execution
                 .and_then(|item| item.last_error.clone())
-                .or_else(|| task.last_error.clone()),
-            "summary": task.prompt,
-            "latestText": task.prompt,
+                .or_else(|| definition.payload.get("lastError").and_then(Value::as_str).map(|value| value.to_string())),
+            "summary": summary,
+            "latestText": latest_text,
             "attemptCount": execution.map(|item| item.attempt_count).unwrap_or(0),
-            "workerState": status,
+            "workerState": worker_state,
             "workerMode": execution
                 .map(|item| item.worker_mode.clone())
                 .unwrap_or_else(|| "main-process".to_string()),
+            "workerLastHeartbeatAt": execution.and_then(|item| item.last_heartbeat_at.clone()),
+            "cancelReason": execution.and_then(|item| item.cancel_reason.clone()),
             "rollbackState": "not_required",
             "createdAt": execution
                 .map(|item| item.created_at.clone())
-                .unwrap_or_else(|| task.created_at.clone()),
+                .unwrap_or_else(|| definition.created_at.clone()),
             "updatedAt": execution
                 .map(|item| item.updated_at.clone())
-                .unwrap_or_else(|| task.updated_at.clone()),
+                .unwrap_or_else(|| definition.updated_at.clone()),
             "completedAt": execution.and_then(|item| item.completed_at.clone()),
             "turns": execution.map(|item| item.checkpoints.clone()).unwrap_or_default()
         }));
     }
-    for task in &store.redclaw_state.long_cycle_tasks {
-        let definition_id = definition_by_long_cycle_source.get(&task.id).cloned();
-        let execution = definition_id
-            .as_ref()
-            .and_then(|definition_id| latest_execution_by_definition.get(definition_id).copied());
-        let status = execution
-            .map(|item| item.status.as_str())
-            .unwrap_or(task.status.as_str());
+
+    for execution in &store.redclaw_job_executions {
+        if latest_execution_by_definition
+            .get(&execution.definition_id)
+            .map(|item| item.id != execution.id)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if store
+            .redclaw_job_definitions
+            .iter()
+            .any(|item| item.id == execution.definition_id)
+        {
+            continue;
+        }
+        let worker_state = execution.status.clone();
         tasks.push(json!({
-            "id": task.id,
-            "definitionId": definition_id,
-            "executionId": execution.map(|item| item.id.clone()),
-            "kind": "long-cycle",
-            "title": task.name,
-            "status": status,
-            "phase": background_phase_from_status(status),
-            "sessionId": execution.and_then(|item| item.session_id.clone()),
-            "contextId": task.project_id,
-            "error": execution
-                .and_then(|item| item.last_error.clone())
-                .or_else(|| task.last_error.clone()),
-            "summary": task.objective,
-            "latestText": task.step_prompt,
-            "attemptCount": execution
-                .map(|item| item.attempt_count)
-                .unwrap_or(task.completed_rounds),
-            "workerState": status,
-            "workerMode": execution
-                .map(|item| item.worker_mode.clone())
-                .unwrap_or_else(|| "main-process".to_string()),
+            "id": execution.id,
+            "definitionId": execution.definition_id,
+            "executionId": execution.id,
+            "kind": "headless-runtime",
+            "title": execution.output_summary.clone().unwrap_or_else(|| "Orphaned execution".to_string()),
+            "status": background_status(&worker_state),
+            "phase": background_phase_from_status(&worker_state),
+            "sessionId": execution.session_id,
+            "contextId": Value::Null,
+            "error": execution.last_error,
+            "summary": execution
+                .input_snapshot
+                .as_ref()
+                .and_then(|value| value.get("prompt"))
+                .and_then(Value::as_str),
+            "latestText": execution.output_summary,
+            "attemptCount": execution.attempt_count,
+            "workerState": worker_state,
+            "workerMode": execution.worker_mode,
+            "workerLastHeartbeatAt": execution.last_heartbeat_at,
+            "cancelReason": execution.cancel_reason,
             "rollbackState": "not_required",
-            "createdAt": execution
-                .map(|item| item.created_at.clone())
-                .unwrap_or_else(|| task.created_at.clone()),
-            "updatedAt": execution
-                .map(|item| item.updated_at.clone())
-                .unwrap_or_else(|| task.updated_at.clone()),
-            "completedAt": execution.and_then(|item| item.completed_at.clone()),
-            "turns": execution.map(|item| item.checkpoints.clone()).unwrap_or_default()
+            "createdAt": execution.created_at,
+            "updatedAt": execution.updated_at,
+            "completedAt": execution.completed_at,
+            "turns": execution.checkpoints
         }));
     }
+    tasks.sort_by(|a, b| {
+        b.get("updatedAt")
+            .and_then(Value::as_str)
+            .cmp(&a.get("updatedAt").and_then(Value::as_str))
+    });
     tasks
+}
+
+pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let state = app.state::<AppState>();
+            let now = crate::now_i64();
+            let mut should_run_maintenance = false;
+            let mut execution_limit = 0usize;
+
+            if let Ok(limit) = crate::persistence::with_store_mut(&state, |store| {
+                sync_redclaw_job_definitions(store);
+                if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
+                    recover_stale_job_executions(store, now);
+                    requeue_retrying_job_executions(store, now);
+                    let _ = enqueue_due_job_executions(store, now);
+                    should_run_maintenance =
+                        parse_millis_string(store.redclaw_state.next_maintenance_at.as_deref())
+                            .unwrap_or(0)
+                            <= now;
+                    store.redclaw_state.last_tick_at = Some(now.to_string());
+                    store.redclaw_state.next_tick_at =
+                        Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
+                    return Ok(store.redclaw_state.max_automation_per_tick.max(1) as usize);
+                }
+                Ok(0)
+            }) {
+                execution_limit = limit;
+            }
+
+            if execution_limit > 0 {
+                let _ = run_due_job_executions(&app, &state, execution_limit);
+                emit_scheduler_snapshot(&app, &state);
+            }
+
+            if should_run_maintenance {
+                let _ = run_memory_maintenance_with_reason(&state, "periodic");
+                if let Ok(store) = state.store.lock() {
+                    let _ = app.emit(
+                        "redclaw:runner-status",
+                        crate::redclaw_state_value(&store.redclaw_state),
+                    );
+                }
+            }
+
+            thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    })
 }

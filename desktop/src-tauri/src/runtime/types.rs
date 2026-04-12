@@ -108,8 +108,8 @@ pub struct RedclawProjectRecord {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RedclawJobDefinitionRecord {
     pub id: String,
     pub source_kind: Option<String>,
@@ -128,8 +128,8 @@ pub struct RedclawJobDefinitionRecord {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RedclawJobExecutionRecord {
     pub id: String,
     pub definition_id: String,
@@ -148,6 +148,10 @@ pub struct RedclawJobExecutionRecord {
     pub output_summary: Option<String>,
     pub artifacts: Vec<Value>,
     pub checkpoints: Vec<Value>,
+    pub retry_not_before_at: Option<String>,
+    pub cancel_requested_at: Option<String>,
+    pub cancel_reason: Option<String>,
+    pub dead_lettered_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

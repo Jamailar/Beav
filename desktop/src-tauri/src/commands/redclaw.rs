@@ -10,12 +10,15 @@ use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_sto
 use crate::runtime::{
     RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord,
 };
-use crate::scheduler::sync_redclaw_job_definitions;
+use crate::scheduler::{
+    emit_scheduler_snapshot, enqueue_manual_job_execution_for_source, run_job_queue_once,
+    run_redclaw_scheduler, sync_redclaw_job_definitions,
+};
 use crate::{
     handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, make_id, normalize_optional_string, now_i64, now_iso,
     payload_field, payload_string, redclaw_state_value, render_redbox_prompt,
-    run_redclaw_scheduler, update_redclaw_profile_doc, AppState,
+    update_redclaw_profile_doc, AppState,
 };
 
 pub fn handle_redclaw_channel(
@@ -355,45 +358,23 @@ pub fn handle_redclaw_channel(
         }
         "redclaw:runner-run-scheduled-now" => (|| {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();
-            let (project_id, prompt) = with_store(state, |store| {
-                let task = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter()
-                    .find(|item| item.id == task_id)
-                    .cloned();
-                let prompt = task
-                    .as_ref()
-                    .map(|item| item.prompt.clone())
-                    .unwrap_or_else(|| {
-                        load_redbox_prompt_or_embedded(
-                            "runtime/redclaw/scheduled_default.txt",
-                            include_str!(
-                                "../../../prompts/library/runtime/redclaw/scheduled_default.txt"
-                            ),
-                        )
-                    });
-                let project_id = task.and_then(|item| item.project_id);
-                Ok((project_id, prompt))
-            })?;
-            let run_result = execute_redclaw_run(app, state, prompt, project_id, "scheduled-task")?;
-            let result = with_store_mut(state, |store| {
-                if let Some(task) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter_mut()
-                    .find(|item| item.id == task_id)
-                {
-                    task.last_run_at = Some(now_iso());
-                    task.last_result = Some("success".to_string());
-                    task.updated_at = now_iso();
-                }
+            let execution_id = with_store_mut(state, |store| {
                 sync_redclaw_job_definitions(store);
-                Ok(json!({ "success": true, "run": run_result }))
+                enqueue_manual_job_execution_for_source(
+                    store,
+                    "scheduled",
+                    &task_id,
+                    "manual-scheduled-now",
+                )
             })?;
-            let status = with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-            let _ = app.emit("redclaw:runner-status", status);
-            Ok(result)
+            let run_result = run_job_queue_once(app, state, Some(&execution_id))?
+                .unwrap_or_else(|| json!({ "success": false, "executionId": execution_id, "status": "not-started" }));
+            with_store_mut(state, |store| {
+                sync_redclaw_job_definitions(store);
+                Ok(())
+            })?;
+            emit_scheduler_snapshot(app, state);
+            Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
         })(),
         "redclaw:runner-list-long-cycle" => with_store(state, |store| {
             Ok(json!(store.redclaw_state.long_cycle_tasks.clone()))
@@ -495,62 +476,23 @@ pub fn handle_redclaw_channel(
         "redclaw:runner-run-long-cycle-now" => {
             (|| {
                 let task_id = payload_string(payload, "taskId").unwrap_or_default();
-                let (project_id, prompt) = with_store(state, |store| {
-                    let task = store
-                        .redclaw_state
-                        .long_cycle_tasks
-                        .iter()
-                        .find(|item| item.id == task_id)
-                        .cloned();
-                    let prompt = task
-                    .as_ref()
-                    .map(|item| {
-                        render_redbox_prompt(
-                            &load_redbox_prompt_or_embedded(
-                                "runtime/redclaw/long_cycle_task.txt",
-                                include_str!("../../../prompts/library/runtime/redclaw/long_cycle_task.txt"),
-                            ),
-                            &[
-                                ("objective", item.objective.clone()),
-                                ("step_prompt", item.step_prompt.clone()),
-                            ],
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        load_redbox_prompt_or_embedded(
-                            "runtime/redclaw/long_cycle_default.txt",
-                            include_str!("../../../prompts/library/runtime/redclaw/long_cycle_default.txt"),
-                        )
-                    });
-                    let project_id = task.and_then(|item| item.project_id);
-                    Ok((project_id, prompt))
-                })?;
-                let run_result =
-                    execute_redclaw_run(app, state, prompt, project_id, "long-cycle-task")?;
-                let result = with_store_mut(state, |store| {
-                    if let Some(task) = store
-                        .redclaw_state
-                        .long_cycle_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    {
-                        task.completed_rounds += 1;
-                        task.last_run_at = Some(now_iso());
-                        task.last_result = Some("success".to_string());
-                        task.status = if task.completed_rounds >= task.total_rounds {
-                            "completed".to_string()
-                        } else {
-                            "running".to_string()
-                        };
-                        task.updated_at = now_iso();
-                    }
+                let execution_id = with_store_mut(state, |store| {
                     sync_redclaw_job_definitions(store);
-                    Ok(json!({ "success": true, "run": run_result }))
+                    enqueue_manual_job_execution_for_source(
+                        store,
+                        "long_cycle",
+                        &task_id,
+                        "manual-long-cycle-now",
+                    )
                 })?;
-                let status =
-                    with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))?;
-                let _ = app.emit("redclaw:runner-status", status);
-                Ok(result)
+                let run_result = run_job_queue_once(app, state, Some(&execution_id))?
+                    .unwrap_or_else(|| json!({ "success": false, "executionId": execution_id, "status": "not-started" }));
+                with_store_mut(state, |store| {
+                    sync_redclaw_job_definitions(store);
+                    Ok(())
+                })?;
+                emit_scheduler_snapshot(app, state);
+                Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
             })()
         }
         _ => return None,

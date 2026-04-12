@@ -12,7 +12,7 @@ mod http_utils;
 mod interactive_runtime_shared;
 mod legacy_import;
 mod manuscript_package;
-mod mcp_runtime;
+mod mcp;
 mod media_generation;
 mod memory_maintenance;
 mod official_support;
@@ -30,7 +30,6 @@ use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
     resolve_runtime_mode_for_session,
 };
-use commands::redclaw_runtime::execute_redclaw_run;
 use events::{
     emit_creative_chat_checkpoint, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
     emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
@@ -52,10 +51,7 @@ use runtime::{
     RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState,
     SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
 };
-use scheduler::{
-    next_long_cycle_timestamp, next_scheduled_timestamp, parse_millis_string,
-    sync_redclaw_job_definitions,
-};
+use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -64,7 +60,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
@@ -621,6 +617,7 @@ struct AppState {
     store: Mutex<AppStore>,
     workspace_root_cache: Mutex<PathBuf>,
     store_persist_version: Arc<AtomicU64>,
+    mcp_manager: mcp::McpManager,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
     editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
     active_chat_requests: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
@@ -1568,19 +1565,23 @@ fn now_i64() -> i64 {
 }
 
 fn discover_local_mcp_configs() -> Vec<(String, Vec<McpServerRecord>)> {
-    mcp_runtime::discover_local_mcp_configs()
+    mcp::discover_local_mcp_configs()
 }
 
 fn invoke_mcp_server(
+    state: &State<'_, AppState>,
     server: &McpServerRecord,
     method: &str,
     params: Value,
-) -> Result<Value, String> {
-    mcp_runtime::invoke_mcp_server(server, method, params)
+) -> Result<mcp::McpInvocationResult, String> {
+    state.mcp_manager.invoke(server, method, params)
 }
 
-fn test_mcp_server(server: &McpServerRecord) -> Result<(String, String), String> {
-    mcp_runtime::test_mcp_server(server)
+fn test_mcp_server(
+    state: &State<'_, AppState>,
+    server: &McpServerRecord,
+) -> Result<mcp::McpProbeResult, String> {
+    state.mcp_manager.probe(server)
 }
 
 fn append_session_transcript(
@@ -2326,10 +2327,6 @@ fn execute_interactive_tool_call(
     let name = normalized_call.name;
     let arguments = &normalized_call.arguments;
     tools::guards::ensure_tool_allowed_for_session(state, runtime_mode, session_id, name)?;
-    let call_mcp_channel = |channel: &str, payload: Value| -> Result<Value, String> {
-        commands::mcp_tools::handle_mcp_tools_channel(app, state, channel, &payload)
-            .unwrap_or_else(|| Err(format!("MCP channel not handled: {channel}")))
-    };
     let call_skill_channel = |channel: &str, payload: Value| -> Result<Value, String> {
         commands::skills_ai::handle_skills_ai_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("Skill channel not handled: {channel}")))
@@ -2775,30 +2772,60 @@ fn execute_interactive_tool_call(
         }
         "redbox_mcp" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
+            let server_value = || {
+                payload_field(arguments, "server")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+            };
+            let parse_server = || -> Result<McpServerRecord, String> {
+                serde_json::from_value(server_value()).map_err(|error| error.to_string())
+            };
             match action.as_str() {
-                "list" => call_mcp_channel("mcp:list", json!({})),
-                "save" => call_mcp_channel(
+                "list" => commands::mcp_tools::mcp_list_value(state),
+                "save" => commands::mcp_tools::handle_mcp_tools_channel(
+                    app,
+                    state,
                     "mcp:save",
-                    json!({ "servers": payload_field(arguments, "servers").cloned().unwrap_or_else(|| json!([])) }),
+                    &json!({ "servers": payload_field(arguments, "servers").cloned().unwrap_or_else(|| json!([])) }),
+                )
+                .unwrap_or_else(|| Err("MCP channel not handled: mcp:save".to_string())),
+                "test" => commands::mcp_tools::mcp_probe_value(state, &parse_server()?),
+                "call" => commands::mcp_tools::mcp_call_value(
+                    state,
+                    &parse_server()?,
+                    &payload_string(arguments, "method").unwrap_or_default(),
+                    payload_field(arguments, "params").cloned().unwrap_or_else(|| json!({})),
+                    payload_string(arguments, "sessionId"),
                 ),
-                "test" => call_mcp_channel(
-                    "mcp:test",
-                    json!({ "server": payload_field(arguments, "server").cloned().unwrap_or_else(|| json!({})) }),
+                "list_tools" => commands::mcp_tools::mcp_call_value(
+                    state,
+                    &parse_server()?,
+                    "tools/list",
+                    json!({}),
+                    payload_string(arguments, "sessionId"),
                 ),
-                "call" => call_mcp_channel(
-                    "mcp:call",
-                    json!({
-                        "server": payload_field(arguments, "server").cloned().unwrap_or_else(|| json!({})),
-                        "method": payload_string(arguments, "method").unwrap_or_default(),
-                        "params": payload_field(arguments, "params").cloned().unwrap_or_else(|| json!({})),
-                        "sessionId": payload_string(arguments, "sessionId"),
-                    }),
+                "list_resources" => commands::mcp_tools::mcp_call_value(
+                    state,
+                    &parse_server()?,
+                    "resources/list",
+                    json!({}),
+                    payload_string(arguments, "sessionId"),
                 ),
-                "discover_local" => call_mcp_channel("mcp:discover-local", json!({})),
-                "import_local" => call_mcp_channel("mcp:import-local", json!({})),
-                "oauth_status" => call_mcp_channel(
-                    "mcp:oauth-status",
-                    json!({ "serverId": payload_string(arguments, "serverId").unwrap_or_default() }),
+                "list_resource_templates" => commands::mcp_tools::mcp_call_value(
+                    state,
+                    &parse_server()?,
+                    "resources/templates/list",
+                    json!({}),
+                    payload_string(arguments, "sessionId"),
+                ),
+                "sessions" => commands::mcp_tools::mcp_sessions_value(state),
+                "disconnect" => commands::mcp_tools::mcp_disconnect_value(state, &parse_server()?),
+                "disconnect_all" => commands::mcp_tools::mcp_disconnect_all_value(state),
+                "discover_local" => commands::mcp_tools::mcp_discover_local_value(),
+                "import_local" => commands::mcp_tools::mcp_import_local_value(state),
+                "oauth_status" => commands::mcp_tools::mcp_oauth_status_value(
+                    state,
+                    &payload_string(arguments, "serverId").unwrap_or_default(),
                 ),
                 _ => Err(format!("unsupported redbox_mcp action: {action}")),
             }
@@ -5115,134 +5142,6 @@ fn build_advisor_youtube_channel(existing: Option<&Value>, url: &str, channel_id
     Value::Object(next)
 }
 
-fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        while !stop.load(Ordering::Relaxed) {
-            let state = app.state::<AppState>();
-            let now = now_i64();
-            let mut scheduled_to_run: Vec<(String, Option<String>, String)> = Vec::new();
-            let mut long_to_run: Vec<(String, Option<String>, String)> = Vec::new();
-            let mut should_run_maintenance = false;
-
-            if let Ok(store) = state.store.lock() {
-                if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
-                    for task in &store.redclaw_state.scheduled_tasks {
-                        if !task.enabled {
-                            continue;
-                        }
-                        let due =
-                            parse_millis_string(task.next_run_at.as_deref()).unwrap_or(0) <= now;
-                        if due {
-                            scheduled_to_run.push((
-                                task.id.clone(),
-                                task.project_id.clone(),
-                                task.prompt.clone(),
-                            ));
-                        }
-                    }
-                    for task in &store.redclaw_state.long_cycle_tasks {
-                        if !task.enabled || task.status == "completed" {
-                            continue;
-                        }
-                        let due =
-                            parse_millis_string(task.next_run_at.as_deref()).unwrap_or(0) <= now;
-                        if due {
-                            long_to_run.push((
-                                task.id.clone(),
-                                task.project_id.clone(),
-                                format!(
-                                    "目标：{}\n\n当前轮执行指令：{}",
-                                    task.objective, task.step_prompt
-                                ),
-                            ));
-                        }
-                    }
-                    should_run_maintenance =
-                        parse_millis_string(store.redclaw_state.next_maintenance_at.as_deref())
-                            .unwrap_or(0)
-                            <= now;
-                }
-            }
-
-            for (task_id, project_id, prompt) in scheduled_to_run {
-                let _ =
-                    execute_redclaw_run(&app, &state, prompt, project_id, "scheduler-scheduled");
-                let _ = with_store_mut(&state, |store| {
-                    if let Some(task) = store
-                        .redclaw_state
-                        .scheduled_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    {
-                        task.last_run_at = Some(now_iso());
-                        task.last_result = Some("success".to_string());
-                        task.updated_at = now_iso();
-                        task.next_run_at = next_scheduled_timestamp(task, now);
-                    }
-                    store.redclaw_state.last_tick_at = Some(now.to_string());
-                    store.redclaw_state.next_tick_at =
-                        Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
-                    sync_redclaw_job_definitions(store);
-                    Ok(())
-                });
-                if let Ok(store) = state.store.lock() {
-                    let _ = app.emit(
-                        "redclaw:runner-status",
-                        redclaw_state_value(&store.redclaw_state),
-                    );
-                }
-            }
-
-            for (task_id, project_id, prompt) in long_to_run {
-                let _ =
-                    execute_redclaw_run(&app, &state, prompt, project_id, "scheduler-long-cycle");
-                let _ = with_store_mut(&state, |store| {
-                    if let Some(task) = store
-                        .redclaw_state
-                        .long_cycle_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    {
-                        task.completed_rounds += 1;
-                        task.last_run_at = Some(now_iso());
-                        task.last_result = Some("success".to_string());
-                        task.updated_at = now_iso();
-                        task.next_run_at = next_long_cycle_timestamp(task, now);
-                        task.status = if task.completed_rounds >= task.total_rounds {
-                            "completed".to_string()
-                        } else {
-                            "running".to_string()
-                        };
-                    }
-                    store.redclaw_state.last_tick_at = Some(now.to_string());
-                    store.redclaw_state.next_tick_at =
-                        Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
-                    sync_redclaw_job_definitions(store);
-                    Ok(())
-                });
-                if let Ok(store) = state.store.lock() {
-                    let _ = app.emit(
-                        "redclaw:runner-status",
-                        redclaw_state_value(&store.redclaw_state),
-                    );
-                }
-            }
-
-            if should_run_maintenance {
-                let _ = run_memory_maintenance_with_reason(&state, "periodic");
-                if let Ok(store) = state.store.lock() {
-                    let _ = app.emit(
-                        "redclaw:runner-status",
-                        redclaw_state_value(&store.redclaw_state),
-                    );
-                }
-            }
-
-            thread::sleep(std::time::Duration::from_millis(1500));
-        }
-    })
-}
-
 fn resolve_local_path(source: &str) -> Option<PathBuf> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
@@ -5634,6 +5533,7 @@ fn main() {
             store: Mutex::new(store),
             workspace_root_cache: Mutex::new(initial_workspace_root),
             store_persist_version: Arc::new(AtomicU64::new(0)),
+            mcp_manager: mcp::McpManager::default(),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
             active_chat_requests: Mutex::new(HashMap::new()),

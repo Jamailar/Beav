@@ -186,14 +186,26 @@ export interface BackgroundTaskItem {
   kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime';
   title: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
-  phase: 'starting' | 'thinking' | 'tooling' | 'responding' | 'updating' | 'completed' | 'failed' | 'cancelled';
+  phase: 'queued' | 'starting' | 'thinking' | 'tooling' | 'responding' | 'updating' | 'completed' | 'failed' | 'cancelled';
   sessionId?: string;
   contextId?: string;
   error?: string;
   summary?: string;
   latestText?: string;
   attemptCount: number;
-  workerState: 'idle' | 'starting' | 'running' | 'retry_wait' | 'timed_out' | 'stopping';
+  workerState:
+    | 'idle'
+    | 'queued'
+    | 'leased'
+    | 'running'
+    | 'retrying'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled'
+    | 'dead_lettered'
+    | 'retry_wait'
+    | 'timed_out'
+    | 'stopping';
   workerMode?: 'main-process' | 'child-json-worker' | 'child-runtime-worker';
   workerPid?: number;
   workerLabel?: string;
@@ -1003,6 +1015,33 @@ export interface McpServerConfig {
     enabled?: boolean;
     tokenPath?: string;
   };
+}
+
+export interface McpCapabilitySnapshot {
+  connectionStrategy: string;
+  initializeResponse?: unknown;
+  toolsResponse?: unknown;
+  resourcesResponse?: unknown;
+  resourceTemplatesResponse?: unknown;
+}
+
+export interface McpSessionState {
+  key: string;
+  serverId: string;
+  serverName: string;
+  transport: 'stdio' | 'sse' | 'streamable-http' | string;
+  connectionStrategy: string;
+  initializedAt: number;
+  lastUsedAt: number;
+  callCount: number;
+  toolCount: number;
+  resourceCount: number;
+  resourceTemplateCount: number;
+}
+
+export interface McpServerRuntimeItem {
+  server: McpServerConfig;
+  session?: McpSessionState | null;
 }
 
 export interface LocalAiGuide {

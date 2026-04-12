@@ -7,7 +7,9 @@ import type {
   AgentTaskTrace,
   BackgroundTaskItem,
   BackgroundWorkerPoolState,
+  McpServerRuntimeItem,
   McpServerConfig,
+  McpSessionState,
   MemoryHistoryEntry,
   MemoryMaintenanceStatus,
     MemorySearchResult,
@@ -1345,14 +1347,19 @@ interface ToolsSettingsSectionProps {
     handleSaveMcpServers: () => Promise<void>;
     mcpStatusMessage: string;
     mcpServers: McpServerConfig[];
+    mcpRuntimeItems: McpServerRuntimeItem[];
+    mcpLiveSessions: McpSessionState[];
     handleUpdateMcpServer: (id: string, updater: (item: McpServerConfig) => McpServerConfig) => void;
     handleDeleteMcpServer: (id: string) => Promise<void>;
+    handleDisconnectMcpServer: (server: McpServerConfig) => Promise<void>;
+    handleDisconnectAllMcpSessions: () => Promise<void>;
     stringifyEnvRecord: (env?: Record<string, string>) => string;
     parseEnvText: (text: string) => Record<string, string>;
     mcpOauthState: McpOauthState;
     handleRefreshMcpOAuth: (server: McpServerConfig) => Promise<void>;
     handleTestMcpServer: (server: McpServerConfig) => Promise<void>;
     mcpTestingId: string;
+    mcpInspectingId: string;
     ytdlpStatus: YtdlpStatus;
     handleInstallYtdlp: () => Promise<void>;
     handleUpdateYtdlp: () => Promise<void>;
@@ -1438,14 +1445,19 @@ export function ToolsSettingsSection({
     handleSaveMcpServers,
     mcpStatusMessage,
     mcpServers,
+    mcpRuntimeItems,
+    mcpLiveSessions,
     handleUpdateMcpServer,
     handleDeleteMcpServer,
+    handleDisconnectMcpServer,
+    handleDisconnectAllMcpSessions,
     stringifyEnvRecord,
     parseEnvText,
     mcpOauthState,
     handleRefreshMcpOAuth,
     handleTestMcpServer,
     mcpTestingId,
+    mcpInspectingId,
     ytdlpStatus,
     handleInstallYtdlp,
     handleUpdateYtdlp,
@@ -1497,6 +1509,20 @@ export function ToolsSettingsSection({
     handleCancelRuntimeTask,
     handleCancelBackgroundTask,
 }: ToolsSettingsSectionProps) {
+    const mcpRuntimeMap = useMemo(
+        () =>
+            Object.fromEntries(
+                mcpRuntimeItems.map((item) => [item.server.id, item.session || null]),
+            ) as Record<string, McpSessionState | null>,
+        [mcpRuntimeItems],
+    );
+
+    const formatMcpTime = (value?: number) => {
+        if (!value) return '未使用';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '未使用' : date.toLocaleString();
+    };
+
     const availabilityTone = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
             case 'available':
@@ -1628,6 +1654,59 @@ export function ToolsSettingsSection({
                     </div>
                 )}
 
+                <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">运行时会话</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">
+                                已连接 {mcpLiveSessions.length} 个 session，展示当前 manager 持有的 MCP 运行时状态。
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void handleDisconnectAllMcpSessions()}
+                            disabled={mcpInspectingId === '__all__' || mcpLiveSessions.length === 0}
+                            className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            {mcpInspectingId === '__all__' ? '断开中...' : '断开全部'}
+                        </button>
+                    </div>
+
+                    {mcpLiveSessions.length === 0 ? (
+                        <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                            暂无活跃 MCP session。测试连接或调用资源后会出现在这里。
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {mcpLiveSessions.map((session) => (
+                                <div key={session.key} className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-medium text-text-primary truncate">{session.serverName}</div>
+                                            <div className="text-[11px] text-text-tertiary font-mono truncate">{session.serverId}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-600">
+                                                {session.connectionStrategy}
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-surface-secondary text-text-secondary">
+                                                {session.transport}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+                                        <div>调用次数：{session.callCount}</div>
+                                        <div>Tools：{session.toolCount}</div>
+                                        <div>Resources：{session.resourceCount}</div>
+                                        <div>Templates：{session.resourceTemplateCount}</div>
+                                        <div className="col-span-2">最近使用：{formatMcpTime(session.lastUsedAt)}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
                 {mcpServers.length === 0 ? (
                     <div className="text-xs text-text-tertiary border border-dashed border-border rounded-lg px-3 py-5 text-center">
                         暂无 MCP Server。你可以新增一条，或使用“一键导入本机配置”。
@@ -1636,6 +1715,16 @@ export function ToolsSettingsSection({
                     <div className="space-y-3">
                         {mcpServers.map((server) => (
                             <div key={server.id} className="border border-border rounded-lg p-3 bg-surface-primary/40 space-y-3">
+                                {mcpRuntimeMap[server.id] && (
+                                    <div className="rounded-md border border-border bg-surface-secondary/20 px-3 py-2 text-[11px] text-text-secondary">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-medium text-text-primary">Runtime</span>
+                                            <span>{mcpRuntimeMap[server.id]?.connectionStrategy}</span>
+                                            <span>calls {mcpRuntimeMap[server.id]?.callCount}</span>
+                                            <span>last {formatMcpTime(mcpRuntimeMap[server.id]?.lastUsedAt)}</span>
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                                     <div className="md:col-span-2">
                                         <label className="block text-[11px] text-text-tertiary mb-1">名称</label>
@@ -1751,6 +1840,14 @@ export function ToolsSettingsSection({
                                             className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
                                         >
                                             {mcpTestingId === server.id ? '测试中...' : '测试连接'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleDisconnectMcpServer(server)}
+                                            disabled={mcpInspectingId === server.id || !mcpRuntimeMap[server.id]}
+                                            className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                        >
+                                            {mcpInspectingId === server.id ? '断开中...' : '断开会话'}
                                         </button>
                                     </div>
                                 </div>
@@ -2190,7 +2287,7 @@ export function ToolsSettingsSection({
                                         <button
                                             type="button"
                                             onClick={() => void handleCancelBackgroundTask(selectedBackgroundTask.id)}
-                                            disabled={selectedBackgroundTask.status !== 'running' || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
+                                            disabled={!['queued', 'leased', 'running', 'retrying'].includes(selectedBackgroundTask.workerState) || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
                                             className="inline-flex items-center gap-2 px-2.5 py-1.5 border border-red-300 text-red-600 rounded text-xs hover:bg-red-50/70 transition-colors disabled:opacity-50"
                                         >
                                             <Square className="w-3.5 h-3.5" />

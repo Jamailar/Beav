@@ -1,15 +1,18 @@
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 use crate::agent::{
     build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{session_bridge_detail_value, session_bridge_summary_value};
-use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
+use crate::scheduler::{
+    cancel_job_execution, derived_background_tasks, emit_scheduler_snapshot,
+    sync_redclaw_job_definitions,
+};
 use crate::{
     log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
-    redclaw_state_value, AppState, ChatSessionRecord,
+    AppState, ChatSessionRecord,
 };
 
 pub fn handle_bridge_channel(
@@ -101,32 +104,11 @@ pub fn handle_bridge_channel(
         "background-tasks:cancel" => {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();
             match with_store_mut(state, |store| {
-                if let Some(index) = store
-                    .redclaw_state
-                    .scheduled_tasks
-                    .iter()
-                    .position(|item| item.id == task_id)
+                if let Some((cancelled_id, kind)) =
+                    cancel_job_execution(store, &task_id, "Cancelled from background tasks")
                 {
-                    let task = &mut store.redclaw_state.scheduled_tasks[index];
-                    task.enabled = false;
-                    task.last_error = Some("Cancelled from background tasks".to_string());
-                    task.updated_at = now_iso();
                     sync_redclaw_job_definitions(store);
-                    return Ok(json!({ "success": true, "kind": "scheduled-task" }));
-                }
-                if let Some(index) = store
-                    .redclaw_state
-                    .long_cycle_tasks
-                    .iter()
-                    .position(|item| item.id == task_id)
-                {
-                    let task = &mut store.redclaw_state.long_cycle_tasks[index];
-                    task.enabled = false;
-                    task.status = "cancelled".to_string();
-                    task.last_error = Some("Cancelled from background tasks".to_string());
-                    task.updated_at = now_iso();
-                    sync_redclaw_job_definitions(store);
-                    return Ok(json!({ "success": true, "kind": "long-cycle" }));
+                    return Ok(json!({ "success": true, "id": cancelled_id, "kind": kind }));
                 }
                 if let Some(task) = store
                     .runtime_tasks
@@ -141,13 +123,8 @@ pub fn handle_bridge_channel(
                 Ok(json!({ "success": false, "error": "后台任务不存在" }))
             }) {
                 Ok(result) => {
-                    match with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state))) {
-                        Ok(status) => {
-                            let _ = app.emit("redclaw:runner-status", status);
-                            Ok(result)
-                        }
-                        Err(error) => Err(error),
-                    }
+                    emit_scheduler_snapshot(app, state);
+                    Ok(result)
                 }
                 Err(error) => Err(error),
             }
