@@ -22,8 +22,10 @@ pub fn persist_chat_exchange(
     attachment: Option<Value>,
     response: &str,
     turn_kind: SessionAgentTurnKind,
+    checkpoint_summary: String,
+    session_title_override: Option<String>,
 ) -> Result<ChatExchangePersistenceStage, String> {
-    let title_hint = Some(session_title_from_message(display_content));
+    let title_hint = session_title_override.or_else(|| Some(session_title_from_message(display_content)));
     let mut title_update: Option<(String, String)> = None;
     let mut final_session_id = String::new();
 
@@ -90,7 +92,7 @@ pub fn persist_chat_exchange(
             store,
             &final_session_id,
             turn_kind.checkpoint_type(),
-            turn_kind.checkpoint_summary().to_string(),
+            checkpoint_summary,
             Some(exchange_checkpoint_payload(response, &runtime_mode)),
         );
         Ok(())

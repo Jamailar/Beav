@@ -1,4 +1,4 @@
-import { Minus, Pause, Play, Plus, Scissors, Search, SkipBack, SkipForward, Trash2 } from 'lucide-react';
+import { Lock, Minus, Pause, Play, Plus, Scissors, Search, SkipBack, SkipForward, Trash2, Unlock } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 type TimelineToolbarProps = {
@@ -6,6 +6,7 @@ type TimelineToolbarProps = {
     trackCount: number;
     isPersisting: boolean;
     selectedClipLabel?: string | null;
+    activeTrackLabel?: string | null;
     cursorLabel: string;
     totalLabel: string;
     zoomPercent: number;
@@ -30,6 +31,17 @@ type TimelineToolbarProps = {
     onAddVideoTrack: () => void;
     onAddAudioTrack: () => void;
     onAddSubtitleTrack: () => void;
+    onMoveSelectionToPrevTrack: () => void;
+    onMoveSelectionToNextTrack: () => void;
+    onMoveTrackUp: () => void;
+    onMoveTrackDown: () => void;
+    onDeleteTrack: () => void;
+    onToggleTrackLock: () => void;
+    onToggleTrackMute: () => void;
+    onToggleLayerVisibility?: () => void;
+    onToggleLayerLock?: () => void;
+    onBringLayerFront?: () => void;
+    onSendLayerBack?: () => void;
     onSplit: () => void;
     onDelete: () => void;
     onToggleClipEnabled: () => void;
@@ -37,7 +49,20 @@ type TimelineToolbarProps = {
     deleteDisabled: boolean;
     toggleDisabled: boolean;
     toggleLabel: string;
+    layerLabel?: string | null;
+    layerVisibilityDisabled?: boolean;
+    layerVisibilityLabel?: string;
+    layerLockDisabled?: boolean;
+    layerLockLabel?: string;
+    layerOrderDisabled?: boolean;
     selectionNavDisabled: boolean;
+    moveSelectionTrackDisabled: boolean;
+    moveTrackDisabled: boolean;
+    deleteTrackDisabled: boolean;
+    trackLockDisabled: boolean;
+    trackLockLabel: string;
+    trackMuteDisabled: boolean;
+    trackMuteLabel: string;
 };
 
 type ToolbarActionButtonProps = {
@@ -81,6 +106,7 @@ export function TimelineToolbar({
     trackCount,
     isPersisting,
     selectedClipLabel,
+    activeTrackLabel,
     cursorLabel,
     totalLabel,
     zoomPercent,
@@ -105,6 +131,17 @@ export function TimelineToolbar({
     onAddVideoTrack,
     onAddAudioTrack,
     onAddSubtitleTrack,
+    onMoveSelectionToPrevTrack,
+    onMoveSelectionToNextTrack,
+    onMoveTrackUp,
+    onMoveTrackDown,
+    onDeleteTrack,
+    onToggleTrackLock,
+    onToggleTrackMute,
+    onToggleLayerVisibility,
+    onToggleLayerLock,
+    onBringLayerFront,
+    onSendLayerBack,
     onSplit,
     onDelete,
     onToggleClipEnabled,
@@ -112,7 +149,20 @@ export function TimelineToolbar({
     deleteDisabled,
     toggleDisabled,
     toggleLabel,
+    layerLabel,
+    layerVisibilityDisabled = true,
+    layerVisibilityLabel = '切换图层显隐',
+    layerLockDisabled = true,
+    layerLockLabel = '切换图层锁定',
+    layerOrderDisabled = true,
     selectionNavDisabled,
+    moveSelectionTrackDisabled,
+    moveTrackDisabled,
+    deleteTrackDisabled,
+    trackLockDisabled,
+    trackLockLabel,
+    trackMuteDisabled,
+    trackMuteLabel,
 }: TimelineToolbarProps) {
     const toggleShortLabel = toggleLabel.includes('禁用') ? '禁用' : '启用';
     return (
@@ -193,6 +243,16 @@ export function TimelineToolbar({
                             {selectedClipLabel}
                         </div>
                     ) : null}
+                    {activeTrackLabel ? (
+                        <div className="redbox-editable-timeline__toolbar-chip">
+                            {activeTrackLabel}
+                        </div>
+                    ) : null}
+                    {layerLabel ? (
+                        <div className="redbox-editable-timeline__toolbar-chip redbox-editable-timeline__toolbar-chip--accent">
+                            {layerLabel}
+                        </div>
+                    ) : null}
                 </div>
                 <div className="redbox-editable-timeline__toolbar-action-row redbox-editable-timeline__toolbar-action-row--wrap">
                     <ToolbarActionButton icon={Minus} label="缩小" title="缩小时间轴 (Cmd/Ctrl+-)" onClick={onZoomOut} />
@@ -203,6 +263,17 @@ export function TimelineToolbar({
                     <ToolbarActionButton label="片段" title="定位选中片段" onClick={onFocusSelection} disabled={selectionNavDisabled} />
                     <ToolbarActionButton label="入点" title="跳到片段起点" onClick={onJumpSelectionStart} disabled={selectionNavDisabled} />
                     <ToolbarActionButton label="出点" title="跳到片段终点" onClick={onJumpSelectionEnd} disabled={selectionNavDisabled} />
+                    <ToolbarActionButton label="图层显隐" title={layerVisibilityLabel} onClick={() => onToggleLayerVisibility?.()} disabled={layerVisibilityDisabled || !onToggleLayerVisibility} />
+                    <ToolbarActionButton label="图层锁定" title={layerLockLabel} onClick={() => onToggleLayerLock?.()} disabled={layerLockDisabled || !onToggleLayerLock} />
+                    <ToolbarActionButton label="置前" title="将当前图层置前" onClick={() => onBringLayerFront?.()} disabled={layerOrderDisabled || !onBringLayerFront} />
+                    <ToolbarActionButton label="置后" title="将当前图层置后" onClick={() => onSendLayerBack?.()} disabled={layerOrderDisabled || !onSendLayerBack} />
+                    <ToolbarActionButton label="上轨" title="将选中片段移动到上一条同类轨道" onClick={onMoveSelectionToPrevTrack} disabled={moveSelectionTrackDisabled} />
+                    <ToolbarActionButton label="下轨" title="将选中片段移动到下一条同类轨道" onClick={onMoveSelectionToNextTrack} disabled={moveSelectionTrackDisabled} />
+                    <ToolbarActionButton icon={trackLockLabel.includes('解锁') ? Unlock : Lock} label={trackLockLabel.includes('解锁') ? '解锁' : '锁轨'} title={trackLockLabel} onClick={onToggleTrackLock} disabled={trackLockDisabled} />
+                    <ToolbarActionButton label={trackMuteLabel.includes('取消') ? '取消静音' : '静音'} title={trackMuteLabel} onClick={onToggleTrackMute} disabled={trackMuteDisabled} />
+                    <ToolbarActionButton label="轨上" title="激活轨道上移" onClick={onMoveTrackUp} disabled={moveTrackDisabled} />
+                    <ToolbarActionButton label="轨下" title="激活轨道下移" onClick={onMoveTrackDown} disabled={moveTrackDisabled} />
+                    <ToolbarActionButton icon={Trash2} label="删轨" title="删除激活轨道（仅空轨）" onClick={onDeleteTrack} disabled={deleteTrackDisabled} />
                     <ToolbarActionButton icon={Plus} label="视频" title="新增视频轨" onClick={onAddVideoTrack} />
                     <ToolbarActionButton icon={Plus} label="音频" title="新增音频轨" onClick={onAddAudioTrack} />
                     <ToolbarActionButton icon={Plus} label="字幕" title="新增字幕轨" onClick={onAddSubtitleTrack} />

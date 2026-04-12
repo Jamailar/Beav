@@ -8,7 +8,8 @@ use crate::{
     get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative,
     lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
     package_assets_path, package_cover_path, package_entry_path, package_images_path,
-    package_manifest_path, package_remotion_path, package_timeline_path,
+    package_manifest_path, package_remotion_path, package_scene_ui_path, package_timeline_path,
+    package_track_ui_path,
     parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
     title_from_relative_path, write_json_value, write_text_file, AppState,
 };
@@ -504,6 +505,9 @@ pub(crate) fn build_timeline_clip_summaries(
                 "trimOutMs": metadata.get("trimOutMs").cloned().unwrap_or(json!(0)),
                 "enabled": metadata.get("enabled").cloned().unwrap_or(json!(true)),
                 "assetKind": metadata.get("assetKind").cloned().unwrap_or(Value::Null),
+                "subtitleStyle": metadata.get("subtitleStyle").cloned().unwrap_or_else(|| json!({})),
+                "textStyle": metadata.get("textStyle").cloned().unwrap_or_else(|| json!({})),
+                "transitionStyle": metadata.get("transitionStyle").cloned().unwrap_or_else(|| json!({})),
                 "startMs": start_ms,
                 "endMs": end_ms,
                 "startSeconds": start_ms as f64 / 1000.0,
@@ -550,6 +554,18 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         package_remotion_path(package_path).as_path(),
         build_default_remotion_scene(&title, &clips),
     );
+    let track_ui = read_json_value_or(
+        package_track_ui_path(package_path).as_path(),
+        json!({}),
+    );
+    let scene_ui = read_json_value_or(
+        package_scene_ui_path(package_path).as_path(),
+        json!({
+            "itemLocks": {},
+            "itemGroups": {},
+            "focusedGroupId": Value::Null
+        }),
+    );
     let clip_count = clips.len();
     Ok(json!({
         "manifest": {
@@ -568,8 +584,10 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             "clipCount": clip_count,
             "sourceRefs": source_refs,
             "clips": clips,
-            "trackNames": tracks.iter().filter_map(|track| track.get("name").and_then(|value| value.as_str()).map(ToString::to_string)).collect::<Vec<_>>()
+            "trackNames": tracks.iter().filter_map(|track| track.get("name").and_then(|value| value.as_str()).map(ToString::to_string)).collect::<Vec<_>>(),
+            "trackUi": track_ui
         },
+        "sceneUi": scene_ui,
         "hasLayoutHtml": false,
         "hasWechatHtml": false,
         "layoutHtml": "",
@@ -619,6 +637,12 @@ pub(crate) fn create_manuscript_package(
             &package_remotion_path(package_path),
             &build_default_remotion_scene(title, &[]),
         )?;
+        write_json_value(&package_track_ui_path(package_path), &json!({}))?;
+        write_json_value(&package_scene_ui_path(package_path), &json!({
+            "itemLocks": {},
+            "itemGroups": {},
+            "focusedGroupId": Value::Null
+        }))?;
     } else if package_kind == "article" {
         write_text_file(&package_path.join("layout.html"), "")?;
         write_text_file(&package_path.join("wechat.html"), "")?;

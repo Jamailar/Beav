@@ -123,6 +123,10 @@ pub(crate) fn package_track_ui_path(package_path: &Path) -> PathBuf {
     package_path.join("track-ui.json")
 }
 
+pub(crate) fn package_scene_ui_path(package_path: &Path) -> PathBuf {
+    package_path.join("scene-ui.json")
+}
+
 pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
     fs::read_to_string(path)
         .ok()

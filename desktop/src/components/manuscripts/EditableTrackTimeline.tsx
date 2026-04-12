@@ -1,13 +1,17 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react';
 import clsx from 'clsx';
 import { Timeline, type TimelineState } from '@xzdarcy/react-timeline-editor';
-import { AudioLines, ChevronDown, ChevronUp, Clapperboard, ImageIcon, Trash2, Type } from 'lucide-react';
+import { AudioLines, ChevronDown, ChevronUp, Clapperboard, Copy, Eye, EyeOff, GripVertical, ImageIcon, Lock, Plus, Rows, Target, Trash2, Type, Unlock, Volume2, VolumeX } from 'lucide-react';
 import { TimelinePlayheadOverlay } from './timeline/TimelinePlayheadOverlay';
 import { TimelineRuler } from './timeline/TimelineRuler';
 import { TimelineScrollbar } from './timeline/TimelineScrollbar';
 import { TimelineToolbar } from './timeline/TimelineToolbar';
+import { resolveSubtitlePreset } from './subtitles/subtitlePresets';
+import { resolveTextPreset } from './texts/textPresets';
+import { resolveTransitionPreset } from './transitions/transitionPresets';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import './editable-track-timeline.css';
+import type { VideoEditorTrackUiState } from '../../features/video-editor/store/useVideoEditorStore';
 
 type TimelineClipSummary = {
     clipId?: unknown;
@@ -22,6 +26,22 @@ type TimelineClipSummary = {
     assetKind?: unknown;
     mediaPath?: unknown;
     mimeType?: unknown;
+    subtitleStyle?: {
+        presetId?: unknown;
+        animation?: unknown;
+        emphasisWords?: unknown;
+        segmentationMode?: unknown;
+        linesPerCaption?: unknown;
+    } | unknown;
+    textStyle?: {
+        presetId?: unknown;
+        animation?: unknown;
+    } | unknown;
+    transitionStyle?: {
+        presetId?: unknown;
+        kind?: unknown;
+        direction?: unknown;
+    } | unknown;
 };
 
 type TimelineActionShape = {
@@ -56,6 +76,14 @@ type EditableTrackTimelineProps = {
     onSelectedClipChange?: (clipId: string | null) => void;
     onActiveTrackChange?: (trackId: string | null) => void;
     onViewportMetricsChange?: (metrics: { scrollLeft: number; maxScrollLeft: number }) => void;
+    controlledTrackUi?: Record<string, VideoEditorTrackUiState>;
+    onTrackUiChange?: (trackUi: Record<string, VideoEditorTrackUiState>) => void;
+    sceneItemVisibility?: Record<string, boolean>;
+    sceneItemLocks?: Record<string, boolean>;
+    sceneItemGroups?: Record<string, string>;
+    onToggleSceneItemVisibility?: (sceneItemId: string) => void;
+    onToggleSceneItemLock?: (sceneItemId: string) => void;
+    onMoveSceneItemsToEdge?: (ids: string[], edge: "front" | "back") => void;
     fps?: number;
     currentFrame?: number;
     durationInFrames?: number;
@@ -112,6 +140,13 @@ type InteractionSnapGuide = {
     label: string;
 };
 
+type TrackReorderState = {
+    pointerId: number;
+    trackId: string;
+    startClientY: number;
+    initialRows: TimelineRowShape[];
+};
+
 type TrackVisualClip = {
     trackId: string;
     clipId: string;
@@ -148,12 +183,18 @@ const MIN_SCALE_WIDTH = 36;
 const MAX_SCALE_WIDTH = 160;
 const START_LEFT = 144;
 const TIMELINE_HEADER_HEIGHT = 40;
-const TIMELINE_ROW_HEIGHT = 64;
+const TIMELINE_ROW_HEIGHT = 40;
 const CURSOR_TIME_EPSILON = 0.01;
 const SCROLL_LEFT_EPSILON = 0.5;
 const TIMELINE_SNAP_SECONDS = 0.25;
 const TIMELINE_WHEEL_SCROLL_STEP = 1;
 const TIMELINE_WHEEL_ZOOM_STEP = 12;
+const COLLAPSED_TRACK_ROW_HEIGHT = 42;
+const TRACK_ROW_HEIGHTS: Record<TrackKind, number> = {
+    video: 40,
+    audio: 36,
+    subtitle: 32,
+};
 
 const TIMELINE_EFFECTS = {
     video: { id: 'video', name: 'Video' },
@@ -455,6 +496,99 @@ function trackDisplayLabel(trackId: string): string {
     return TRACK_DEFINITIONS[kind].kindLabel;
 }
 
+function trackRowHeight(trackId: string, collapsed = false): number {
+    if (collapsed) return COLLAPSED_TRACK_ROW_HEIGHT;
+    return TRACK_ROW_HEIGHTS[trackIdToKind(trackId)] || TIMELINE_ROW_HEIGHT;
+}
+
+function summarizeClipText(value: unknown, maxLength = 54): string {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function clipCaptionTokens(value: unknown): string[] {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return [];
+    const matches = normalized.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*|[\u4e00-\u9fff]|[^\s]/g);
+    return (matches || []).map((token) => token.trim()).filter(Boolean);
+}
+
+function sceneItemIdForClip(clip: TimelineClipSummary | undefined): string | null {
+    if (!clip) return null;
+    const clipId = String(clip.clipId || '').trim();
+    if (!clipId) return null;
+    const kind = String(clip.assetKind || '').trim().toLowerCase();
+    const track = String(clip.track || '').trim().toUpperCase();
+    if (kind === 'text') return `${clipId}:text`;
+    if (kind === 'subtitle' || kind === 'caption' || track.startsWith('S') || track.startsWith('C')) return `${clipId}:subtitle`;
+    return clipId;
+}
+
+function buildCaptionSegments(
+    words: string[],
+    mode: 'punctuationOrPause' | 'time' | 'singleWord',
+    linesPerCaption: number,
+    durationSeconds: number
+): string[][] {
+    if (words.length === 0) return [];
+    if (mode === 'singleWord') return words.map((word) => [word]);
+    if (mode === 'time') {
+        const targetSegments = Math.max(1, Math.min(words.length, Math.round(Math.max(0.5, durationSeconds) / 0.8)));
+        const wordsPerSegment = Math.max(1, Math.ceil(words.length / targetSegments));
+        const segments: string[][] = [];
+        for (let index = 0; index < words.length; index += wordsPerSegment) {
+            segments.push(words.slice(index, index + wordsPerSegment));
+        }
+        return segments;
+    }
+    const segments: string[][] = [];
+    let buffer: string[] = [];
+    const softLimit = Math.max(3, linesPerCaption * 4);
+    words.forEach((word) => {
+        buffer.push(word);
+        if (/[.,!?;:，。！？；：]/.test(word) || buffer.length >= softLimit) {
+            segments.push(buffer);
+            buffer = [];
+        }
+    });
+    if (buffer.length > 0) segments.push(buffer);
+    return segments;
+}
+
+function trackKindIcon(kind: TrackKind) {
+    if (kind === 'audio') return AudioLines;
+    if (kind === 'subtitle') return Type;
+    return Clapperboard;
+}
+
+function reorderRowsByIndices(rows: TimelineRowShape[], fromIndex: number, toIndex: number): TimelineRowShape[] {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= rows.length || toIndex >= rows.length) {
+        return cloneRows(rows);
+    }
+    const nextRows = cloneRows(rows);
+    const [movedRow] = nextRows.splice(fromIndex, 1);
+    nextRows.splice(toIndex, 0, movedRow);
+    return nextRows;
+}
+
+function applyTrackUiToRows(
+    rows: TimelineRowShape[],
+    trackUi: Record<string, VideoEditorTrackUiState>
+): TimelineRowShape[] {
+    return rows.map((row) => {
+        const ui = trackUi[row.id];
+        const nextRowHeight = trackRowHeight(row.id, !!ui?.collapsed);
+        if ((row.rowHeight || trackRowHeight(row.id, false)) === nextRowHeight) {
+            return row;
+        }
+        return {
+            ...row,
+            rowHeight: nextRowHeight,
+        };
+    });
+}
+
 function cloneRows(rows: TimelineRowShape[]): TimelineRowShape[] {
     return rows.map((row) => ({
         ...row,
@@ -490,7 +624,7 @@ function buildTimelineRows(clips: TimelineClipSummary[], fallbackTracks: string[
 
         return {
             id: trackName,
-            rowHeight: TIMELINE_ROW_HEIGHT,
+            rowHeight: trackRowHeight(trackName, false),
             actions,
         };
     });
@@ -524,6 +658,14 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     onSelectedClipChange,
     onActiveTrackChange,
     onViewportMetricsChange,
+    controlledTrackUi,
+    onTrackUiChange,
+    sceneItemVisibility = {},
+    sceneItemLocks = {},
+    sceneItemGroups = {},
+    onToggleSceneItemVisibility,
+    onToggleSceneItemLock,
+    onMoveSceneItemsToEdge,
     fps = 30,
     currentFrame,
     durationInFrames,
@@ -542,8 +684,8 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     const videoStripPendingRef = useRef<Set<string>>(new Set());
     const normalizedClips = useMemo(() => clips.map((item) => item as TimelineClipSummary), [clips]);
     const externalRows = useMemo(
-        () => buildTimelineRows(normalizedClips, fallbackTracks),
-        [fallbackTracks, normalizedClips]
+        () => applyTrackUiToRows(buildTimelineRows(normalizedClips, fallbackTracks), controlledTrackUi || {}),
+        [controlledTrackUi, fallbackTracks, normalizedClips]
     );
     const externalSignature = useMemo(() => serializeRows(externalRows), [externalRows]);
     const [editorRows, setEditorRows] = useState<TimelineRowShape[]>(externalRows);
@@ -551,6 +693,8 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
     const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
     const [focusedTrackId, setFocusedTrackId] = useState<string | null>(null);
+    const [selectedTrackIds, setSelectedTrackIds] = useState<string[]>([]);
+    const [localTrackUiMap, setLocalTrackUiMap] = useState<Record<string, VideoEditorTrackUiState>>(controlledTrackUi || {});
     const [internalCursorTime, setInternalCursorTime] = useState(0);
     const [scaleWidth, setScaleWidth] = useState(SCALE_WIDTH);
     const [viewportWidth, setViewportWidth] = useState(0);
@@ -560,6 +704,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     const [dropIndicator, setDropIndicator] = useState<DropIndicatorState | null>(null);
     const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null);
     const [clipInteraction, setClipInteraction] = useState<ClipInteractionState | null>(null);
+    const [trackReorder, setTrackReorder] = useState<TrackReorderState | null>(null);
     const [interactionSnapGuide, setInteractionSnapGuide] = useState<InteractionSnapGuide | null>(null);
     const [videoStripFrames, setVideoStripFrames] = useState<Record<string, string[]>>({});
     const [contextMenu, setContextMenu] = useState<{
@@ -567,10 +712,28 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         y: number;
         clipId: string;
     } | null>(null);
+    const [trackContextMenu, setTrackContextMenu] = useState<{
+        x: number;
+        y: number;
+        trackIds: string[];
+    } | null>(null);
     const clipboardRef = useRef<TimelineClipboardItem[]>([]);
     const undoStackRef = useRef<TimelineSelectionSnapshot[]>([]);
     const redoStackRef = useRef<TimelineSelectionSnapshot[]>([]);
     const pendingHistorySnapshotRef = useRef<TimelineSelectionSnapshot | null>(null);
+    const effectiveTrackUiMap = controlledTrackUi || localTrackUiMap;
+    const lockedTrackIds = useMemo(
+        () => Object.entries(effectiveTrackUiMap).filter(([, value]) => value.locked).map(([trackId]) => trackId),
+        [effectiveTrackUiMap]
+    );
+    const hiddenTrackIds = useMemo(
+        () => Object.entries(effectiveTrackUiMap).filter(([, value]) => value.hidden).map(([trackId]) => trackId),
+        [effectiveTrackUiMap]
+    );
+    const soloTrackIds = useMemo(
+        () => Object.entries(effectiveTrackUiMap).filter(([, value]) => value.solo).map(([trackId]) => trackId),
+        [effectiveTrackUiMap]
+    );
 
     const clipById = useMemo(() => {
         const map = new Map<string, TimelineClipSummary>();
@@ -589,6 +752,10 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     }, [clipById, selectedClipId, selectedClipIds]);
 
     const selectedClipIdSet = useMemo(() => new Set(effectiveSelectedClipIds), [effectiveSelectedClipIds]);
+    const effectiveSelectedTrackIds = useMemo(() => {
+        return Array.from(new Set(selectedTrackIds.filter((trackId) => editorRows.some((row) => row.id === trackId))));
+    }, [editorRows, selectedTrackIds]);
+    const selectedTrackIdSet = useMemo(() => new Set(effectiveSelectedTrackIds), [effectiveSelectedTrackIds]);
     const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 30;
     const cursorTimeEpsilon = Math.max(CURSOR_TIME_EPSILON, 0.5 / safeFps);
     const hasControlledCursorTime = Number.isFinite(controlledCursorTime ?? NaN);
@@ -601,10 +768,10 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         ids: string[] = effectiveSelectedClipIds,
         primaryId: string | null = selectedClipId
     ): TimelineSelectionSnapshot => ({
-        rows: cloneRows(rows),
+        rows: applyTrackUiToRows(cloneRows(rows), effectiveTrackUiMap),
         selectedClipIds: [...ids],
         primaryClipId: primaryId,
-    }), [editorRows, effectiveSelectedClipIds, selectedClipId]);
+    }), [editorRows, effectiveSelectedClipIds, effectiveTrackUiMap, selectedClipId]);
 
     const applySelectionState = useCallback((ids: string[], primaryId?: string | null) => {
         const filtered = Array.from(new Set(ids)).filter((id) => clipById.has(id));
@@ -619,6 +786,23 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         setSelectedClipIds([]);
         setSelectedClipId(null);
     }, []);
+
+    const applyTrackSelectionState = useCallback((ids: string[], primaryId?: string | null) => {
+        const filtered = Array.from(new Set(ids)).filter((trackId) => editorRows.some((row) => row.id === trackId));
+        const nextPrimary = primaryId !== undefined
+            ? (primaryId && filtered.includes(primaryId) ? primaryId : filtered[0] || null)
+            : filtered[0] || null;
+        setSelectedTrackIds(filtered);
+        setFocusedTrackId(nextPrimary);
+    }, [editorRows]);
+
+    const updateTrackUiMap = useCallback((updater: (current: Record<string, VideoEditorTrackUiState>) => Record<string, VideoEditorTrackUiState>) => {
+        const nextMap = updater(effectiveTrackUiMap);
+        if (!controlledTrackUi) {
+            setLocalTrackUiMap(nextMap);
+        }
+        onTrackUiChange?.(nextMap);
+    }, [controlledTrackUi, effectiveTrackUiMap, onTrackUiChange]);
 
     const pushUndoSnapshot = useCallback((snapshot: TimelineSelectionSnapshot) => {
         undoStackRef.current.push(snapshot);
@@ -637,10 +821,19 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     }, [externalRows, externalSignature]);
 
     useEffect(() => {
+        if (!controlledTrackUi) return;
+        setLocalTrackUiMap(controlledTrackUi);
+    }, [controlledTrackUi]);
+
+    useEffect(() => {
         if (!focusedTrackId) return;
         if (editorRows.some((row) => row.id === focusedTrackId)) return;
         setFocusedTrackId(null);
     }, [editorRows, focusedTrackId]);
+
+    useEffect(() => {
+        setSelectedTrackIds((current) => current.filter((trackId) => editorRows.some((row) => row.id === trackId)));
+    }, [editorRows]);
 
     useEffect(() => {
         return () => {
@@ -673,7 +866,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         setFocusedTrackId(selectedTrackId);
     }, [focusedTrackId, selectedTrackId]);
 
-    const activeTrackId = selectedTrackId || focusedTrackId;
+    const activeTrackId = effectiveSelectedTrackIds[0] || selectedTrackId || focusedTrackId;
+    const activeTrackLocked = activeTrackId ? lockedTrackIds.includes(activeTrackId) : false;
+    const contextMenuClip = contextMenu ? clipById.get(contextMenu.clipId) : null;
+    const contextMenuSceneItemId = sceneItemIdForClip(contextMenuClip);
+    const contextMenuSceneHidden = contextMenuSceneItemId ? sceneItemVisibility[contextMenuSceneItemId] === false : false;
+    const contextMenuSceneLocked = contextMenuSceneItemId ? !!sceneItemLocks[contextMenuSceneItemId] : false;
 
     useEffect(() => {
         onActiveTrackChange?.(activeTrackId);
@@ -754,7 +952,8 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     ) => {
         const compatibleTrackIds = editorRows
             .map((row) => row.id)
-            .filter((trackId) => trackIdToKind(trackId) === kind);
+            .filter((trackId) => trackIdToKind(trackId) === kind)
+            .filter((trackId) => !lockedTrackIds.includes(trackId));
         const preferredTrackId = String(options?.preferredTrackId || '').trim();
         if (preferredTrackId && compatibleTrackIds.includes(preferredTrackId)) {
             return preferredTrackId;
@@ -767,7 +966,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             return activeTrackId;
         }
         return compatibleTrackIds[compatibleTrackIds.length - 1] || null;
-    }, [activeTrackId, editorRows]);
+    }, [activeTrackId, editorRows, lockedTrackIds]);
 
     const ensureTrackIdForKind = useCallback(async (
         kind: TrackKind,
@@ -843,11 +1042,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         const currentSignature = serializeRows(editorRows);
         if (currentSignature === externalSignature) return;
         if (clipInteraction) return;
+        if (trackReorder) return;
         const timer = window.setTimeout(() => {
             void persistRows(editorRows);
         }, 220);
         return () => window.clearTimeout(timer);
-    }, [clipInteraction, editorRows, externalSignature, persistRows]);
+    }, [clipInteraction, editorRows, externalSignature, persistRows, trackReorder]);
 
     const handleAddTrack = useCallback(async (kind: TrackKind) => {
         if (!filePath) return;
@@ -923,6 +1123,392 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             setIsPersisting(false);
         }
     }, [filePath, focusedTrackId, onPackageStateChange]);
+
+    const handleClearTrack = useCallback(async (trackId: string) => {
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!filePath || !normalizedTrackId) return;
+        const targetRow = editorRows.find((row) => row.id === normalizedTrackId);
+        if (!targetRow || targetRow.actions.length === 0) return;
+        captureUndoSnapshot();
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            for (const action of targetRow.actions) {
+                const result = await window.ipcRenderer.invoke('manuscripts:delete-package-clip', {
+                    filePath,
+                    clipId: action.id,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (result?.success && result.state) {
+                    latestState = result.state;
+                }
+            }
+            if (latestState) {
+                onPackageStateChange?.(latestState);
+                if (activeTrackId === normalizedTrackId) {
+                    clearSelectionState();
+                    setFocusedTrackId(normalizedTrackId);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to clear track:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [activeTrackId, captureUndoSnapshot, clearSelectionState, editorRows, filePath, onPackageStateChange]);
+
+    const handleBatchTrackUi = useCallback((
+        trackIds: string[],
+        updater: (current: VideoEditorTrackUiState) => VideoEditorTrackUiState
+    ) => {
+        const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
+        if (validTrackIds.length === 0) return;
+        updateTrackUiMap((current) => {
+            const next = { ...current };
+            validTrackIds.forEach((trackId) => {
+                const previous = next[trackId] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+                next[trackId] = updater(previous);
+            });
+            return next;
+        });
+    }, [editorRows, updateTrackUiMap]);
+
+    const handleClearTracks = useCallback(async (trackIds: string[]) => {
+        const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
+        if (!filePath || validTrackIds.length === 0) return;
+        const clipsToDelete = editorRows
+            .filter((row) => validTrackIds.includes(row.id))
+            .flatMap((row) => row.actions.map((action) => action.id));
+        if (clipsToDelete.length === 0) return;
+        captureUndoSnapshot();
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            for (const clipId of clipsToDelete) {
+                const result = await window.ipcRenderer.invoke('manuscripts:delete-package-clip', {
+                    filePath,
+                    clipId,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (result?.success && result.state) {
+                    latestState = result.state;
+                }
+            }
+            if (latestState) {
+                onPackageStateChange?.(latestState);
+                clearSelectionState();
+                applyTrackSelectionState(validTrackIds, validTrackIds[0] || null);
+            }
+        } catch (error) {
+            console.error('Failed to clear tracks:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [applyTrackSelectionState, captureUndoSnapshot, clearSelectionState, editorRows, filePath, onPackageStateChange]);
+
+    const handleDeleteTracks = useCallback(async (trackIds: string[]) => {
+        const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
+        if (!filePath || validTrackIds.length === 0) return;
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            for (const trackId of validTrackIds) {
+                const row = editorRows.find((item) => item.id === trackId);
+                if (!row || row.actions.length > 0) continue;
+                // eslint-disable-next-line no-await-in-loop
+                const result = await window.ipcRenderer.invoke('manuscripts:delete-package-track', {
+                    filePath,
+                    trackId,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (result?.success && result.state) {
+                    latestState = result.state;
+                }
+            }
+            if (latestState) {
+                onPackageStateChange?.(latestState);
+                applyTrackSelectionState([], null);
+            }
+        } catch (error) {
+            console.error('Failed to delete selected tracks:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [applyTrackSelectionState, editorRows, filePath, onPackageStateChange]);
+
+    const updateTrackUi = useCallback((
+        trackId: string | null,
+        updater: (current: VideoEditorTrackUiState) => VideoEditorTrackUiState
+    ) => {
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!normalizedTrackId) return;
+        updateTrackUiMap((current) => {
+            const previous = current[normalizedTrackId] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+            return {
+                ...current,
+                [normalizedTrackId]: updater(previous),
+            };
+        });
+    }, [updateTrackUiMap]);
+
+    const toggleTrackLock = useCallback((trackId: string | null) => {
+        updateTrackUi(trackId, (current) => ({ ...current, locked: !current.locked }));
+    }, [updateTrackUi]);
+
+    const toggleTrackHidden = useCallback((trackId: string | null) => {
+        updateTrackUi(trackId, (current) => ({ ...current, hidden: !current.hidden }));
+    }, [updateTrackUi]);
+
+    const toggleTrackCollapsed = useCallback((trackId: string | null) => {
+        updateTrackUi(trackId, (current) => ({ ...current, collapsed: !current.collapsed }));
+    }, [updateTrackUi]);
+
+    const toggleTrackMuted = useCallback((trackId: string | null) => {
+        updateTrackUi(trackId, (current) => ({ ...current, muted: !current.muted }));
+    }, [updateTrackUi]);
+
+    const toggleTrackSolo = useCallback((trackId: string | null) => {
+        updateTrackUi(trackId, (current) => ({ ...current, solo: !current.solo }));
+    }, [updateTrackUi]);
+
+    const setTrackVolume = useCallback((trackId: string | null, volume: number) => {
+        updateTrackUi(trackId, (current) => ({
+            ...current,
+            volume: clampNumber(volume, 0, 1),
+        }));
+    }, [updateTrackUi]);
+
+    const handleInsertTrackAdjacent = useCallback(async (baseTrackId: string, direction: 'up' | 'down' = 'down') => {
+        const normalizedTrackId = String(baseTrackId || '').trim();
+        if (!filePath || !normalizedTrackId) return null;
+        const kind = trackIdToKind(normalizedTrackId);
+        setIsPersisting(true);
+        try {
+            const addResult = await window.ipcRenderer.invoke('manuscripts:add-package-track', {
+                filePath,
+                kind,
+            }) as { success?: boolean; state?: Record<string, unknown> };
+            if (!addResult?.success || !addResult.state) return null;
+
+            let latestState = addResult.state;
+            const nextTrackNames = (
+                (addResult.state as { timelineSummary?: { trackNames?: string[] } })?.timelineSummary?.trackNames || []
+            )
+                .map((item) => String(item || '').trim())
+                .filter(Boolean);
+
+            const createdTrackId = [...nextTrackNames]
+                .reverse()
+                .find((trackId) => trackIdToKind(trackId) === kind) || null;
+            if (!createdTrackId) {
+                onPackageStateChange?.(addResult.state);
+                return null;
+            }
+
+            const currentIndex = nextTrackNames.indexOf(normalizedTrackId);
+            const createdIndex = nextTrackNames.indexOf(createdTrackId);
+            if (currentIndex >= 0 && createdIndex >= 0) {
+                const desiredIndex = direction === 'up' ? currentIndex : currentIndex + 1;
+                let remainingSteps = Math.max(0, createdIndex - desiredIndex);
+                while (remainingSteps > 0) {
+                    const moveResult = await window.ipcRenderer.invoke('manuscripts:move-package-track', {
+                        filePath,
+                        trackId: createdTrackId,
+                        direction: 'up',
+                    }) as { success?: boolean; state?: Record<string, unknown> };
+                    if (moveResult?.success && moveResult.state) {
+                        latestState = moveResult.state;
+                    }
+                    remainingSteps -= 1;
+                }
+            }
+
+            setFocusedTrackId(createdTrackId);
+            onPackageStateChange?.(latestState);
+            return createdTrackId;
+        } catch (error) {
+            console.error('Failed to insert adjacent track:', error);
+            return null;
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [filePath, onPackageStateChange]);
+
+    const handleDuplicateTrack = useCallback(async (trackId: string) => {
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!filePath || !normalizedTrackId) return;
+        const sourceRow = editorRows.find((row) => row.id === normalizedTrackId);
+        if (!sourceRow) return;
+        const targetTrackId = await handleInsertTrackAdjacent(normalizedTrackId, 'down');
+        if (!targetTrackId) return;
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            const orderedActions = [...sourceRow.actions].sort((a, b) => a.start - b.start);
+            for (let index = 0; index < orderedActions.length; index += 1) {
+                const action = orderedActions[index];
+                const originalClip = clipById.get(action.id);
+                if (!originalClip) continue;
+                const addResult = await window.ipcRenderer.invoke('manuscripts:add-package-clip', {
+                    filePath,
+                    assetId: String(originalClip.assetId || ''),
+                    track: targetTrackId,
+                    order: index,
+                    durationMs: Math.max(100, Math.round(actionDurationSeconds(action) * 1000)),
+                }) as { success?: boolean; insertedClipId?: string; state?: Record<string, unknown> };
+                if (addResult?.success && addResult.state) {
+                    latestState = addResult.state;
+                }
+                const insertedClipId = String(addResult?.insertedClipId || '').trim();
+                if (!insertedClipId) continue;
+                const updateResult = await window.ipcRenderer.invoke('manuscripts:update-package-clip', {
+                    filePath,
+                    clipId: insertedClipId,
+                    track: targetTrackId,
+                    order: index,
+                    durationMs: Math.max(100, Math.round(actionDurationSeconds(action) * 1000)),
+                    trimInMs: normalizeNumber(action.trimInMs, normalizeNumber(originalClip.trimInMs, 0)),
+                    trimOutMs: normalizeNumber(action.trimOutMs, normalizeNumber(originalClip.trimOutMs, 0)),
+                    enabled: action.disable !== true,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (updateResult?.success && updateResult.state) {
+                    latestState = updateResult.state;
+                }
+            }
+            if (latestState) {
+                setFocusedTrackId(targetTrackId);
+                onPackageStateChange?.(latestState);
+            }
+        } catch (error) {
+            console.error('Failed to duplicate track:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [clipById, editorRows, filePath, handleInsertTrackAdjacent, onPackageStateChange]);
+
+    const handleMoveTracks = useCallback(async (trackIds: string[], direction: 'up' | 'down') => {
+        const validTrackIds = Array.from(new Set(trackIds.filter((trackId) => editorRows.some((row) => row.id === trackId))));
+        if (!filePath || validTrackIds.length === 0) return;
+        const orderMap = new Map(editorRows.map((row, index) => [row.id, index]));
+        const sortedTrackIds = [...validTrackIds].sort((left, right) => {
+            const leftIndex = orderMap.get(left) ?? 0;
+            const rightIndex = orderMap.get(right) ?? 0;
+            return direction === 'up' ? leftIndex - rightIndex : rightIndex - leftIndex;
+        });
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            for (const trackId of sortedTrackIds) {
+                // eslint-disable-next-line no-await-in-loop
+                const result = await window.ipcRenderer.invoke('manuscripts:move-package-track', {
+                    filePath,
+                    trackId,
+                    direction,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (result?.success && result.state) {
+                    latestState = result.state;
+                }
+            }
+            if (latestState) {
+                onPackageStateChange?.(latestState);
+                applyTrackSelectionState(validTrackIds, validTrackIds[0] || null);
+            }
+        } catch (error) {
+            console.error('Failed to move selected tracks:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [applyTrackSelectionState, editorRows, filePath, onPackageStateChange]);
+
+    const persistTrackReorder = useCallback(async (trackId: string, fromIndex: number, toIndex: number) => {
+        if (!filePath || fromIndex === toIndex) return;
+        setIsPersisting(true);
+        try {
+            let latestState: Record<string, unknown> | null = null;
+            const direction = toIndex > fromIndex ? 'down' : 'up';
+            const stepCount = Math.abs(toIndex - fromIndex);
+            for (let index = 0; index < stepCount; index += 1) {
+                const result = await window.ipcRenderer.invoke('manuscripts:move-package-track', {
+                    filePath,
+                    trackId,
+                    direction,
+                }) as { success?: boolean; state?: Record<string, unknown> };
+                if (result?.success && result.state) {
+                    latestState = result.state;
+                }
+            }
+            if (latestState) {
+                onPackageStateChange?.(latestState);
+            }
+        } catch (error) {
+            console.error('Failed to persist track reorder:', error);
+        } finally {
+            setIsPersisting(false);
+        }
+    }, [filePath, onPackageStateChange]);
+
+    const findAdjacentCompatibleTrackId = useCallback((trackId: string | null, direction: 'up' | 'down') => {
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!normalizedTrackId) return null;
+        const trackKind = trackIdToKind(normalizedTrackId);
+        const compatibleTrackIds = editorRows
+            .map((row) => row.id)
+            .filter((rowId) => trackIdToKind(rowId) === trackKind);
+        const currentIndex = compatibleTrackIds.indexOf(normalizedTrackId);
+        if (currentIndex < 0) return null;
+        const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+        if (nextIndex < 0 || nextIndex >= compatibleTrackIds.length) return null;
+        return compatibleTrackIds[nextIndex] || null;
+    }, [editorRows]);
+
+    const moveSelectedClipToAdjacentTrack = useCallback((direction: 'up' | 'down') => {
+        if (!selectedClipId || effectiveSelectedClipIds.length !== 1) return;
+        const sourceTrackId = editorRows.find((row) => row.actions.some((action) => action.id === selectedClipId))?.id || null;
+        if (!sourceTrackId) return;
+        const targetTrackId = findAdjacentCompatibleTrackId(sourceTrackId, direction);
+        if (!targetTrackId || targetTrackId === sourceTrackId) return;
+        if (lockedTrackIds.includes(sourceTrackId) || lockedTrackIds.includes(targetTrackId)) return;
+        const sourceRow = editorRows.find((row) => row.id === sourceTrackId);
+        const targetRow = editorRows.find((row) => row.id === targetTrackId);
+        if (!sourceRow || !targetRow) return;
+        const movingAction = sourceRow.actions.find((action) => action.id === selectedClipId);
+        if (!movingAction) return;
+        captureUndoSnapshot();
+        const nextRows = editorRows.map((row) => {
+            if (row.id === sourceTrackId) {
+                return {
+                    ...row,
+                    actions: rebalanceActionsInOrder(row.actions.filter((action) => action.id !== selectedClipId)),
+                };
+            }
+            if (row.id === targetTrackId) {
+                return {
+                    ...row,
+                    actions: rebalanceActionsByStart([...row.actions.map((action) => ({ ...action })), { ...movingAction }]),
+                };
+            }
+            return {
+                ...row,
+                actions: row.actions.map((action) => ({ ...action })),
+            };
+        });
+        setEditorRows(nextRows);
+        setFocusedTrackId(targetTrackId);
+        applySelectionState([selectedClipId], selectedClipId);
+    }, [applySelectionState, captureUndoSnapshot, editorRows, effectiveSelectedClipIds.length, findAdjacentCompatibleTrackId, lockedTrackIds, selectedClipId]);
+
+    const beginTrackReorder = useCallback((event: React.PointerEvent<HTMLButtonElement>, trackId: string) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (isPersisting) return;
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!normalizedTrackId) return;
+        captureUndoSnapshot();
+        setTrackReorder({
+            pointerId: event.pointerId,
+            trackId: normalizedTrackId,
+            startClientY: event.clientY,
+            initialRows: cloneRows(editorRows),
+        });
+    }, [captureUndoSnapshot, editorRows, isPersisting]);
 
     const handleDeleteSelectedClip = useCallback(async () => {
         if (!filePath || effectiveSelectedClipIds.length === 0) return;
@@ -1232,7 +1818,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         applySelectionState(snapshot.selectedClipIds, snapshot.primaryClipId);
     }, [applySelectionState, snapshotSelectionState]);
 
-    const handleAssetDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    const handleAssetDrop = async (event: React.DragEvent<HTMLDivElement>) => {
         event.preventDefault();
         setIsDraggingAsset(false);
         setDraggingAssetKind(null);
@@ -1266,10 +1852,10 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         const assetPayload = parseAssetPayloadFromDataTransfer(event.dataTransfer);
         const assetTrackKind = assetKindToTrackKind(assetPayload?.kind);
         const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
-        const rowIndex = Math.max(0, Math.min(Math.floor(relativeY / TIMELINE_ROW_HEIGHT), Math.max(editorRows.length - 1, 0)));
-        const hoveredRow = editorRows[rowIndex] || editorRows[0];
+        const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
+        const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || editorRows[0] : editorRows[0];
         const ensuredTrackId = await ensureTrackIdForKind(assetTrackKind, {
-            preferredTrackId: hoveredRow?.id || null,
+            preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
         });
         const targetTrackId = ensuredTrackId || hoveredRow?.id || null;
         if (!targetTrackId) {
@@ -1281,6 +1867,10 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             return;
         }
         const targetRow = editorRows.find((row) => row.id === targetTrackId) || null;
+        if (lockedTrackIds.includes(targetTrackId)) {
+            console.warn('[timeline-drop] target track is locked', { targetTrackId, assetId });
+            return;
+        }
 
         const relativeX = Math.max(0, event.clientX - rect.left - START_LEFT);
         const dropTime = Math.max(0, (relativeX + scrollLeft) / scaleWidth);
@@ -1348,9 +1938,13 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         } finally {
             setIsPersisting(false);
         }
-    }, [captureUndoSnapshot, editorRows, ensureTrackIdForKind, filePath, onPackageStateChange, scaleWidth, scrollLeft]);
+    };
 
     const selectedClip = selectedClipId ? clipById.get(selectedClipId) : null;
+    const selectedSceneItemId = sceneItemIdForClip(selectedClip);
+    const selectedSceneItemHidden = selectedSceneItemId ? sceneItemVisibility[selectedSceneItemId] === false : false;
+    const selectedSceneItemLocked = selectedSceneItemId ? !!sceneItemLocks[selectedSceneItemId] : false;
+    const selectedSceneItemGrouped = selectedSceneItemId ? !!sceneItemGroups[selectedSceneItemId] : false;
     const totalDurationSeconds = useMemo(() => {
         return Math.max(
             0,
@@ -1365,6 +1959,10 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             offsetTop += height;
             const visualKind = trackIdToVisualKind(row.id);
             const definition = TRACK_DEFINITIONS[visualKind];
+            const ui = effectiveTrackUiMap[row.id] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+            const totalDurationSeconds = row.actions.reduce((sum, action) => (
+                sum + Math.max(0, Number(action.end || 0) - Number(action.start || 0))
+            ), 0);
             return {
                 id: row.id,
                 title: row.id,
@@ -1372,25 +1970,44 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 emptyLabel: definition.emptyLabel,
                 kind: visualKind,
                 clipCount: row.actions.length,
+                totalDurationSeconds,
+                locked: ui.locked,
+                hidden: ui.hidden,
+                collapsed: ui.collapsed,
+                muted: ui.muted,
+                solo: ui.solo,
+                volume: ui.volume,
                 top,
                 height,
                 canMoveUp: index > 0,
                 canMoveDown: index < editorRows.length - 1,
             };
         });
-    }, [editorRows]);
+    }, [editorRows, effectiveTrackUiMap]);
+    const selectedTrackSummaries = useMemo(() => {
+        const summaryMap = new Map(trackSummaries.map((track) => [track.id, track]));
+        return effectiveSelectedTrackIds
+            .map((trackId) => summaryMap.get(trackId))
+            .filter((track): track is NonNullable<typeof track> => !!track);
+    }, [effectiveSelectedTrackIds, trackSummaries]);
+    const allSelectedTracksAudio = selectedTrackSummaries.length > 0 && selectedTrackSummaries.every((track) => track.kind === 'audio');
+    const selectedTrackBatchLabel = useMemo(() => {
+        if (selectedTrackSummaries.length === 0) return null;
+        const clipCount = selectedTrackSummaries.reduce((sum, track) => sum + track.clipCount, 0);
+        return `${selectedTrackSummaries.length} 轨 · ${clipCount} 段`;
+    }, [selectedTrackSummaries]);
     const visualClips = useMemo<TrackVisualClip[]>(() => {
         const trackMap = new Map(trackSummaries.map((track) => [track.id, track]));
         return editorRows.flatMap((row) => {
             const track = trackMap.get(row.id);
-            if (!track) return [];
+            if (!track || track.hidden) return [];
             return row.actions.map((action) => ({
                 trackId: row.id,
                 clipId: action.id,
                 left: START_LEFT + Number(action.start || 0) * scaleWidth - scrollLeft,
                 width: Math.max(24, (Number(action.end || 0) - Number(action.start || 0)) * scaleWidth),
                 top: track.top + 4,
-                height: Math.max(44, track.height - 8),
+                height: Math.max(track.collapsed ? 30 : 44, track.height - 8),
                 selected: selectedClipIdSet.has(action.id),
                 action,
                 clip: clipById.get(String(action.id || '').trim()),
@@ -1451,6 +2068,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
+        if (lockedTrackIds.includes(rowId)) return;
         const row = editorRows.find((item) => item.id === rowId);
         if (!row) return;
         applySelectionState([action.id], action.id);
@@ -1467,7 +2085,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             initialActions: row.actions.map((item) => ({ ...item })),
             initialAction: { ...action },
         });
-    }, [applySelectionState, editorRows, snapshotSelectionState]);
+    }, [applySelectionState, editorRows, lockedTrackIds, snapshotSelectionState]);
 
     useEffect(() => {
         if (!clipInteraction) return;
@@ -1499,9 +2117,9 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             if (clipInteraction.mode === 'move' && bodyRef.current) {
                 const rect = bodyRef.current.getBoundingClientRect();
                 const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
-                const rowIndex = Math.max(0, Math.min(Math.floor(relativeY / TIMELINE_ROW_HEIGHT), Math.max(editorRows.length - 1, 0)));
-                const hoveredRow = editorRows[rowIndex] || null;
-                if (hoveredRow && trackIdToKind(hoveredRow.id) === sourceTrackKind) {
+                const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
+                const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || null : null;
+                if (hoveredRow && !lockedTrackIds.includes(hoveredRow.id) && trackIdToKind(hoveredRow.id) === sourceTrackKind) {
                     targetRowId = hoveredRow.id;
                 }
             }
@@ -1630,7 +2248,40 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             window.removeEventListener('pointerup', handlePointerUp);
             window.removeEventListener('pointercancel', handlePointerUp);
         };
-    }, [clipById, clipInteraction, effectiveCursorTime, editorRows, pushUndoSnapshot, scaleWidth, scrollLeft, trackSummaries, updateRowActions]);
+    }, [clipById, clipInteraction, effectiveCursorTime, editorRows, lockedTrackIds, pushUndoSnapshot, scaleWidth, scrollLeft, trackSummaries, updateRowActions]);
+
+    useEffect(() => {
+        if (!trackReorder) return;
+
+        const handlePointerMove = (event: PointerEvent) => {
+            if (event.pointerId !== trackReorder.pointerId) return;
+            const sourceIndex = trackReorder.initialRows.findIndex((row) => row.id === trackReorder.trackId);
+            if (sourceIndex < 0) return;
+            const deltaY = event.clientY - trackReorder.startClientY;
+            const movedSlots = Math.round(deltaY / TIMELINE_ROW_HEIGHT);
+            const targetIndex = Math.max(0, Math.min(trackReorder.initialRows.length - 1, sourceIndex + movedSlots));
+            setEditorRows(reorderRowsByIndices(trackReorder.initialRows, sourceIndex, targetIndex));
+        };
+
+        const handlePointerUp = (event: PointerEvent) => {
+            if (event.pointerId !== trackReorder.pointerId) return;
+            const sourceIndex = trackReorder.initialRows.findIndex((row) => row.id === trackReorder.trackId);
+            const targetIndex = editorRows.findIndex((row) => row.id === trackReorder.trackId);
+            setTrackReorder(null);
+            if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex) {
+                void persistTrackReorder(trackReorder.trackId, sourceIndex, targetIndex);
+            }
+        };
+
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerUp);
+        return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
+            window.removeEventListener('pointercancel', handlePointerUp);
+        };
+    }, [editorRows, persistTrackReorder, trackReorder]);
     const effectiveDurationInFrames = Math.max(
         1,
         Number.isFinite(durationInFrames as number)
@@ -1652,6 +2303,20 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         if (!action) return 0;
         return Math.max(0.1, Number(action.end || 0) - Number(action.start || 0));
     }, [editorRows, selectedClipId]);
+    const activeTrackSummary = useMemo(() => {
+        if (!activeTrackId) return null;
+        return trackSummaries.find((track) => track.id === activeTrackId) || null;
+    }, [activeTrackId, trackSummaries]);
+
+    function findTrackSummaryAtRelativeY(relativeY: number) {
+        return trackSummaries.find((track) => relativeY >= track.top && relativeY < track.top + track.height) || trackSummaries[trackSummaries.length - 1] || null;
+    }
+
+    useEffect(() => {
+        if (!selectedTrackId) return;
+        if (!hiddenTrackIds.includes(selectedTrackId)) return;
+        clearSelectionState();
+    }, [clearSelectionState, hiddenTrackIds, selectedTrackId]);
     const selectedClipAction = useMemo(() => {
         if (!selectedClipId) return null;
         return editorRows.flatMap((row) => row.actions).find((item) => item.id === selectedClipId) || null;
@@ -1942,6 +2607,36 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 return;
             }
 
+            if (event.altKey && event.shiftKey && event.key === 'ArrowUp' && activeTrackId) {
+                event.preventDefault();
+                void handleMoveTrack(activeTrackId, 'up');
+                return;
+            }
+
+            if (event.altKey && event.shiftKey && event.key === 'ArrowDown' && activeTrackId) {
+                event.preventDefault();
+                void handleMoveTrack(activeTrackId, 'down');
+                return;
+            }
+
+            if (event.altKey && !event.shiftKey && event.key === 'ArrowUp') {
+                event.preventDefault();
+                moveSelectedClipToAdjacentTrack('up');
+                return;
+            }
+
+            if (event.altKey && !event.shiftKey && event.key === 'ArrowDown') {
+                event.preventDefault();
+                moveSelectedClipToAdjacentTrack('down');
+                return;
+            }
+
+            if (withCommand && key === 'l' && effectiveSelectedTrackIds.length > 0) {
+                event.preventDefault();
+                handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, locked: !current.locked }));
+                return;
+            }
+
             if (event.key === 'ArrowLeft') {
                 if (!onStepFrame) return;
                 event.preventDefault();
@@ -1977,6 +2672,13 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         safeFps,
         selectAllClips,
         selectedClipId,
+        activeTrackId,
+        applyTrackSelectionState,
+        effectiveSelectedTrackIds,
+        handleMoveTrack,
+        handleBatchTrackUi,
+        moveSelectedClipToAdjacentTrack,
+        selectedTrackIdSet,
         undoTimelineChange,
         zoomInTimeline,
         zoomOutTimeline,
@@ -2028,6 +2730,16 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         ? `已选 ${effectiveSelectedClipIds.length} 段`
                         : selectedClip ? `选中 ${formatSeconds(selectedClipDurationSeconds)}` : null
                 }
+                layerLabel={
+                    selectedSceneItemId
+                        ? `${selectedSceneItemHidden ? '隐藏' : '显示'} · ${selectedSceneItemLocked ? '锁定' : '可编辑'}${selectedSceneItemGrouped ? ' · 组内' : ''}`
+                        : null
+                }
+                activeTrackLabel={
+                    activeTrackSummary
+                        ? `${activeTrackSummary.title} · ${activeTrackSummary.kindLabel} · ${activeTrackSummary.clipCount} 段 · ${formatSeconds(activeTrackSummary.totalDurationSeconds)}`
+                        : null
+                }
                 cursorLabel={formatSeconds(effectiveCursorTime)}
                 totalLabel={formatSeconds(totalDurationSeconds)}
                 zoomPercent={zoomPercent}
@@ -2052,14 +2764,65 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 onAddVideoTrack={() => handleAddTrack('video')}
                 onAddAudioTrack={() => handleAddTrack('audio')}
                 onAddSubtitleTrack={() => handleAddTrack('subtitle')}
+                onMoveSelectionToPrevTrack={() => moveSelectedClipToAdjacentTrack('up')}
+                onMoveSelectionToNextTrack={() => moveSelectedClipToAdjacentTrack('down')}
+                onMoveTrackUp={() => {
+                    if (activeTrackId) {
+                        void handleMoveTrack(activeTrackId, 'up');
+                    }
+                }}
+                onMoveTrackDown={() => {
+                    if (activeTrackId) {
+                        void handleMoveTrack(activeTrackId, 'down');
+                    }
+                }}
+                onDeleteTrack={() => {
+                    if (activeTrackId) {
+                        void handleDeleteTrack(activeTrackId);
+                    }
+                }}
+                onToggleTrackLock={() => toggleTrackLock(activeTrackId)}
+                onToggleTrackMute={() => toggleTrackMuted(activeTrackId)}
+                onToggleLayerVisibility={() => {
+                    if (selectedSceneItemId) {
+                        onToggleSceneItemVisibility?.(selectedSceneItemId);
+                    }
+                }}
+                onToggleLayerLock={() => {
+                    if (selectedSceneItemId) {
+                        onToggleSceneItemLock?.(selectedSceneItemId);
+                    }
+                }}
+                onBringLayerFront={() => {
+                    if (selectedSceneItemId) {
+                        onMoveSceneItemsToEdge?.([selectedSceneItemId], 'front');
+                    }
+                }}
+                onSendLayerBack={() => {
+                    if (selectedSceneItemId) {
+                        onMoveSceneItemsToEdge?.([selectedSceneItemId], 'back');
+                    }
+                }}
                 onSplit={handleSplitSelectedClip}
                 onDelete={handleDeleteSelectedClip}
                 onToggleClipEnabled={handleToggleSelectedClip}
-                splitDisabled={!selectedClipId || effectiveSelectedClipIds.length > 1}
-                deleteDisabled={effectiveSelectedClipIds.length === 0}
-                toggleDisabled={!selectedClipId || effectiveSelectedClipIds.length > 1}
+                splitDisabled={!selectedClipId || effectiveSelectedClipIds.length > 1 || activeTrackLocked}
+                deleteDisabled={effectiveSelectedClipIds.length === 0 || activeTrackLocked}
+                toggleDisabled={!selectedClipId || effectiveSelectedClipIds.length > 1 || activeTrackLocked}
                 toggleLabel={selectedClip?.enabled === false ? '启用片段' : '禁用片段'}
+                layerVisibilityDisabled={!selectedSceneItemId}
+                layerVisibilityLabel={selectedSceneItemHidden ? '显示当前图层' : '隐藏当前图层'}
+                layerLockDisabled={!selectedSceneItemId}
+                layerLockLabel={selectedSceneItemLocked ? '解锁当前图层' : '锁定当前图层'}
+                layerOrderDisabled={!selectedSceneItemId}
                 selectionNavDisabled={!selectedClipAction}
+                moveSelectionTrackDisabled={!selectedClipAction || effectiveSelectedClipIds.length > 1 || !selectedTrackId}
+                moveTrackDisabled={!activeTrackSummary || isPersisting}
+                deleteTrackDisabled={!activeTrackSummary || activeTrackSummary.clipCount > 0 || isPersisting}
+                trackLockDisabled={!activeTrackSummary}
+                trackLockLabel={activeTrackLocked ? '解锁轨道' : '锁定轨道'}
+                trackMuteDisabled={!activeTrackSummary || activeTrackSummary.kind !== 'audio'}
+                trackMuteLabel={activeTrackSummary?.muted ? '取消静音轨道' : '静音轨道'}
             />
             <TimelineRuler
                 viewportWidth={viewportWidth}
@@ -2091,12 +2854,19 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                     const assetPayload = parseAssetPayloadFromDataTransfer(event.dataTransfer);
                     setDraggingAssetKind(assetPayload?.kind || null);
                     const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
-                    const rowIndex = Math.max(0, Math.min(Math.floor(relativeY / TIMELINE_ROW_HEIGHT), Math.max(editorRows.length - 1, 0)));
-                    const hoveredRow = editorRows[rowIndex] || editorRows[0];
+                    const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
+                    const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || editorRows[0] : editorRows[0];
                     const targetTrackId = assetPayload
-                        ? findCompatibleTrackId(assetKindToTrackKind(assetPayload.kind), { preferredTrackId: hoveredRow?.id || null })
+                        ? findCompatibleTrackId(assetKindToTrackKind(assetPayload.kind), {
+                            preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
+                        })
                         : hoveredRow?.id || null;
                     const targetRow = editorRows.find((row) => row.id === targetTrackId) || hoveredRow;
+                    if (targetRow && lockedTrackIds.includes(targetRow.id)) {
+                        setDropIndicator(null);
+                        setDragPreview(null);
+                        return;
+                    }
                     if (!targetRow) {
                         setDropIndicator(null);
                         setDragPreview(null);
@@ -2143,9 +2913,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         const previewWidth = Math.max(28, (previewDurationMs / 1000) * scaleWidth);
                         setDragPreview({
                             x: indicatorX + 2,
-                            y: targetRow.rowHeight
-                                ? rowIndex * targetRow.rowHeight + 4
-                                : rowIndex * TIMELINE_ROW_HEIGHT + 4,
+                            y: (hoveredTrack?.top || 0) + 4,
                             width: previewWidth,
                             height: Math.max(44, (targetRow.rowHeight || TIMELINE_ROW_HEIGHT) - 8),
                             kind: assetPayload.kind,
@@ -2197,17 +2965,142 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         + 字幕轨
                     </button>
                 </div>
+                {selectedTrackSummaries.length > 0 ? (
+                    <div className="redbox-editable-timeline__track-selection-bar">
+                        <div className="redbox-editable-timeline__track-selection-meta">
+                            <span>轨道管理</span>
+                            <span>{selectedTrackBatchLabel}</span>
+                        </div>
+                        <div className="redbox-editable-timeline__track-selection-actions">
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, collapsed: !current.collapsed }))}
+                            >
+                                折叠/展开
+                            </button>
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, hidden: !current.hidden }))}
+                            >
+                                隐藏/显示
+                            </button>
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, locked: !current.locked }))}
+                            >
+                                锁定/解锁
+                            </button>
+                            {allSelectedTracksAudio ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        className="redbox-editable-timeline__track-selection-button"
+                                        onClick={() => handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, muted: !current.muted }))}
+                                    >
+                                        静音/取消
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="redbox-editable-timeline__track-selection-button"
+                                        onClick={() => handleBatchTrackUi(effectiveSelectedTrackIds, (current) => ({ ...current, solo: !current.solo }))}
+                                    >
+                                        独奏/取消
+                                    </button>
+                                </>
+                            ) : null}
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => {
+                                    void handleMoveTracks(effectiveSelectedTrackIds, 'up');
+                                }}
+                            >
+                                整体上移
+                            </button>
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => {
+                                    void handleMoveTracks(effectiveSelectedTrackIds, 'down');
+                                }}
+                            >
+                                整体下移
+                            </button>
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button"
+                                onClick={() => {
+                                    void handleClearTracks(effectiveSelectedTrackIds);
+                                }}
+                            >
+                                清空内容
+                            </button>
+                            {selectedTrackSummaries.length === 1 ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        className="redbox-editable-timeline__track-selection-button"
+                                        onClick={() => {
+                                            void handleInsertTrackAdjacent(selectedTrackSummaries[0].id, 'up');
+                                        }}
+                                    >
+                                        上方插入
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="redbox-editable-timeline__track-selection-button"
+                                        onClick={() => {
+                                            void handleInsertTrackAdjacent(selectedTrackSummaries[0].id, 'down');
+                                        }}
+                                    >
+                                        下方插入
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="redbox-editable-timeline__track-selection-button"
+                                        onClick={() => {
+                                            void handleDuplicateTrack(selectedTrackSummaries[0].id);
+                                        }}
+                                    >
+                                        复制轨道
+                                    </button>
+                                </>
+                            ) : null}
+                            <button
+                                type="button"
+                                className="redbox-editable-timeline__track-selection-button redbox-editable-timeline__track-selection-button--danger"
+                                onClick={() => {
+                                    void handleDeleteTracks(effectiveSelectedTrackIds);
+                                }}
+                                disabled={!selectedTrackSummaries.every((track) => track.clipCount === 0)}
+                            >
+                                删除空轨
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
                 <div className="redbox-editable-timeline__track-rail">
                     {trackSummaries.map((track) => {
                         const isSelectedTrack = activeTrackId === track.id;
                         const isDropTrack = dropIndicator?.rowId === track.id;
+                        const TrackIcon = trackKindIcon(track.kind);
+                        const isTrackDragging = trackReorder?.trackId === track.id;
                         return (
                             <div
                                 key={track.id}
                                 className={clsx(
                                     'redbox-editable-timeline__track-pill',
                                     `redbox-editable-timeline__track-pill--${track.kind}`,
-                                    isSelectedTrack && 'redbox-editable-timeline__track-pill--selected',
+                                    (isSelectedTrack || selectedTrackIdSet.has(track.id)) && 'redbox-editable-timeline__track-pill--selected',
+                                    isTrackDragging && 'redbox-editable-timeline__track-pill--reordering',
+                                    track.locked && 'redbox-editable-timeline__track-pill--locked',
+                                    track.hidden && 'redbox-editable-timeline__track-pill--hidden',
+                                    track.collapsed && 'redbox-editable-timeline__track-pill--collapsed',
+                                    track.muted && 'redbox-editable-timeline__track-pill--muted',
+                                    track.solo && 'redbox-editable-timeline__track-pill--solo',
                                     isDropTrack && 'redbox-editable-timeline__track-pill--drop',
                                     isDraggingAsset && draggingAssetKind && trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__track-pill--accepting',
                                     isDraggingAsset && draggingAssetKind && !trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__track-pill--blocked'
@@ -2216,7 +3109,31 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                     top: track.top + 8,
                                     height: Math.max(44, track.height - 16),
                                 }}
-                                onClick={() => {
+                                onClick={(event) => {
+                                    setTrackContextMenu(null);
+                                    const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+                                    if (additive) {
+                                        const nextIds = selectedTrackIdSet.has(track.id)
+                                            ? effectiveSelectedTrackIds.filter((id) => id !== track.id)
+                                            : [...effectiveSelectedTrackIds, track.id];
+                                        applyTrackSelectionState(nextIds, track.id);
+                                    } else {
+                                        applyTrackSelectionState([track.id], track.id);
+                                    }
+                                    focusTrack(track.id, { clearClipSelection: true });
+                                }}
+                                onContextMenu={(event) => {
+                                    event.preventDefault();
+                                    setContextMenu(null);
+                                    const targetTrackIds = selectedTrackIdSet.has(track.id)
+                                        ? effectiveSelectedTrackIds
+                                        : [track.id];
+                                    applyTrackSelectionState(targetTrackIds, track.id);
+                                    setTrackContextMenu({
+                                        x: event.clientX,
+                                        y: event.clientY,
+                                        trackIds: targetTrackIds,
+                                    });
                                     focusTrack(track.id, { clearClipSelection: true });
                                 }}
                                 onKeyDown={(event) => {
@@ -2229,8 +3146,108 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 tabIndex={0}
                             >
                                 <div className="redbox-editable-timeline__track-title-row">
-                                    <div className="redbox-editable-timeline__track-title">{track.title}</div>
+                                    <div className="redbox-editable-timeline__track-title">
+                                        <TrackIcon size={12} />
+                                        <span>{track.title}</span>
+                                    </div>
                                     <div className="redbox-editable-timeline__track-actions">
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action redbox-editable-timeline__track-action--drag"
+                                            onPointerDown={(event) => beginTrackReorder(event, track.id)}
+                                            disabled={isPersisting || track.locked}
+                                            title="拖拽重排轨道"
+                                        >
+                                            <GripVertical size={11} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                toggleTrackCollapsed(track.id);
+                                            }}
+                                            disabled={isPersisting}
+                                            title={track.collapsed ? '展开轨道' : '折叠轨道'}
+                                        >
+                                            <Rows size={11} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                toggleTrackHidden(track.id);
+                                            }}
+                                            disabled={isPersisting}
+                                            title={track.hidden ? '显示轨道内容' : '隐藏轨道内容'}
+                                        >
+                                            {track.hidden ? <Eye size={11} /> : <EyeOff size={11} />}
+                                        </button>
+                                        {track.kind === 'audio' ? (
+                                            <button
+                                                type="button"
+                                                className="redbox-editable-timeline__track-action"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    toggleTrackMuted(track.id);
+                                                }}
+                                                disabled={isPersisting}
+                                                title={track.muted ? '取消静音轨道' : '静音轨道'}
+                                            >
+                                                {track.muted ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                                            </button>
+                                        ) : null}
+                                        {track.kind === 'audio' ? (
+                                            <button
+                                                type="button"
+                                                className="redbox-editable-timeline__track-action"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    toggleTrackSolo(track.id);
+                                                }}
+                                                disabled={isPersisting}
+                                                title={track.solo ? '取消独奏轨道' : '独奏轨道'}
+                                            >
+                                                <Target size={11} />
+                                            </button>
+                                        ) : null}
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                toggleTrackLock(track.id);
+                                            }}
+                                            disabled={isPersisting}
+                                            title={track.locked ? '解锁轨道' : '锁定轨道'}
+                                        >
+                                            {track.locked ? <Unlock size={11} /> : <Lock size={11} />}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                void handleDuplicateTrack(track.id);
+                                            }}
+                                            disabled={isPersisting}
+                                            title="复制整条轨道到下一条同类轨"
+                                        >
+                                            <Copy size={11} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                void handleInsertTrackAdjacent(track.id, 'down');
+                                            }}
+                                            disabled={isPersisting}
+                                            title={`在此轨下方插入${track.kindLabel}`}
+                                        >
+                                            <Plus size={11} />
+                                        </button>
                                         <button
                                             type="button"
                                             className="redbox-editable-timeline__track-action"
@@ -2238,7 +3255,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                                 event.stopPropagation();
                                                 void handleMoveTrack(track.id, 'up');
                                             }}
-                                            disabled={!track.canMoveUp || isPersisting}
+                                            disabled={!track.canMoveUp || isPersisting || track.locked}
                                             title="轨道上移"
                                         >
                                             <ChevronUp size={11} />
@@ -2250,10 +3267,22 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                                 event.stopPropagation();
                                                 void handleMoveTrack(track.id, 'down');
                                             }}
-                                            disabled={!track.canMoveDown || isPersisting}
+                                            disabled={!track.canMoveDown || isPersisting || track.locked}
                                             title="轨道下移"
                                         >
                                             <ChevronDown size={11} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="redbox-editable-timeline__track-action redbox-editable-timeline__track-action--danger"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                void handleClearTrack(track.id);
+                                            }}
+                                            disabled={track.clipCount === 0 || isPersisting || track.locked}
+                                            title={track.clipCount === 0 ? '轨道为空' : '清空轨道内容'}
+                                        >
+                                            <Trash2 size={11} />
                                         </button>
                                         <button
                                             type="button"
@@ -2272,6 +3301,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 <div className="redbox-editable-timeline__track-meta">
                                     <span>{track.kindLabel}</span>
                                     <span>{track.clipCount} 段</span>
+                                    <span>{formatSeconds(track.totalDurationSeconds)}</span>
+                                    {track.collapsed ? <span>折叠</span> : null}
+                                    {track.hidden ? <span>隐藏</span> : null}
+                                    {track.locked ? <span>锁定</span> : null}
+                                    {track.muted ? <span>静音</span> : null}
+                                    {track.solo ? <span>独奏</span> : null}
                                 </div>
                             </div>
                         );
@@ -2282,10 +3317,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         <button
                             key={`track-hit-${track.id}`}
                             type="button"
-                            className={clsx(
+                                className={clsx(
                                 'redbox-editable-timeline__track-hit',
                                 `redbox-editable-timeline__track-hit--${track.kind}`,
                                 activeTrackId === track.id && 'redbox-editable-timeline__track-hit--selected',
+                                track.locked && 'redbox-editable-timeline__track-hit--locked',
+                                track.hidden && 'redbox-editable-timeline__track-hit--hidden',
                                 isDraggingAsset && draggingAssetKind && trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__track-hit--accepting',
                                 isDraggingAsset && draggingAssetKind && !trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__track-hit--blocked'
                             )}
@@ -2294,14 +3331,14 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 top: track.top,
                                 height: track.height,
                             }}
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                focusTrack(track.id, { clearClipSelection: true });
-                            }}
-                        />
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    focusTrack(track.id, { clearClipSelection: true });
+                                }}
+                            />
                     ))}
                     {trackSummaries
-                        .filter((track) => track.clipCount === 0)
+                        .filter((track) => track.clipCount === 0 && !track.hidden)
                         .map((track) => (
                             <div
                                 key={`empty-track-${track.id}`}
@@ -2318,6 +3355,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 <div className={clsx(
                                     'redbox-editable-timeline__empty-track-chip',
                                     `redbox-editable-timeline__empty-track-chip--${track.kind}`,
+                                    track.locked && 'redbox-editable-timeline__empty-track-chip--locked',
                                     isDraggingAsset && draggingAssetKind && trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__empty-track-chip--accepting',
                                     isDraggingAsset && draggingAssetKind && !trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__empty-track-chip--blocked'
                                 )}>
@@ -2364,11 +3402,56 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         const visualKind = clipToVisualKind(clip);
                         const assetUrl = clip ? assetSourceUrl(clip) : '';
                         const mimeType = clip ? assetMimeType(clip) : '';
-                        const typeLabel = visualKind === 'audio' ? '音频' : visualKind === 'subtitle' ? '字幕' : kind === 'image' ? '图片' : '视频';
+                        const typeLabel = visualKind === 'audio'
+                            ? '音频'
+                            : kind === 'text'
+                                ? '文本'
+                                : visualKind === 'subtitle'
+                                    ? '字幕'
+                                    : kind === 'image'
+                                        ? '图片'
+                                        : '视频';
                         const isCompactClip = width < 132;
                         const isTinyClip = width < 88;
                         const showTitle = width >= 96;
                         const showMeta = width >= 136;
+                        const transitionStyle = (clip?.transitionStyle && typeof clip.transitionStyle === 'object' ? clip.transitionStyle as Record<string, unknown> : {}) || {};
+                        const subtitleStyle = (clip?.subtitleStyle && typeof clip.subtitleStyle === 'object' ? clip.subtitleStyle as Record<string, unknown> : {}) || {};
+                        const textStyle = (clip?.textStyle && typeof clip.textStyle === 'object' ? clip.textStyle as Record<string, unknown> : {}) || {};
+                        const transitionPreset = resolveTransitionPreset(String(transitionStyle.presetId || '').trim() || undefined);
+                        const transitionKind = String(transitionStyle.kind || transitionPreset.kind || '').trim();
+                        const transitionDirection = String(transitionStyle.direction || transitionPreset.direction || '').trim();
+                        const transitionDurationMs = Math.max(0, Number(transitionStyle.durationMs ?? transitionPreset.durationMs ?? 0));
+                        const transitionLabel = transitionPreset.id !== 'none'
+                            ? transitionPreset.label
+                            : (transitionKind && transitionKind !== 'none' ? transitionKind : '');
+                        const clipPixelsPerSecond = width / Math.max(0.1, visibleDurationSeconds);
+                        const transitionSeriesWidth = transitionLabel
+                            ? Math.max(16, Math.min(width * 0.42, (transitionDurationMs / 1000) * clipPixelsPerSecond + 14))
+                            : 0;
+                        const subtitlePresetLabel = String(subtitleStyle.presetId || '').trim();
+                        const textPresetLabel = String(textStyle.presetId || '').trim();
+                        const resolvedSubtitlePreset = resolveSubtitlePreset(subtitlePresetLabel || undefined);
+                        const resolvedTextPreset = resolveTextPreset(textPresetLabel || undefined);
+                        const clipSummaryText = summarizeClipText(clip?.name);
+                        const subtitleAnimationLabel = String(subtitleStyle.animation || resolvedSubtitlePreset.animation || '').trim();
+                        const textAnimationLabel = String(textStyle.animation || resolvedTextPreset.animation || '').trim();
+                        const subtitleEmphasisCount = Array.isArray(subtitleStyle.emphasisWords) ? subtitleStyle.emphasisWords.length : 0;
+                        const subtitleTokens = visualKind === 'subtitle' ? clipCaptionTokens(clip?.name) : [];
+                        const subtitleTokenCount = subtitleTokens.length;
+                        const subtitleSegmentationMode = String(subtitleStyle.segmentationMode || 'punctuationOrPause') as 'punctuationOrPause' | 'time' | 'singleWord';
+                        const subtitleLinesPerCaption = Math.max(1, Number(subtitleStyle.linesPerCaption || 1));
+                        const subtitleSegments = visualKind === 'subtitle'
+                            ? buildCaptionSegments(subtitleTokens, subtitleSegmentationMode, subtitleLinesPerCaption, visibleDurationSeconds)
+                            : [];
+                        const subtitleSegmentCount = subtitleSegments.length;
+                        const emphasizedSegmentCount = subtitleSegmentCount > 0
+                            ? Math.max(0, Math.min(subtitleSegmentCount, Math.round((subtitleEmphasisCount / Math.max(1, subtitleTokenCount)) * subtitleSegmentCount)))
+                            : 0;
+                        const sceneItemId = sceneItemIdForClip(clip);
+                        const sceneHidden = sceneItemId ? sceneItemVisibility[sceneItemId] === false : false;
+                        const sceneLocked = sceneItemId ? !!sceneItemLocks[sceneItemId] : false;
+                        const sceneGrouped = sceneItemId ? !!sceneItemGroups[sceneItemId] : false;
                         const stripFrameCount = buildClipStripFrameCount(width);
                         const stripCacheKey = `${clipId}:${stripFrameCount}:${Math.round(normalizeNumber(clip?.trimInMs, 0))}:${Math.round(visibleDurationSeconds * 1000)}`;
                         const generatedFrames = videoStripFrames[stripCacheKey] || [];
@@ -2383,12 +3466,28 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                     height,
                                 }}
                             >
+                                {transitionLabel && transitionLabel !== 'none' ? (
+                                    <div
+                                        className="redbox-editable-timeline__clip-transition-series"
+                                        style={{
+                                            width: transitionSeriesWidth,
+                                            background: transitionPreset.preview,
+                                            borderColor: `${transitionPreset.accent}55`,
+                                        }}
+                                    >
+                                        <div
+                                            className="redbox-editable-timeline__clip-transition-series-glow"
+                                            style={{ background: `linear-gradient(90deg, ${transitionPreset.accent}bb, transparent)` }}
+                                        />
+                                    </div>
+                                ) : null}
                                 <div
                                     className={clsx(
                                         'redbox-editable-timeline__clip',
                                         visualKind === 'audio' && 'redbox-editable-timeline__clip--audio',
                                         visualKind === 'video' && 'redbox-editable-timeline__clip--video',
                                         kind === 'image' && 'redbox-editable-timeline__clip--image',
+                                        kind === 'text' && 'redbox-editable-timeline__clip--text',
                                         visualKind === 'subtitle' && 'redbox-editable-timeline__clip--subtitle',
                                         isCompactClip && 'redbox-editable-timeline__clip--compact',
                                         selected && 'redbox-editable-timeline__clip--selected',
@@ -2458,6 +3557,82 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                         {kind === 'image' ? <ImageIcon size={11} /> : null}
                                         <span>{assetUrl && visualKind === 'video' && !mimeType.startsWith('image/') ? '视频' : typeLabel}</span>
                                     </div>
+                                    {transitionLabel && transitionLabel !== 'none' ? (
+                                        <>
+                                            <div
+                                                className="redbox-editable-timeline__clip-transition-edge"
+                                                style={{ background: `linear-gradient(180deg, ${transitionPreset.accent}, ${transitionPreset.accent}33)` }}
+                                            />
+                                            <div
+                                                className="redbox-editable-timeline__clip-transition-pill"
+                                                style={{
+                                                    background: `linear-gradient(135deg, ${transitionPreset.accent}26, rgba(8, 47, 73, 0.82))`,
+                                                    borderColor: `${transitionPreset.accent}4d`,
+                                                }}
+                                            >
+                                            <span>{transitionLabel}</span>
+                                            {transitionDurationMs > 0 ? <span>{transitionDurationMs}ms</span> : null}
+                                            {transitionDirection ? <span>{transitionDirection.replace('from-', '')}</span> : null}
+                                            </div>
+                                        </>
+                                    ) : null}
+                                    {(visualKind === 'subtitle' || kind === 'text') && width >= 148 ? (
+                                        <div className="redbox-editable-timeline__clip-content-card">
+                                            <div className="redbox-editable-timeline__clip-content-pills">
+                                                <span className="redbox-editable-timeline__clip-content-pill">
+                                                    {visualKind === 'subtitle' ? resolvedSubtitlePreset.label : resolvedTextPreset.label}
+                                                </span>
+                                                <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--ghost">
+                                                    {visualKind === 'subtitle' ? subtitleAnimationLabel : textAnimationLabel}
+                                                </span>
+                                                {visualKind === 'subtitle' && subtitleEmphasisCount > 0 ? (
+                                                    <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--accent">
+                                                        {subtitleEmphasisCount} 重点
+                                                    </span>
+                                                ) : null}
+                                            </div>
+                                            {clipSummaryText ? (
+                                                <div className="redbox-editable-timeline__clip-content-text">{clipSummaryText}</div>
+                                            ) : null}
+                                            {(sceneHidden || sceneLocked || sceneGrouped) ? (
+                                                <div className="redbox-editable-timeline__clip-content-pills">
+                                                    {sceneHidden ? (
+                                                        <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--ghost">
+                                                            hidden
+                                                        </span>
+                                                    ) : null}
+                                                    {sceneGrouped ? (
+                                                        <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--group">
+                                                            group
+                                                        </span>
+                                                    ) : null}
+                                                    {sceneLocked ? (
+                                                        <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--lock">
+                                                            lock
+                                                        </span>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+                                            {visualKind === 'subtitle' && subtitleTokenCount > 0 ? (
+                                                <div className="redbox-editable-timeline__clip-subtitle-rhythm">
+                                                    <div className="redbox-editable-timeline__clip-subtitle-rhythm-bars">
+                                                        {Array.from({ length: Math.min(Math.max(1, subtitleSegmentCount), 18) }).map((_, markerIndex) => (
+                                                            <span
+                                                                key={`${clipId}-subtitle-marker-${markerIndex}`}
+                                                                className={clsx(
+                                                                    'redbox-editable-timeline__clip-subtitle-rhythm-bar',
+                                                                    markerIndex < emphasizedSegmentCount && 'redbox-editable-timeline__clip-subtitle-rhythm-bar--emphasis'
+                                                                )}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                    <span className="redbox-editable-timeline__clip-subtitle-rhythm-label">
+                                                        {subtitleSegmentCount || 1} 段
+                                                    </span>
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
                                     <div className="redbox-editable-timeline__clip-overlay" />
                                     {showTitle ? (
                                         <div className="redbox-editable-timeline__clip-title">
@@ -2468,6 +3643,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                         <div className="redbox-editable-timeline__clip-meta">
                                             <span>{typeLabel}</span>
                                             <span>{formatSeconds(visibleDurationSeconds)}</span>
+                                            {transitionLabel && transitionLabel !== 'none' ? <span>{transitionLabel}</span> : null}
+                                            {subtitlePresetLabel ? <span>{subtitleSegmentationMode === 'singleWord' ? '逐词字幕' : subtitleSegmentationMode === 'time' ? '时间字幕' : '停顿字幕'}</span> : null}
+                                            {textPresetLabel ? <span>文本预设</span> : null}
+                                            {sceneHidden ? <span>已隐藏</span> : null}
+                                            {sceneGrouped ? <span>组对象</span> : null}
+                                            {sceneLocked ? <span>已锁定</span> : null}
                                             {action.disable ? <span>禁用</span> : null}
                                         </div>
                                     ) : isTinyClip ? null : (
@@ -2696,6 +3877,201 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                             }}
                         >
                             选中片段
+                        </button>
+                        {contextMenuSceneItemId ? (
+                            <>
+                                <div className="my-1 h-px bg-white/10" />
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        setContextMenu(null);
+                                        onToggleSceneItemVisibility?.(contextMenuSceneItemId);
+                                    }}
+                                >
+                                    {contextMenuSceneHidden ? '显示图层' : '隐藏图层'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        setContextMenu(null);
+                                        onToggleSceneItemLock?.(contextMenuSceneItemId);
+                                    }}
+                                >
+                                    {contextMenuSceneLocked ? '解锁图层' : '锁定图层'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        setContextMenu(null);
+                                        onMoveSceneItemsToEdge?.([contextMenuSceneItemId], 'front');
+                                    }}
+                                >
+                                    图层置前
+                                </button>
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        setContextMenu(null);
+                                        onMoveSceneItemsToEdge?.([contextMenuSceneItemId], 'back');
+                                    }}
+                                >
+                                    图层置后
+                                </button>
+                            </>
+                        ) : null}
+                    </div>
+                ) : null}
+                {trackContextMenu ? (
+                    <div
+                        className="fixed z-[120] min-w-[170px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                        style={{ left: trackContextMenu.x, top: trackContextMenu.y }}
+                        onMouseLeave={() => setTrackContextMenu(null)}
+                    >
+                        {trackContextMenu.trackIds.length > 1 ? (
+                            <div className="px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-white/45">
+                                已选 {trackContextMenu.trackIds.length} 条轨道
+                            </div>
+                        ) : null}
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                handleBatchTrackUi(trackContextMenu.trackIds, (current) => ({ ...current, collapsed: !current.collapsed }));
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            折叠 / 展开轨道
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                handleBatchTrackUi(trackContextMenu.trackIds, (current) => ({ ...current, hidden: !current.hidden }));
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            隐藏 / 显示轨道
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                handleBatchTrackUi(trackContextMenu.trackIds, (current) => ({ ...current, locked: !current.locked }));
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            锁定 / 解锁轨道
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                void handleMoveTracks(trackContextMenu.trackIds, 'up');
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            选中轨整体上移
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                void handleMoveTracks(trackContextMenu.trackIds, 'down');
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            选中轨整体下移
+                        </button>
+                        {trackContextMenu.trackIds.every((trackId) => trackIdToKind(trackId) === 'audio') ? (
+                            <>
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        handleBatchTrackUi(trackContextMenu.trackIds, (current) => ({ ...current, muted: !current.muted }));
+                                        setTrackContextMenu(null);
+                                    }}
+                                >
+                                    静音 / 取消静音
+                                </button>
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        handleBatchTrackUi(trackContextMenu.trackIds, (current) => ({ ...current, solo: !current.solo }));
+                                        setTrackContextMenu(null);
+                                    }}
+                                >
+                                    独奏 / 取消独奏
+                                </button>
+                            </>
+                        ) : null}
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                void handleClearTracks(trackContextMenu.trackIds);
+                                setTrackContextMenu(null);
+                            }}
+                        >
+                            清空轨道内容
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                if (trackContextMenu.trackIds.length === 1) {
+                                    void handleDuplicateTrack(trackContextMenu.trackIds[0]);
+                                }
+                                setTrackContextMenu(null);
+                            }}
+                            disabled={trackContextMenu.trackIds.length !== 1}
+                        >
+                            复制整轨到下一条同类轨
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                if (trackContextMenu.trackIds.length === 1) {
+                                    void handleInsertTrackAdjacent(trackContextMenu.trackIds[0], 'up');
+                                }
+                                setTrackContextMenu(null);
+                            }}
+                            disabled={trackContextMenu.trackIds.length !== 1}
+                        >
+                            在上方插入同类轨
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                if (trackContextMenu.trackIds.length === 1) {
+                                    void handleInsertTrackAdjacent(trackContextMenu.trackIds[0], 'down');
+                                }
+                                setTrackContextMenu(null);
+                            }}
+                            disabled={trackContextMenu.trackIds.length !== 1}
+                        >
+                            在下方插入同类轨
+                        </button>
+                        <button
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                            onClick={() => {
+                                void handleDeleteTracks(trackContextMenu.trackIds);
+                                setTrackContextMenu(null);
+                            }}
+                            disabled={!trackContextMenu.trackIds.every((trackId) => {
+                                const row = editorRows.find((item) => item.id === trackId);
+                                return !!row && row.actions.length === 0;
+                            })}
+                        >
+                            删除空轨
                         </button>
                     </div>
                 ) : null}

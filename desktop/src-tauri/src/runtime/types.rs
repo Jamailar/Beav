@@ -409,14 +409,6 @@ impl RuntimeTrace {
 
 pub type RuntimeTaskTraceRecord = RuntimeTrace;
 
-#[derive(Debug, Clone)]
-pub struct ChatExecutionResult {
-    pub session_id: String,
-    pub response: String,
-    pub title_update: Option<(String, String)>,
-    pub emitted_live_events: bool,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedChatConfig {
     pub protocol: String,

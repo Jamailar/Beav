@@ -274,6 +274,70 @@
     width: 124px;
 }
 
+.redbox-editable-timeline__track-selection-bar {
+    position: absolute;
+    top: 8px;
+    left: 146px;
+    right: 10px;
+    z-index: 7;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(12, 12, 12, 0.78);
+    backdrop-filter: blur(12px);
+}
+
+.redbox-editable-timeline__track-selection-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.redbox-editable-timeline__track-selection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.redbox-editable-timeline__track-selection-button {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 11px;
+    font-weight: 600;
+    transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.redbox-editable-timeline__track-selection-button:hover:not(:disabled) {
+    border-color: rgba(103, 232, 249, 0.34);
+    background: rgba(34, 211, 238, 0.12);
+    color: rgba(207, 250, 254, 0.96);
+}
+
+.redbox-editable-timeline__track-selection-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.38;
+}
+
+.redbox-editable-timeline__track-selection-button--danger:hover:not(:disabled) {
+    border-color: rgba(248, 113, 113, 0.38);
+    background: rgba(239, 68, 68, 0.12);
+    color: rgba(254, 226, 226, 0.96);
+}
+
 .redbox-editable-timeline__quick-add-button {
     display: inline-flex;
     align-items: center;
@@ -371,6 +435,33 @@
     background: rgba(34, 211, 238, 0.14);
 }
 
+.redbox-editable-timeline__track-pill--reordering {
+    opacity: 0.82;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.redbox-editable-timeline__track-pill--locked {
+    border-color: rgba(250, 204, 21, 0.32);
+    box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.12);
+}
+
+.redbox-editable-timeline__track-pill--hidden {
+    opacity: 0.56;
+}
+
+.redbox-editable-timeline__track-pill--collapsed {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.redbox-editable-timeline__track-pill--muted {
+    box-shadow: inset 0 0 0 1px rgba(251, 113, 133, 0.12);
+}
+
+.redbox-editable-timeline__track-pill--solo {
+    box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.14);
+}
+
 .redbox-editable-timeline__track-pill--accepting {
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
@@ -380,6 +471,9 @@
 }
 
 .redbox-editable-timeline__track-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
     font-weight: 700;
     color: rgba(255, 255, 255, 0.9);
@@ -416,6 +510,10 @@
     border-color: rgba(255, 255, 255, 0.2);
     background: rgba(255, 255, 255, 0.09);
     color: rgba(255, 255, 255, 0.92);
+}
+
+.redbox-editable-timeline__track-action--drag {
+    cursor: ns-resize;
 }
 
 .redbox-editable-timeline__track-action--danger:hover:not(:disabled) {
@@ -582,11 +680,20 @@
     opacity: 0.34;
 }
 
+.redbox-editable-timeline__track-hit--locked {
+    background: linear-gradient(90deg, rgba(250, 204, 21, 0.06), rgba(250, 204, 21, 0.01));
+}
+
+.redbox-editable-timeline__track-hit--hidden {
+    opacity: 0.22;
+}
+
 .redbox-editable-timeline__canvas-clip {
     position: absolute;
     padding: 6px 2px;
     box-sizing: border-box;
     pointer-events: auto;
+    overflow: visible;
 }
 
 .redbox-editable-timeline__canvas-clip--preview {
@@ -642,6 +749,12 @@
 
 .redbox-editable-timeline__empty-track-chip--blocked {
     opacity: 0.4;
+}
+
+.redbox-editable-timeline__empty-track-chip--locked {
+    border-style: solid;
+    border-color: rgba(250, 204, 21, 0.22);
+    color: rgba(253, 224, 71, 0.72);
 }
 
 .redbox-editable-timeline__playhead-overlay {
@@ -858,6 +971,176 @@
     letter-spacing: 0.04em;
 }
 
+.redbox-editable-timeline__clip-transition-series {
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: -10px;
+    z-index: 0;
+    border: 1px solid rgba(103, 232, 249, 0.32);
+    border-right: none;
+    border-radius: 14px 0 0 14px;
+    opacity: 0.92;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.redbox-editable-timeline__clip-transition-series::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: 0;
+    bottom: 0;
+    width: 22px;
+    background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.72));
+}
+
+.redbox-editable-timeline__clip-transition-series-glow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 18px;
+    filter: blur(14px);
+    opacity: 0.72;
+}
+
+.redbox-editable-timeline__clip-transition-pill {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(8, 47, 73, 0.78);
+    border: 1px solid rgba(103, 232, 249, 0.2);
+    color: rgba(240, 249, 255, 0.92);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.redbox-editable-timeline__clip-transition-edge {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 10px;
+    background: linear-gradient(180deg, rgba(103, 232, 249, 0.95), rgba(103, 232, 249, 0.22));
+    clip-path: polygon(0 0, 100% 8%, 100% 92%, 0 100%);
+    z-index: 1;
+}
+
+.redbox-editable-timeline__clip-content-card {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 36px;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.redbox-editable-timeline__clip-content-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.redbox-editable-timeline__clip-content-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(10, 10, 10, 0.4);
+    color: rgba(255, 255, 255, 0.84);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.redbox-editable-timeline__clip-content-pill--ghost {
+    color: rgba(255, 255, 255, 0.62);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.redbox-editable-timeline__clip-content-pill--accent {
+    background: rgba(250, 204, 21, 0.16);
+    border-color: rgba(250, 204, 21, 0.3);
+    color: rgba(254, 240, 138, 0.96);
+}
+
+.redbox-editable-timeline__clip-content-pill--group {
+    background: rgba(232, 121, 249, 0.14);
+    border-color: rgba(232, 121, 249, 0.3);
+    color: rgba(250, 232, 255, 0.94);
+}
+
+.redbox-editable-timeline__clip-content-pill--lock {
+    background: rgba(251, 191, 36, 0.14);
+    border-color: rgba(251, 191, 36, 0.3);
+    color: rgba(254, 240, 138, 0.96);
+}
+
+.redbox-editable-timeline__clip-content-text {
+    max-width: 100%;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm-bar {
+    width: 4px;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm-bar:nth-child(3n) {
+    height: 14px;
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm-bar--emphasis {
+    background: rgba(250, 204, 21, 0.92);
+    box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.14);
+}
+
+.redbox-editable-timeline__clip-subtitle-rhythm-label {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.56);
+}
+
 .redbox-editable-timeline__clip-wave {
     align-self: center;
     width: 3px;
@@ -882,6 +1165,10 @@
 
 .redbox-editable-timeline__clip--image {
     background: linear-gradient(180deg, rgba(55, 65, 81, 0.9), rgba(24, 24, 27, 0.92));
+}
+
+.redbox-editable-timeline__clip--text {
+    background: linear-gradient(180deg, rgba(88, 28, 135, 0.9), rgba(59, 7, 100, 0.92));
 }
 
 .redbox-editable-timeline__clip--subtitle {

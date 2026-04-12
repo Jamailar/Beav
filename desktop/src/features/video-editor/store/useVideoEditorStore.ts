@@ -6,6 +6,15 @@ export type VideoEditorViewportMetrics = {
     maxScrollLeft: number;
 };
 
+export type VideoEditorTrackUiState = {
+    locked: boolean;
+    hidden: boolean;
+    collapsed: boolean;
+    muted: boolean;
+    solo: boolean;
+    volume: number;
+};
+
 export type VideoEditorPreviewTab = 'preview' | 'motion' | 'script';
 export type VideoEditorRatioPreset = '16:9' | '9:16';
 export type VideoEditorLeftPanel =
@@ -51,6 +60,7 @@ export type VideoEditorState = {
         viewport: VideoEditorViewportMetrics;
         zoomPercent: number;
         playheadSeconds: number;
+        trackUi: Record<string, VideoEditorTrackUiState>;
     };
     timelinePreview: {
         mode: 'timeline-composition';
@@ -63,7 +73,8 @@ export type VideoEditorState = {
     selection: {
         kind: 'clip' | 'scene' | 'scene-item' | 'asset' | null;
         sceneItemId: string | null;
-        sceneItemKind: 'asset' | 'overlay' | 'title' | null;
+        sceneItemIds: string[];
+        sceneItemKind: 'asset' | 'overlay' | 'title' | 'text' | 'subtitle' | null;
     };
     player: {
         previewTab: VideoEditorPreviewTab;
@@ -77,6 +88,11 @@ export type VideoEditorState = {
         guidesVisible: boolean;
         safeAreaVisible: boolean;
         itemTransforms: Record<string, SceneItemTransform>;
+        itemVisibility: Record<string, boolean>;
+        itemOrder: string[];
+        itemLocks: Record<string, boolean>;
+        itemGroups: Record<string, string>;
+        focusedGroupId: string | null;
     };
     panels: {
         leftPanel: VideoEditorLeftPanel;
@@ -141,6 +157,7 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
             },
             zoomPercent: 100,
             playheadSeconds: 0,
+            trackUi: {},
         },
         timelinePreview: {
             mode: 'timeline-composition',
@@ -153,6 +170,7 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
         selection: {
             kind: null,
             sceneItemId: null,
+            sceneItemIds: [],
             sceneItemKind: null,
         },
         player: {
@@ -167,6 +185,11 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
             guidesVisible: true,
             safeAreaVisible: true,
             itemTransforms: {},
+            itemVisibility: {},
+            itemOrder: [],
+            itemLocks: {},
+            itemGroups: {},
+            focusedGroupId: null,
         },
         panels: {
             leftPanel: 'uploads',

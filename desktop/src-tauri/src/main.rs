@@ -601,6 +601,11 @@ struct EditorRuntimeStateRecord {
     active_panel: Option<String>,
     drawer_panel: Option<String>,
     scene_item_transforms: Option<Value>,
+    scene_item_visibility: Option<Value>,
+    scene_item_order: Option<Value>,
+    scene_item_locks: Option<Value>,
+    scene_item_groups: Option<Value>,
+    focused_group_id: Option<String>,
     track_ui: Option<Value>,
     viewport_scroll_left: f64,
     viewport_max_scroll_left: f64,
@@ -2725,6 +2730,26 @@ fn execute_interactive_tool_call(
                     }
                     Ok(result)
                 }
+                "text_add" | "text-add" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:insert-package-text-at-playhead",
+                        editor_tool_payload(file_path.clone(), arguments, &["text", "track", "durationMs", "textStyle"]),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor text added",
+                            Some(json!({
+                                "filePath": file_path,
+                                "text": payload_string(arguments, "text")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
                 "clip_update" | "clip-update" => call_manuscript_channel(
                     "manuscripts:update-package-clip",
                     editor_tool_payload(
@@ -2735,6 +2760,7 @@ fn execute_interactive_tool_call(
                             "name",
                             "assetKind",
                             "subtitleStyle",
+                            "textStyle",
                             "transitionStyle",
                             "track",
                             "order",
