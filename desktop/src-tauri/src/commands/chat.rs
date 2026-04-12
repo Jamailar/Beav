@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{
-    build_chat_send_turn, emit_session_agent_turn_postprocess,
+    build_chat_send_turn, build_redclaw_chat_postprocess, emit_session_agent_turn_postprocess,
     execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::commands::chat_state::{
@@ -60,17 +60,19 @@ pub fn handle_send_channel(
                     "chat-session",
                 )?;
                 redclaw_artifact_kind = Some(artifact_kind);
+                let postprocess = build_redclaw_chat_postprocess(
+                    artifact_kind,
+                    execution.session_id(),
+                    prepared_turn.display_content(),
+                    redclaw_artifacts.clone(),
+                );
                 let _ = with_store_mut(state, |store| {
                     store.work_items.push(create_work_item(
                         "redclaw-note",
-                        format!("RedClaw Chat {}", artifact_kind),
-                        Some("RedClaw fixed session generated a persisted artifact.".to_string()),
-                        Some(prepared_turn.display_content().to_string()),
-                        Some(json!({
-                            "sessionId": execution.session_id(),
-                            "artifactKind": artifact_kind,
-                            "artifacts": redclaw_artifacts.clone(),
-                        })),
+                        postprocess.work_item_title,
+                        Some(postprocess.work_item_summary),
+                        Some(postprocess.work_item_description),
+                        Some(postprocess.work_item_metadata),
                         2,
                     ));
                     Ok(())
@@ -92,11 +94,13 @@ pub fn handle_send_channel(
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
-                    json!({
-                        "sessionId": execution.session_id(),
-                        "artifactKind": redclaw_artifact_kind,
-                        "artifacts": redclaw_artifacts,
-                    }),
+                    build_redclaw_chat_postprocess(
+                        redclaw_artifact_kind.unwrap_or("run"),
+                        execution.session_id(),
+                        prepared_turn.display_content(),
+                        redclaw_artifacts,
+                    )
+                    .runner_payload,
                 );
             }
             Ok(())
