@@ -108,6 +108,24 @@ pub struct SessionAgentTurnExecution {
     pub emitted_live_events: bool,
 }
 
+impl SessionAgentTurnExecution {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn response(&self) -> &str {
+        &self.response
+    }
+
+    pub fn title_update(&self) -> Option<&(String, String)> {
+        self.title_update.as_ref()
+    }
+
+    pub fn emitted_live_events(&self) -> bool {
+        self.emitted_live_events
+    }
+}
+
 pub enum PreparedSessionAgentTurn<'a> {
     ChatSend(PreparedChatSendTurn<'a>),
     RuntimeQuery(PreparedRuntimeQueryTurn<'a>),
@@ -263,6 +281,13 @@ mod tests {
         assert!(execution.emitted_live_events);
         assert_eq!(
             execution.title_update.as_ref().map(|(_, title)| title.as_str()),
+            Some("Title")
+        );
+        assert_eq!(execution.session_id(), "session-1");
+        assert_eq!(execution.response(), "done");
+        assert!(execution.emitted_live_events());
+        assert_eq!(
+            execution.title_update().map(|(_, title)| title.as_str()),
             Some("Title")
         );
     }

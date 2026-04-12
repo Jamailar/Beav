@@ -52,9 +52,9 @@ pub fn handle_send_channel(
                     state,
                     artifact_kind,
                     &project_id,
-                    &execution.session_id,
+                    execution.session_id(),
                     &message,
-                    &execution.response,
+                    execution.response(),
                     "chat-session",
                 )?;
                 redclaw_artifact_kind = Some(artifact_kind);
@@ -65,7 +65,7 @@ pub fn handle_send_channel(
                         Some("RedClaw fixed session generated a persisted artifact.".to_string()),
                         Some(prepared_turn.display_content().to_string()),
                         Some(json!({
-                            "sessionId": execution.session_id,
+                            "sessionId": execution.session_id(),
                             "artifactKind": artifact_kind,
                             "artifacts": redclaw_artifacts.clone(),
                         })),
@@ -77,12 +77,12 @@ pub fn handle_send_channel(
             let runtime_mode = with_store(state, |store| {
                 Ok(resolve_runtime_mode_for_session(
                     &store,
-                    &execution.session_id,
+                    execution.session_id(),
                 ))
             })?;
 
-            if execution.emitted_live_events {
-                if let Some((sid, title)) = execution.title_update.clone() {
+            if execution.emitted_live_events() {
+                if let Some((sid, title)) = execution.title_update().cloned() {
                     emit_runtime_task_checkpoint_saved(
                         app,
                         None,
@@ -95,18 +95,18 @@ pub fn handle_send_channel(
             } else {
                 emit_chat_sequence(
                     app,
-                    &execution.session_id,
-                    &execution.response,
+                    execution.session_id(),
+                    execution.response(),
                     "正在分析输入并生成回答。",
                     &runtime_mode,
-                    execution.title_update,
+                    execution.title_update().cloned(),
                 );
             }
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
                     json!({
-                        "sessionId": execution.session_id,
+                        "sessionId": execution.session_id(),
                         "artifactKind": redclaw_artifact_kind,
                         "artifacts": redclaw_artifacts,
                     }),

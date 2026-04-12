@@ -67,7 +67,7 @@ pub fn handle_bridge_channel(
                 build_session_bridge_turn(session_id.clone(), message),
             );
             execute_prepared_session_agent_turn(None, state, &turn)
-            .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id }))
+            .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id() }))
         }
         "session-bridge:resolve-permission" => Ok(json!({ "success": true })),
         "background-tasks:list" => {

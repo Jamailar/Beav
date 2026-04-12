@@ -57,7 +57,7 @@ pub fn handle_runtime_query(
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(
             store,
-            &execution.session_id,
+            execution.session_id(),
             turn.route_reasoning().unwrap_or_default(),
             turn.route_value().cloned().unwrap_or(Value::Null),
             turn.orchestration().cloned(),
@@ -72,7 +72,7 @@ pub fn handle_runtime_query(
         emit_runtime_task_checkpoint_saved(
             app,
             None,
-            Some(&execution.session_id),
+            Some(execution.session_id()),
             &checkpoint_type,
             &summary,
             payload,
@@ -80,16 +80,16 @@ pub fn handle_runtime_query(
     }
     emit_chat_sequence(
         app,
-        &execution.session_id,
-        &execution.response,
+        execution.session_id(),
+        execution.response(),
         "正在规划并调用模型生成响应。",
         &runtime_mode,
-        execution.title_update,
+        execution.title_update().cloned(),
     );
     Ok(json!({
         "success": true,
-        "sessionId": execution.session_id,
-        "response": execution.response,
+        "sessionId": execution.session_id(),
+        "response": execution.response(),
         "route": turn.route_value().cloned().unwrap_or(Value::Null),
         "orchestration": turn.orchestration().cloned()
     }))
