@@ -27,6 +27,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
+import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import {
@@ -211,6 +212,10 @@ const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
     { id: 'audio', label: '音频' },
     { id: 'folders', label: '文件夹' },
 ];
+
+const MANUSCRIPTS_INITIAL_ASSET_LIMIT = 0;
+const MANUSCRIPTS_ACTIVE_ASSET_LIMIT = 60;
+const MANUSCRIPTS_CARD_RENDER_LIMIT = 80;
 
 const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '3:4', label: '3:4' },
@@ -441,7 +446,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [error, setError] = useState('');
     const [activeFolder, setActiveFolder] = useState('');
     const [query, setQuery] = useState('');
-    const [filter, setFilter] = useState<DraftFilter>('all');
+    const [filter, setFilter] = useState<DraftFilter>('drafts');
     const [layout, setLayout] = useState<DraftLayout>('gallery');
     const [createOpen, setCreateOpen] = useState(false);
     const [createKind, setCreateKind] = useState<CreateKind>('longform');
@@ -495,12 +500,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const treeRequestIdRef = useRef(0);
     const assetsRequestIdRef = useRef(0);
     const hasLoadedSnapshotRef = useRef(false);
+    const deferredAssetsTimerRef = useRef<number | null>(null);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
         try {
-            const treeResult = await window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>;
+            const treeResult = await uiMeasure('manuscripts', 'load_tree', async () => (
+                window.ipcRenderer.invoke('manuscripts:list') as Promise<FileNode[]>
+            ), { requestId, mode, isActive });
             if (requestId !== treeRequestIdRef.current) return;
             setTree(Array.isArray(treeResult) ? treeResult : []);
         } catch (loadError) {
@@ -514,10 +522,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, []);
 
-    const loadAssets = useCallback(async () => {
+    const loadAssets = useCallback(async (limit = MANUSCRIPTS_ACTIVE_ASSET_LIMIT) => {
         const requestId = ++assetsRequestIdRef.current;
         try {
-            const mediaResult = await window.ipcRenderer.invoke('media:list', { limit: 500 }) as { success?: boolean; assets?: MediaAsset[]; error?: string };
+            const mediaResult = await uiMeasure('manuscripts', 'load_assets', async () => (
+                window.ipcRenderer.invoke('media:list', { limit }) as Promise<{ success?: boolean; assets?: MediaAsset[]; error?: string }>
+            ), { requestId, mode, isActive, limit });
             if (requestId !== assetsRequestIdRef.current) return;
             if (!mediaResult?.success) {
                 throw new Error(mediaResult?.error || '加载媒体资产失败');
@@ -531,9 +541,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             throw loadError;
         }
-    }, []);
+    }, [isActive, mode]);
 
     const loadData = useCallback(async () => {
+        uiDebug('manuscripts', 'load_data:start', { mode, isActive, hasSnapshot: hasLoadedSnapshotRef.current });
         if (hasLoadedSnapshotRef.current) {
             setIsRefreshing(true);
         } else {
@@ -541,15 +552,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
         setError('');
         try {
-            await Promise.all([loadTree(), loadAssets()]);
+            await Promise.all([loadTree(), loadAssets(MANUSCRIPTS_INITIAL_ASSET_LIMIT)]);
             hasLoadedSnapshotRef.current = true;
+            uiDebug('manuscripts', 'load_data:done', {
+                mode,
+                isActive,
+                treeCount: tree.length,
+                assetCount: assets.length,
+            });
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : '加载草稿失败');
         } finally {
             setLoading(false);
             setIsRefreshing(false);
         }
-    }, [loadAssets, loadTree]);
+    }, [assets.length, isActive, loadAssets, loadTree, mode, tree.length]);
 
     const handleImportMediaFiles = useCallback(async () => {
         setWorkingId('media-import');
@@ -591,16 +608,43 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const refreshWorkspace = useCallback(async () => {
         // Keep editor interactions smooth: skip heavy media refresh while actively editing.
         if (mode === 'editor') {
+            uiDebug('manuscripts', 'refresh_workspace:editor_fast_path');
             await loadTree();
             return;
         }
-        await loadData();
-    }, [loadData, loadTree, mode]);
+        uiDebug('manuscripts', 'refresh_workspace:gallery_split_load');
+        if (hasLoadedSnapshotRef.current) {
+            setIsRefreshing(true);
+        } else {
+            setLoading(true);
+        }
+        setError('');
+        try {
+            await loadTree();
+            hasLoadedSnapshotRef.current = true;
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : '加载草稿失败');
+        } finally {
+            setLoading(false);
+        }
+        if (deferredAssetsTimerRef.current != null) {
+            window.clearTimeout(deferredAssetsTimerRef.current);
+        }
+        deferredAssetsTimerRef.current = window.setTimeout(() => {
+            deferredAssetsTimerRef.current = null;
+            void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT).finally(() => setIsRefreshing(false));
+        }, 0);
+    }, [loadAssets, loadTree, mode]);
 
     usePageRefresh({
         isActive,
         refresh: refreshWorkspace,
     });
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+        uiDebug('manuscripts', isActive ? 'view_activate' : 'view_deactivate', { mode, editorFile });
+    }, [editorFile, isActive, mode]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -610,7 +654,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 return;
             }
             if (payload?.scope === 'media') {
-                void loadAssets();
+                void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
             }
         };
         window.ipcRenderer.on('data:changed', handleDataChanged);
@@ -623,6 +667,38 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         if (!isActive) return;
         void loadSettings();
     }, [isActive, loadSettings]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        if (mode === 'editor') return;
+        if (!['all', 'media', 'image', 'video', 'audio'].includes(filter)) return;
+        if (assets.length > 0) return;
+        uiDebug('manuscripts', 'load_assets:on_demand');
+        void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+    }, [assets.length, filter, isActive, loadAssets, mode]);
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+        uiDebug('manuscripts', isActive ? 'view_activate' : 'view_deactivate', { mode, editorFile });
+    }, [editorFile, isActive, mode]);
+
+    useEffect(() => {
+        return () => {
+            if (deferredAssetsTimerRef.current != null) {
+                window.clearTimeout(deferredAssetsTimerRef.current);
+                deferredAssetsTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (deferredAssetsTimerRef.current != null) {
+                window.clearTimeout(deferredAssetsTimerRef.current);
+                deferredAssetsTimerRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (!size) return;
@@ -1319,7 +1395,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             const createdDelta = b.createdAt - a.createdAt;
             if (createdDelta !== 0) return createdDelta;
             return a.title.localeCompare(b.title, 'zh-Hans-CN');
-        });
+        }).slice(0, MANUSCRIPTS_CARD_RENDER_LIMIT);
     }, [fileMetaMap, visibleAssets, visibleDrafts, visibleFolders]);
 
     const bindableImageAssets = useMemo(
@@ -1541,6 +1617,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 {isVideoDraft ? (
                     <Suspense fallback={<div className="h-full flex items-center justify-center text-white/45">视频工作台加载中...</div>}>
                         <VideoDraftWorkbench
+                            isActive={isActive}
                             title={currentDescriptor.title}
                             editorFile={editorFile}
                             packageAssets={packageAssets}

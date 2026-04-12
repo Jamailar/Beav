@@ -4,7 +4,10 @@ pub struct PreparedSessionBridgeTurn<'a> {
     pub request: ChatExchangeRequest<'a>,
 }
 
-pub fn build_session_bridge_turn(session_id: String, message: String) -> PreparedSessionBridgeTurn<'static> {
+pub fn build_session_bridge_turn(
+    session_id: String,
+    message: String,
+) -> PreparedSessionBridgeTurn<'static> {
     PreparedSessionBridgeTurn {
         request: ChatExchangeRequest::session_bridge(session_id, message),
     }

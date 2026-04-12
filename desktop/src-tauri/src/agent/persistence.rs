@@ -1,17 +1,15 @@
 use serde_json::{json, Value};
 use tauri::State;
 
-use crate::agent::{
-    ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind,
-};
+use crate::agent::{ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind};
 use crate::commands::chat_state::{ensure_chat_session, infer_context_type_from_session_id};
-use crate::persistence::with_store_mut;
+use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::append_session_checkpoint;
 use crate::{
-    append_session_transcript, default_memory_maintenance_status, memory_maintenance_status_from_workspace,
-    next_memory_maintenance_at_ms, now_i64, now_iso, resolve_runtime_mode_from_context_type,
-    session_title_from_message, value_to_i64_string, write_memory_maintenance_status_for_workspace,
-    AppState, ChatMessageRecord, ChatSessionRecord, make_id,
+    append_session_transcript, default_memory_maintenance_status, make_id,
+    memory_maintenance_status_from_workspace, next_memory_maintenance_at_ms, now_i64, now_iso,
+    resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
+    write_memory_maintenance_status_for_workspace, AppState, ChatMessageRecord, ChatSessionRecord,
 };
 
 pub fn persist_chat_exchange(
@@ -25,7 +23,8 @@ pub fn persist_chat_exchange(
     checkpoint_summary: String,
     session_title_override: Option<String>,
 ) -> Result<ChatExchangePersistenceStage, String> {
-    let title_hint = session_title_override.or_else(|| Some(session_title_from_message(display_content)));
+    let title_hint =
+        session_title_override.or_else(|| Some(session_title_from_message(display_content)));
     let mut title_update: Option<(String, String)> = None;
     let mut final_session_id = String::new();
 
@@ -97,7 +96,6 @@ pub fn persist_chat_exchange(
         );
         Ok(())
     })?;
-
     Ok(ChatExchangePersistenceStage {
         final_session_id,
         title_update,
@@ -108,13 +106,15 @@ pub fn update_post_exchange_maintenance(
     state: &State<'_, AppState>,
     response: &str,
 ) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        let next_scheduled_at = next_memory_maintenance_at_ms(response, now_i64());
-        let current = memory_maintenance_status_from_workspace(state)?
+    let next_scheduled_at = next_memory_maintenance_at_ms(response, now_i64());
+    let current = with_store(state, |store| {
+        Ok(memory_maintenance_status_from_workspace(state)?
             .or_else(|| crate::memory_maintenance_status_from_settings(&store.settings))
-            .unwrap_or_else(default_memory_maintenance_status);
-        let status = build_post_exchange_maintenance_status(&current, next_scheduled_at);
-        write_memory_maintenance_status_for_workspace(state, &status)?;
+            .unwrap_or_else(default_memory_maintenance_status))
+    })?;
+    let status = build_post_exchange_maintenance_status(&current, next_scheduled_at);
+    write_memory_maintenance_status_for_workspace(state, &status)?;
+    with_store_mut(state, |store| {
         if let Some(object) = store.settings.as_object_mut() {
             object.remove("redbox_memory_maintenance_status_json");
         }
@@ -131,10 +131,7 @@ fn exchange_checkpoint_payload(response: &str, runtime_mode: &str) -> Value {
     })
 }
 
-fn build_post_exchange_maintenance_status(
-    current: &Value,
-    next_scheduled_at: i64,
-) -> Value {
+fn build_post_exchange_maintenance_status(current: &Value, next_scheduled_at: i64) -> Value {
     json!({
         "started": true,
         "running": false,
@@ -179,7 +176,10 @@ mod tests {
     fn exchange_checkpoint_payload_truncates_preview_and_keeps_runtime_mode() {
         let payload = exchange_checkpoint_payload(&"a".repeat(120), "chatroom");
         assert_eq!(
-            payload.get("responsePreview").and_then(Value::as_str).map(|v| v.len()),
+            payload
+                .get("responsePreview")
+                .and_then(Value::as_str)
+                .map(|v| v.len()),
             Some(80)
         );
         assert_eq!(
@@ -199,10 +199,22 @@ mod tests {
             "lastError": null
         });
         let status = build_post_exchange_maintenance_status(&current, 999);
-        assert_eq!(status.get("lockState").and_then(Value::as_str), Some("owner"));
-        assert_eq!(status.get("pendingMutations").and_then(Value::as_i64), Some(2));
-        assert_eq!(status.get("nextScheduledAt").and_then(Value::as_i64), Some(999));
-        assert_eq!(status.get("lastReason").and_then(Value::as_str), Some("query-after"));
+        assert_eq!(
+            status.get("lockState").and_then(Value::as_str),
+            Some("owner")
+        );
+        assert_eq!(
+            status.get("pendingMutations").and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            status.get("nextScheduledAt").and_then(Value::as_i64),
+            Some(999)
+        );
+        assert_eq!(
+            status.get("lastReason").and_then(Value::as_str),
+            Some("query-after")
+        );
     }
 
     #[test]

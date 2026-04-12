@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import type { ViewType } from '../App';
 import { IndexingStatus } from './IndexingStatus';
 import { appAlert } from '../utils/appDialogs';
+import { uiMeasure } from '../utils/uiDebug';
 
 const appLogo = new URL('../../Box.png', import.meta.url).href;
 
@@ -85,7 +86,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
   const loadSpaces = useCallback(async () => {
     try {
-      const result = await window.ipcRenderer.invoke('spaces:list') as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
+      const result = await uiMeasure('layout', 'load_spaces', async () => (
+        window.ipcRenderer.invoke('spaces:list') as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
+      )) as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
       setSpaces(result?.spaces || []);
       setActiveSpaceId(result?.activeSpaceId || '');
     } catch (error) {
@@ -110,7 +113,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => {
     const loadVersion = async () => {
       try {
-        const version = await window.ipcRenderer.getAppVersion();
+        const version = await uiMeasure('layout', 'load_version', async () => (
+          window.ipcRenderer.getAppVersion()
+        ));
         setAppVersion(String(version || '').trim());
       } catch (error) {
         console.error('Failed to load app version:', error);
@@ -308,7 +313,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             <button
               key={id}
               data-guide-id={`nav-${id}`}
-              onClick={() => onNavigate(id)}
+              onClick={() => {
+                onNavigate(id);
+              }}
               className={clsx(
                 "w-full flex items-center gap-3 px-3.5 py-2.5 text-[13px] rounded-xl transition-all tracking-[0.01em] font-normal",
                 currentView === id

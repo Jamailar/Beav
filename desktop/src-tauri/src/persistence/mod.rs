@@ -20,6 +20,63 @@ use crate::{
     AssistantStateRecord, RedclawStateRecord, SpaceRecord,
 };
 
+pub(crate) struct WorkspaceHydrationSnapshot {
+    categories: Vec<crate::SubjectCategory>,
+    subjects: Vec<crate::SubjectRecord>,
+    advisors: Vec<crate::AdvisorRecord>,
+    chat_rooms: Vec<crate::ChatRoomRecord>,
+    chatroom_messages: Vec<crate::ChatRoomMessageRecord>,
+    memories: Vec<crate::UserMemoryRecord>,
+    memory_history: Vec<crate::MemoryHistoryRecord>,
+    media_assets: Vec<crate::MediaAssetRecord>,
+    cover_assets: Vec<crate::CoverAssetRecord>,
+    knowledge_notes: Vec<crate::KnowledgeNoteRecord>,
+    youtube_videos: Vec<crate::YoutubeVideoRecord>,
+    document_sources: Vec<crate::DocumentKnowledgeSourceRecord>,
+    redclaw_state: RedclawStateRecord,
+    work_items: Vec<crate::WorkItemRecord>,
+}
+
+pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrationSnapshot {
+    WorkspaceHydrationSnapshot {
+        categories: load_subject_categories_from_fs(&root.join("subjects")),
+        subjects: load_subjects_from_fs(&root.join("subjects")),
+        advisors: load_advisors_from_fs(&root.join("advisors")),
+        chat_rooms: load_chat_rooms_from_fs(&root.join("chatrooms")),
+        chatroom_messages: load_chatroom_messages_from_fs(&root.join("chatrooms")),
+        memories: load_memories_from_fs(&root.join("memory")),
+        memory_history: load_memory_history_from_fs(&root.join("memory")),
+        media_assets: load_media_assets_from_fs(&root.join("media")),
+        cover_assets: load_cover_assets_from_fs(&root.join("cover")),
+        knowledge_notes: load_knowledge_notes_from_fs(&root.join("knowledge")),
+        youtube_videos: load_youtube_videos_from_fs(&root.join("knowledge")),
+        document_sources: load_document_sources_from_fs(&root.join("knowledge")),
+        redclaw_state: load_redclaw_state_from_fs(&root.join("redclaw")),
+        work_items: load_work_items_from_fs(&root.join("redclaw")),
+    }
+}
+
+pub(crate) fn apply_workspace_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: WorkspaceHydrationSnapshot,
+) {
+    store.categories = snapshot.categories;
+    store.subjects = snapshot.subjects;
+    store.advisors = snapshot.advisors;
+    store.chat_rooms = snapshot.chat_rooms;
+    store.chatroom_messages = snapshot.chatroom_messages;
+    store.memories = snapshot.memories;
+    store.memory_history = snapshot.memory_history;
+    store.media_assets = snapshot.media_assets;
+    store.cover_assets = snapshot.cover_assets;
+    store.knowledge_notes = snapshot.knowledge_notes;
+    store.youtube_videos = snapshot.youtube_videos;
+    store.document_sources = snapshot.document_sources;
+    store.redclaw_state = snapshot.redclaw_state;
+    sync_redclaw_job_definitions(store);
+    store.work_items = snapshot.work_items;
+}
+
 pub fn build_store_path() -> PathBuf {
     let base = config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -224,91 +281,163 @@ pub fn hydrate_store_from_workspace_files(
     store_path: &Path,
 ) -> Result<(), String> {
     let root = active_space_workspace_root_from_store(store, &store.active_space_id, store_path)?;
-    store.categories = load_subject_categories_from_fs(&root.join("subjects"));
-    store.subjects = load_subjects_from_fs(&root.join("subjects"));
-    store.advisors = load_advisors_from_fs(&root.join("advisors"));
-    store.chat_rooms = load_chat_rooms_from_fs(&root.join("chatrooms"));
-    store.chatroom_messages = load_chatroom_messages_from_fs(&root.join("chatrooms"));
-    store.memories = load_memories_from_fs(&root.join("memory"));
-    store.memory_history = load_memory_history_from_fs(&root.join("memory"));
-    store.media_assets = load_media_assets_from_fs(&root.join("media"));
-    store.cover_assets = load_cover_assets_from_fs(&root.join("cover"));
-    store.knowledge_notes = load_knowledge_notes_from_fs(&root.join("knowledge"));
-    store.youtube_videos = load_youtube_videos_from_fs(&root.join("knowledge"));
-    store.document_sources = load_document_sources_from_fs(&root.join("knowledge"));
-    store.redclaw_state = load_redclaw_state_from_fs(&root.join("redclaw"));
-    sync_redclaw_job_definitions(store);
-    store.work_items = load_work_items_from_fs(&root.join("redclaw"));
+    let snapshot = load_workspace_hydration_snapshot(&root);
+    apply_workspace_hydration_snapshot(store, snapshot);
     Ok(())
 }
 
 pub fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.knowledge_notes.is_empty()
+    let root = with_store(state, |store| {
+        let needs_hydration = store.knowledge_notes.is_empty()
             || store.youtube_videos.is_empty()
-            || store.document_sources.is_empty()
-        {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+            || store.document_sources.is_empty();
+        if !needs_hydration {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.subjects.is_empty() || store.categories.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+    let root = with_store(state, |store| {
+        let needs_hydration = store.subjects.is_empty() || store.categories.is_empty();
+        if !needs_hydration {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_media(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.media_assets.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+    let root = with_store(state, |store| {
+        if !store.media_assets.is_empty() {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_cover(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.cover_assets.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+    let root = with_store(state, |store| {
+        if !store.cover_assets.is_empty() {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_work(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.work_items.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+    let root = with_store(state, |store| {
+        if !store.work_items.is_empty() {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.advisors.is_empty() {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+    let root = with_store(state, |store| {
+        if !store.advisors.is_empty() {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<(), String> {
-    with_store_mut(state, |store| {
-        if store.redclaw_state.projects.is_empty()
+    let root = with_store(state, |store| {
+        let needs_hydration = store.redclaw_state.projects.is_empty()
             || store.redclaw_state.scheduled_tasks.is_empty()
-                && store.redclaw_state.long_cycle_tasks.is_empty()
-        {
-            hydrate_store_from_workspace_files(store, &state.store_path)?;
+                && store.redclaw_state.long_cycle_tasks.is_empty();
+        if !needs_hydration {
+            return Ok(None);
         }
-        Ok(())
-    })
+        Ok(Some(active_space_workspace_root_from_store(
+            &store,
+            &store.active_space_id,
+            &state.store_path,
+        )?))
+    })?;
+    if let Some(root) = root {
+        let snapshot = load_workspace_hydration_snapshot(&root);
+        with_store_mut(state, |store| {
+            apply_workspace_hydration_snapshot(store, snapshot);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {

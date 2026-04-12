@@ -165,11 +165,15 @@ pub fn handle_chat_sessions_wander_channel(
             }
             "sessions:get-transcript" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| Ok(json!(trace_for_session(&store, &session_id))))
+                with_store(state, |store| {
+                    Ok(json!(trace_for_session(&store, &session_id)))
+                })
             }
             "sessions:get-tool-results" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| Ok(json!(tool_results_for_session(&store, &session_id))))
+                with_store(state, |store| {
+                    Ok(json!(tool_results_for_session(&store, &session_id)))
+                })
             }
             "chat:get-messages" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
@@ -465,10 +469,17 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 let task_started_at = now_ms();
                 let task_id = with_store_mut(state, |store| {
-                    let typed_route = RuntimeRouteRecord::from_value(&route)
-                        .unwrap_or_else(|| runtime_direct_route_record("wander", "漫步生成新选题", None));
+                    let typed_route = RuntimeRouteRecord::from_value(&route).unwrap_or_else(|| {
+                        runtime_direct_route_record("wander", "漫步生成新选题", None)
+                    });
                     let task = RuntimeTaskRecord {
                         id: make_id("task"),
+                        runtime_id: None,
+                        parent_runtime_id: None,
+                        parent_task_id: None,
+                        root_task_id: None,
+                        child_task_ids: Vec::new(),
+                        aggregation_status: None,
                         task_type: "wander".to_string(),
                         status: "running".to_string(),
                         runtime_mode: "wander".to_string(),

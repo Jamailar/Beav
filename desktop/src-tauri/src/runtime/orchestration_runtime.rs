@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use crate::runtime::RuntimeSubagentRoleSpec;
 use crate::payload_string;
+use crate::runtime::RuntimeSubagentRoleSpec;
 
 pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
     match role_id {

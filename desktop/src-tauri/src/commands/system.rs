@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     log_timing_event, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
-    refresh_runtime_warm_state, store_root, AppState,
+    refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
 
 pub fn handle_system_channel(
@@ -53,21 +53,39 @@ pub fn handle_system_channel(
                     let started_at = now_ms();
                     let request_id = format!("db:get-settings:{}", started_at);
                     let result = with_store(state, |store| Ok(store.settings.clone()));
-                    log_timing_event(state, "settings", &request_id, "db:get-settings", started_at, None);
+                    log_timing_event(
+                        state,
+                        "settings",
+                        &request_id,
+                        "db:get-settings",
+                        started_at,
+                        None,
+                    );
                     result
                 }
                 "db:save-settings" => {
                     let started_at = now_ms();
                     let request_id = format!("db:save-settings:{}", started_at);
-                    with_store_mut(state, |store| {
+                    let active_space_id = with_store_mut(state, |store| {
                         store.settings = payload.clone();
-                        Ok(())
+                        Ok(store.active_space_id.clone())
                     })?;
+                    let _ = update_workspace_root_cache(state, payload, &active_space_id);
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                    let _ = app.emit("settings:updated", json!({
-                        "updatedAt": now_iso(),
-                    }));
-                    log_timing_event(state, "settings", &request_id, "db:save-settings", started_at, None);
+                    let _ = app.emit(
+                        "settings:updated",
+                        json!({
+                            "updatedAt": now_iso(),
+                        }),
+                    );
+                    log_timing_event(
+                        state,
+                        "settings",
+                        &request_id,
+                        "db:save-settings",
+                        started_at,
+                        None,
+                    );
                     Ok(json!({ "success": true }))
                 }
                 "debug:get-status" => Ok(json!({

@@ -277,6 +277,24 @@ function clipOrderInTrack(clip: VideoClipLike, timelineClips: VideoClipLike[]): 
   return index >= 0 ? index : sameTrack.length;
 }
 
+function buildTimelineTrackOrder(trackNames: string[], timelineClips: VideoClipLike[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const appendTrack = (value: unknown) => {
+    const normalized = String(value || '').trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    ordered.push(normalized);
+  };
+  trackNames.forEach(appendTrack);
+  timelineClips.forEach((clip) => appendTrack(clip.track));
+  return ordered;
+}
+
+function trackOrderValue(trackId: string, trackOrderIndex: Map<string, number>): number {
+  return trackOrderIndex.get(String(trackId || '').trim()) ?? Number.MAX_SAFE_INTEGER;
+}
+
 function makeSceneGroupId() {
   return `group-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -414,6 +432,7 @@ export interface VideoDraftWorkbenchProps {
   editorBody: string;
   editorBodyDirty: boolean;
   isSavingEditorBody: boolean;
+  isActive?: boolean;
   editorChatSessionId: string | null;
   remotionComposition?: RemotionCompositionConfig | null;
   remotionRenderPath?: string | null;
@@ -440,6 +459,7 @@ export function VideoDraftWorkbench({
   editorBody,
   editorBodyDirty,
   isSavingEditorBody,
+  isActive = true,
   editorChatSessionId,
   remotionComposition,
   remotionRenderPath,
@@ -553,6 +573,7 @@ export function VideoDraftWorkbench({
   const selectedClipId = useVideoEditorStore(editorStore, (state) => state.timeline.selectedClipId);
   const activeTrackId = useVideoEditorStore(editorStore, (state) => state.timeline.activeTrackId);
   const timelineViewport = useVideoEditorStore(editorStore, (state) => state.timeline.viewport);
+  const timelineZoomPercent = useVideoEditorStore(editorStore, (state) => state.timeline.zoomPercent);
   const timelineTrackUi = useVideoEditorStore(editorStore, (state) => state.timeline.trackUi);
   const projectWidth = useVideoEditorStore(editorStore, (state) => state.project.width);
   const projectHeight = useVideoEditorStore(editorStore, (state) => state.project.height);
@@ -944,10 +965,28 @@ export function VideoDraftWorkbench({
     () => displayAssets.find((asset) => asset.id === currentPreviewAssetId) || primaryVideoAsset || displayAssets[0] || null,
     [currentPreviewAssetId, displayAssets, primaryVideoAsset]
   );
+  const timelineTrackOrder = useMemo(
+    () => buildTimelineTrackOrder(timelineTrackNames, timelineClips),
+    [timelineClips, timelineTrackNames]
+  );
+  const timelineTrackOrderIndex = useMemo(
+    () => new Map(timelineTrackOrder.map((trackId, index) => [trackId, index])),
+    [timelineTrackOrder]
+  );
   const assetsById = useMemo(
     () => Object.fromEntries(displayAssets.map((asset) => [asset.id, asset])),
     [displayAssets]
   );
+  const compareTimelineClipsByTrackOrder = useCallback((left: VideoClipLike, right: VideoClipLike) => {
+    const trackDelta = trackOrderValue(String(left.track || '').trim(), timelineTrackOrderIndex)
+      - trackOrderValue(String(right.track || '').trim(), timelineTrackOrderIndex);
+    if (trackDelta !== 0) return trackDelta;
+    const startDelta = Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
+    if (Math.abs(startDelta) > 0.0001) return startDelta;
+    const orderDelta = clipOrderInTrack(left, timelineClips) - clipOrderInTrack(right, timelineClips);
+    if (orderDelta !== 0) return orderDelta;
+    return String(left.clipId || '').localeCompare(String(right.clipId || ''), 'zh-CN');
+  }, [timelineClips, timelineTrackOrderIndex]);
   const timelineRenderableClips = useMemo(
     () => timelineClips.filter((clip) => {
       const trackId = String(clip.track || '').trim();
@@ -955,36 +994,54 @@ export function VideoDraftWorkbench({
     }),
     [timelineClips, timelineTrackUi]
   );
-  const timelineAudibleClips = useMemo(
-    () => timelineRenderableClips.filter((clip) => {
+  const timelinePlayableAudioClips = useMemo(
+    () => timelineRenderableClips.filter((clip) => String(clip.assetKind || '').trim().toLowerCase() === 'audio'),
+    [timelineRenderableClips]
+  );
+  const timelineSoloAudioClips = useMemo(
+    () => timelinePlayableAudioClips.filter((clip) => {
       const trackId = String(clip.track || '').trim();
-      return !(timelineTrackUi[trackId]?.muted);
+      return !!timelineTrackUi[trackId]?.solo;
     }),
-    [timelineRenderableClips, timelineTrackUi]
+    [timelinePlayableAudioClips, timelineTrackUi]
+  );
+  const timelineAudibleClips = useMemo(
+    () => {
+      const source = timelineSoloAudioClips.length > 0 ? timelineSoloAudioClips : timelinePlayableAudioClips;
+      return source.filter((clip) => {
+        const trackId = String(clip.track || '').trim();
+        return !(timelineTrackUi[trackId]?.muted);
+      });
+    },
+    [timelinePlayableAudioClips, timelineSoloAudioClips, timelineTrackUi]
   );
 
   const clipAtTime = useMemo(() => {
     return (timeInSeconds: number) => {
       const targetTime = Math.max(0, timeInSeconds);
-      const containingClip = timelineRenderableClips.find((clip) => {
-        const start = Number(clip.startSeconds || 0);
-        const end = Number(clip.endSeconds || 0);
-        return Number.isFinite(start) && Number.isFinite(end) && targetTime >= start && targetTime <= end;
-      });
+      const containingClip = [...timelineRenderableClips]
+        .filter((clip) => {
+          const start = Number(clip.startSeconds || 0);
+          const end = Number(clip.endSeconds || 0);
+          return Number.isFinite(start) && Number.isFinite(end) && targetTime >= start && targetTime <= end;
+        })
+        .sort(compareTimelineClipsByTrackOrder)[0];
       return containingClip || null;
     };
-  }, [timelineRenderableClips]);
+  }, [compareTimelineClipsByTrackOrder, timelineRenderableClips]);
   const activeTimelineClip = useMemo(
     () => clipAtTime(previewCurrentTime),
     [clipAtTime, previewCurrentTime]
   );
   const visibleTimelineClips = useMemo(
-    () => timelineRenderableClips.filter((clip) => {
-      const start = Number(clip.startSeconds || 0);
-      const end = Number(clip.endSeconds || 0);
-      return Number.isFinite(start) && Number.isFinite(end) && previewCurrentTime >= start && previewCurrentTime <= end;
-    }),
-    [previewCurrentTime, timelineRenderableClips]
+    () => [...timelineRenderableClips]
+      .filter((clip) => {
+        const start = Number(clip.startSeconds || 0);
+        const end = Number(clip.endSeconds || 0);
+        return Number.isFinite(start) && Number.isFinite(end) && previewCurrentTime >= start && previewCurrentTime <= end;
+      })
+      .sort(compareTimelineClipsByTrackOrder),
+    [compareTimelineClipsByTrackOrder, previewCurrentTime, timelineRenderableClips]
   );
   const activeVisualTimelineClip = useMemo(
     () => visibleTimelineClips.find((clip) => {
@@ -994,16 +1051,17 @@ export function VideoDraftWorkbench({
     [visibleTimelineClips]
   );
   const activeAudioTimelineClip = useMemo(
-    () => timelineAudibleClips.find((clip) => {
-      const start = Number(clip.startSeconds || 0);
-      const end = Number(clip.endSeconds || 0);
-      return Number.isFinite(start)
-        && Number.isFinite(end)
-        && previewCurrentTime >= start
-        && previewCurrentTime <= end
-        && String(clip.assetKind || '').trim().toLowerCase() === 'audio';
-    }) || null,
-    [previewCurrentTime, timelineAudibleClips]
+    () => [...timelineAudibleClips]
+      .filter((clip) => {
+        const start = Number(clip.startSeconds || 0);
+        const end = Number(clip.endSeconds || 0);
+        return Number.isFinite(start)
+          && Number.isFinite(end)
+          && previewCurrentTime >= start
+          && previewCurrentTime <= end;
+      })
+      .sort(compareTimelineClipsByTrackOrder)[0] || null,
+    [compareTimelineClipsByTrackOrder, previewCurrentTime, timelineAudibleClips]
   );
   const selectedTimelineClip = useMemo(() => {
     const normalizedSelectedClipId = String(selectedClipId || '').trim();
@@ -1078,7 +1136,11 @@ export function VideoDraftWorkbench({
         const trackId = String(clip.track || '').trim();
         return !(timelineTrackUi[trackId]?.hidden);
       })
-      .sort((left, right) => Number(left.startSeconds || 0) - Number(right.startSeconds || 0))
+      .sort((left, right) => {
+        const startDelta = Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
+        if (Math.abs(startDelta) > 0.0001) return startDelta;
+        return compareTimelineClipsByTrackOrder(left, right);
+      })
       .map((clip) => String(clip.clipId || '').trim())
       .filter(Boolean);
     const activeClipId = String((activeVisualTimelineClip || activeAudioTimelineClip || activeTimelineClip)?.clipId || '').trim() || null;
@@ -1097,10 +1159,10 @@ export function VideoDraftWorkbench({
         currentPreviewAssetId: activeAssetId || state.assets.currentPreviewAssetId,
       },
     }));
-  }, [activeAudioTimelineClip, activeTimelineClip, activeVisualTimelineClip, editorStore, previewCurrentTime, timelineClips, timelineDurationSeconds, timelineTrackUi, visibleTimelineClips]);
+  }, [activeAudioTimelineClip, activeTimelineClip, activeVisualTimelineClip, compareTimelineClipsByTrackOrder, editorStore, previewCurrentTime, timelineClips, timelineDurationSeconds, timelineTrackUi, visibleTimelineClips]);
 
   useEffect(() => {
-    if (!editorChatSessionId) return;
+    if (!isActive || !editorChatSessionId) return;
     const parseJsonOutput = (raw: unknown): Record<string, unknown> | null => {
       const text = String(raw || '').trim();
       if (!text) return null;
@@ -1190,7 +1252,7 @@ export function VideoDraftWorkbench({
         }
       },
     });
-  }, [editorChatSessionId, editorFile, editorStore, onPackageStateChange]);
+  }, [editorChatSessionId, editorFile, editorStore, isActive, onPackageStateChange]);
 
   const selectedScene = useMemo(() => {
     if (!editableComposition?.scenes?.length) return null;
@@ -1726,10 +1788,10 @@ export function VideoDraftWorkbench({
       })
       .sort((left, right) => {
         const startDelta = Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
-        if (startDelta !== 0) return startDelta;
-        return String(left.track || '').localeCompare(String(right.track || ''));
+        if (Math.abs(startDelta) > 0.0001) return startDelta;
+        return compareTimelineClipsByTrackOrder(left, right);
       }),
-    [timelineClips]
+    [compareTimelineClipsByTrackOrder, timelineClips]
   );
   const selectedTransitionContext = useMemo(() => {
     const selectedClipIdValue = String(selectedTimelineClip?.clipId || '').trim();
@@ -2680,6 +2742,19 @@ export function VideoDraftWorkbench({
     }));
   }, [editorStore]);
 
+  const handleTimelineZoomChange = useCallback((zoomPercent: number) => {
+    const safeZoomPercent = Math.round(Number(zoomPercent) || 100);
+    if (editorStore.getState().timeline.zoomPercent === safeZoomPercent) {
+      return;
+    }
+    editorStore.setState((state) => ({
+      timeline: {
+        ...state.timeline,
+        zoomPercent: safeZoomPercent,
+      },
+    }));
+  }, [editorStore]);
+
   const handleTimelineTrackUiChange = useCallback((trackUi: VideoEditorState['timeline']['trackUi']) => {
     editorStore.setState((state) => ({
       timeline: {
@@ -2976,70 +3051,68 @@ export function VideoDraftWorkbench({
   return (
     <>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#111113] text-white">
-        <div className="border-b border-white/10 bg-[#141417] px-5 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-200/65">LexBox Editor</div>
-              <div className="mt-1 truncate text-lg font-semibold text-white">{title}</div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {([
-                ['preview', 'Preview'],
-                ['motion', 'Remotion'],
-                ['script', 'Script'],
-              ] as const).map(([tabId, label]) => (
-                <button
-                  key={tabId}
-                  type="button"
-                  onClick={() => setPreviewTab(tabId)}
-                  className={clsx(
-                    'rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                    previewTab === tabId
-                      ? 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100'
-                      : 'border-white/10 bg-white/[0.03] text-white/55 hover:border-white/20 hover:text-white'
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
-                <Undo2 className="h-4 w-4" />
-              </button>
-              <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
-                <Redo2 className="h-4 w-4" />
-              </button>
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#141417] px-5 py-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-200/65">LexBox Editor</div>
+            <div className="mt-1 truncate text-lg font-semibold text-white">{title}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              ['preview', 'Preview'],
+              ['motion', 'Remotion'],
+              ['script', 'Script'],
+            ] as const).map(([tabId, label]) => (
               <button
+                key={tabId}
                 type="button"
-                onClick={onRenderRemotionVideo}
-                disabled={isRenderingRemotion || !editableComposition?.scenes?.length}
+                onClick={() => setPreviewTab(tabId)}
                 className={clsx(
-                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                  isRenderingRemotion || !editableComposition?.scenes?.length
-                    ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                    : 'border-cyan-400/40 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+                  'rounded-full border px-3 py-1.5 text-xs font-medium transition',
+                  previewTab === tabId
+                    ? 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100'
+                    : 'border-white/10 bg-white/[0.03] text-white/55 hover:border-white/20 hover:text-white'
                 )}
               >
-                <Download className="h-3.5 w-3.5" />
-                {isRenderingRemotion ? '导出中...' : '导出 MP4'}
+                {label}
               </button>
-              <button
-                type="button"
-                onClick={() => editorStore.setState((state) => ({
-                  panels: {
-                    ...state.panels,
-                    redclawDrawerOpen: !state.panels.redclawDrawerOpen,
-                  },
-                }))}
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:border-white/20 hover:text-white"
-              >
-                {redclawDrawerOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-                AI 对话
-              </button>
-            </div>
+            ))}
           </div>
-        </div>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
+              <Undo2 className="h-4 w-4" />
+            </button>
+            <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
+              <Redo2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onRenderRemotionVideo}
+              disabled={isRenderingRemotion || !editableComposition?.scenes?.length}
+              className={clsx(
+                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
+                isRenderingRemotion || !editableComposition?.scenes?.length
+                  ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
+                  : 'border-cyan-400/40 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+              )}
+            >
+              <Download className="h-3.5 w-3.5" />
+              {isRenderingRemotion ? '导出中...' : '导出 MP4'}
+            </button>
+            <button
+              type="button"
+              onClick={() => editorStore.setState((state) => ({
+                panels: {
+                  ...state.panels,
+                  redclawDrawerOpen: !state.panels.redclawDrawerOpen,
+                },
+              }))}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:border-white/20 hover:text-white"
+            >
+              {redclawDrawerOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+              AI 对话
+            </button>
+          </div>
+        </header>
 
         <div
           className="grid min-h-0 flex-1"
@@ -5413,6 +5486,7 @@ export function VideoDraftWorkbench({
                     stageHeight={projectHeight}
                     ratioPreset={ratioPreset}
                     timelineClips={timelineClips}
+                    trackOrder={timelineTrackOrder}
                     trackUi={timelineTrackUi}
                     assetsById={assetsById}
                     selectedScene={selectedScene}
@@ -5604,6 +5678,9 @@ export function VideoDraftWorkbench({
               onSelectedClipChange={handleTimelineSelectedClipChange}
               onActiveTrackChange={handleTimelineActiveTrackChange}
               onViewportMetricsChange={handleTimelineViewportChange}
+              controlledViewport={timelineViewport}
+              controlledZoomPercent={timelineZoomPercent}
+              onZoomPercentChange={handleTimelineZoomChange}
               controlledTrackUi={timelineTrackUi}
               onTrackUiChange={handleTimelineTrackUiChange}
               sceneItemVisibility={sceneItemVisibility}

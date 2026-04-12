@@ -218,6 +218,9 @@ impl Default for RedclawStateRecord {
 pub struct SessionCheckpointRecord {
     pub id: String,
     pub session_id: String,
+    pub runtime_id: Option<String>,
+    pub parent_runtime_id: Option<String>,
+    pub source_task_id: Option<String>,
     pub checkpoint_type: String,
     pub summary: String,
     pub payload: Option<Value>,
@@ -229,6 +232,9 @@ pub struct SessionCheckpointRecord {
 pub struct SessionToolResultRecord {
     pub id: String,
     pub session_id: String,
+    pub runtime_id: Option<String>,
+    pub parent_runtime_id: Option<String>,
+    pub source_task_id: Option<String>,
     pub call_id: String,
     pub tool_name: String,
     pub command: Option<String>,
@@ -353,13 +359,18 @@ impl RuntimeArtifact {
             created_at: now_i64(),
         }
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RuntimeTask {
     pub id: String,
+    pub runtime_id: Option<String>,
+    pub parent_runtime_id: Option<String>,
+    pub parent_task_id: Option<String>,
+    pub root_task_id: Option<String>,
+    pub child_task_ids: Vec<String>,
+    pub aggregation_status: Option<String>,
     pub task_type: String,
     pub status: String,
     pub runtime_mode: String,
@@ -387,6 +398,9 @@ pub type RuntimeTaskRecord = RuntimeTask;
 pub struct RuntimeTrace {
     pub id: i64,
     pub task_id: String,
+    pub runtime_id: Option<String>,
+    pub parent_runtime_id: Option<String>,
+    pub source_task_id: Option<String>,
     pub node_id: Option<String>,
     pub event_type: String,
     pub payload: Option<Value>,
@@ -394,11 +408,22 @@ pub struct RuntimeTrace {
 }
 
 impl RuntimeTrace {
-    pub fn new(task_id: &str, node_id: Option<String>, event_type: &str, payload: Option<Value>) -> Self {
+    pub fn new(
+        task_id: &str,
+        runtime_id: Option<String>,
+        parent_runtime_id: Option<String>,
+        source_task_id: Option<String>,
+        node_id: Option<String>,
+        event_type: &str,
+        payload: Option<Value>,
+    ) -> Self {
         let created_at = now_i64();
         Self {
             id: created_at,
             task_id: task_id.to_string(),
+            runtime_id,
+            parent_runtime_id,
+            source_task_id,
             node_id,
             event_type: event_type.to_string(),
             payload,

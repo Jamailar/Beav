@@ -42,7 +42,10 @@ pub fn emit_session_agent_completion(
     turn_kind: SessionAgentTurnKind,
 ) -> Result<(), String> {
     let runtime_mode = with_store(state, |store| {
-        Ok(resolve_runtime_mode_for_session(&store, execution.session_id()))
+        Ok(resolve_runtime_mode_for_session(
+            &store,
+            execution.session_id(),
+        ))
     })?;
     emit_session_agent_turn_postprocess(
         app,
@@ -66,8 +69,8 @@ fn pending_label_for_turn_kind(turn_kind: SessionAgentTurnKind) -> &'static str 
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::{SessionAgentTurnExecution, SessionAgentTurnKind};
     use super::pending_label_for_turn_kind;
+    use crate::agent::{SessionAgentTurnExecution, SessionAgentTurnKind};
 
     #[test]
     fn postprocess_helper_leaves_execution_surface_intact() {

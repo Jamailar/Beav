@@ -1,4 +1,5 @@
 use crate::persistence::{with_store, with_store_mut};
+use crate::session_lineage_fields;
 use crate::tools::registry::diagnostics_tool_items;
 use crate::*;
 use serde_json::{json, Value};
@@ -83,9 +84,14 @@ pub fn handle_mcp_tools_channel(
                     Ok(response) => {
                         if let Some(session_id) = session_id.clone() {
                             let _ = with_store_mut(state, |store| {
+                                let (runtime_id, parent_runtime_id, source_task_id) =
+                                    session_lineage_fields(store, &session_id);
                                 store.session_tool_results.push(SessionToolResultRecord {
                                     id: make_id("tool-result"),
                                     session_id,
+                                    runtime_id,
+                                    parent_runtime_id,
+                                    source_task_id,
                                     call_id: make_id("call"),
                                     tool_name: format!("mcp:{}", method),
                                     command: server.command.clone().or(server.url.clone()),
@@ -110,9 +116,14 @@ pub fn handle_mcp_tools_channel(
                     Err(error) => {
                         if let Some(session_id) = session_id {
                             let _ = with_store_mut(state, |store| {
+                                let (runtime_id, parent_runtime_id, source_task_id) =
+                                    session_lineage_fields(store, &session_id);
                                 store.session_tool_results.push(SessionToolResultRecord {
                                     id: make_id("tool-result"),
                                     session_id,
+                                    runtime_id,
+                                    parent_runtime_id,
+                                    source_task_id,
                                     call_id: make_id("call"),
                                     tool_name: format!("mcp:{}", method),
                                     command: server.command.clone().or(server.url.clone()),

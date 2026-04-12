@@ -81,5 +81,4 @@ mod tests {
             SessionAgentTurnKind::RuntimeQuery,
         ));
     }
-
 }

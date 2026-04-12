@@ -19,10 +19,12 @@ pub(crate) fn interactive_runtime_system_prompt(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> String {
-    if let Ok(runtime_warm) = state.runtime_warm.lock() {
-        if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
-            if !entry.system_prompt.trim().is_empty() {
-                return entry.system_prompt.clone();
+    if session_id.is_none() {
+        if let Ok(runtime_warm) = state.runtime_warm.lock() {
+            if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
+                if !entry.system_prompt.trim().is_empty() {
+                    return entry.system_prompt.clone();
+                }
             }
         }
     }

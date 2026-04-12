@@ -245,26 +245,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     return sessionData;
   }, [applySession]);
 
-  const hydrateSession = useCallback(async (options?: { preserveExisting?: boolean }) => {
-    const preserveExisting = options?.preserveExisting ?? true;
-    const result = await invoke<{ success: boolean; session?: RedboxAuthSession | null; error?: string }>('redbox-auth:get-session');
-    if (!result?.success) {
-      return preserveExisting ? session : null;
-    }
-    const sessionData = result.session || null;
-    if (sessionData?.accessToken) {
-      applySession(sessionData);
-      return sessionData;
-    }
-    if (preserveExisting && session?.accessToken) {
-      return session;
-    }
-    applySession(null);
-    setUser(null);
-    setPoints(null);
-    return null;
-  }, [applySession, session]);
-
   const fetchUser = useCallback(async () => {
     const result = await invoke<{ success: boolean; user?: Record<string, unknown>; error?: string }>('redbox-auth:me');
     if (!result?.success) {
@@ -301,34 +281,29 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
   }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
 
-  const refreshSessionSilently = useCallback(async () => {
-    const sessionData = await hydrateSession({ preserveExisting: true });
-    if (sessionData?.accessToken) {
-      requestSettingsRefresh();
-      void loadAuthenticatedData();
-      return sessionData;
+  const requestBackgroundRefresh = useCallback(async () => {
+    const result = await invoke<{ success: boolean; queued?: boolean; error?: string }>('redbox-auth:refresh');
+    if (!result?.success) {
+      throw new Error(result?.error || '后台刷新请求失败');
     }
-    return null;
-  }, [hydrateSession, loadAuthenticatedData, requestSettingsRefresh]);
+    return result;
+  }, []);
 
   const refreshProfileAndPoints = useCallback(async () => {
     setBusy(true);
     try {
-      let sessionData = session;
-      if (!sessionData?.accessToken) {
-        sessionData = await hydrateSession({ preserveExisting: false });
-      }
-      if (!sessionData?.accessToken) {
+      if (!session?.accessToken) {
         throw new Error('当前未登录，请先登录官方账号');
       }
       await loadAuthenticatedData();
-      setPanelNotice('success', `用户信息与积分余额已刷新（${new Date().toLocaleTimeString()}）`);
+      await requestBackgroundRefresh();
+      setPanelNotice('success', '已通知后台刷新，页面会在本地缓存更新后自动同步');
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '刷新用户信息失败');
     } finally {
       setBusy(false);
     }
-  }, [hydrateSession, loadAuthenticatedData, session, setPanelNotice]);
+  }, [loadAuthenticatedData, requestBackgroundRefresh, session, setPanelNotice]);
 
   const startWechatPolling = useCallback((sessionId: string) => {
     stopWechatPolling();
@@ -550,28 +525,20 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
 
   useEffect(() => {
     let canceled = false;
-    setBootstrapped(true);
     const bootstrap = async () => {
       try {
         const cachedSession = await hydrateCachedSession();
         if (canceled) return;
         if (cachedSession?.accessToken) {
           requestSettingsRefresh();
-          void loadAuthenticatedData();
-          void refreshSessionSilently();
-          return;
-        }
-
-        const sessionData = await hydrateSession({ preserveExisting: true });
-        if (canceled) return;
-        if (sessionData?.accessToken) {
-          requestSettingsRefresh();
-          void loadAuthenticatedData();
-        } else if (!cachedSession?.accessToken) {
-          void fetchWechatQr({ silent: true });
+          await loadAuthenticatedData();
         }
       } catch {
         // ignore
+      } finally {
+        if (!canceled) {
+          setBootstrapped(true);
+        }
       }
     };
     void bootstrap();
@@ -579,7 +546,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       canceled = true;
       stopWechatPolling();
     };
-  }, [fetchWechatQr, hydrateCachedSession, hydrateSession, loadAuthenticatedData, refreshSessionSilently, requestSettingsRefresh, stopWechatPolling]);
+  }, [hydrateCachedSession, loadAuthenticatedData, requestSettingsRefresh, stopWechatPolling]);
 
   useEffect(() => {
     const handleSessionUpdated = async (_event: unknown, payload?: { session?: RedboxAuthSession | null }) => {
@@ -600,6 +567,16 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       window.ipcRenderer.off('redbox-auth:session-updated', handleSessionUpdated);
     };
   }, [applySession, loadAuthenticatedData, requestSettingsRefresh]);
+
+  useEffect(() => {
+    const handleDataUpdated = async () => {
+      await loadAuthenticatedData();
+    };
+    window.ipcRenderer.on('redbox-auth:data-updated', handleDataUpdated);
+    return () => {
+      window.ipcRenderer.off('redbox-auth:data-updated', handleDataUpdated);
+    };
+  }, [loadAuthenticatedData]);
 
   return (
     <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 space-y-4">
@@ -842,7 +819,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               <div className="text-sm font-medium text-text-primary">调用记录</div>
               <button
                 type="button"
-                onClick={() => void fetchCallRecords()}
+                onClick={() => void refreshProfileAndPoints()}
                 disabled={busy}
                 title="刷新记录"
                 className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"

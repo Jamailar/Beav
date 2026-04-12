@@ -164,20 +164,22 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             }
         })
         .collect();
-    let latest_execution_by_definition: std::collections::HashMap<String, &crate::RedclawJobExecutionRecord> =
-        store
-            .redclaw_job_executions
-            .iter()
-            .fold(std::collections::HashMap::new(), |mut acc, execution| {
-                let replace = acc
-                    .get(&execution.definition_id)
-                    .map(|current| execution.updated_at > current.updated_at)
-                    .unwrap_or(true);
-                if replace {
-                    acc.insert(execution.definition_id.clone(), execution);
-                }
-                acc
-            });
+    let latest_execution_by_definition: std::collections::HashMap<
+        String,
+        &crate::RedclawJobExecutionRecord,
+    > = store.redclaw_job_executions.iter().fold(
+        std::collections::HashMap::new(),
+        |mut acc, execution| {
+            let replace = acc
+                .get(&execution.definition_id)
+                .map(|current| execution.updated_at > current.updated_at)
+                .unwrap_or(true);
+            if replace {
+                acc.insert(execution.definition_id.clone(), execution);
+            }
+            acc
+        },
+    );
     for task in &store.redclaw_state.scheduled_tasks {
         let definition_id = definition_by_scheduled_source.get(&task.id).cloned();
         let execution = definition_id

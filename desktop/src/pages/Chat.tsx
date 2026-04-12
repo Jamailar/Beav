@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
 import { Send, Terminal, Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Users, Paperclip, FileX, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
@@ -9,6 +9,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
+import { uiDebug, uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 
 interface Session {
   id: string;
@@ -33,6 +34,7 @@ interface SelectionMenu {
 }
 
 interface ChatProps {
+  isActive?: boolean;
   defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
@@ -369,6 +371,7 @@ function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatMode
 }
 
 export function Chat({
+  isActive = true,
   pendingMessage,
   onMessageConsumed,
   defaultCollapsed = true,
@@ -390,6 +393,9 @@ export function Chat({
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
 }: ChatProps) {
+  const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
+    uiDebug('chat', event, extra);
+  }, []);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -433,10 +439,74 @@ export function Chat({
   const localMessageMutationRef = useRef(0);
   const chatRoomsRequestIdRef = useRef(0);
   const sessionsRequestIdRef = useRef(0);
+  const isActiveRef = useRef(isActive);
+  const coldRecoveryPendingRef = useRef(true);
+  const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
+  const suppressComposerFocusUntilRef = useRef(0);
+  const [composerSuppressed, setComposerSuppressed] = useState(false);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+  const blurComposer = useCallback((reason: string) => {
+    const element = inputRef.current;
+    if (!element) return;
+    if (document.activeElement === element) {
+      debugUi('input_blur', { reason });
+      element.blur();
+    }
+  }, [debugUi]);
+  const suppressComposerFocus = useCallback((reason: string, ms: number) => {
+    suppressComposerFocusUntilRef.current = performance.now() + ms;
+    debugUi('suppress_composer_focus', { reason, ms });
+    setComposerSuppressed(true);
+  }, [debugUi]);
+  const resumeComposerFocus = useCallback((source: 'empty' | 'composer') => {
+    suppressComposerFocusUntilRef.current = 0;
+    setComposerSuppressed(false);
+    debugUi('resume_composer_focus', { source });
+    requestAnimationFrame(() => {
+      if (!inputRef.current) return;
+      inputRef.current.focus();
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
+    });
+  }, [debugUi]);
+  const handleComposerFocus = useCallback((source: 'empty' | 'composer') => {
+    const now = performance.now();
+    if (now < suppressComposerFocusUntilRef.current) {
+      debugUi('focus_blocked', {
+        source,
+        remainingMs: Math.round(suppressComposerFocusUntilRef.current - now),
+      });
+      queueMicrotask(() => blurComposer(`blocked_focus:${source}`));
+      return;
+    }
+    debugUi('composer_focus_allowed', { source });
+  }, [blurComposer, debugUi]);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    if (isActive) {
+      coldRecoveryPendingRef.current = true;
+      debugUi('chat:view_activate', { sessionId: currentSessionIdRef.current });
+      return;
+    }
+
+    debugUi('chat:view_deactivate', { sessionId: currentSessionIdRef.current });
+    suppressComposerFocus('view_deactivate', 1500);
+    blurComposer('view_deactivate');
+    shouldAutoScrollRef.current = false;
+    missedChunksRef.current = '';
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = null;
+    }
+    pendingUpdateRef.current = null;
+    setShowRoomPicker(false);
+    setSelectionMenu((prev) => ({ ...prev, visible: false }));
+    setShowModelPicker(false);
+    setComposerSuppressed(false);
+  }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
   const selectSessionRequestRef = useRef(0);
   
   // 缓冲未处理的 chunk，用于解决页面加载期间的数据丢失问题
@@ -472,9 +542,11 @@ export function Chat({
   }, [isNearBottom]);
 
   const loadContextUsage = useCallback(async (sessionId: string) => {
-    if (!sessionId) return;
+    if (!sessionId || !isActiveRef.current) return;
     try {
-      const usage = await window.ipcRenderer.chat.getContextUsage(sessionId);
+      const usage = await uiMeasure('chat', 'load_context_usage', async () => (
+        window.ipcRenderer.chat.getContextUsage(sessionId)
+      ), { sessionId });
       if (usage?.success) {
         setContextUsage(usage as ChatContextUsage);
       }
@@ -507,8 +579,11 @@ export function Chat({
   }, []);
 
   const loadChatModelOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
     try {
-      const settings = await window.ipcRenderer.getSettings() as ChatSettingsSnapshot | undefined;
+      const settings = await uiMeasure('chat', 'load_chat_model_options', async () => (
+        window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
+      ));
       const options = buildChatModelOptions(settings);
       setChatModelOptions(options);
       setSelectedChatModelKey((current) => {
@@ -541,7 +616,9 @@ export function Chat({
       setIsRoomPickerLoading(true);
     }
     try {
-      const rooms = await window.ipcRenderer.invoke('chatrooms:list') as ChatRoom[];
+      const rooms = await uiMeasure('chat', 'load_chat_rooms', async () => (
+        window.ipcRenderer.invoke('chatrooms:list') as Promise<ChatRoom[]>
+      ), { silent });
       if (requestId !== chatRoomsRequestIdRef.current) {
         return;
       }
@@ -571,26 +648,12 @@ export function Chat({
   }, [pendingMessage]);
 
   useEffect(() => {
+    if (!isActive) return;
     void loadChatModelOptions();
-  }, [loadChatModelOptions]);
+  }, [isActive, loadChatModelOptions]);
 
   useEffect(() => {
-    const handleSettingsUpdated = () => {
-      void loadChatModelOptions();
-    };
-    const handleWindowFocus = () => {
-      void loadChatModelOptions();
-    };
-    window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
-    window.addEventListener('focus', handleWindowFocus);
-    return () => {
-      window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
-      window.removeEventListener('focus', handleWindowFocus);
-    };
-  }, [loadChatModelOptions]);
-
-  useEffect(() => {
-    if (!showModelPicker) return;
+    if (!isActive || !showModelPicker) return;
     const handlePointerDown = (event: MouseEvent) => {
       if (!modelPickerRef.current) return;
       if (!modelPickerRef.current.contains(event.target as Node)) {
@@ -608,7 +671,7 @@ export function Chat({
   }, [cleanupAudioCapture]);
 
   useEffect(() => {
-    if (messages.length === 0) return;
+    if (!isActive || messages.length === 0) return;
     requestAnimationFrame(() => {
       const container = messagesContainerRef.current;
       if (container && shouldAutoScrollRef.current) {
@@ -620,16 +683,18 @@ export function Chat({
   }, [messages, currentSessionId]);
 
   useEffect(() => {
+    if (!isActive) return;
     shouldAutoScrollRef.current = true;
-  }, [currentSessionId]);
+  }, [currentSessionId, isActive]);
 
   useEffect(() => {
-    if (!fixedSessionId || !currentSessionId) return;
+    if (!isActive || !fixedSessionId || !currentSessionId) return;
     void loadContextUsage(currentSessionId);
-  }, [fixedSessionId, currentSessionId, messages.length, isProcessing, loadContextUsage]);
+  }, [fixedSessionId, currentSessionId, isActive, messages.length, isProcessing, loadContextUsage]);
 
   // Load sessions on mount
   useEffect(() => {
+    if (!isActive) return;
     void loadChatRooms({ silent: true });
 
     // Handle fixed session (File-Bound Mode)
@@ -645,24 +710,11 @@ export function Chat({
     } else {
       // 有 pendingMessage 时只加载列表，不选择
       window.ipcRenderer.chat.getSessions().then((list: Session[]) => {
+        debugUi('load_sessions:pending_message_done', { count: Array.isArray(list) ? list.length : 0 });
         setSessions(list);
       }).catch(console.error);
     }
-  }, [fixedSessionId, loadChatRooms]); // Add fixedSessionId dependency
-
-  useEffect(() => {
-    const handleRunnerMessage = (_: unknown, payload?: { sessionId?: string }) => {
-      const sid = payload?.sessionId;
-      if (!sid || !currentSessionId) return;
-      if (sid !== currentSessionId) return;
-      void selectSession(sid);
-    };
-
-    window.ipcRenderer.on('redclaw:runner-message', handleRunnerMessage);
-    return () => {
-      window.ipcRenderer.off('redclaw:runner-message', handleRunnerMessage);
-    };
-  }, [currentSessionId]);
+  }, [fixedSessionId, isActive, loadChatRooms]); // Add fixedSessionId dependency
 
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
@@ -676,11 +728,20 @@ export function Chat({
     };
     taskHints?: unknown;
   }) => {
+    uiDebug('chat', 'dispatch_send:queued', {
+      sessionId: payload.sessionId || null,
+      chars: payload.message.length,
+      hasAttachment: Boolean(payload.attachment),
+    });
     const schedule = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
       : (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0);
 
     schedule(() => {
+      uiDebug('chat', 'dispatch_send:flushed', {
+        sessionId: payload.sessionId || null,
+        chars: payload.message.length,
+      });
       window.ipcRenderer.chat.send(payload);
     });
   }, []);
@@ -688,7 +749,7 @@ export function Chat({
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
     // 已处理过或正在处理中，跳过
-    if (!pendingMessage || isProcessing || pendingMessageHandledRef.current) {
+    if (!isActive || !pendingMessage || isProcessing || pendingMessageHandledRef.current) {
       return;
     }
 
@@ -718,7 +779,7 @@ export function Chat({
           setCurrentSessionId(session.id);
           sessionId = session.id;
 
-          console.log('[Chat] Created new session for AI 脑爆:', session.id, sessionTitle);
+          debugUi('pending_message:create_session_done', { sessionId: session.id, sessionTitle });
         } catch (error) {
           console.error('Failed to create session:', error);
           pendingMessageHandledRef.current = false; // 重置，允许重试
@@ -779,12 +840,15 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
 
   const loadSessions = async () => {
+    if (!isActiveRef.current) return;
     const requestId = ++sessionsRequestIdRef.current;
     try {
-      const list = await window.ipcRenderer.chat.getSessions();
+      const list = await uiMeasure('chat', 'load_sessions', async () => (
+        window.ipcRenderer.chat.getSessions()
+      ));
       if (requestId !== sessionsRequestIdRef.current) {
         return;
       }
@@ -799,14 +863,22 @@ export function Chat({
   };
 
   const selectSession = async (sessionId: string) => {
+    if (!isActiveRef.current) return;
     setCurrentSessionId(sessionId);
     const requestId = ++selectSessionRequestRef.current;
     const mutationVersionAtStart = localMessageMutationRef.current;
     try {
-      const [history, runtimeStateRaw] = await Promise.all([
-        window.ipcRenderer.chat.getMessages(sessionId),
-        window.ipcRenderer.chat.getRuntimeState(sessionId),
-      ]);
+      const shouldRecoverRuntime = coldRecoveryPendingRef.current;
+      coldRecoveryPendingRef.current = false;
+      debugUi('select_session:start', { sessionId, shouldRecoverRuntime });
+      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => (
+        Promise.all([
+          window.ipcRenderer.chat.getMessages(sessionId),
+          shouldRecoverRuntime
+            ? window.ipcRenderer.chat.getRuntimeState(sessionId)
+            : Promise.resolve(null),
+        ])
+      ), { sessionId, shouldRecoverRuntime });
       if (requestId !== selectSessionRequestRef.current) {
         return;
       }
@@ -843,18 +915,16 @@ export function Chat({
       const runtimePartial = runtimeState?.partialResponse || '';
       let shouldSetProcessing = false;
 
-      // 优先恢复后端“仍在运行”的会话状态，避免切 tab 后看起来像任务中断
-      if (runtimeProcessing) {
+      // 仅在首次挂载冷恢复时允许读取 runtimeState，正常流结束后不做补偿式回放
+      if (shouldRecoverRuntime && runtimeProcessing) {
+        debugUi('cold_recovery:runtime_processing', {
+          sessionId,
+          partialChars: runtimePartial.length,
+        });
         const restoredContent = `${runtimePartial}${missedChunksRef.current || ''}`;
         missedChunksRef.current = '';
         const lastMsg = uiMessages[uiMessages.length - 1];
-        if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
-          uiMessages[uiMessages.length - 1] = {
-            ...lastMsg,
-            content: restoredContent || lastMsg.content || '',
-            isStreaming: true,
-          };
-        } else {
+        if (!lastMsg || lastMsg.role !== 'ai') {
           uiMessages.push({
             id: `streaming_${Date.now()}`,
             role: 'ai',
@@ -863,41 +933,23 @@ export function Chat({
             timeline: [],
             isStreaming: true,
           });
+        } else {
+          uiMessages[uiMessages.length - 1] = {
+            ...lastMsg,
+            content: restoredContent || lastMsg.content || '',
+            isStreaming: true,
+          };
         }
         shouldSetProcessing = true;
       }
 
-      // 检查是否有缓冲的 missedChunks（仅在后端当前不处于 processing 时回放）
-      if (!runtimeProcessing && missedChunksRef.current) {
-        const chunk = missedChunksRef.current;
-        missedChunksRef.current = ''; // 清空缓冲
-
-        // 检查最后一条是否是 AI 消息
-        const lastMsg = uiMessages[uiMessages.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          // 追加内容并标记为 streaming
-          uiMessages[uiMessages.length - 1] = {
-            ...lastMsg,
-            content: lastMsg.content + chunk,
-            isStreaming: true
-          };
-          shouldSetProcessing = true; // 恢复 processing 状态
-        } else {
-          // 如果没有 AI 消息，创建一个新的
-          uiMessages.push({
-            id: Date.now().toString(),
-            role: 'ai',
-            content: chunk,
-            tools: [],
-            timeline: [],
-            isStreaming: true
-          });
-          shouldSetProcessing = true;
-        }
-      }
-
       setMessages(uiMessages);
       setIsProcessing(shouldSetProcessing);
+      debugUi('select_session:done', {
+        sessionId,
+        messageCount: uiMessages.length,
+        recoveredProcessing: shouldSetProcessing,
+      });
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
@@ -1007,103 +1059,18 @@ export function Chat({
     }
   }, [appendAssistantChunk]);
 
-  // 处理文字选中
-  const handleTextSelection = useCallback((event?: MouseEvent) => {
-    const target = event?.target as HTMLElement | null;
-    if (target?.closest('[data-selection-menu]')) {
-      return;
-    }
-
-    // 延迟执行，确保选中完成
-    setTimeout(() => {
-      const selection = window.getSelection();
-      const selectedText = selection?.toString().trim();
-
-      if (selectedText && selectedText.length > 0) {
-        const range = selection?.getRangeAt(0);
-        const rect = range?.getBoundingClientRect();
-
-        if (rect) {
-          setSelectionMenu({
-            visible: true,
-            x: rect.left + rect.width / 2,
-            y: rect.top - 10,
-            text: selectedText
-          });
-          setShowRoomPicker(false);
-        }
-      }
-    }, 10);
-  }, []);
-
-  // 点击其他地方隐藏菜单
-  const handleClickOutside = useCallback((e: MouseEvent) => {
-    // 检查点击是否在菜单内部
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-selection-menu]')) {
-      return;
-    }
-    setSelectionMenu(prev => ({ ...prev, visible: false }));
-    setShowRoomPicker(false);
-  }, []);
-
-  const handleOpenRoomPicker = useCallback(async () => {
-    setShowRoomPicker(true);
-    void loadChatRooms();
-  }, [loadChatRooms]);
-
-  // 发送到群聊
-  const handleSendToRoom = useCallback(async (roomId: string) => {
-    if (!selectionMenu.text) return;
-
-    try {
-      window.ipcRenderer.send('chatrooms:send', {
-        roomId,
-        message: selectionMenu.text
-      });
-
-      // 隐藏菜单
-      setSelectionMenu(prev => ({ ...prev, visible: false }));
-      setShowRoomPicker(false);
-
-      // 可以显示一个提示
-      console.log('Message sent to room:', roomId);
-    } catch (error) {
-      console.error('Failed to send to room:', error);
-    }
-  }, [selectionMenu.text]);
-
   useEffect(() => {
-    if (!selectionMenu.visible) {
-      return;
-    }
-    void loadChatRooms({ silent: true });
-  }, [selectionMenu.visible, loadChatRooms]);
-
-  useEffect(() => {
+    if (!isActive) return;
     const handleSpaceChanged = () => {
       setShowRoomPicker(false);
+      setSelectionMenu(prev => ({ ...prev, visible: false }));
       void loadChatRooms({ silent: true });
     };
     window.ipcRenderer.on('space:changed', handleSpaceChanged);
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [loadChatRooms]);
-
-  // 监听选中事件
-  useEffect(() => {
-    const handleMouseUp = (event: MouseEvent) => handleTextSelection(event);
-
-    // 在整个文档上监听
-    document.addEventListener('mouseup', handleMouseUp);
-    document.addEventListener('mousedown', handleClickOutside);
-
-    return () => {
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [handleTextSelection, handleClickOutside]);
+  }, [isActive, loadChatRooms]);
 
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
@@ -1115,10 +1082,13 @@ export function Chat({
   }, [currentSessionId]);
 
   useEffect(() => {
+    if (!isActive) return;
+    debugUi('runtime_subscription:init', { sessionId: currentSessionIdRef.current });
     // --- Event Handlers ---
 
     // 1. Phase Start (e.g. Planning, Executing)
     const handlePhaseStart = (_: unknown, { name }: { name: string }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1152,6 +1122,7 @@ export function Chat({
 
     // 2. Thought Start
     const handleThoughtStart = (_: unknown) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1178,6 +1149,7 @@ export function Chat({
 
     // 3. Thought Delta
     const handleThoughtDelta = (_: unknown, data?: { content: string }) => {
+      if (!isActiveRef.current) return;
       const content = data?.content;
       if (!content) return;
       setMessages(prev => {
@@ -1215,6 +1187,7 @@ export function Chat({
 
     // 4. Thought End
     const handleThoughtEnd = (_: unknown) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1236,9 +1209,15 @@ export function Chat({
     };
 
   const handleResponseChunk = (_: unknown, { content }: { content: string }) => {
+      if (!isActiveRef.current) {
+        if (import.meta.env.DEV) {
+          console.warn('[ui][chat] inactive page received response chunk');
+        }
+        return;
+      }
       if (!content) return;
 
-      const now = Date.now();
+      const now = performance.now();
       const lastChunk = lastStreamChunkRef.current;
       if (
         content === lastChunk.content &&
@@ -1247,6 +1226,22 @@ export function Chat({
         return;
       }
       lastStreamChunkRef.current = { content, at: now };
+      if (!streamStatsRef.current) {
+        streamStatsRef.current = { startedAt: now, chunks: 0, chars: 0 };
+        debugUi('stream:first_chunk', {
+          sessionId: currentSessionIdRef.current,
+          chunkChars: content.length,
+        });
+      }
+      streamStatsRef.current.chunks += 1;
+      streamStatsRef.current.chars += content.length;
+      if (streamStatsRef.current.chunks % 25 === 0) {
+        debugUi('stream:progress', {
+          sessionId: currentSessionIdRef.current,
+          chunks: streamStatsRef.current.chunks,
+          chars: streamStatsRef.current.chars,
+        });
+      }
 
       // 直接更新 Ref 缓冲，防止闭包过时
       missedChunksRef.current += content;
@@ -1267,6 +1262,7 @@ export function Chat({
     };
 
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1306,6 +1302,7 @@ export function Chat({
     };
 
     const handleToolEnd = (_: unknown, toolData: { callId: string; name: string; output: { success: boolean; content: string } }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1363,6 +1360,7 @@ export function Chat({
     };
 
     const handleToolUpdate = (_: unknown, toolData: { callId: string; name: string; partial: string }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1421,6 +1419,7 @@ export function Chat({
     };
 
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1444,19 +1443,85 @@ export function Chat({
     };
 
     const handleConfirmRequest = (_: unknown, request: ToolConfirmRequest) => {
+      if (!isActiveRef.current) return;
       setConfirmRequest(request);
     };
 
     const handleResponseEnd = (_: unknown, payload?: { content?: string }) => {
+      if (!isActiveRef.current) {
+        if (import.meta.env.DEV) {
+          console.warn('[ui][chat] inactive page received response end');
+        }
+        return;
+      }
+      suppressComposerFocus('response_end', 5000);
+      blurComposer('response_end');
       flushPendingAssistantChunk();
-
-      setIsProcessing(false);
-      setErrorNotice(null);
       const finalContent = typeof payload?.content === 'string' ? payload.content : '';
-      setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          const mergedContent = mergeAssistantContent(lastMsg.content || '', finalContent);
+      const streamStats = streamStatsRef.current;
+      debugUi('chat:response_end:ui', {
+        sessionId: currentSessionIdRef.current,
+        chars: finalContent.length,
+        chunks: streamStats?.chunks || 0,
+        streamedChars: streamStats?.chars || 0,
+        streamElapsedMs: streamStats ? Math.round(performance.now() - streamStats.startedAt) : 0,
+      });
+      streamStatsRef.current = null;
+      startTransition(() => {
+        setIsProcessing(false);
+        setErrorNotice(null);
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.role === 'ai') {
+            const mergedContent = mergeAssistantContent(lastMsg.content || '', finalContent);
+            const now = Date.now();
+            const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
+              if (item.status !== 'running') return item;
+              return {
+                ...item,
+                status: 'done',
+                duration: now - item.timestamp,
+              } as ProcessItem;
+            });
+            return [...prev.slice(0, -1), { ...lastMsg, content: mergedContent, timeline, isStreaming: false }];
+          }
+          if (finalContent) {
+            return [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                role: 'ai',
+                content: finalContent,
+                tools: [],
+                timeline: [],
+                isStreaming: false,
+              }
+            ];
+          }
+          return prev;
+        });
+      });
+    };
+
+    const handleCancelled = () => {
+      if (!isActiveRef.current) return;
+      suppressComposerFocus('cancelled', 3000);
+      blurComposer('cancelled');
+      flushPendingAssistantChunk();
+      missedChunksRef.current = '';
+      debugUi('response_cancelled', {
+        sessionId: currentSessionIdRef.current,
+        chunks: streamStatsRef.current?.chunks || 0,
+        streamedChars: streamStatsRef.current?.chars || 0,
+      });
+      streamStatsRef.current = null;
+      startTransition(() => {
+        setIsProcessing(false);
+        setConfirmRequest(null);
+        setErrorNotice(null);
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
           const now = Date.now();
           const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
             if (item.status !== 'running') return item;
@@ -1466,55 +1531,20 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, content: mergedContent, timeline, isStreaming: false }];
-        }
-        if (finalContent) {
-          return [
-            ...prev,
-            {
-              id: Date.now().toString(),
-              role: 'ai',
-              content: finalContent,
-              tools: [],
-              timeline: [],
-              isStreaming: false,
-            }
-          ];
-        }
-        return prev;
-      });
-      loadSessions(); // Update session list (e.g. title might change)
-    };
-
-    const handleCancelled = () => {
-      flushPendingAssistantChunk();
-      missedChunksRef.current = '';
-      setIsProcessing(false);
-      setConfirmRequest(null);
-      setErrorNotice(null);
-      setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
-        const now = Date.now();
-        const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
-          if (item.status !== 'running') return item;
-          return {
-            ...item,
-            status: 'done',
-            duration: now - item.timestamp,
-          } as ProcessItem;
+          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false }];
         });
-        return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false }];
       });
     };
 
     const handleSessionTitleUpdated = (_: unknown, { sessionId, title }: { sessionId: string; title: string }) => {
+      if (!isActiveRef.current) return;
       setSessions(prev => prev.map(s =>
         s.id === sessionId ? { ...s, title } : s
       ));
     };
 
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
+      if (!isActiveRef.current) return;
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1524,35 +1554,45 @@ export function Chat({
     };
 
     const handleError = (_: unknown, error: ChatErrorEventPayload | string) => {
-      setIsProcessing(false);
-      setConfirmRequest(null);
+      if (!isActiveRef.current) return;
+      suppressComposerFocus('error', 3000);
+      blurComposer('error');
       const { formatted, notice } = deriveChatErrorPresentation(error);
-      setErrorNotice(notice);
-      setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
-          const now = Date.now();
-          const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
-            if (item.status !== 'running') return item;
-            return {
-              ...item,
-              status: item.type === 'tool-call' ? 'failed' : 'done',
-              duration: now - item.timestamp,
-            } as ProcessItem;
-          });
-          return [...prev.slice(0, -1), { ...lastMsg, content: formatted, timeline, isStreaming: false }];
-        }
-        return [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: 'ai',
-            content: formatted,
-            tools: [],
-            timeline: [],
-            isStreaming: false,
+      debugUi('response_error', {
+        sessionId: currentSessionIdRef.current,
+        error: typeof error === 'string' ? error : error?.message || 'unknown',
+      });
+      streamStatsRef.current = null;
+      startTransition(() => {
+        setIsProcessing(false);
+        setConfirmRequest(null);
+        setErrorNotice(notice);
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
+            const now = Date.now();
+            const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
+              if (item.status !== 'running') return item;
+              return {
+                ...item,
+                status: item.type === 'tool-call' ? 'failed' : 'done',
+                duration: now - item.timestamp,
+              } as ProcessItem;
+            });
+            return [...prev.slice(0, -1), { ...lastMsg, content: formatted, timeline, isStreaming: false }];
           }
-        ];
+          return [
+            ...prev,
+            {
+              id: Date.now().toString(),
+              role: 'ai',
+              content: formatted,
+              tools: [],
+              timeline: [],
+              isStreaming: false,
+            }
+          ];
+        });
       });
     };
 
@@ -1654,6 +1694,7 @@ export function Chat({
     });
 
     return () => {
+      debugUi('runtime_subscription:dispose', { sessionId: currentSessionIdRef.current });
       disposeRuntimeEvents();
 
       // Cleanup timer
@@ -1661,7 +1702,7 @@ export function Chat({
           clearTimeout(updateTimerRef.current);
       }
     };
-  }, []);
+  }, [debugUi, flushPendingAssistantChunk, isActive]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1792,6 +1833,13 @@ export function Chat({
   }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
 
   const sendMessage = (content: string, attachment?: UploadedFileAttachment) => {
+    uiTraceInteraction('chat', 'send_message', {
+      sessionId: currentSessionId || null,
+      chars: String(content || '').trim().length,
+      hasAttachment: Boolean(attachment),
+    });
+    suppressComposerFocus('send_message', 5000);
+    blurComposer('send_message');
     shouldAutoScrollRef.current = true;
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
@@ -2078,26 +2126,41 @@ export function Chat({
               <form onSubmit={handleSubmit} className="relative w-full mt-10">
                 <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
                 <div className="group relative flex flex-col w-full bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2 transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20">
-                  <textarea
-                    ref={inputRef}
-                    value={input}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                      syncInputHeight();
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                        e.preventDefault();
-                        handleSubmit(e as any);
-                        if (inputRef.current) inputRef.current.style.height = 'auto';
-                      }
-                    }}
-                    placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-                    className="w-full bg-transparent px-4 py-3 text-[16px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[100px] overflow-y-auto"
-                    disabled={isProcessing}
-                    autoFocus
-                    rows={1}
-                  />
+                  {composerSuppressed ? (
+                    <button
+                      type="button"
+                      onClick={() => resumeComposerFocus('empty')}
+                      className="w-full rounded-2xl px-4 py-6 text-left text-[16px] text-text-tertiary"
+                    >
+                      对话已完成，点击后继续输入...
+                    </button>
+                  ) : (
+                    <textarea
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        syncInputHeight();
+                      }}
+                      onFocus={() => handleComposerFocus('empty')}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
+                          e.preventDefault();
+                          handleSubmit(e as any);
+                          if (inputRef.current) inputRef.current.style.height = 'auto';
+                        }
+                      }}
+                      placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
+                      className="w-full bg-transparent px-4 py-3 text-[16px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[100px] overflow-y-auto"
+                      data-ime="chat-composer-empty"
+                      spellCheck={false}
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      readOnly={isProcessing}
+                      aria-disabled={isProcessing}
+                      rows={1}
+                    />
+                  )}
                   <div className="flex items-center justify-between px-2 pb-1">
                     <div className="flex items-center gap-1">
                       <button type="button" onClick={() => void pickAttachment()} className="p-2 text-text-tertiary hover:text-text-secondary transition-colors" title="添加文件">
@@ -2179,37 +2242,6 @@ export function Chat({
           </div>
         ) : (
           <>
-            {/* Selection Menu */}
-            {selectionMenu.visible && (
-              <div data-selection-menu className="fixed z-[1000] transform -translate-x-1/2 -translate-y-full" style={{ left: selectionMenu.x, top: selectionMenu.y }}>
-                <div className="bg-surface-primary border border-border rounded-lg shadow-xl overflow-hidden">
-                  {!showRoomPicker ? (
-                    <button onClick={() => void handleOpenRoomPicker()} className="flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-surface-secondary transition-colors whitespace-nowrap">
-                      <Users className="w-4 h-4" /> 发送到群聊讨论
-                    </button>
-                  ) : (
-                    <div className="min-w-[180px]">
-                      <div className="px-3 py-2 text-xs text-text-tertiary border-b border-border bg-surface-secondary">选择群聊</div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {isRoomPickerLoading ? (
-                          <div className="px-3 py-2 text-sm text-text-tertiary flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" />加载中...</div>
-                        ) : chatRooms.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-text-tertiary">暂无群聊</div>
-                        ) : (
-                          chatRooms.map((room) => (
-                            <button key={room.id} onClick={() => handleSendToRoom(room.id)} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-surface-secondary transition-colors text-left">
-                              <MessageSquare className="w-4 h-4 text-text-tertiary" /> <span className="truncate">{room.name}</span>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 w-3 h-3 bg-surface-primary border-r border-b border-border transform rotate-45" />
-              </div>
-            )}
-
             {/* Messages */}
             <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', contentOuterPaddingClass)}>
               <div className={clsx('mx-auto min-w-0 space-y-4 md:space-y-5', contentMaxWidthClass, contentWidthClass)}>
@@ -2254,25 +2286,41 @@ export function Chat({
                     </div>
                   )}
                   <div className="group relative flex flex-col w-full bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5 transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20">
-                    <textarea
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => {
-                        setInput(e.target.value);
-                        syncInputHeight();
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                          e.preventDefault();
-                          handleSubmit(e as any);
-                          if (inputRef.current) inputRef.current.style.height = 'auto';
-                        }
-                      }}
-                      placeholder="发送消息..."
-                      className="w-full bg-transparent px-3.5 py-2.5 text-[14px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto"
-                      disabled={isProcessing}
-                      rows={1}
-                    />
+                    {composerSuppressed ? (
+                      <button
+                        type="button"
+                        onClick={() => resumeComposerFocus('composer')}
+                        className="w-full rounded-2xl px-3.5 py-6 text-left text-[14px] text-text-tertiary"
+                      >
+                        对话已完成，点击后继续输入...
+                      </button>
+                    ) : (
+                      <textarea
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => {
+                          setInput(e.target.value);
+                          syncInputHeight();
+                        }}
+                        onFocus={() => handleComposerFocus('composer')}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
+                            e.preventDefault();
+                            handleSubmit(e as any);
+                            if (inputRef.current) inputRef.current.style.height = 'auto';
+                          }
+                        }}
+                        placeholder="发送消息..."
+                        className="w-full bg-transparent px-3.5 py-2.5 text-[14px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto"
+                        data-ime="chat-composer-main"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        readOnly={isProcessing}
+                        aria-disabled={isProcessing}
+                        rows={1}
+                      />
+                    )}
                     <div className="flex items-center justify-between px-1.5 pb-0.5">
                       <div className="flex items-center gap-1">
                         <button type="button" onClick={() => void pickAttachment()} className="p-2 text-text-tertiary hover:text-text-secondary transition-colors" title="添加文件">

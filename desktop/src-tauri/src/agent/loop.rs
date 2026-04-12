@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::agent::{
     persist_chat_exchange, resolve_chat_exchange_context, resolve_chat_exchange_response_stage,
@@ -6,7 +6,9 @@ use crate::agent::{
     SessionAgentTurnExecution,
 };
 use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
-use crate::{ensure_redclaw_onboarding_completed_with_defaults, handle_redclaw_onboarding_turn, AppState};
+use crate::{
+    ensure_redclaw_onboarding_completed_with_defaults, handle_redclaw_onboarding_turn, AppState,
+};
 
 pub fn execute_prepared_session_agent_turn(
     app: Option<&AppHandle>,
@@ -22,7 +24,9 @@ pub fn execute_session_agent_turn(
     request: ChatExchangeRequest<'_>,
 ) -> Result<SessionAgentTurnExecution, String> {
     let checkpoint_summary = request.checkpoint_summary_text();
-    let session_title_override = request.session_title_hint_override().map(ToString::to_string);
+    let session_title_override = request
+        .session_title_hint_override()
+        .map(ToString::to_string);
     let ChatExchangeRequest {
         session_id,
         message,
@@ -34,7 +38,13 @@ pub fn execute_session_agent_turn(
         session_title_override: _,
     } = request;
     let context = resolve_chat_exchange_context(state, session_id, turn_kind)?;
-    let _ = update_chat_runtime_state(state, &context.working_session_id, true, String::new(), None);
+    let _ = update_chat_runtime_state(
+        state,
+        &context.working_session_id,
+        true,
+        String::new(),
+        None,
+    );
 
     if context.runtime_mode == "redclaw"
         && context.should_handle_redclaw_onboarding
@@ -84,7 +94,13 @@ pub fn execute_session_agent_turn(
         response.clone(),
         None,
     );
-    let _ = update_post_exchange_maintenance(state, &response);
+    if let Some(app_handle) = app.cloned() {
+        let response_for_maintenance = response.clone();
+        std::thread::spawn(move || {
+            let state = app_handle.state::<AppState>();
+            let _ = update_post_exchange_maintenance(&state, &response_for_maintenance);
+        });
+    }
 
     Ok(SessionAgentTurnExecution {
         session_id: persistence.final_session_id,

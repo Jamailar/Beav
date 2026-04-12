@@ -1,13 +1,11 @@
 use serde_json::Value;
 
 use crate::runtime::{
-    append_runtime_task_trace, AppliedTaskResumeExecution,
-    PreparedTaskResumeExecution, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeGraph,
-    RuntimeGraphNodeRecord, RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    append_runtime_task_trace, AppliedTaskResumeExecution, PreparedTaskResumeExecution,
+    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeGraph, RuntimeGraphNodeRecord,
+    RuntimeRouteRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
 };
-use crate::{
-    create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord,
-};
+use crate::{create_work_item, make_id, now_i64, payload_string, AppStore, WorkItemRecord};
 
 pub type RuntimeNodeEvent = (String, String, Option<String>, Option<String>);
 pub type RuntimeCheckpointEvent = (String, String, Option<Value>);
@@ -32,6 +30,12 @@ pub fn create_runtime_task(
 ) -> RuntimeTaskRecord {
     RuntimeTaskRecord {
         id: make_id("task"),
+        runtime_id: None,
+        parent_runtime_id: None,
+        parent_task_id: None,
+        root_task_id: None,
+        child_task_ids: Vec::new(),
+        aggregation_status: None,
         task_type: task_type.to_string(),
         status: status.to_string(),
         runtime_mode,
@@ -107,19 +111,40 @@ pub fn get_runtime_task_value(store: &AppStore, task_id: &str) -> Value {
     get_runtime_task(store, task_id).map_or(Value::Null, |item| runtime_task_value(&item))
 }
 
-pub fn list_runtime_task_traces(store: &AppStore, task_id: &str) -> Vec<RuntimeTaskTraceRecord> {
+pub fn child_task_ids_for_parent(store: &AppStore, task_id: &str) -> Vec<String> {
+    store
+        .runtime_tasks
+        .iter()
+        .filter(|item| item.parent_task_id.as_deref() == Some(task_id))
+        .map(|item| item.id.clone())
+        .collect()
+}
+
+pub fn list_runtime_task_traces(
+    store: &AppStore,
+    task_id: &str,
+    include_children: bool,
+) -> Vec<RuntimeTaskTraceRecord> {
+    let mut task_ids = vec![task_id.to_string()];
+    if include_children {
+        task_ids.extend(child_task_ids_for_parent(store, task_id));
+    }
     let mut items: Vec<RuntimeTaskTraceRecord> = store
         .runtime_task_traces
         .iter()
-        .filter(|item| item.task_id == task_id)
+        .filter(|item| task_ids.iter().any(|candidate| candidate == &item.task_id))
         .cloned()
         .collect();
     items.sort_by_key(|item| item.created_at);
     items
 }
 
-pub fn list_runtime_task_traces_value(store: &AppStore, task_id: &str) -> Value {
-    serde_json::json!(list_runtime_task_traces(store, task_id))
+pub fn list_runtime_task_traces_value(
+    store: &AppStore,
+    task_id: &str,
+    include_children: bool,
+) -> Value {
+    serde_json::json!(list_runtime_task_traces(store, task_id, include_children))
 }
 
 pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {
@@ -206,12 +231,7 @@ pub fn record_runtime_node(
         summary.clone(),
         error.clone(),
     );
-    runtime_node_events.push((
-        node_id.to_string(),
-        status.to_string(),
-        summary,
-        error,
-    ));
+    runtime_node_events.push((node_id.to_string(), status.to_string(), summary, error));
 }
 
 pub fn record_runtime_checkpoint(
@@ -524,7 +544,12 @@ pub fn append_resume_traces(
     repair_orchestration: Option<Value>,
     failed: bool,
 ) {
-    append_runtime_task_trace(store, task_id, "resumed", Some(serde_json::json!({ "route": route_value })));
+    append_runtime_task_trace(
+        store,
+        task_id,
+        "resumed",
+        Some(serde_json::json!({ "route": route_value })),
+    );
     if let Some(orchestration_value) = orchestration {
         append_runtime_task_trace(
             store,
@@ -580,7 +605,11 @@ pub fn runtime_graph_for_route_record(route: &Value) -> Vec<RuntimeGraphNodeReco
         nodes.push(pending_node("review", "review", "Review"));
     }
     nodes.push(pending_node("execute_tools", "execute_tools", "Execute"));
-    nodes.push(pending_node("save_artifact", "save_artifact", "Save Artifact"));
+    nodes.push(pending_node(
+        "save_artifact",
+        "save_artifact",
+        "Save Artifact",
+    ));
     nodes
 }
 
@@ -719,5 +748,40 @@ mod tests {
                 .and_then(Value::as_str),
             Some("default")
         );
+    }
+
+    #[test]
+    fn list_runtime_task_traces_can_include_children() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let mut parent = create_runtime_task(
+            "manual",
+            "pending",
+            "default".to_string(),
+            Some("session-parent".to_string()),
+            Some("draft".to_string()),
+            route.clone(),
+            None,
+        );
+        let parent_id = parent.id.clone();
+        parent.runtime_id = Some("runtime-parent".to_string());
+        let mut child = create_runtime_task(
+            "subagent",
+            "pending",
+            "default".to_string(),
+            Some("session-child".to_string()),
+            Some("draft".to_string()),
+            route,
+            None,
+        );
+        child.parent_task_id = Some(parent_id.clone());
+        child.id = "task-child".to_string();
+        let mut store = crate::AppStore::default();
+        store.runtime_tasks.push(parent.clone());
+        store.runtime_tasks.push(child.clone());
+        append_runtime_task_trace(&mut store, &parent_id, "created", None);
+        append_runtime_task_trace(&mut store, &child.id, "completed", None);
+
+        assert_eq!(list_runtime_task_traces(&store, &parent_id, false).len(), 1);
+        assert_eq!(list_runtime_task_traces(&store, &parent_id, true).len(), 2);
     }
 }

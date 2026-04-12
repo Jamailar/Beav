@@ -11,15 +11,33 @@ use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::skills::active_skill_activation_items;
-use crate::{payload_field, payload_string, resolve_runtime_mode_for_session, AppState};
+use crate::{
+    log_timing_event, now_ms, payload_field, payload_string, resolve_runtime_mode_for_session,
+    AppState,
+};
 
 pub fn handle_runtime_query(
     app: &AppHandle,
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
+    let started_at = now_ms();
     let session_id = payload_string(payload, "sessionId");
     let message = payload_string(payload, "message").unwrap_or_default();
+    let request_id = format!(
+        "runtime:query:{}",
+        session_id
+            .clone()
+            .unwrap_or_else(|| "new-session".to_string())
+    );
+    log_timing_event(
+        state,
+        "ai",
+        &request_id,
+        "runtime:query:start",
+        started_at,
+        Some(format!("chars={}", message.chars().count())),
+    );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let runtime_mode = with_store(state, |store| {
         Ok(session_id
@@ -129,6 +147,17 @@ pub fn handle_runtime_query(
         &execution,
         crate::agent::SessionAgentTurnKind::RuntimeQuery,
     )?;
+    log_timing_event(
+        state,
+        "ai",
+        &request_id,
+        "runtime:query:done",
+        started_at,
+        Some(format!(
+            "responseChars={}",
+            execution.response().chars().count()
+        )),
+    );
     Ok(json!({
         "success": true,
         "sessionId": execution.session_id(),

@@ -152,7 +152,10 @@ fn default_track_name_for_asset(asset: &MediaAssetRecord) -> &'static str {
 fn timeline_track_kind(track_name: &str) -> &'static str {
     if track_name.starts_with('A') {
         "Audio"
-    } else if track_name.starts_with('S') || track_name.starts_with('T') || track_name.starts_with('C') {
+    } else if track_name.starts_with('S')
+        || track_name.starts_with('T')
+        || track_name.starts_with('C')
+    {
         "Subtitle"
     } else {
         "Video"
@@ -262,11 +265,7 @@ fn build_timeline_subtitle_clip(
     })
 }
 
-fn build_timeline_text_clip(
-    desired_order: usize,
-    text: &str,
-    duration_ms: Option<i64>,
-) -> Value {
+fn build_timeline_text_clip(desired_order: usize, text: &str, duration_ms: Option<i64>) -> Value {
     let duration_value = duration_ms
         .filter(|value| *value > 0)
         .unwrap_or(2500)
@@ -397,8 +396,7 @@ pub fn handle_manuscripts_channel(
         match channel {
             "manuscripts:list" => {
                 let root = manuscripts_root(state)?;
-                Ok(serde_json::to_value(list_tree(&root, &root)?)
-                    .map_err(|error| error.to_string())?)
+                serde_json::to_value(list_tree(&root, &root)).map_err(|error| error.to_string())
             }
             "manuscripts:read" => {
                 let relative = payload_value_as_string(&payload).unwrap_or_default();
@@ -640,8 +638,10 @@ pub fn handle_manuscripts_channel(
                         canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
                         active_panel: payload_string(&payload, "activePanel"),
                         drawer_panel: payload_string(&payload, "drawerPanel"),
-                        scene_item_transforms: payload_field(&payload, "sceneItemTransforms").cloned(),
-                        scene_item_visibility: payload_field(&payload, "sceneItemVisibility").cloned(),
+                        scene_item_transforms: payload_field(&payload, "sceneItemTransforms")
+                            .cloned(),
+                        scene_item_visibility: payload_field(&payload, "sceneItemVisibility")
+                            .cloned(),
                         scene_item_order: payload_field(&payload, "sceneItemOrder").cloned(),
                         scene_item_locks: payload_field(&payload, "sceneItemLocks").cloned(),
                         scene_item_groups: payload_field(&payload, "sceneItemGroups").cloned(),
@@ -667,7 +667,9 @@ pub fn handle_manuscripts_channel(
             }
             "manuscripts:update-package-track-ui" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
-                let track_ui = payload_field(&payload, "trackUi").cloned().unwrap_or_else(|| json!({}));
+                let track_ui = payload_field(&payload, "trackUi")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 if file_path.is_empty() {
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
@@ -680,13 +682,17 @@ pub fn handle_manuscripts_channel(
             }
             "manuscripts:update-package-scene-ui" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
-                let scene_ui = payload_field(&payload, "sceneUi").cloned().unwrap_or_else(|| json!({
-                    "itemVisibility": {},
-                    "itemOrder": [],
-                    "itemLocks": {},
-                    "itemGroups": {},
-                    "focusedGroupId": Value::Null
-                }));
+                let scene_ui = payload_field(&payload, "sceneUi")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        json!({
+                            "itemVisibility": {},
+                            "itemOrder": [],
+                            "itemLocks": {},
+                            "itemGroups": {},
+                            "focusedGroupId": Value::Null
+                        })
+                    });
                 if file_path.is_empty() {
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
@@ -747,7 +753,9 @@ pub fn handle_manuscripts_channel(
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let track_id = payload_string(&payload, "trackId").unwrap_or_default();
                 if file_path.is_empty() || track_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath and trackId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and trackId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 let mut timeline = read_json_value_or(
@@ -785,7 +793,9 @@ pub fn handle_manuscripts_channel(
                     })
                     .count();
                 if same_kind_count <= 1 {
-                    return Ok(json!({ "success": false, "error": "At least one track per media kind must remain" }));
+                    return Ok(
+                        json!({ "success": false, "error": "At least one track per media kind must remain" }),
+                    );
                 }
                 let has_children = tracks[track_index]
                     .get("children")
@@ -793,7 +803,9 @@ pub fn handle_manuscripts_channel(
                     .map(|children| !children.is_empty())
                     .unwrap_or(false);
                 if has_children {
-                    return Ok(json!({ "success": false, "error": "Only empty tracks can be deleted" }));
+                    return Ok(
+                        json!({ "success": false, "error": "Only empty tracks can be deleted" }),
+                    );
                 }
                 tracks.remove(track_index);
                 normalize_package_timeline(&mut timeline);
@@ -803,9 +815,12 @@ pub fn handle_manuscripts_channel(
             "manuscripts:move-package-track" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let track_id = payload_string(&payload, "trackId").unwrap_or_default();
-                let direction = payload_string(&payload, "direction").unwrap_or_else(|| "up".to_string());
+                let direction =
+                    payload_string(&payload, "direction").unwrap_or_else(|| "up".to_string());
                 if file_path.is_empty() || track_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath and trackId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and trackId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 let mut timeline = read_json_value_or(
@@ -836,7 +851,9 @@ pub fn handle_manuscripts_channel(
                     track_index.saturating_sub(1)
                 };
                 if target_index == track_index {
-                    return Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }));
+                    return Ok(
+                        json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }),
+                    );
                 }
                 let track = tracks.remove(track_index);
                 tracks.insert(target_index, track);
@@ -953,14 +970,17 @@ pub fn handle_manuscripts_channel(
                             })
                             .unwrap_or_else(|| "S1".to_string())
                     });
-                let target_track = ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
+                let target_track =
+                    ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
                 let target_children = target_track
                     .get_mut("children")
                     .and_then(Value::as_array_mut)
                     .ok_or_else(|| "Timeline track children missing".to_string())?;
 
                 let mut desired_order = target_children.len();
-                if let Some(order) = payload_field(&payload, "order").and_then(|value| value.as_i64()) {
+                if let Some(order) =
+                    payload_field(&payload, "order").and_then(|value| value.as_i64())
+                {
                     desired_order = order.clamp(0, target_children.len() as i64) as usize;
                 } else {
                     let mut cursor_ms = 0_i64;
@@ -1176,7 +1196,8 @@ pub fn handle_manuscripts_channel(
                             })
                             .unwrap_or_else(|| "T1".to_string())
                     });
-                let target_track = ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
+                let target_track =
+                    ensure_timeline_track(&mut timeline, &preferred_track_name, "Subtitle");
                 let target_children = target_track
                     .get_mut("children")
                     .and_then(Value::as_array_mut)
@@ -1203,7 +1224,8 @@ pub fn handle_manuscripts_channel(
                     payload_field(&payload, "durationMs").and_then(|value| value.as_i64()),
                 );
                 if let Some(text_style) = payload_field(&payload, "textStyle").cloned() {
-                    if let Some(metadata) = clip.get_mut("metadata").and_then(Value::as_object_mut) {
+                    if let Some(metadata) = clip.get_mut("metadata").and_then(Value::as_object_mut)
+                    {
                         metadata.insert("textStyle".to_string(), text_style);
                     }
                 }

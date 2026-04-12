@@ -158,12 +158,26 @@ pub fn emit_runtime_event(
     task_id: Option<&str>,
     payload: Value,
 ) {
+    emit_runtime_event_with_lineage(app, event_type, session_id, task_id, None, None, payload);
+}
+
+pub fn emit_runtime_event_with_lineage(
+    app: &AppHandle,
+    event_type: &str,
+    session_id: Option<&str>,
+    task_id: Option<&str>,
+    runtime_id: Option<&str>,
+    parent_runtime_id: Option<&str>,
+    payload: Value,
+) {
     let _ = app.emit(
         "runtime:event",
         json!({
             "eventType": event_type,
             "sessionId": session_id,
             "taskId": task_id,
+            "runtimeId": runtime_id,
+            "parentRuntimeId": parent_runtime_id,
             "payload": payload,
             "timestamp": now_i64(),
         }),
@@ -376,15 +390,60 @@ pub fn emit_runtime_subagent_spawned(
     session_id: Option<&str>,
     role_id: &str,
     runtime_mode: &str,
+    child_runtime_id: Option<&str>,
+    child_task_id: Option<&str>,
+    child_session_id: Option<&str>,
+    parent_runtime_id: Option<&str>,
 ) {
-    emit_runtime_event(
+    emit_runtime_event_with_lineage(
         app,
         "subagent_spawned",
         session_id,
         task_id,
+        child_runtime_id,
+        parent_runtime_id,
         json!({
             "roleId": role_id,
             "runtimeMode": runtime_mode,
+            "childRuntimeId": child_runtime_id,
+            "childTaskId": child_task_id,
+            "childSessionId": child_session_id,
+            "parentTaskId": task_id,
+        }),
+    );
+}
+
+pub fn emit_runtime_subagent_finished(
+    app: &AppHandle,
+    task_id: Option<&str>,
+    session_id: Option<&str>,
+    role_id: &str,
+    runtime_mode: &str,
+    child_runtime_id: Option<&str>,
+    child_task_id: Option<&str>,
+    child_session_id: Option<&str>,
+    parent_runtime_id: Option<&str>,
+    status: &str,
+    summary: Option<&str>,
+    error: Option<&str>,
+) {
+    emit_runtime_event_with_lineage(
+        app,
+        "subagent_finished",
+        session_id,
+        task_id,
+        child_runtime_id,
+        parent_runtime_id,
+        json!({
+            "roleId": role_id,
+            "runtimeMode": runtime_mode,
+            "childRuntimeId": child_runtime_id,
+            "childTaskId": child_task_id,
+            "childSessionId": child_session_id,
+            "parentTaskId": task_id,
+            "status": status,
+            "summary": summary,
+            "error": error,
         }),
     );
 }

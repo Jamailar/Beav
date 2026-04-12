@@ -15,6 +15,7 @@ import {
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
+import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 
 const REDCLAW_CONTEXT_ID = 'redclaw-singleton';
 const REDCLAW_CONTEXT_TYPE = 'redclaw';
@@ -356,6 +357,10 @@ function resultTone(result?: RunnerResult): string {
 }
 
 export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWorkboard, isActive = true }: RedClawProps) {
+    const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
+        if (!import.meta.env.DEV) return;
+        console.debug(`[ui][redclaw] ${event}`, extra || {});
+    }, []);
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [activeSpaceName, setActiveSpaceName] = useState<string>('默认空间');
@@ -413,7 +418,12 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             setIsSessionLoading(true);
         }
         try {
-            const spaceInfo = await window.ipcRenderer.invoke('spaces:list') as {
+            const spaceInfo = await uiMeasure('redclaw', 'init_session:spaces', async () => (
+                window.ipcRenderer.invoke('spaces:list') as Promise<{
+                    activeSpaceId?: string;
+                    spaces?: Array<{ id: string; name: string }>;
+                } | null>
+            )) as {
                 activeSpaceId?: string;
                 spaces?: Array<{ id: string; name: string }>;
             } | null;
@@ -421,15 +431,18 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             const spaceName = spaceInfo?.spaces?.find((space) => space.id === activeSpaceId)?.name || activeSpaceId;
             setActiveSpaceName(spaceName);
 
-            const session = await window.ipcRenderer.chat.getOrCreateContextSession({
-                contextId: `${REDCLAW_CONTEXT_ID}:${activeSpaceId}`,
-                contextType: REDCLAW_CONTEXT_TYPE,
-                title: `RedClaw · ${spaceName}`,
-                initialContext: `${REDCLAW_CONTEXT}\n当前空间: ${spaceName} (${activeSpaceId})`,
-            });
+            const session = await uiMeasure('redclaw', 'init_session:create_context', async () => (
+                window.ipcRenderer.chat.getOrCreateContextSession({
+                    contextId: `${REDCLAW_CONTEXT_ID}:${activeSpaceId}`,
+                    contextType: REDCLAW_CONTEXT_TYPE,
+                    title: `RedClaw · ${spaceName}`,
+                    initialContext: `${REDCLAW_CONTEXT}\n当前空间: ${spaceName} (${activeSpaceId})`,
+                })
+            ), { activeSpaceId, spaceName });
             if (requestId !== sessionRequestIdRef.current) return;
             setSessionId(session.id);
             hasSessionSnapshotRef.current = true;
+            debugUi('init_session:done', { sessionId: session.id, activeSpaceId, spaceName });
         } catch (error) {
             console.error('Failed to initialize RedClaw session:', error);
             if (!hasSessionSnapshotRef.current) {
@@ -457,7 +470,9 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             setAutomationLoading(true);
         }
         try {
-            const status = await window.ipcRenderer.redclawRunner.getStatus() as RunnerStatus;
+            const status = await uiMeasure('redclaw', 'load_runner_status', async () => (
+                window.ipcRenderer.redclawRunner.getStatus() as Promise<RunnerStatus>
+            ), { syncForm }) as RunnerStatus;
             if (requestId !== runnerStatusRequestIdRef.current) return;
             setRunnerStatus(status);
             hasRunnerSnapshotRef.current = true;
@@ -477,7 +492,9 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     const loadProjects = useCallback(async () => {
         const requestId = ++projectsRequestIdRef.current;
         try {
-            const list = await window.ipcRenderer.invoke('redclaw:list-projects', { limit: 60 }) as RedClawProjectSummary[];
+            const list = await uiMeasure('redclaw', 'load_projects', async () => (
+                window.ipcRenderer.invoke('redclaw:list-projects', { limit: 60 }) as Promise<RedClawProjectSummary[]>
+            )) as RedClawProjectSummary[];
             if (requestId !== projectsRequestIdRef.current) return;
             if (Array.isArray(list)) {
                 setProjects(list);
@@ -493,7 +510,9 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             setIsSkillsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.listSkills();
+            const list = await uiMeasure('redclaw', 'load_skills', async () => (
+                window.ipcRenderer.listSkills()
+            ));
             if (requestId !== skillsRequestIdRef.current) return;
             setSkills((list || []) as SkillDefinition[]);
             hasSkillsSnapshotRef.current = true;
@@ -505,6 +524,21 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             }
         }
     }, []);
+
+    useEffect(() => {
+        debugUi(isActive ? 'view_activate' : 'view_deactivate', { sessionId });
+        if (!isActive) {
+            return;
+        }
+    }, [debugUi, isActive, sessionId]);
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+        debugUi('view_mount');
+        return () => {
+            debugUi('view_unmount');
+        };
+    }, [debugUi]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -589,9 +623,12 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
 
     const compactRedClawContext = useCallback(async () => {
         if (!sessionId || chatActionLoading) return;
+        uiTraceInteraction('redclaw', 'compact_context', { sessionId });
         setChatActionLoading('compact');
         try {
-            const result = await window.ipcRenderer.chat.compactContext(sessionId);
+            const result = await uiMeasure('redclaw', 'compact_context:invoke', async () => (
+                window.ipcRenderer.chat.compactContext(sessionId)
+            ), { sessionId });
             if (!result?.success) {
                 setChatActionMessage(result?.message || '压缩失败，请稍后重试');
                 return;
@@ -989,6 +1026,7 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
                             <Chat
+                                isActive={isActive}
                                 key={`${sessionId}:${chatRefreshKey}`}
                                 fixedSessionId={sessionId}
                                 pendingMessage={pendingMessage}

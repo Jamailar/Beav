@@ -1,10 +1,13 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-use crate::persistence::{hydrate_store_from_workspace_files, with_store, with_store_mut};
+use crate::persistence::{
+    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    with_store_mut,
+};
 use crate::{
-    active_space_workspace_root_from_store, emit_space_changed, ensure_workspace_dirs, make_id,
-    now_iso, payload_string, payload_value_as_string, AppState, SpaceRecord,
+    active_space_workspace_root_from_store, emit_space_changed, make_id, now_iso,
+    payload_string, payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
 };
 
 pub fn handle_spaces_channel(
@@ -51,22 +54,25 @@ pub fn handle_spaces_channel(
                     )
                 })?;
 
-                let _ = with_store_mut(state, |store| {
-                    hydrate_store_from_workspace_files(store, &state.store_path)?;
-                    Ok(())
-                });
+                if let Some(root) = with_store(state, |store| {
+                    Ok(Some(active_space_workspace_root_from_store(
+                        &store,
+                        &store.active_space_id,
+                        &state.store_path,
+                    )?))
+                })? {
+                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let _ = with_store_mut(state, |store| {
+                        apply_workspace_hydration_snapshot(store, snapshot);
+                        Ok(())
+                    });
+                }
 
                 if let Some(active_space_id) =
                     result.get("activeSpaceId").and_then(|value| value.as_str())
                 {
-                    let root = with_store(state, |store| {
-                        active_space_workspace_root_from_store(
-                            &store,
-                            active_space_id,
-                            &state.store_path,
-                        )
-                    })?;
-                    ensure_workspace_dirs(&root)?;
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let _ = update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
                     emit_space_changed(app, active_space_id);
                 }
 
@@ -102,22 +108,25 @@ pub fn handle_spaces_channel(
                     Ok(json!({ "success": true, "activeSpaceId": store.active_space_id }))
                 })?;
 
-                let _ = with_store_mut(state, |store| {
-                    hydrate_store_from_workspace_files(store, &state.store_path)?;
-                    Ok(())
-                });
+                if let Some(root) = with_store(state, |store| {
+                    Ok(Some(active_space_workspace_root_from_store(
+                        &store,
+                        &store.active_space_id,
+                        &state.store_path,
+                    )?))
+                })? {
+                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let _ = with_store_mut(state, |store| {
+                        apply_workspace_hydration_snapshot(store, snapshot);
+                        Ok(())
+                    });
+                }
 
                 if let Some(active_space_id) =
                     result.get("activeSpaceId").and_then(|value| value.as_str())
                 {
-                    let root = with_store(state, |store| {
-                        active_space_workspace_root_from_store(
-                            &store,
-                            active_space_id,
-                            &state.store_path,
-                        )
-                    })?;
-                    ensure_workspace_dirs(&root)?;
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let _ = update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
                     emit_space_changed(app, active_space_id);
                 }
 

@@ -100,6 +100,9 @@ export interface AgentTaskTrace {
   id: number;
   taskId: string;
   nodeId?: string | null;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  sourceTaskId?: string | null;
   eventType: string;
   payload?: unknown;
   createdAt: number;
@@ -112,12 +115,15 @@ export type RuntimeUnifiedEventType =
   | 'tool_result'
   | 'task_node_changed'
   | 'subagent_spawned'
+  | 'subagent_finished'
   | 'task_checkpoint_saved';
 
 export interface RuntimeUnifiedEvent {
   eventType: RuntimeUnifiedEventType;
   sessionId?: string | null;
   taskId?: string | null;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
   payload?: unknown;
   timestamp: number;
 }
@@ -135,6 +141,9 @@ export interface SessionRuntimeRecord {
 export interface SessionCheckpointRecord {
   id: string;
   sessionId: string;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  sourceTaskId?: string | null;
   checkpointType: string;
   summary: string;
   payload?: unknown;
@@ -144,6 +153,9 @@ export interface SessionCheckpointRecord {
 export interface SessionToolResultItem {
   id: string;
   sessionId: string;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  sourceTaskId?: string | null;
   callId: string;
   toolName: string;
   command?: string;
@@ -348,9 +360,9 @@ declare global {
         query: (payload: { sessionId?: string; message: string; modelConfig?: unknown }) => Promise<{ success: boolean; sessionId: string; response?: string; error?: string }>;
         resume: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId: string }>;
         forkSession: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId?: string; forkedSessionId?: string }>;
-        getTrace: (payload: { sessionId: string; limit?: number }) => Promise<SessionRuntimeRecord[]>;
-        getCheckpoints: (payload: { sessionId: string; limit?: number }) => Promise<SessionCheckpointRecord[]>;
-        getToolResults: (payload: { sessionId: string; limit?: number }) => Promise<SessionToolResultItem[]>;
+        getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
+        getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
+        getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
       };
       toolHooks: {
         list: () => Promise<unknown[]>;

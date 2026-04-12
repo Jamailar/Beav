@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
     FolderPlus,
     ImagePlus,
@@ -163,6 +164,22 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
 
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+        uiDebug('subjects', isActive ? 'view_activate' : 'view_deactivate', {
+            loading,
+            subjectCount: subjects.length,
+        });
+    }, [isActive, loading, subjects.length]);
+
+    useEffect(() => {
+        if (!import.meta.env.DEV) return;
+        uiDebug('subjects', 'view_mount');
+        return () => {
+            uiDebug('subjects', 'view_unmount');
+        };
+    }, []);
+
     const loadData = useCallback(async () => {
         const requestId = loadDataRequestRef.current + 1;
         loadDataRequestRef.current = requestId;
@@ -171,10 +188,12 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         }
         setError('');
         try {
-            const [categoriesResult, subjectsResult] = await Promise.all([
-                window.ipcRenderer.subjects.categories.list(),
-                window.ipcRenderer.subjects.list({ limit: 500 }),
-            ]);
+            const [categoriesResult, subjectsResult] = await uiMeasure('subjects', 'load_data', async () => (
+                Promise.all([
+                    window.ipcRenderer.subjects.categories.list(),
+                    window.ipcRenderer.subjects.list({ limit: 500 }),
+                ])
+            ), { requestId });
             if (!categoriesResult?.success) {
                 throw new Error(categoriesResult?.error || '加载分类失败');
             }

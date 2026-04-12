@@ -4,6 +4,7 @@ import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
+import { uiTraceInteraction } from './utils/uiDebug';
 
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
 const CreativeChatPage = lazy(async () => ({ default: (await import('./pages/CreativeChat')).CreativeChat }));
@@ -22,9 +23,24 @@ const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workbo
 
 export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
 
-const PINNED_VIEWS: ViewType[] = ['manuscripts', 'chat', 'creative-chat', 'redclaw', 'wander', 'settings'];
-const MAX_CACHED_VIEWS = 5;
-const NON_CACHEABLE_VIEWS = new Set<ViewType>([]);
+const PINNED_VIEWS: ViewType[] = [];
+const MAX_CACHED_VIEWS = 0;
+const NON_CACHEABLE_VIEWS = new Set<ViewType>([
+  'chat',
+  'creative-chat',
+  'skills',
+  'knowledge',
+  'advisors',
+  'settings',
+  'manuscripts',
+  'archives',
+  'wander',
+  'redclaw',
+  'media-library',
+  'cover-studio',
+  'subjects',
+  'workboard',
+]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 
 // 待发送的聊天消息（用于跨页面传递）
@@ -133,7 +149,7 @@ function ViewLoadingFallback() {
 }
 
 function computeMountedViews(history: ViewType[]): Set<ViewType> {
-  const next = new Set<ViewType>(PINNED_VIEWS);
+  const next = new Set<ViewType>();
   const recent = history.slice(-MAX_CACHED_VIEWS);
   for (const view of recent) {
     if (!NON_CACHEABLE_VIEWS.has(view)) {
@@ -141,6 +157,13 @@ function computeMountedViews(history: ViewType[]): Set<ViewType> {
     }
   }
   return next;
+}
+
+function shouldRenderView(mountedViews: Set<ViewType>, currentView: ViewType, view: ViewType): boolean {
+  if (NON_CACHEABLE_VIEWS.has(view)) {
+    return currentView === view;
+  }
+  return mountedViews.has(view);
 }
 
 function App() {
@@ -185,6 +208,7 @@ function App() {
 
   // 导航到 Chat 页面并发送消息
   const navigateToChat = (message: PendingChatMessage) => {
+    uiTraceInteraction('app', 'nav_to_chat', { to: 'chat' });
     setPendingChatMessage(message);
     setCurrentView('chat');
   };
@@ -195,6 +219,7 @@ function App() {
   };
 
   const navigateToRedClaw = (message: PendingChatMessage) => {
+    uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
     setPendingRedClawMessage(message);
     setCurrentView('redclaw');
   };
@@ -205,6 +230,7 @@ function App() {
 
   // 导航到稿件页面并打开指定文件
   const navigateToManuscript = (filePath: string) => {
+    uiTraceInteraction('app', 'nav_to_manuscripts', { to: 'manuscripts' });
     setPendingManuscriptFile(filePath);
     setCurrentView('manuscripts');
   };
@@ -319,10 +345,11 @@ function App() {
   return (
     <>
       <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={isImmersiveEditor}>
-        {mountedViews.has('chat') && (
+        {shouldRenderView(mountedViews, currentView, 'chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
               <ChatPage
+                isActive={currentView === 'chat'}
                 pendingMessage={pendingChatMessage}
                 onMessageConsumed={clearPendingMessage}
               />
@@ -399,7 +426,7 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('redclaw') && (
+        {shouldRenderView(mountedViews, currentView, 'redclaw') && (
           <div className={currentView === 'redclaw' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage

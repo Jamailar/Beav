@@ -17,29 +17,27 @@ export function VideoEditorStageShell({
     compact = false,
 }: VideoEditorStageShellProps) {
     return (
-        <section className="col-start-3 row-start-1 min-h-0 bg-[#111214]">
-            <div className="flex h-full min-h-0 flex-col px-4 py-4">
-                {!compact ? (
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                            <div className="text-sm font-medium text-white">{title}</div>
-                            <div className="mt-1 text-xs text-white/45">{subtitle}</div>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                            {toolbar}
-                        </div>
+        <section className="col-start-3 row-start-1 flex h-full min-h-0 flex-col bg-[#111214] px-4 py-4">
+            {!compact ? (
+                <header className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium text-white">{title}</div>
+                        <div className="mt-1 text-xs text-white/45">{subtitle}</div>
                     </div>
-                ) : (
-                    <div className="mb-2 flex items-center justify-end gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         {toolbar}
                     </div>
-                )}
-                <div className={clsx(
-                    'min-h-0 flex-1 overflow-hidden rounded-[22px] border border-white/10 bg-[#101113]',
-                    'shadow-[0_14px_40px_rgba(0,0,0,0.24)]'
-                )}>
-                    {children}
+                </header>
+            ) : (
+                <div className="mb-2 flex items-center justify-end gap-2">
+                    {toolbar}
                 </div>
+            )}
+            <div className={clsx(
+                'min-h-0 flex-1 overflow-hidden rounded-[22px] border border-white/10 bg-[#101113]',
+                'shadow-[0_14px_40px_rgba(0,0,0,0.24)]'
+            )}>
+                {children}
             </div>
         </section>
     );

@@ -91,7 +91,10 @@ mod tests {
             "requiresMultiAgent": true,
             "requiresLongRunningTask": false
         }));
-        let ids = graph.iter().map(|node| node.id.as_str()).collect::<Vec<_>>();
+        let ids = graph
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<Vec<_>>();
         assert!(ids.contains(&"spawn_agents"));
         assert!(ids.contains(&"handoff"));
         assert!(ids.contains(&"review"));
@@ -251,6 +254,12 @@ mod tests {
         let route = runtime_direct_route_record("knowledge", "search it", None);
         let task = RuntimeTaskRecord {
             id: "task-1".to_string(),
+            runtime_id: None,
+            parent_runtime_id: None,
+            parent_task_id: None,
+            root_task_id: None,
+            child_task_ids: Vec::new(),
+            aggregation_status: None,
             task_type: "manual".to_string(),
             status: "pending".to_string(),
             runtime_mode: "knowledge".to_string(),
@@ -286,22 +295,28 @@ mod tests {
         };
         let value = runtime_task_value(&task);
 
-        assert_eq!(value.get("taskType").and_then(Value::as_str), Some("manual"));
         assert_eq!(
-            value.get("route")
+            value.get("taskType").and_then(Value::as_str),
+            Some("manual")
+        );
+        assert_eq!(
+            value
+                .get("route")
                 .and_then(|item| item.get("recommendedRole"))
                 .and_then(Value::as_str),
             Some("researcher")
         );
         assert_eq!(
-            value.get("graph")
+            value
+                .get("graph")
                 .and_then(Value::as_array)
                 .and_then(|items| items.first())
                 .and_then(|item| item.get("startedAt")),
             Some(&Value::Null)
         );
         assert_eq!(
-            value.get("artifacts")
+            value
+                .get("artifacts")
                 .and_then(Value::as_array)
                 .and_then(|items| items.first())
                 .and_then(|item| item.get("label"))
@@ -309,7 +324,8 @@ mod tests {
             Some("Saved Artifact")
         );
         assert_eq!(
-            value.get("checkpoints")
+            value
+                .get("checkpoints")
                 .and_then(Value::as_array)
                 .and_then(|items| items.first())
                 .and_then(|item| item.get("nodeId"))

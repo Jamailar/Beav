@@ -86,6 +86,7 @@ type TimelinePreviewCompositionProps = {
     stageHeight: number;
     ratioPreset: VideoEditorRatioPreset;
     timelineClips: TimelineClipLike[];
+    trackOrder: string[];
     trackUi: Record<string, TrackUiStateLike>;
     assetsById: Record<string, MediaAssetLike>;
     selectedScene: RemotionScene | null;
@@ -191,12 +192,20 @@ function normalizeAssetKind(clip: TimelineClipLike) {
     return 'unknown';
 }
 
-function trackPriority(track: string) {
-    const normalized = String(track || '').trim().toUpperCase();
-    if (normalized.startsWith('V')) return 0;
-    if (normalized.startsWith('S') || normalized.startsWith('T') || normalized.startsWith('C')) return 1;
-    if (normalized.startsWith('A')) return 2;
-    return 3;
+function buildTrackOrderIndex(trackOrder: string[], timelineClips: TimelineClipLike[]): Map<string, number> {
+    const ordered = new Map<string, number>();
+    const appendTrack = (value: unknown) => {
+        const normalized = String(value || '').trim();
+        if (!normalized || ordered.has(normalized)) return;
+        ordered.set(normalized, ordered.size);
+    };
+    trackOrder.forEach(appendTrack);
+    timelineClips.forEach((clip) => appendTrack(clip.track));
+    return ordered;
+}
+
+function trackOrderValue(trackId: string, trackOrderIndex: Map<string, number>): number {
+    return trackOrderIndex.get(String(trackId || '').trim()) ?? Number.MAX_SAFE_INTEGER;
 }
 
 function isSubtitleClip(clip: TimelineClipLike) {
@@ -532,6 +541,7 @@ export function TimelinePreviewComposition({
     stageHeight,
     ratioPreset,
     timelineClips,
+    trackOrder,
     trackUi,
     assetsById,
     selectedScene,
@@ -568,6 +578,18 @@ export function TimelinePreviewComposition({
     const [marquee, setMarquee] = useState<MarqueeState | null>(null);
     const [stageRenderSize, setStageRenderSize] = useState({ width: 0, height: 0 });
     const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
+    const trackOrderIndex = useMemo(
+        () => buildTrackOrderIndex(trackOrder, timelineClips),
+        [timelineClips, trackOrder]
+    );
+    const compareActiveClips = (left: TimelineClipLike, right: TimelineClipLike) => {
+        const trackDelta = trackOrderValue(String(left.track || '').trim(), trackOrderIndex)
+            - trackOrderValue(String(right.track || '').trim(), trackOrderIndex);
+        if (trackDelta !== 0) return trackDelta;
+        const startDelta = Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
+        if (Math.abs(startDelta) > 0.0001) return startDelta;
+        return String(left.clipId || '').localeCompare(String(right.clipId || ''), 'zh-CN');
+    };
 
     const visibleClips = useMemo(
         () => timelineClips.filter((clip) => {
@@ -618,12 +640,8 @@ export function TimelinePreviewComposition({
                     const kind = normalizeAssetKind(clip);
                     return (kind === 'video' || kind === 'image') && !isSubtitleClip(clip);
                 })
-                .sort((left, right) => {
-                    const priorityDelta = trackPriority(String(left.track || '')) - trackPriority(String(right.track || ''));
-                    if (priorityDelta !== 0) return priorityDelta;
-                    return Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
-                })[0] || null,
-        [activeClips]
+                .sort(compareActiveClips)[0] || null,
+        [activeClips, trackOrderIndex]
     );
 
     const previousVisualClip = useMemo(() => {
@@ -642,12 +660,8 @@ export function TimelinePreviewComposition({
     const activeAudioClip = useMemo(
         () =>
             [...activeAudibleClips]
-                .sort((left, right) => {
-                    const priorityDelta = trackPriority(String(left.track || '')) - trackPriority(String(right.track || ''));
-                    if (priorityDelta !== 0) return priorityDelta;
-                    return Number(left.startSeconds || 0) - Number(right.startSeconds || 0);
-                })[0] || null,
-        [activeAudibleClips]
+                .sort(compareActiveClips)[0] || null,
+        [activeAudibleClips, trackOrderIndex]
     );
 
     const activeClip = activeVisualClip || activeAudioClip || null;

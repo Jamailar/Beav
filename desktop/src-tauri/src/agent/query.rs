@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::agent::ChatExchangeRequest;
-use crate::runtime::RuntimeRouteRecord;
 use crate::payload_string;
+use crate::runtime::RuntimeRouteRecord;
 
 pub struct PreparedRuntimeQueryExecution {
     pub route: RuntimeRouteRecord,
@@ -108,9 +108,15 @@ mod tests {
             "help me",
         );
 
-        assert!(prepared.effective_message.contains("Subagent orchestration summary"));
-        assert!(prepared.effective_message.contains("- planner: break into steps"));
-        assert!(prepared.effective_message.contains("- reviewer: verify saved artifact"));
+        assert!(prepared
+            .effective_message
+            .contains("Subagent orchestration summary"));
+        assert!(prepared
+            .effective_message
+            .contains("- planner: break into steps"));
+        assert!(prepared
+            .effective_message
+            .contains("- reviewer: verify saved artifact"));
     }
 
     #[test]
@@ -136,7 +142,10 @@ mod tests {
 
         assert_eq!(turn.request.session_id.as_deref(), Some("session-1"));
         assert_eq!(turn.request.display_content, "help me");
-        assert_eq!(turn.request.turn_kind, crate::agent::SessionAgentTurnKind::RuntimeQuery);
+        assert_eq!(
+            turn.request.turn_kind,
+            crate::agent::SessionAgentTurnKind::RuntimeQuery
+        );
         assert_eq!(
             turn.route_value.get("intent").and_then(Value::as_str),
             Some(turn.route.intent.as_str())

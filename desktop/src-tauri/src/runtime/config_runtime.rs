@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ResolvedChatConfig;
 use crate::payload_string;
+use crate::runtime::ResolvedChatConfig;
 
 pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path) -> String {
     let mut parts = Vec::new();

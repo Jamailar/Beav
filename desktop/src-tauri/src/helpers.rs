@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
@@ -304,7 +305,7 @@ fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
 fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> FileNode {
     let manifest = read_json_value_or(&package_manifest_path(path), json!({}));
     let entry_path = package_entry_path(path, file_name, Some(&manifest));
-    let entry_content = fs::read_to_string(&entry_path).unwrap_or_default();
+    let entry_content = read_text_prefix(&entry_path, 8 * 1024);
     let title =
         payload_string(&manifest, "title").unwrap_or_else(|| title_from_relative_path(file_name));
     let draft_type = payload_string(&manifest, "draftType")
@@ -341,7 +342,7 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
 }
 
 fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> FileNode {
-    let content = fs::read_to_string(path).unwrap_or_default();
+    let content = read_text_prefix(path, 8 * 1024);
     let frontmatter = parse_markdown_frontmatter(&content).unwrap_or_else(|| json!({}));
     let title = payload_string(&frontmatter, "title")
         .unwrap_or_else(|| title_from_relative_path(file_name));
@@ -392,7 +393,29 @@ pub(crate) fn resolve_manuscript_path(
     })
 }
 
-pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, String> {
+const MANUSCRIPTS_TREE_MAX_DEPTH: usize = 12;
+
+fn read_text_prefix(path: &Path, max_bytes: u64) -> String {
+    let Ok(file) = fs::File::open(path) else {
+        return String::new();
+    };
+    let mut reader = file.take(max_bytes);
+    let mut buffer = Vec::new();
+    if reader.read_to_end(&mut buffer).is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+fn list_tree_internal(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+) -> Result<Vec<FileNode>, String> {
+    if depth > MANUSCRIPTS_TREE_MAX_DEPTH {
+        return Ok(Vec::new());
+    }
+
     let mut entries = fs::read_dir(current)
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
@@ -404,6 +427,10 @@ pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, St
     for entry in entries {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() {
+            continue;
+        }
         let relative = normalize_relative_path(
             path.strip_prefix(root)
                 .map_err(|error| error.to_string())?
@@ -411,9 +438,9 @@ pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, St
                 .as_ref(),
         );
 
-        if path.is_dir() && is_manuscript_package_name(&file_name) {
+        if file_type.is_dir() && is_manuscript_package_name(&file_name) {
             nodes.push(file_node_from_package(&path, &file_name, relative));
-        } else if path.is_dir() {
+        } else if file_type.is_dir() {
             let updated_at = fs::metadata(&path)
                 .ok()
                 .and_then(|meta| meta.modified().ok())
@@ -423,14 +450,14 @@ pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, St
                 name: file_name,
                 path: relative,
                 is_directory: true,
-                children: Some(list_tree(root, &path)?),
+                children: Some(list_tree_internal(root, &path, depth + 1)?),
                 status: None,
                 title: None,
                 draft_type: None,
                 updated_at,
                 summary: None,
             });
-        } else if path.is_file() {
+        } else if file_type.is_file() {
             if file_name.ends_with(".md") {
                 nodes.push(file_node_from_markdown(&path, &file_name, relative));
             } else {
@@ -454,6 +481,10 @@ pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, St
     }
 
     Ok(nodes)
+}
+
+pub(crate) fn list_tree(root: &Path, current: &Path) -> Result<Vec<FileNode>, String> {
+    list_tree_internal(root, current, 0)
 }
 
 pub(crate) fn markdown_to_html(title: &str, content: &str) -> String {

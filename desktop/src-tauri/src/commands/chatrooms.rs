@@ -1,4 +1,7 @@
-use crate::persistence::{with_store, with_store_mut};
+use crate::persistence::{
+    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    with_store_mut,
+};
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
@@ -187,10 +190,19 @@ pub fn handle_chatrooms_channel(
         match channel {
             "chatrooms:list" => {
                 let _ = ensure_six_hats_room(state);
-                let _ = with_store_mut(state, |store| {
-                    hydrate_store_from_workspace_files(store, &state.store_path)?;
-                    Ok(())
-                });
+                if let Some(root) = with_store(state, |store| {
+                    Ok(Some(active_space_workspace_root_from_store(
+                        &store,
+                        &store.active_space_id,
+                        &state.store_path,
+                    )?))
+                })? {
+                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let _ = with_store_mut(state, |store| {
+                        apply_workspace_hydration_snapshot(store, snapshot);
+                        Ok(())
+                    });
+                }
                 with_store(state, |store| {
                     let mut rooms = store.chat_rooms.clone();
                     rooms.sort_by(|a, b| {
@@ -204,10 +216,19 @@ pub fn handle_chatrooms_channel(
             }
             "chatrooms:messages" => {
                 let room_id = payload_value_as_string(payload).unwrap_or_default();
-                let _ = with_store_mut(state, |store| {
-                    hydrate_store_from_workspace_files(store, &state.store_path)?;
-                    Ok(())
-                });
+                if let Some(root) = with_store(state, |store| {
+                    Ok(Some(active_space_workspace_root_from_store(
+                        &store,
+                        &store.active_space_id,
+                        &state.store_path,
+                    )?))
+                })? {
+                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let _ = with_store_mut(state, |store| {
+                        apply_workspace_hydration_snapshot(store, snapshot);
+                        Ok(())
+                    });
+                }
                 with_store(state, |store| {
                     let mut items: Vec<ChatRoomMessageRecord> = store
                         .chatroom_messages

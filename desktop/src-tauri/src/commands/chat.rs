@@ -10,7 +10,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
 use crate::session_lineage_fields;
 use crate::skills::active_skill_activation_items;
-use crate::{make_id, now_i64, payload_field, payload_string, AppState};
+use crate::{log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string, AppState};
 
 pub fn handle_send_channel(
     app: &AppHandle,
@@ -20,10 +20,25 @@ pub fn handle_send_channel(
 ) -> Result<(), String> {
     match channel {
         "chat:send-message" => {
+            let started_at = now_ms();
             let session_id = payload_string(&payload, "sessionId");
             let message = payload_string(&payload, "message").unwrap_or_default();
             let display_content =
                 payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());
+            let request_id = format!(
+                "chat:send:{}",
+                session_id
+                    .clone()
+                    .unwrap_or_else(|| "new-session".to_string())
+            );
+            log_timing_event(
+                state,
+                "ai",
+                &request_id,
+                "chat:send-message:start",
+                started_at,
+                Some(format!("chars={}", message.chars().count())),
+            );
             let turn = build_chat_send_turn(
                 session_id.clone(),
                 message.clone(),
@@ -69,6 +84,14 @@ pub fn handle_send_channel(
                         .unwrap_or(Value::Null),
                 );
             }
+            log_timing_event(
+                state,
+                "ai",
+                &request_id,
+                "chat:send-message:done",
+                started_at,
+                Some("status=ok".to_string()),
+            );
             Ok(())
         }
         "chat:cancel" | "ai:cancel" => {

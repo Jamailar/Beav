@@ -1,5 +1,7 @@
+use crate::agent::{
+    execute_prepared_session_agent_turn, AssistantDaemonTurn, PreparedSessionAgentTurn,
+};
 use serde_json::{json, Value};
-use crate::agent::{execute_prepared_session_agent_turn, AssistantDaemonTurn, PreparedSessionAgentTurn};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,9 +13,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{
-    now_iso, with_store, AppState, AssistantSidecarRuntime, AssistantStateRecord,
-};
+use crate::{now_iso, with_store, AppState, AssistantSidecarRuntime, AssistantStateRecord};
 
 pub(crate) fn value_to_i64_string(value: Option<&Value>) -> Option<String> {
     value.and_then(|item| {

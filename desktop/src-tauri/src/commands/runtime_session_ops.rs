@@ -9,10 +9,7 @@ use crate::{
     make_id, now_iso, now_ms, payload_string, payload_value_as_string, AppState, ChatSessionRecord,
 };
 
-pub fn runtime_state_value(
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
+pub fn runtime_state_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let requested_session_id = payload_value_as_string(payload).unwrap_or_default();
     let guard = state
         .chat_runtime_states
@@ -45,12 +42,19 @@ pub fn runtime_resume_value(payload: &Value) -> Value {
     json!({ "success": true, "sessionId": session_id })
 }
 
-pub fn runtime_trace_value(
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
+pub fn runtime_trace_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(trace_value_for_session(&store, &session_id)))
+    let include_child_sessions = payload
+        .get("includeChildSessions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    with_store(state, |store| {
+        Ok(trace_value_for_session(
+            &store,
+            &session_id,
+            include_child_sessions,
+        ))
+    })
 }
 
 pub fn runtime_checkpoints_value(
@@ -58,7 +62,19 @@ pub fn runtime_checkpoints_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(checkpoints_value_for_session(&store, &session_id)))
+    let include_child_sessions = payload
+        .get("includeChildSessions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let runtime_id = payload_string(payload, "runtimeId");
+    with_store(state, |store| {
+        Ok(checkpoints_value_for_session(
+            &store,
+            &session_id,
+            include_child_sessions,
+            runtime_id.as_deref(),
+        ))
+    })
 }
 
 pub fn runtime_tool_results_value(
@@ -66,7 +82,19 @@ pub fn runtime_tool_results_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    with_store(state, |store| Ok(tool_results_value_for_session(&store, &session_id)))
+    let include_child_sessions = payload
+        .get("includeChildSessions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let runtime_id = payload_string(payload, "runtimeId");
+    with_store(state, |store| {
+        Ok(tool_results_value_for_session(
+            &store,
+            &session_id,
+            include_child_sessions,
+            runtime_id.as_deref(),
+        ))
+    })
 }
 
 pub fn fork_runtime_session(

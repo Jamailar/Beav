@@ -9,8 +9,7 @@ use crate::{
     lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
     package_assets_path, package_cover_path, package_entry_path, package_images_path,
     package_manifest_path, package_remotion_path, package_scene_ui_path, package_timeline_path,
-    package_track_ui_path,
-    parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
+    package_track_ui_path, parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
     title_from_relative_path, write_json_value, write_text_file, AppState,
 };
 
@@ -554,10 +553,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         package_remotion_path(package_path).as_path(),
         build_default_remotion_scene(&title, &clips),
     );
-    let track_ui = read_json_value_or(
-        package_track_ui_path(package_path).as_path(),
-        json!({}),
-    );
+    let track_ui = read_json_value_or(package_track_ui_path(package_path).as_path(), json!({}));
     let scene_ui = read_json_value_or(
         package_scene_ui_path(package_path).as_path(),
         json!({
@@ -638,11 +634,14 @@ pub(crate) fn create_manuscript_package(
             &build_default_remotion_scene(title, &[]),
         )?;
         write_json_value(&package_track_ui_path(package_path), &json!({}))?;
-        write_json_value(&package_scene_ui_path(package_path), &json!({
-            "itemLocks": {},
-            "itemGroups": {},
-            "focusedGroupId": Value::Null
-        }))?;
+        write_json_value(
+            &package_scene_ui_path(package_path),
+            &json!({
+                "itemLocks": {},
+                "itemGroups": {},
+                "focusedGroupId": Value::Null
+            }),
+        )?;
     } else if package_kind == "article" {
         write_text_file(&package_path.join("layout.html"), "")?;
         write_text_file(&package_path.join("wechat.html"), "")?;

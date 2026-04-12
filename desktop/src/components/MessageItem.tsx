@@ -574,13 +574,17 @@ export const MessageItem = memo(({
           <div className={clsx('chat-ai-shell group', msg.isStreaming && 'chat-ai-shell-streaming')}>
             <div ref={aiContentRef} className={clsx('chat-ai-content', msg.isStreaming && 'chat-ai-content-streaming')}>
               <div className="chat-markdown-body text-text-primary">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                  urlTransform={transformMarkdownUrl}
-                >
-                  {msg.content}
-                </ReactMarkdown>
+                {msg.isStreaming ? (
+                  <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                    urlTransform={transformMarkdownUrl}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                )}
                 {msg.isStreaming && (
                   <span className="ml-1 inline-block h-4 w-2 animate-pulse align-middle bg-accent-primary" />
                 )}

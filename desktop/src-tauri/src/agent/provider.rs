@@ -23,9 +23,10 @@ pub fn resolve_chat_exchange_response_stage(
         });
     }
 
-    if let (Some(app), Some(config)) =
-        (app, resolve_chat_config(&context.settings_snapshot, model_config))
-    {
+    if let (Some(app), Some(config)) = (
+        app,
+        resolve_chat_config(&context.settings_snapshot, model_config),
+    ) {
         if matches!(config.protocol.as_str(), "openai" | "anthropic" | "gemini") {
             let interactive_result = match config.protocol.as_str() {
                 "openai" => run_openai_interactive_chat_runtime(

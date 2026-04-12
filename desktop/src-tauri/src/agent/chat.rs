@@ -1,13 +1,13 @@
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agent::{
     emit_session_agent_completion, execute_prepared_session_agent_turn, ChatExchangeRequest,
-    PreparedSessionAgentTurn, SessionAgentTurnExecution, SessionAgentTurnKind,
+    PreparedSessionAgentTurn, SessionAgentTurnKind,
 };
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
-use crate::persistence::{with_store, with_store_mut};
-use crate::{create_work_item, AppState};
+use crate::persistence::with_store;
+use crate::AppState;
 
 pub struct PreparedChatSendTurn<'a> {
     pub request: ChatExchangeRequest<'a>,
@@ -15,10 +15,6 @@ pub struct PreparedChatSendTurn<'a> {
 }
 
 pub struct RedclawChatPostprocess {
-    pub work_item_title: String,
-    pub work_item_summary: String,
-    pub work_item_description: String,
-    pub work_item_metadata: Value,
     pub runner_payload: Value,
 }
 
@@ -56,67 +52,58 @@ pub fn build_redclaw_chat_postprocess(
     artifacts: Vec<Value>,
 ) -> RedclawChatPostprocess {
     RedclawChatPostprocess {
-        work_item_title: format!("RedClaw Chat {}", artifact_kind),
-        work_item_summary: "RedClaw fixed session generated a persisted artifact.".to_string(),
-        work_item_description: display_content.to_string(),
-        work_item_metadata: json!({
-            "sessionId": session_id,
-            "artifactKind": artifact_kind,
-            "artifacts": artifacts,
-        }),
         runner_payload: json!({
             "sessionId": session_id,
+            "displayContent": display_content,
             "artifactKind": artifact_kind,
             "artifacts": artifacts,
         }),
     }
 }
 
-pub fn run_redclaw_chat_postprocess(
-    state: &State<'_, AppState>,
-    prepared_turn: &PreparedSessionAgentTurn<'_>,
-    execution: &SessionAgentTurnExecution,
-    message: &str,
-) -> Result<Option<RedclawChatPostprocess>, String> {
-    if !prepared_turn.is_redclaw_session() {
-        return Ok(None);
-    }
-    let project_id = with_store(state, |store| {
-        Ok(store
-            .redclaw_state
-            .projects
-            .first()
-            .map(|item| item.id.clone())
-            .unwrap_or_else(|| "redclaw-chat".to_string()))
-    })?;
-    let artifact_kind = detect_redclaw_artifact_kind(message, "chat-session");
-    let artifacts = save_redclaw_outputs(
-        state,
-        artifact_kind,
-        &project_id,
-        execution.session_id(),
-        message,
-        execution.response(),
-        "chat-session",
-    )?;
-    let postprocess = build_redclaw_chat_postprocess(
-        artifact_kind,
-        execution.session_id(),
-        prepared_turn.display_content(),
-        artifacts,
-    );
-    let _ = with_store_mut(state, |store| {
-        store.work_items.push(create_work_item(
-            "redclaw-note",
-            postprocess.work_item_title.clone(),
-            Some(postprocess.work_item_summary.clone()),
-            Some(postprocess.work_item_description.clone()),
-            Some(postprocess.work_item_metadata.clone()),
-            2,
-        ));
-        Ok(())
+fn spawn_redclaw_chat_postprocess(
+    app: AppHandle,
+    session_id: String,
+    display_content: String,
+    response: String,
+    message: String,
+) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let project_id = with_store(&state, |store| {
+            Ok(store
+                .redclaw_state
+                .projects
+                .first()
+                .map(|item| item.id.clone())
+                .unwrap_or_else(|| "redclaw-chat".to_string()))
+        });
+        let Ok(project_id) = project_id else {
+            eprintln!("[RedClaw chat postprocess] failed to resolve project id");
+            return;
+        };
+        let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
+        let artifacts = save_redclaw_outputs(
+            &state,
+            artifact_kind,
+            &project_id,
+            &session_id,
+            &message,
+            &response,
+            "chat-session",
+        );
+        let Ok(artifacts) = artifacts else {
+            eprintln!("[RedClaw chat postprocess] failed to save outputs");
+            return;
+        };
+        let postprocess = build_redclaw_chat_postprocess(
+            artifact_kind,
+            &session_id,
+            &display_content,
+            artifacts,
+        );
+        let _ = app.emit("redclaw:runner-message", postprocess.runner_payload);
     });
-    Ok(Some(postprocess))
 }
 
 pub fn run_chat_send_turn(
@@ -126,11 +113,21 @@ pub fn run_chat_send_turn(
     message: &str,
 ) -> Result<CompletedChatSendTurn, String> {
     let execution = execute_prepared_session_agent_turn(Some(app), state, prepared_turn)?;
-    let redclaw_postprocess =
-        run_redclaw_chat_postprocess(state, prepared_turn, &execution, message)?;
     emit_session_agent_completion(app, state, &execution, SessionAgentTurnKind::ChatSend)?;
+    if prepared_turn.is_redclaw_session() {
+        spawn_redclaw_chat_postprocess(
+            app.clone(),
+            execution.session_id().to_string(),
+            prepared_turn.display_content().to_string(),
+            execution.response().to_string(),
+            message.to_string(),
+        );
+        return Ok(CompletedChatSendTurn {
+            redclaw_postprocess: None,
+        });
+    }
     Ok(CompletedChatSendTurn {
-        redclaw_postprocess,
+        redclaw_postprocess: None,
     })
 }
 
@@ -165,26 +162,9 @@ mod tests {
     #[test]
     fn build_redclaw_chat_postprocess_shapes_work_item_and_runner_payloads() {
         let artifacts = vec![json!({ "kind": "run-log", "path": "/tmp/run.md" })];
-        let postprocess = build_redclaw_chat_postprocess(
-            "run",
-            "session-1",
-            "display body",
-            artifacts.clone(),
-        );
+        let postprocess =
+            build_redclaw_chat_postprocess("run", "session-1", "display body", artifacts.clone());
 
-        assert_eq!(postprocess.work_item_title, "RedClaw Chat run");
-        assert_eq!(
-            postprocess.work_item_summary,
-            "RedClaw fixed session generated a persisted artifact."
-        );
-        assert_eq!(postprocess.work_item_description, "display body");
-        assert_eq!(
-            postprocess
-                .work_item_metadata
-                .get("sessionId")
-                .and_then(Value::as_str),
-            Some("session-1")
-        );
         assert_eq!(
             postprocess
                 .runner_payload
@@ -211,12 +191,12 @@ mod tests {
             vec![json!({ "kind": "run-log", "path": "/tmp/run.md" })],
         );
         assert_eq!(
-            postprocess.work_item_metadata.get("artifactKind"),
-            postprocess.runner_payload.get("artifactKind")
+            postprocess.runner_payload.get("artifactKind").and_then(Value::as_str),
+            Some("run")
         );
         assert_eq!(
-            postprocess.work_item_metadata.get("artifacts"),
-            postprocess.runner_payload.get("artifacts")
+            postprocess.runner_payload.get("displayContent").and_then(Value::as_str),
+            Some("display body")
         );
     }
 

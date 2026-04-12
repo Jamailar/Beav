@@ -13,6 +13,7 @@ use crate::{payload_string, AppState};
 
 pub fn prepare_task_resume_execution(
     app: &AppHandle,
+    state: &State<'_, AppState>,
     settings_snapshot: &Value,
     task_snapshot: &RuntimeTaskRecord,
 ) -> Result<PreparedTaskResumeExecution, String> {
@@ -24,21 +25,23 @@ pub fn prepare_task_resume_execution(
         )
     });
     let route_value = route.clone().into_value();
-    let orchestration = if route.requires_multi_agent
-        || task_snapshot.runtime_mode == "background-maintenance"
-    {
-        Some(run_subagent_orchestration_for_task(
-            Some(app),
-            settings_snapshot,
-            &task_snapshot.runtime_mode,
-            &task_snapshot.id,
-            task_snapshot.owner_session_id.as_deref(),
-            &route,
-            task_snapshot.goal.as_deref().unwrap_or(""),
-        )?)
-    } else {
-        None
-    };
+    let orchestration =
+        if route.requires_multi_agent || task_snapshot.runtime_mode == "background-maintenance" {
+            Some(run_subagent_orchestration_for_task(
+                Some(app),
+                state,
+                settings_snapshot,
+                &task_snapshot.runtime_mode,
+                &task_snapshot.id,
+                task_snapshot.owner_session_id.as_deref(),
+                &route,
+                task_snapshot.goal.as_deref().unwrap_or(""),
+                task_snapshot.metadata.as_ref(),
+                None,
+            )?)
+        } else {
+            None
+        };
     let reviewer_blocked = reviewer_rejected(orchestration.as_ref());
     let repair_plan = if reviewer_blocked {
         orchestration
@@ -64,12 +67,15 @@ pub fn prepare_task_resume_execution(
                     build_repair_goal(task_snapshot.goal.as_deref().unwrap_or(""), repair);
                 run_subagent_orchestration_for_task(
                     Some(app),
+                    state,
                     settings_snapshot,
                     &task_snapshot.runtime_mode,
                     &format!("{}-repair", task_snapshot.id),
                     task_snapshot.owner_session_id.as_deref(),
                     &route,
                     &repair_goal,
+                    task_snapshot.metadata.as_ref(),
+                    None,
                 )
             })
             .transpose()?
@@ -105,8 +111,9 @@ pub fn handle_runtime_task_resume(
         return Ok(json!({ "success": false, "error": "任务不存在" }));
     };
 
-    let settings_snapshot = crate::persistence::with_store(state, |store| Ok(store.settings.clone()))?;
-    let prepared = prepare_task_resume_execution(app, &settings_snapshot, &task_snapshot)?;
+    let settings_snapshot =
+        crate::persistence::with_store(state, |store| Ok(store.settings.clone()))?;
+    let prepared = prepare_task_resume_execution(app, state, &settings_snapshot, &task_snapshot)?;
     let saved_artifact = maybe_save_task_resume_artifact(state, &task_snapshot, &prepared)?;
 
     let applied = crate::persistence::with_store_mut(state, |store| {
@@ -232,7 +239,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            applied.response.get("success").and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(store.work_items.len(), 1);
         assert_eq!(store.work_items[0].r#type, "runtime-artifact");
         assert_eq!(store.runtime_tasks[0].status, "completed");
@@ -266,7 +276,10 @@ mod tests {
             crate::runtime::apply_task_resume_execution(&mut store, &task_id, &prepared, None)
                 .unwrap();
 
-        assert_eq!(applied.response.get("success").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            applied.response.get("success").and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             applied.response.get("error").and_then(Value::as_str),
             Some("reviewer rejected execution")

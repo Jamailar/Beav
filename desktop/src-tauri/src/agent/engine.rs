@@ -102,11 +102,7 @@ impl<'a> ChatExchangeRequest<'a> {
         }
     }
 
-    pub fn wander(
-        session_id: String,
-        prompt: String,
-        model_config: Option<&'a Value>,
-    ) -> Self {
+    pub fn wander(session_id: String, prompt: String, model_config: Option<&'a Value>) -> Self {
         Self {
             session_id: Some(session_id),
             display_content: prompt.clone(),
@@ -309,7 +305,10 @@ mod tests {
 
     #[test]
     fn session_agent_turn_kind_maps_to_stable_checkpoint_contract() {
-        assert_eq!(SessionAgentTurnKind::ChatSend.checkpoint_type(), "chat-send");
+        assert_eq!(
+            SessionAgentTurnKind::ChatSend.checkpoint_type(),
+            "chat-send"
+        );
         assert_eq!(
             SessionAgentTurnKind::RuntimeQuery.checkpoint_summary(),
             "Runtime query completed"
@@ -328,13 +327,8 @@ mod tests {
             SessionAgentTurnKind::ChatSend
         );
         assert_eq!(
-            ChatExchangeRequest::runtime_query(
-                None,
-                "m".to_string(),
-                "d".to_string(),
-                None,
-            )
-            .turn_kind,
+            ChatExchangeRequest::runtime_query(None, "m".to_string(), "d".to_string(), None,)
+                .turn_kind,
             SessionAgentTurnKind::RuntimeQuery
         );
         assert_eq!(
@@ -342,16 +336,13 @@ mod tests {
             SessionAgentTurnKind::SessionBridge
         );
         assert_eq!(
-            ChatExchangeRequest::assistant_daemon(
-                "s".to_string(),
-                "m".to_string(),
-                "feishu"
-            )
-            .turn_kind,
+            ChatExchangeRequest::assistant_daemon("s".to_string(), "m".to_string(), "feishu")
+                .turn_kind,
             SessionAgentTurnKind::AssistantDaemon
         );
         assert_eq!(
-            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler").turn_kind,
+            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler")
+                .turn_kind,
             SessionAgentTurnKind::RedclawRun
         );
         assert_eq!(
@@ -383,7 +374,10 @@ mod tests {
             assistant.checkpoint_summary_text(),
             "Assistant daemon handled feishu"
         );
-        assert_eq!(assistant.session_title_hint_override(), Some("Assistant · feishu"));
+        assert_eq!(
+            assistant.session_title_hint_override(),
+            Some("Assistant · feishu")
+        );
 
         let redclaw =
             ChatExchangeRequest::redclaw_run("session-r".to_string(), "prompt".to_string(), "cron");
@@ -442,7 +436,10 @@ mod tests {
         assert_eq!(execution.response, "done");
         assert!(execution.emitted_live_events);
         assert_eq!(
-            execution.title_update.as_ref().map(|(_, title)| title.as_str()),
+            execution
+                .title_update
+                .as_ref()
+                .map(|(_, title)| title.as_str()),
             Some("Title")
         );
         assert_eq!(execution.session_id(), "session-1");

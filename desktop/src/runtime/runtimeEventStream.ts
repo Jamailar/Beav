@@ -1,39 +1,71 @@
 import type { RuntimeUnifiedEvent } from '../types';
+import { uiDebug } from '../utils/uiDebug';
 
 type UnknownRecord = Record<string, unknown>;
 
+type RuntimeEnvelopeMeta = {
+  runtimeId?: string;
+  parentRuntimeId?: string;
+};
+
+type RuntimeScopedPayload = {
+  sessionId: string;
+  runtimeId?: string;
+  parentRuntimeId?: string;
+};
+
+type TaskScopedPayload = RuntimeScopedPayload & {
+  taskId: string;
+};
+
 export interface RuntimeEventStreamHandlers {
   getActiveSessionId?: () => string | null | undefined;
-  onPhaseStart?: (payload: { sessionId: string; phase: string; runtimeMode: string }) => void;
-  onThoughtStart?: (payload: { sessionId: string }) => void;
-  onThoughtDelta?: (payload: { sessionId: string; content: string }) => void;
-  onResponseDelta?: (payload: { sessionId: string; content: string }) => void;
-  onToolRequest?: (payload: { sessionId: string; callId: string; name: string; input: unknown; description: string }) => void;
-  onToolResult?: (payload: { sessionId: string; callId: string; name: string; output: UnknownRecord }) => void;
-  onTaskNodeChanged?: (payload: {
-    sessionId: string;
-    taskId: string;
+  onPhaseStart?: (payload: RuntimeScopedPayload & { phase: string; runtimeMode: string }) => void;
+  onThoughtStart?: (payload: RuntimeScopedPayload) => void;
+  onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onResponseDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onToolRequest?: (payload: RuntimeScopedPayload & { callId: string; name: string; input: unknown; description: string }) => void;
+  onToolResult?: (payload: RuntimeScopedPayload & { callId: string; name: string; output: UnknownRecord }) => void;
+  onTaskNodeChanged?: (payload: TaskScopedPayload & {
     nodeId: string;
     status: string;
     summary: string;
     error: string;
+    parentTaskId?: string;
+    sourceTaskId?: string;
   }) => void;
-  onSubagentSpawned?: (payload: { sessionId: string; taskId: string; roleId: string; runtimeMode: string }) => void;
-  onTaskCheckpointSaved?: (payload: {
-    sessionId: string;
-    taskId: string;
+  onSubagentSpawned?: (payload: TaskScopedPayload & {
+    roleId: string;
+    runtimeMode: string;
+    childRuntimeId?: string;
+    childTaskId?: string;
+    childSessionId?: string;
+    parentTaskId?: string;
+  }) => void;
+  onSubagentFinished?: (payload: TaskScopedPayload & {
+    roleId: string;
+    runtimeMode: string;
+    status: string;
+    summary: string;
+    error: string;
+    childRuntimeId?: string;
+    childTaskId?: string;
+    childSessionId?: string;
+    parentTaskId?: string;
+  }) => void;
+  onTaskCheckpointSaved?: (payload: TaskScopedPayload & {
     checkpointType: string;
     summary: string;
     checkpointPayload: UnknownRecord;
   }) => void;
-  onChatPlanUpdated?: (payload: { sessionId: string; steps: unknown[] }) => void;
-  onChatThoughtEnd?: (payload: { sessionId: string }) => void;
-  onChatResponseEnd?: (payload: { sessionId: string; content: string }) => void;
-  onChatCancelled?: (payload: { sessionId: string }) => void;
-  onChatError?: (payload: { sessionId: string; errorPayload: UnknownRecord }) => void;
-  onChatSessionTitleUpdated?: (payload: { sessionId: string; title: string }) => void;
-  onChatSkillActivated?: (payload: { sessionId: string; name: string; description: string }) => void;
-  onChatToolConfirmRequest?: (payload: { sessionId: string; request: UnknownRecord }) => void;
+  onChatPlanUpdated?: (payload: RuntimeScopedPayload & { steps: unknown[] }) => void;
+  onChatThoughtEnd?: (payload: RuntimeScopedPayload) => void;
+  onChatResponseEnd?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onChatCancelled?: (payload: RuntimeScopedPayload) => void;
+  onChatError?: (payload: RuntimeScopedPayload & { errorPayload: UnknownRecord }) => void;
+  onChatSessionTitleUpdated?: (payload: RuntimeScopedPayload & { title: string }) => void;
+  onChatSkillActivated?: (payload: RuntimeScopedPayload & { name: string; description: string }) => void;
+  onChatToolConfirmRequest?: (payload: RuntimeScopedPayload & { request: UnknownRecord }) => void;
   onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
   onCreativeChatAdvisorStart?: (payload: {
     roomId: string;
@@ -82,6 +114,11 @@ function toText(value: unknown): string {
   return String(value || '').trim();
 }
 
+function toOptionalText(value: unknown): string | undefined {
+  const text = toText(value);
+  return text || undefined;
+}
+
 function toTextArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => toText(item)).filter((item) => Boolean(item));
@@ -102,6 +139,8 @@ function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
     eventType,
     sessionId: toText(record.sessionId) || null,
     taskId: toText(record.taskId) || null,
+    runtimeId: toOptionalText(record.runtimeId) || null,
+    parentRuntimeId: toOptionalText(record.parentRuntimeId) || null,
     payload: toRecord(record.payload),
     timestamp: Number(record.timestamp || Date.now()),
   };
@@ -112,17 +151,22 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   if (shouldSkipBySession(handlers, sessionId)) return;
   const taskId = toText(envelope.taskId);
   const payload = toRecord(envelope.payload);
+  const runtimeMeta: RuntimeEnvelopeMeta = {
+    runtimeId: toOptionalText(envelope.runtimeId),
+    parentRuntimeId: toOptionalText(envelope.parentRuntimeId),
+  };
 
   if (envelope.eventType === 'stream_start') {
     const phase = toText(payload.phase);
     if (!phase) return;
     handlers.onPhaseStart?.({
       sessionId,
+      ...runtimeMeta,
       phase,
       runtimeMode: toText(payload.runtimeMode),
     });
     if (phase === 'thinking') {
-      handlers.onThoughtStart?.({ sessionId });
+      handlers.onThoughtStart?.({ sessionId, ...runtimeMeta });
     }
     return;
   }
@@ -132,16 +176,17 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     if (!content) return;
     const stream = toText(payload.stream || 'response');
     if (stream === 'thought') {
-      handlers.onThoughtDelta?.({ sessionId, content });
+      handlers.onThoughtDelta?.({ sessionId, ...runtimeMeta, content });
       return;
     }
-    handlers.onResponseDelta?.({ sessionId, content });
+    handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content });
     return;
   }
 
   if (envelope.eventType === 'tool_request') {
     handlers.onToolRequest?.({
       sessionId,
+      ...runtimeMeta,
       callId: toText(payload.callId),
       name: toText(payload.name),
       input: payload.input,
@@ -153,6 +198,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   if (envelope.eventType === 'tool_result') {
     handlers.onToolResult?.({
       sessionId,
+      ...runtimeMeta,
       callId: toText(payload.callId),
       name: toText(payload.name),
       output: toRecord(payload.output),
@@ -163,11 +209,14 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   if (envelope.eventType === 'task_node_changed') {
     handlers.onTaskNodeChanged?.({
       sessionId,
+      ...runtimeMeta,
       taskId,
       nodeId: toText(payload.nodeId) || 'node',
       status: toText(payload.status).toLowerCase(),
       summary: toText(payload.summary),
       error: toText(payload.error),
+      parentTaskId: toOptionalText(payload.parentTaskId),
+      sourceTaskId: toOptionalText(payload.sourceTaskId),
     });
     return;
   }
@@ -175,9 +224,32 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
   if (envelope.eventType === 'subagent_spawned') {
     handlers.onSubagentSpawned?.({
       sessionId,
+      ...runtimeMeta,
       taskId,
       roleId: toText(payload.roleId) || 'subagent',
       runtimeMode: toText(payload.runtimeMode) || 'unknown',
+      childRuntimeId: toOptionalText(payload.childRuntimeId),
+      childTaskId: toOptionalText(payload.childTaskId),
+      childSessionId: toOptionalText(payload.childSessionId),
+      parentTaskId: toOptionalText(payload.parentTaskId) || toOptionalText(taskId),
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'subagent_finished') {
+    handlers.onSubagentFinished?.({
+      sessionId,
+      ...runtimeMeta,
+      taskId,
+      roleId: toText(payload.roleId) || 'subagent',
+      runtimeMode: toText(payload.runtimeMode) || 'unknown',
+      status: toText(payload.status) || 'completed',
+      summary: toText(payload.summary),
+      error: toText(payload.error),
+      childRuntimeId: toOptionalText(payload.childRuntimeId),
+      childTaskId: toOptionalText(payload.childTaskId),
+      childSessionId: toOptionalText(payload.childSessionId),
+      parentTaskId: toOptionalText(payload.parentTaskId) || toOptionalText(taskId),
     });
     return;
   }
@@ -188,6 +260,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     const summary = toText(payload.summary);
     handlers.onTaskCheckpointSaved?.({
       sessionId,
+      ...runtimeMeta,
       taskId,
       checkpointType,
       summary,
@@ -195,35 +268,36 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     });
     if (checkpointType === 'chat.plan_updated') {
       const steps = Array.isArray(checkpointPayload.steps) ? checkpointPayload.steps : [];
-      handlers.onChatPlanUpdated?.({ sessionId, steps });
+      handlers.onChatPlanUpdated?.({ sessionId, ...runtimeMeta, steps });
       return;
     }
     if (checkpointType === 'chat.thought_end') {
-      handlers.onChatThoughtEnd?.({ sessionId });
+      handlers.onChatThoughtEnd?.({ sessionId, ...runtimeMeta });
       return;
     }
     if (checkpointType === 'chat.response_end') {
-      handlers.onChatResponseEnd?.({ sessionId, content: String(checkpointPayload.content || '') });
+      handlers.onChatResponseEnd?.({ sessionId, ...runtimeMeta, content: String(checkpointPayload.content || '') });
       return;
     }
     if (checkpointType === 'chat.cancelled') {
-      handlers.onChatCancelled?.({ sessionId });
+      handlers.onChatCancelled?.({ sessionId, ...runtimeMeta });
       return;
     }
     if (checkpointType === 'chat.error') {
-      handlers.onChatError?.({ sessionId, errorPayload: checkpointPayload });
+      handlers.onChatError?.({ sessionId, ...runtimeMeta, errorPayload: checkpointPayload });
       return;
     }
     if (checkpointType === 'chat.session_title_updated') {
       const checkpointSessionId = toText(checkpointPayload.sessionId) || sessionId;
       const title = toText(checkpointPayload.title);
       if (!checkpointSessionId || !title) return;
-      handlers.onChatSessionTitleUpdated?.({ sessionId: checkpointSessionId, title });
+      handlers.onChatSessionTitleUpdated?.({ sessionId: checkpointSessionId, ...runtimeMeta, title });
       return;
     }
     if (checkpointType === 'chat.skill_activated') {
       handlers.onChatSkillActivated?.({
         sessionId,
+        ...runtimeMeta,
         name: toText(checkpointPayload.name),
         description: toText(checkpointPayload.description),
       });
@@ -232,6 +306,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     if (checkpointType === 'chat.tool_confirm_request') {
       handlers.onChatToolConfirmRequest?.({
         sessionId,
+        ...runtimeMeta,
         request: checkpointPayload,
       });
       return;
@@ -326,6 +401,20 @@ export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers
   const listener = (_event: unknown, envelope?: unknown) => {
     const parsed = parseRuntimeEnvelope(envelope);
     if (!parsed) return;
+    const sessionId = toText(parsed.sessionId);
+    if (shouldSkipBySession(handlers, sessionId)) return;
+    if (import.meta.env.DEV) {
+      const payload = toRecord(parsed.payload);
+      uiDebug('runtime-event', 'dispatch', {
+        eventType: parsed.eventType,
+        sessionId: parsed.sessionId,
+        taskId: parsed.taskId,
+        runtimeId: parsed.runtimeId,
+        checkpointType: toText(payload.checkpointType),
+        stream: toText(payload.stream),
+        contentChars: String(payload.content || '').length,
+      });
+    }
     dispatchRuntimeEnvelope(handlers, parsed);
   };
   window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);

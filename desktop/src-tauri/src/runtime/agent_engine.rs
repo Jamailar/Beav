@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use crate::runtime::{RuntimeRouteRecord, RuntimeTaskRecord};
 use crate::payload_field;
+use crate::runtime::{RuntimeRouteRecord, RuntimeTaskRecord};
 
 pub const RUNTIME_INTENT_NAMES: &[&str] = &[
     "direct_answer",
@@ -181,7 +181,11 @@ pub fn runtime_direct_route_record(
             .and_then(|value| payload_field(value, "requiresHumanApproval"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        confidence: if intent == "direct_answer" { 0.55 } else { 0.92 },
+        confidence: if intent == "direct_answer" {
+            0.55
+        } else {
+            0.92
+        },
         reasoning: format!(
             "runtime-mode-default:{}; intent={}; role={}",
             runtime_mode, intent, role

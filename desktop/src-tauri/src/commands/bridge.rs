@@ -1,11 +1,11 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn};
-use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{
-    session_bridge_detail_value, session_bridge_summary_value,
+use crate::agent::{
+    build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
+use crate::persistence::{with_store, with_store_mut};
+use crate::runtime::{session_bridge_detail_value, session_bridge_summary_value};
 use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 use crate::{
     log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
@@ -42,7 +42,11 @@ pub fn handle_bridge_channel(
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             with_store(state, |store| {
                 let background_tasks = derived_background_tasks(&store);
-                Ok(session_bridge_detail_value(&store, &session_id, &background_tasks))
+                Ok(session_bridge_detail_value(
+                    &store,
+                    &session_id,
+                    &background_tasks,
+                ))
             })
         }
         "session-bridge:list-permissions" => Ok(json!([])),
@@ -62,29 +66,28 @@ pub fn handle_bridge_channel(
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             let message = payload_string(payload, "message").unwrap_or_default();
-            let turn = PreparedSessionAgentTurn::session_bridge(
-                build_session_bridge_turn(session_id.clone(), message),
-            );
+            let turn = PreparedSessionAgentTurn::session_bridge(build_session_bridge_turn(
+                session_id.clone(),
+                message,
+            ));
             execute_prepared_session_agent_turn(None, state, &turn)
-            .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id() }))
+                .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id() }))
         }
         "session-bridge:resolve-permission" => Ok(json!({ "success": true })),
-        "background-tasks:list" => {
-            with_store(state, |store| {
-                let started_at = now_ms();
-                let request_id = format!("background-tasks:list:{}", started_at);
-                let tasks = derived_background_tasks(&store);
-                log_timing_event(
-                    state,
-                    "settings",
-                    &request_id,
-                    "background-tasks:list",
-                    started_at,
-                    Some(format!("tasks={}", tasks.len())),
-                );
-                Ok(json!(tasks))
-            })
-        }
+        "background-tasks:list" => with_store(state, |store| {
+            let started_at = now_ms();
+            let request_id = format!("background-tasks:list:{}", started_at);
+            let tasks = derived_background_tasks(&store);
+            log_timing_event(
+                state,
+                "settings",
+                &request_id,
+                "background-tasks:list",
+                started_at,
+                Some(format!("tasks={}", tasks.len())),
+            );
+            Ok(json!(tasks))
+        }),
         "background-tasks:get" => {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();
             with_store(state, |store| {

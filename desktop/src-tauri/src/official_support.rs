@@ -4,10 +4,12 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     escape_html, normalize_base_url, now_ms, payload_field, payload_string, run_curl_json,
+    run_curl_json_with_timeout,
 };
 
 pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
+pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 
 pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> String {
     let base = normalize_base_url(base_url);
@@ -124,7 +126,7 @@ pub(crate) fn invoke_openai_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json(
+    let response = run_curl_json_with_timeout(
         "POST",
         &format!("{}/chat/completions", normalize_base_url(base_url)),
         api_key,
@@ -136,6 +138,7 @@ pub(crate) fn invoke_openai_chat(
             ],
             "stream": false
         })),
+        Some(45),
     )?;
     let content = response
         .get("choices")
@@ -158,7 +161,7 @@ pub(crate) fn invoke_anthropic_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json(
+    let response = run_curl_json_with_timeout(
         "POST",
         &format!("{}/messages", normalize_base_url(base_url)),
         None,
@@ -173,6 +176,7 @@ pub(crate) fn invoke_anthropic_chat(
                 { "role": "user", "content": message }
             ]
         })),
+        Some(45),
     )?;
     let text = response
         .get("content")
@@ -194,7 +198,7 @@ pub(crate) fn invoke_gemini_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json(
+    let response = run_curl_json_with_timeout(
         "POST",
         &gemini_url(
             base_url,
@@ -211,6 +215,7 @@ pub(crate) fn invoke_gemini_chat(
                 }
             ]
         })),
+        Some(45),
     )?;
     let text = response
         .get("candidates")
@@ -652,6 +657,12 @@ pub(crate) fn official_settings_call_records_list(settings: &Value) -> Vec<Value
     official_settings_json_array(settings, "redbox_auth_call_records_json")
 }
 
+pub(crate) fn official_settings_points(settings: &Value) -> Option<Value> {
+    payload_string(settings, "redbox_auth_points_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value.is_object())
+}
+
 pub(crate) fn official_settings_wechat_login(settings: &Value) -> Option<Value> {
     payload_string(settings, "redbox_auth_wechat_login_json")
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -709,6 +720,10 @@ pub(crate) fn emit_redbox_auth_session_updated(app: &AppHandle, session: Option<
         REDBOX_AUTH_SESSION_UPDATED_EVENT,
         json!({ "session": session }),
     );
+}
+
+pub(crate) fn emit_redbox_auth_data_updated(app: &AppHandle, payload: Value) {
+    let _ = app.emit(REDBOX_AUTH_DATA_UPDATED_EVENT, payload);
 }
 
 pub(crate) fn create_official_payment_form(order_no: &str, amount: f64, subject: &str) -> String {

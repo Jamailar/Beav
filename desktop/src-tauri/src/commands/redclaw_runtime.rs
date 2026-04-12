@@ -4,10 +4,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    create_work_item,
-    make_id, now_iso, redclaw_root,
-    resolve_manuscript_path, slug_from_relative_path, write_text_file, AppState,
-    RedclawProjectRecord,
+    create_work_item, make_id, now_iso, redclaw_root, resolve_manuscript_path,
+    slug_from_relative_path, write_text_file, AppState, RedclawProjectRecord,
 };
 
 pub fn redclaw_session_id_for_space(space_id: &str) -> String {

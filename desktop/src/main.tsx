@@ -67,6 +67,6 @@ const isDevRuntime = window.location.protocol !== 'file:';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   isDevRuntime
-    ? <React.StrictMode>{appTree}</React.StrictMode>
+    ? appTree
     : appTree,
 )

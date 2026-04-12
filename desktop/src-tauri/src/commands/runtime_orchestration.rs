@@ -6,13 +6,14 @@ use crate::runtime::{
     build_runtime_task_artifact_content, runtime_subagent_role_spec, RuntimeArtifact,
     RuntimeRouteRecord,
 };
+use crate::subagents::{real_subagents_enabled, run_real_subagent_orchestration_for_task};
 use crate::{
     generate_structured_response_with_settings, load_redbox_prompt, parse_json_value_from_text,
     payload_string, render_redbox_prompt, role_sequence_for_route, slug_from_relative_path,
     workspace_root, write_text_file, AppState,
 };
 
-pub fn run_subagent_orchestration_for_task(
+fn run_prompt_subagent_orchestration_for_task(
     app: Option<&AppHandle>,
     settings: &Value,
     runtime_mode: &str,
@@ -38,6 +39,10 @@ pub fn run_subagent_orchestration_for_task(
                 session_id,
                 &role_id,
                 runtime_mode,
+                None,
+                None,
+                None,
+                None,
             );
         }
         let role_spec = runtime_subagent_role_spec(&role_id);
@@ -91,6 +96,45 @@ pub fn run_subagent_orchestration_for_task(
         "outputs": outputs,
         "promptSection": "subagent orchestration completed"
     }))
+}
+
+pub fn run_subagent_orchestration_for_task(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    settings: &Value,
+    runtime_mode: &str,
+    task_id: &str,
+    session_id: Option<&str>,
+    route: &RuntimeRouteRecord,
+    user_input: &str,
+    metadata: Option<&Value>,
+    model_config: Option<&Value>,
+) -> Result<Value, String> {
+    if let Some(handle) = app {
+        if real_subagents_enabled(settings, metadata) {
+            return run_real_subagent_orchestration_for_task(
+                handle,
+                state,
+                settings,
+                runtime_mode,
+                task_id,
+                session_id,
+                route,
+                user_input,
+                metadata,
+                model_config,
+            );
+        }
+    }
+    run_prompt_subagent_orchestration_for_task(
+        app,
+        settings,
+        runtime_mode,
+        task_id,
+        session_id,
+        route,
+        user_input,
+    )
 }
 
 pub fn save_runtime_task_artifact(

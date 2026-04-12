@@ -16,8 +16,48 @@ pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTrans
     items
 }
 
-pub fn trace_value_for_session(store: &AppStore, session_id: &str) -> Value {
-    json!(trace_for_session(store, session_id))
+fn session_ids_for_query(
+    store: &AppStore,
+    session_id: &str,
+    include_child_sessions: bool,
+) -> Vec<String> {
+    let mut session_ids = vec![session_id.to_string()];
+    if include_child_sessions {
+        session_ids.extend(
+            store
+                .chat_sessions
+                .iter()
+                .filter(|item| {
+                    item.metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("parentSessionId"))
+                        .and_then(Value::as_str)
+                        == Some(session_id)
+                })
+                .map(|item| item.id.clone()),
+        );
+    }
+    session_ids
+}
+
+pub fn trace_value_for_session(
+    store: &AppStore,
+    session_id: &str,
+    include_child_sessions: bool,
+) -> Value {
+    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
+    let mut items = store
+        .session_transcript_records
+        .iter()
+        .filter(|item| {
+            session_ids
+                .iter()
+                .any(|candidate| candidate == &item.session_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by_key(|item| item.created_at);
+    json!(items)
 }
 
 pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<SessionCheckpointRecord> {
@@ -31,8 +71,30 @@ pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<Sessio
     items
 }
 
-pub fn checkpoints_value_for_session(store: &AppStore, session_id: &str) -> Value {
-    json!(checkpoints_for_session(store, session_id))
+pub fn checkpoints_value_for_session(
+    store: &AppStore,
+    session_id: &str,
+    include_child_sessions: bool,
+    runtime_id: Option<&str>,
+) -> Value {
+    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
+    let mut items = store
+        .session_checkpoints
+        .iter()
+        .filter(|item| {
+            session_ids
+                .iter()
+                .any(|candidate| candidate == &item.session_id)
+        })
+        .filter(|item| {
+            runtime_id
+                .map(|value| item.runtime_id.as_deref() == Some(value))
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by_key(|item| item.created_at);
+    json!(items)
 }
 
 pub fn tool_results_for_session(
@@ -49,8 +111,30 @@ pub fn tool_results_for_session(
     items
 }
 
-pub fn tool_results_value_for_session(store: &AppStore, session_id: &str) -> Value {
-    json!(tool_results_for_session(store, session_id))
+pub fn tool_results_value_for_session(
+    store: &AppStore,
+    session_id: &str,
+    include_child_sessions: bool,
+    runtime_id: Option<&str>,
+) -> Value {
+    let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
+    let mut items = store
+        .session_tool_results
+        .iter()
+        .filter(|item| {
+            session_ids
+                .iter()
+                .any(|candidate| candidate == &item.session_id)
+        })
+        .filter(|item| {
+            runtime_id
+                .map(|value| item.runtime_id.as_deref() == Some(value))
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by_key(|item| item.created_at);
+    json!(items)
 }
 
 pub fn transcript_count_for_session(store: &AppStore, session_id: &str) -> i64 {
@@ -258,18 +342,23 @@ mod tests {
     fn session_list_item_value_includes_counts_and_summary() {
         let mut store = crate::AppStore::default();
         store.chat_sessions.push(test_session("session-1"));
-        store.session_transcript_records.push(SessionTranscriptRecord {
-            id: "trace-1".to_string(),
-            session_id: "session-1".to_string(),
-            record_type: "message".to_string(),
-            role: "user".to_string(),
-            content: "hello".to_string(),
-            payload: None,
-            created_at: 1,
-        });
+        store
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-1".to_string(),
+                session_id: "session-1".to_string(),
+                record_type: "message".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                payload: None,
+                created_at: 1,
+            });
         store.session_checkpoints.push(SessionCheckpointRecord {
             id: "checkpoint-1".to_string(),
             session_id: "session-1".to_string(),
+            runtime_id: None,
+            parent_runtime_id: None,
+            source_task_id: None,
             checkpoint_type: "runtime.route".to_string(),
             summary: "route".to_string(),
             payload: None,
@@ -277,10 +366,17 @@ mod tests {
         });
 
         let value = session_list_item_value(&store, &store.chat_sessions[0]);
-        assert_eq!(value.get("transcriptCount").and_then(Value::as_i64), Some(1));
-        assert_eq!(value.get("checkpointCount").and_then(Value::as_i64), Some(1));
         assert_eq!(
-            value.get("chatSession")
+            value.get("transcriptCount").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("checkpointCount").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("chatSession")
                 .and_then(|item| item.get("id"))
                 .and_then(Value::as_str),
             Some("session-1")
@@ -299,28 +395,35 @@ mod tests {
         let mut store = crate::AppStore::default();
         let session = test_session("session-1");
         store.chat_sessions.push(session.clone());
-        store.runtime_tasks.push(crate::runtime::create_runtime_task(
-            "manual",
-            "pending",
-            "default".to_string(),
-            Some("session-1".to_string()),
-            Some("draft".to_string()),
-            crate::runtime::runtime_direct_route_record("default", "draft", None),
-            None,
-        ));
+        store
+            .runtime_tasks
+            .push(crate::runtime::create_runtime_task(
+                "manual",
+                "pending",
+                "default".to_string(),
+                Some("session-1".to_string()),
+                Some("draft".to_string()),
+                crate::runtime::runtime_direct_route_record("default", "draft", None),
+                None,
+            ));
 
         let summary = session_bridge_summary_value(&session, &store);
-        assert_eq!(summary.get("ownerTaskCount").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            summary.get("ownerTaskCount").and_then(Value::as_i64),
+            Some(1)
+        );
 
         let detail = session_bridge_detail_value(&store, "session-1", &[json!({"id": "bg-1"})]);
         assert_eq!(
-            detail.get("session")
+            detail
+                .get("session")
                 .and_then(|item| item.get("backgroundTaskCount"))
                 .and_then(Value::as_i64),
             Some(1)
         );
         assert_eq!(
-            detail.get("tasks")
+            detail
+                .get("tasks")
                 .and_then(Value::as_array)
                 .map(|items| items.len()),
             Some(1)
@@ -330,18 +433,23 @@ mod tests {
     #[test]
     fn session_value_helpers_preserve_array_shapes() {
         let mut store = crate::AppStore::default();
-        store.session_transcript_records.push(SessionTranscriptRecord {
-            id: "trace-1".to_string(),
-            session_id: "session-1".to_string(),
-            record_type: "message".to_string(),
-            role: "user".to_string(),
-            content: "hello".to_string(),
-            payload: None,
-            created_at: 1,
-        });
+        store
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-1".to_string(),
+                session_id: "session-1".to_string(),
+                record_type: "message".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                payload: None,
+                created_at: 1,
+            });
         store.session_tool_results.push(SessionToolResultRecord {
             id: "tool-1".to_string(),
             session_id: "session-1".to_string(),
+            runtime_id: None,
+            parent_runtime_id: None,
+            source_task_id: None,
             call_id: "call-1".to_string(),
             tool_name: "redbox_fs".to_string(),
             command: None,
@@ -357,9 +465,56 @@ mod tests {
             updated_at: 1,
         });
 
-        assert!(trace_value_for_session(&store, "session-1").is_array());
-        assert!(tool_results_value_for_session(&store, "session-1").is_array());
-        assert!(checkpoints_value_for_session(&store, "session-1").is_array());
+        assert!(trace_value_for_session(&store, "session-1", false).is_array());
+        assert!(tool_results_value_for_session(&store, "session-1", false, None).is_array());
+        assert!(checkpoints_value_for_session(&store, "session-1", false, None).is_array());
+    }
+
+    #[test]
+    fn session_queries_can_include_child_sessions() {
+        let mut store = crate::AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-parent".to_string(),
+            title: "Parent".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({"contextType": "chat"})),
+        });
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-child".to_string(),
+            title: "Child".to_string(),
+            created_at: "2".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({
+                "contextType": "chat",
+                "parentSessionId": "session-parent"
+            })),
+        });
+        store
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-parent".to_string(),
+                session_id: "session-parent".to_string(),
+                record_type: "message".to_string(),
+                role: "user".to_string(),
+                content: "parent".to_string(),
+                payload: None,
+                created_at: 1,
+            });
+        store
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-child".to_string(),
+                session_id: "session-child".to_string(),
+                record_type: "message".to_string(),
+                role: "assistant".to_string(),
+                content: "child".to_string(),
+                payload: None,
+                created_at: 2,
+            });
+
+        let traces = trace_value_for_session(&store, "session-parent", true);
+        assert_eq!(traces.as_array().map(|items| items.len()), Some(2));
     }
 
     #[test]
@@ -387,7 +542,10 @@ mod tests {
         );
 
         assert_eq!(store.session_checkpoints.len(), 2);
-        assert_eq!(store.session_checkpoints[0].checkpoint_type, "runtime.route");
+        assert_eq!(
+            store.session_checkpoints[0].checkpoint_type,
+            "runtime.route"
+        );
         assert_eq!(
             store.session_checkpoints[1].checkpoint_type,
             "runtime.orchestration"

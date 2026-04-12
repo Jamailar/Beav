@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Brain, Plus, Star, ChevronDown, Check } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
@@ -21,13 +21,9 @@ import {
   type BackgroundWorkerPoolState,
   type CreateAiSourceDraft,
   type LocalAiGuide,
-  type MemoryHistoryEntry,
-  type MemoryMaintenanceStatus,
-  type MemorySearchResult,
   type McpServerConfig,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
-  type UserMemory,
   AiPresetLogo,
   AiPresetSelect,
   AiModelSelect,
@@ -70,7 +66,6 @@ import {
   ExperimentalSettingsSection,
   GeneralSettingsSection,
   KnowledgeSettingsSection,
-  MemorySettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
@@ -83,7 +78,7 @@ const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
 
-type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'experimental';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 
@@ -272,7 +267,6 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
 
 export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [aiTabContentReady, setAiTabContentReady] = useState(false);
   const { flags, updateFlag } = useFeatureFlags();
   const [formData, setFormData] = useState({
     api_endpoint: '',
@@ -391,7 +385,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const fetchModelsRequestRef = useRef(0);
   const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
-  const memoryLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
   const runtimeTasksLoadRequestRef = useRef(0);
   const runtimeSessionsLoadRequestRef = useRef(0);
@@ -404,12 +397,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
+  const officialStartupSyncRef = useRef(false);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
     knowledge: false,
     tools: false,
-    memory: false,
     experimental: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
@@ -417,7 +410,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     ai: false,
     knowledge: false,
     tools: false,
-    memory: false,
     experimental: false,
   });
 
@@ -705,18 +697,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   // Update State
   const [appVersion, setAppVersion] = useState('');
 
-  // Memory State
-  const [memories, setMemories] = useState<UserMemory[]>([]);
-  const [archivedMemories, setArchivedMemories] = useState<UserMemory[]>([]);
-  const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryEntry[]>([]);
-  const [memoryMaintenanceStatus, setMemoryMaintenanceStatus] = useState<MemoryMaintenanceStatus | null>(null);
-  const [memorySearchQuery, setMemorySearchQuery] = useState('');
-  const [includeArchivedInSearch, setIncludeArchivedInSearch] = useState(false);
-  const [memorySearchResults, setMemorySearchResults] = useState<MemorySearchResult[]>([]);
-  const [newMemoryContent, setNewMemoryContent] = useState('');
-  const [newMemoryType, setNewMemoryType] = useState<'general' | 'preference' | 'fact'>('general');
-  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
-  const [isMemorySearching, setIsMemorySearching] = useState(false);
   const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
@@ -767,15 +747,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       canceled = true;
     };
   }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, logSettingsPerf, officialAiPanelEnabled]);
-
-  useEffect(() => {
-    if (activeTab !== 'ai') {
-      setAiTabContentReady(false);
-      return;
-    }
-    console.log('[settings][ai] tab-enter');
-    return;
-  }, [activeTab]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -1149,9 +1120,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       ...prev,
       [source.id]: prev[source.id] || 'chat',
     }));
-    if (!(modelsBySource[source.id] || []).length) {
-      void fetchModelsForSource(source, { manual: true });
-    }
   };
 
   const fetchModelsForSource = useCallback(async (
@@ -1485,87 +1453,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       }));
     } catch (error) {
       console.error('Failed to query MCP oauth status:', error);
-    }
-  };
-
-  const loadMemories = useCallback(async () => {
-    const requestId = ++memoryLoadRequestRef.current;
-    setIsMemoryLoading(true);
-    try {
-      const [data, archived, history, maintenanceStatus] = await Promise.all([
-        window.ipcRenderer.invoke('memory:list') as Promise<UserMemory[]>,
-        window.ipcRenderer.invoke('memory:archived') as Promise<UserMemory[]>,
-        window.ipcRenderer.invoke('memory:history') as Promise<MemoryHistoryEntry[]>,
-        window.ipcRenderer.invoke('memory:maintenance-status') as Promise<MemoryMaintenanceStatus>,
-      ]);
-      if (requestId !== memoryLoadRequestRef.current) return;
-      setMemories(data);
-      setArchivedMemories(archived);
-      setMemoryHistory(history);
-      setMemoryMaintenanceStatus(maintenanceStatus);
-    } catch (e) {
-      console.error("Failed to load memories", e);
-    } finally {
-      if (requestId === memoryLoadRequestRef.current) {
-        setIsMemoryLoading(false);
-      }
-    }
-  }, []);
-
-  const handleRunMemoryMaintenance = async () => {
-    try {
-      const status = await window.ipcRenderer.invoke('memory:maintenance-run') as MemoryMaintenanceStatus;
-      setMemoryMaintenanceStatus(status);
-      await loadMemories();
-    } catch (e) {
-      console.error('Failed to run memory maintenance', e);
-    }
-  };
-
-  const handleSearchMemories = async () => {
-    const query = memorySearchQuery.trim();
-    if (!query) {
-      setMemorySearchResults([]);
-      return;
-    }
-    setIsMemorySearching(true);
-    try {
-      const results = await window.ipcRenderer.invoke('memory:search', {
-        query,
-        includeArchived: includeArchivedInSearch,
-        limit: 20,
-      }) as MemorySearchResult[];
-      setMemorySearchResults(results);
-    } catch (e) {
-      console.error('Failed to search memories', e);
-    } finally {
-      setIsMemorySearching(false);
-    }
-  };
-
-  const handleAddMemory = async () => {
-    if (!newMemoryContent.trim()) return;
-
-    try {
-      await window.ipcRenderer.invoke('memory:add', {
-        content: newMemoryContent,
-        type: newMemoryType,
-        tags: []
-      });
-      setNewMemoryContent('');
-      loadMemories();
-    } catch (e) {
-      console.error("Failed to add memory", e);
-    }
-  };
-
-  const handleDeleteMemory = async (id: string) => {
-    if (!(await appConfirm('确定要删除这条记忆吗？', { title: '删除记忆', confirmLabel: '删除', tone: 'danger' }))) return;
-    try {
-      await window.ipcRenderer.invoke('memory:delete', id);
-      loadMemories();
-    } catch (e) {
-      console.error("Failed to delete memory", e);
     }
   };
 
@@ -2137,6 +2024,24 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
 
+  const syncOfficialAuthForStartup = useCallback(async () => {
+    if (officialStartupSyncRef.current) return;
+    officialStartupSyncRef.current = true;
+    try {
+      const cached = await window.ipcRenderer.invoke('redbox-auth:get-session-cached') as {
+        success?: boolean;
+        session?: { accessToken?: string | null } | null;
+      } | null;
+      const accessToken = String(cached?.session?.accessToken || '').trim();
+      if (!accessToken) {
+        return;
+      }
+      await window.ipcRenderer.invoke('redbox-auth:get-session');
+    } catch (error) {
+      console.error('Failed to sync official auth during startup', error);
+    }
+  }, []);
+
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
       preserveViewState: true,
@@ -2380,24 +2285,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     baseSettingsInFlightRef.current = true;
     const startedAt = performance.now();
     try {
+      await syncOfficialAuthForStartup();
       await loadSettings({
         preserveViewState: true,
         preserveRemoteModels: true,
       });
       baseSettingsLoadedRef.current = true;
       tabWarmRef.current.ai = true;
-      if (officialAiPanelEnabled && !OfficialAiPanelComponent) {
-        void loadOfficialAiPanelModule().then((module) => {
-          const nextComponent = module?.default || null;
-          if (!nextComponent) return;
-          setOfficialAiPanelComponent(() => nextComponent);
-        });
-      }
       logSettingsPerf(force ? 'base-settings-refresh' : 'base-settings-load', startedAt);
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [OfficialAiPanelComponent, loadSettings, logSettingsPerf, officialAiPanelEnabled]);
+  }, [loadSettings, logSettingsPerf, syncOfficialAuthForStartup]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -2412,8 +2311,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           loadRecentDebugLogs(),
           loadAssistantDaemonStatus(),
         ]);
-      } else if (tab === 'memory') {
-        await loadMemories();
       } else if (tab === 'knowledge') {
         await loadVectorStats();
       } else if (tab === 'tools') {
@@ -2458,7 +2355,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
-    loadMemories,
     loadRecentDebugLogs,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -2481,14 +2377,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (!isActive) {
-      if (settingsActivationTimerRef.current != null) {
-        window.clearTimeout(settingsActivationTimerRef.current);
-        settingsActivationTimerRef.current = null;
-      }
-      return;
-    }
-
     if (settingsActivationTimerRef.current != null) {
       window.clearTimeout(settingsActivationTimerRef.current);
     }
@@ -2504,7 +2392,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         settingsActivationTimerRef.current = null;
       }
     };
-  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive]);
+  }, [ensureBaseSettingsLoaded]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -2528,15 +2416,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!baseSettingsLoadedRef.current) {
       return;
     }
-    let memoryPollTimer: number | null = null;
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
-    if (activeTab === 'memory') {
-      void ensureTabResourcesLoaded('memory');
-      memoryPollTimer = window.setInterval(() => {
-        void ensureTabResourcesLoaded('memory', true);
-      }, 15000);
-    }
     if (activeTab === 'knowledge') {
       void ensureTabResourcesLoaded('knowledge');
     }
@@ -2559,9 +2440,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
 
     return () => {
-      if (memoryPollTimer) {
-        window.clearInterval(memoryPollTimer);
-      }
       if (runtimePollTimer) {
         window.clearInterval(runtimePollTimer);
       }
@@ -2778,7 +2656,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'memory', label: '用户记忆', icon: Brain },
     { id: 'knowledge', label: '知识库索引', icon: Database },
     { id: 'tools', label: '工具管理', icon: Wrench },
     { id: 'experimental', label: '实验性功能', icon: FlaskConical },
@@ -2879,20 +2756,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                     </div>
                   </div>
 
-                  {!aiTabContentReady && (
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary space-y-3">
-                      <div>AI 模型页已切换到最小占位模式，先确认是否仍会卡死。</div>
-                      <button
-                        type="button"
-                        onClick={() => setAiTabContentReady(true)}
-                        className="px-3 py-2 rounded-lg border border-border bg-surface-primary text-text-primary hover:bg-surface-secondary transition-colors"
-                      >
-                        加载高级 AI 设置
-                      </button>
-                    </div>
-                  )}
-
-                  {aiTabContentReady && (
                   <>
                   {aiModelSubTab === 'custom' && (
                   <>
@@ -3607,35 +3470,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                     </div>
                   )}
                   </>
-                  )}
 
                 </section>
               </div>
-            )}
-
-            {/* Memory Tab */}
-            {activeTab === 'memory' && (
-              <MemorySettingsSection
-                newMemoryType={newMemoryType}
-                setNewMemoryType={setNewMemoryType}
-                newMemoryContent={newMemoryContent}
-                setNewMemoryContent={setNewMemoryContent}
-                handleAddMemory={handleAddMemory}
-                isMemoryLoading={isMemoryLoading}
-                memories={memories}
-                archivedMemories={archivedMemories}
-                memoryHistory={memoryHistory}
-                maintenanceStatus={memoryMaintenanceStatus}
-                onRunMaintenance={handleRunMemoryMaintenance}
-                memorySearchQuery={memorySearchQuery}
-                setMemorySearchQuery={setMemorySearchQuery}
-                includeArchivedInSearch={includeArchivedInSearch}
-                setIncludeArchivedInSearch={setIncludeArchivedInSearch}
-                memorySearchResults={memorySearchResults}
-                isMemorySearching={isMemorySearching}
-                onSearchMemories={handleSearchMemories}
-                handleDeleteMemory={handleDeleteMemory}
-              />
             )}
 
             {/* Knowledge Tab */}

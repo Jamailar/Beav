@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react';
 import clsx from 'clsx';
 import { Timeline, type TimelineState } from '@xzdarcy/react-timeline-editor';
-import { AudioLines, ChevronDown, ChevronUp, Clapperboard, Copy, Eye, EyeOff, GripVertical, ImageIcon, Lock, Plus, Rows, Target, Trash2, Type, Unlock, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, Clapperboard, Eye, EyeOff, ImageIcon, Lock, MoreHorizontal, Rows, Trash2, Type, Unlock, Volume2, VolumeX } from 'lucide-react';
 import { TimelinePlayheadOverlay } from './timeline/TimelinePlayheadOverlay';
 import { TimelineRuler } from './timeline/TimelineRuler';
 import { TimelineScrollbar } from './timeline/TimelineScrollbar';
@@ -11,7 +11,7 @@ import { resolveTextPreset } from './texts/textPresets';
 import { resolveTransitionPreset } from './transitions/transitionPresets';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import './editable-track-timeline.css';
-import type { VideoEditorTrackUiState } from '../../features/video-editor/store/useVideoEditorStore';
+import type { VideoEditorTrackUiState, VideoEditorViewportMetrics } from '../../features/video-editor/store/useVideoEditorStore';
 
 type TimelineClipSummary = {
     clipId?: unknown;
@@ -76,6 +76,9 @@ type EditableTrackTimelineProps = {
     onSelectedClipChange?: (clipId: string | null) => void;
     onActiveTrackChange?: (trackId: string | null) => void;
     onViewportMetricsChange?: (metrics: { scrollLeft: number; maxScrollLeft: number }) => void;
+    controlledViewport?: VideoEditorViewportMetrics | null;
+    controlledZoomPercent?: number | null;
+    onZoomPercentChange?: (zoomPercent: number) => void;
     controlledTrackUi?: Record<string, VideoEditorTrackUiState>;
     onTrackUiChange?: (trackUi: Record<string, VideoEditorTrackUiState>) => void;
     sceneItemVisibility?: Record<string, boolean>;
@@ -181,7 +184,7 @@ const MIN_IMAGE_CLIP_MS = 500;
 const SCALE_WIDTH = 72;
 const MIN_SCALE_WIDTH = 36;
 const MAX_SCALE_WIDTH = 160;
-const START_LEFT = 144;
+const START_LEFT = 188;
 const TIMELINE_HEADER_HEIGHT = 40;
 const TIMELINE_ROW_HEIGHT = 40;
 const CURSOR_TIME_EPSILON = 0.01;
@@ -658,6 +661,9 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     onSelectedClipChange,
     onActiveTrackChange,
     onViewportMetricsChange,
+    controlledViewport = null,
+    controlledZoomPercent = null,
+    onZoomPercentChange,
     controlledTrackUi,
     onTrackUiChange,
     sceneItemVisibility = {},
@@ -696,7 +702,11 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     const [selectedTrackIds, setSelectedTrackIds] = useState<string[]>([]);
     const [localTrackUiMap, setLocalTrackUiMap] = useState<Record<string, VideoEditorTrackUiState>>(controlledTrackUi || {});
     const [internalCursorTime, setInternalCursorTime] = useState(0);
-    const [scaleWidth, setScaleWidth] = useState(SCALE_WIDTH);
+    const [scaleWidth, setScaleWidth] = useState(() => {
+        const initialZoom = Number(controlledZoomPercent ?? 100);
+        const safeZoom = Number.isFinite(initialZoom) ? initialZoom : 100;
+        return clampNumber((safeZoom / 100) * SCALE_WIDTH, MIN_SCALE_WIDTH, MAX_SCALE_WIDTH);
+    });
     const [viewportWidth, setViewportWidth] = useState(0);
     const [scrollLeft, setScrollLeft] = useState(0);
     const [isDraggingAsset, setIsDraggingAsset] = useState(false);
@@ -2704,6 +2714,27 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         });
     }, [maxScrollLeft, onViewportMetricsChange, scrollLeft]);
 
+    useEffect(() => {
+        const nextZoom = Number(controlledZoomPercent);
+        if (!Number.isFinite(nextZoom)) return;
+        const nextScaleWidth = clampNumber((nextZoom / 100) * SCALE_WIDTH, MIN_SCALE_WIDTH, MAX_SCALE_WIDTH);
+        setScaleWidth((current) => (Math.abs(current - nextScaleWidth) < 0.001 ? current : nextScaleWidth));
+    }, [controlledZoomPercent]);
+
+    useEffect(() => {
+        onZoomPercentChange?.(zoomPercent);
+    }, [onZoomPercentChange, zoomPercent]);
+
+    useEffect(() => {
+        const nextScrollLeft = Number(controlledViewport?.scrollLeft);
+        if (!Number.isFinite(nextScrollLeft)) return;
+        const safeLeft = clampNumber(nextScrollLeft, 0, maxScrollLeft);
+        timelineRef.current?.setScrollLeft(safeLeft);
+        setScrollLeft((current) => (
+            Math.abs(current - safeLeft) < SCROLL_LEFT_EPSILON ? current : safeLeft
+        ));
+    }, [controlledViewport?.scrollLeft, maxScrollLeft]);
+
     return (
         <div
             ref={rootRef}
@@ -2942,30 +2973,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 }}
                 onDrop={handleAssetDrop}
             >
-                <div className="redbox-editable-timeline__quick-add">
-                    <button
-                        type="button"
-                        className="redbox-editable-timeline__quick-add-button"
-                        onClick={() => void handleAddTrack('video')}
-                    >
-                        + 视频轨
-                    </button>
-                    <button
-                        type="button"
-                        className="redbox-editable-timeline__quick-add-button"
-                        onClick={() => void handleAddTrack('audio')}
-                    >
-                        + 音频轨
-                    </button>
-                    <button
-                        type="button"
-                        className="redbox-editable-timeline__quick-add-button"
-                        onClick={() => void handleAddTrack('subtitle')}
-                    >
-                        + 字幕轨
-                    </button>
-                </div>
-                {selectedTrackSummaries.length > 0 ? (
+                {selectedTrackSummaries.length > 1 ? (
                     <div className="redbox-editable-timeline__track-selection-bar">
                         <div className="redbox-editable-timeline__track-selection-meta">
                             <span>轨道管理</span>
@@ -3153,12 +3161,15 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                     <div className="redbox-editable-timeline__track-actions">
                                         <button
                                             type="button"
-                                            className="redbox-editable-timeline__track-action redbox-editable-timeline__track-action--drag"
-                                            onPointerDown={(event) => beginTrackReorder(event, track.id)}
-                                            disabled={isPersisting || track.locked}
-                                            title="拖拽重排轨道"
+                                            className="redbox-editable-timeline__track-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                toggleTrackHidden(track.id);
+                                            }}
+                                            disabled={isPersisting}
+                                            title={track.hidden ? '显示轨道内容' : '隐藏轨道内容'}
                                         >
-                                            <GripVertical size={11} />
+                                            {track.hidden ? <Eye size={11} /> : <EyeOff size={11} />}
                                         </button>
                                         <button
                                             type="button"
@@ -3171,18 +3182,6 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             title={track.collapsed ? '展开轨道' : '折叠轨道'}
                                         >
                                             <Rows size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                toggleTrackHidden(track.id);
-                                            }}
-                                            disabled={isPersisting}
-                                            title={track.hidden ? '显示轨道内容' : '隐藏轨道内容'}
-                                        >
-                                            {track.hidden ? <Eye size={11} /> : <EyeOff size={11} />}
                                         </button>
                                         {track.kind === 'audio' ? (
                                             <button
@@ -3209,7 +3208,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                                 disabled={isPersisting}
                                                 title={track.solo ? '取消独奏轨道' : '独奏轨道'}
                                             >
-                                                <Target size={11} />
+                                                <span className="redbox-editable-timeline__track-action-glyph">S</span>
                                             </button>
                                         ) : null}
                                         <button
@@ -3229,84 +3228,22 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             className="redbox-editable-timeline__track-action"
                                             onClick={(event) => {
                                                 event.stopPropagation();
-                                                void handleDuplicateTrack(track.id);
+                                                setTrackContextMenu({
+                                                    x: event.clientX,
+                                                    y: event.clientY,
+                                                    trackIds: selectedTrackIdSet.has(track.id) ? effectiveSelectedTrackIds : [track.id],
+                                                });
                                             }}
                                             disabled={isPersisting}
-                                            title="复制整条轨道到下一条同类轨"
+                                            title="更多轨道操作"
                                         >
-                                            <Copy size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleInsertTrackAdjacent(track.id, 'down');
-                                            }}
-                                            disabled={isPersisting}
-                                            title={`在此轨下方插入${track.kindLabel}`}
-                                        >
-                                            <Plus size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleMoveTrack(track.id, 'up');
-                                            }}
-                                            disabled={!track.canMoveUp || isPersisting || track.locked}
-                                            title="轨道上移"
-                                        >
-                                            <ChevronUp size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleMoveTrack(track.id, 'down');
-                                            }}
-                                            disabled={!track.canMoveDown || isPersisting || track.locked}
-                                            title="轨道下移"
-                                        >
-                                            <ChevronDown size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action redbox-editable-timeline__track-action--danger"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleClearTrack(track.id);
-                                            }}
-                                            disabled={track.clipCount === 0 || isPersisting || track.locked}
-                                            title={track.clipCount === 0 ? '轨道为空' : '清空轨道内容'}
-                                        >
-                                            <Trash2 size={11} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="redbox-editable-timeline__track-action redbox-editable-timeline__track-action--danger"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleDeleteTrack(track.id);
-                                            }}
-                                            disabled={track.clipCount > 0 || isPersisting}
-                                            title={track.clipCount > 0 ? '仅支持删除空轨道' : '删除轨道'}
-                                        >
-                                            <Trash2 size={11} />
+                                            <MoreHorizontal size={11} />
                                         </button>
                                     </div>
                                 </div>
                                 <div className="redbox-editable-timeline__track-meta">
-                                    <span>{track.kindLabel}</span>
-                                    <span>{track.clipCount} 段</span>
-                                    <span>{formatSeconds(track.totalDurationSeconds)}</span>
-                                    {track.collapsed ? <span>折叠</span> : null}
-                                    {track.hidden ? <span>隐藏</span> : null}
-                                    {track.locked ? <span>锁定</span> : null}
-                                    {track.muted ? <span>静音</span> : null}
-                                    {track.solo ? <span>独奏</span> : null}
+                                    <span className="redbox-editable-timeline__track-meta-brief">{track.clipCount} 段</span>
+                                    <span className="redbox-editable-timeline__track-meta-brief">{formatSeconds(track.totalDurationSeconds)}</span>
                                 </div>
                             </div>
                         );
@@ -3345,6 +3282,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 className="redbox-editable-timeline__empty-track"
                                 style={{
                                     left: START_LEFT + 14,
+                                    right: 16,
                                     top: track.top + 10,
                                     height: Math.max(38, track.height - 20),
                                 }}
@@ -3455,6 +3393,8 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         const stripFrameCount = buildClipStripFrameCount(width);
                         const stripCacheKey = `${clipId}:${stripFrameCount}:${Math.round(normalizeNumber(clip?.trimInMs, 0))}:${Math.round(visibleDurationSeconds * 1000)}`;
                         const generatedFrames = videoStripFrames[stripCacheKey] || [];
+                        const showContentCard = (visualKind === 'subtitle' || kind === 'text') && width >= 168 && (selected || width >= 236);
+                        const showRichContentCard = selected || width >= 296;
                         return (
                             <div
                                 key={clipId}
@@ -3576,25 +3516,27 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             </div>
                                         </>
                                     ) : null}
-                                    {(visualKind === 'subtitle' || kind === 'text') && width >= 148 ? (
+                                    {showContentCard ? (
                                         <div className="redbox-editable-timeline__clip-content-card">
                                             <div className="redbox-editable-timeline__clip-content-pills">
                                                 <span className="redbox-editable-timeline__clip-content-pill">
                                                     {visualKind === 'subtitle' ? resolvedSubtitlePreset.label : resolvedTextPreset.label}
                                                 </span>
-                                                <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--ghost">
-                                                    {visualKind === 'subtitle' ? subtitleAnimationLabel : textAnimationLabel}
-                                                </span>
-                                                {visualKind === 'subtitle' && subtitleEmphasisCount > 0 ? (
+                                                {(showRichContentCard || width >= 228) && (visualKind === 'subtitle' ? subtitleAnimationLabel : textAnimationLabel) ? (
+                                                    <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--ghost">
+                                                        {visualKind === 'subtitle' ? subtitleAnimationLabel : textAnimationLabel}
+                                                    </span>
+                                                ) : null}
+                                                {showRichContentCard && visualKind === 'subtitle' && subtitleEmphasisCount > 0 ? (
                                                     <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--accent">
                                                         {subtitleEmphasisCount} 重点
                                                     </span>
                                                 ) : null}
                                             </div>
-                                            {clipSummaryText ? (
+                                            {(showRichContentCard || width >= 208) && clipSummaryText ? (
                                                 <div className="redbox-editable-timeline__clip-content-text">{clipSummaryText}</div>
                                             ) : null}
-                                            {(sceneHidden || sceneLocked || sceneGrouped) ? (
+                                            {showRichContentCard && (sceneHidden || sceneLocked || sceneGrouped) ? (
                                                 <div className="redbox-editable-timeline__clip-content-pills">
                                                     {sceneHidden ? (
                                                         <span className="redbox-editable-timeline__clip-content-pill redbox-editable-timeline__clip-content-pill--ghost">
@@ -3613,7 +3555,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                                     ) : null}
                                                 </div>
                                             ) : null}
-                                            {visualKind === 'subtitle' && subtitleTokenCount > 0 ? (
+                                            {showRichContentCard && visualKind === 'subtitle' && subtitleTokenCount > 0 ? (
                                                 <div className="redbox-editable-timeline__clip-subtitle-rhythm">
                                                     <div className="redbox-editable-timeline__clip-subtitle-rhythm-bars">
                                                         {Array.from({ length: Math.min(Math.max(1, subtitleSegmentCount), 18) }).map((_, markerIndex) => (

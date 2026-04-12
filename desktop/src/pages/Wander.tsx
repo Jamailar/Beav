@@ -5,6 +5,7 @@ import { resolveAssetUrl } from '../utils/pathManager';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { uiDebug } from '../utils/uiDebug';
 
 interface WanderItem {
   id: string;
@@ -82,6 +83,23 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
   const activeRequestIdRef = useRef('');
   const activeSessionIdRef = useRef('');
   const historyListRef = useRef<WanderHistoryRecord[]>([]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    uiDebug('wander', isActive ? 'view_activate' : 'view_deactivate', {
+      loading,
+      phase,
+      itemCount: items.length,
+    });
+  }, [isActive, items.length, loading, phase]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    uiDebug('wander', 'view_mount');
+    return () => {
+      uiDebug('wander', 'view_unmount');
+    };
+  }, []);
 
   useEffect(() => {
     historyListRef.current = historyList;
@@ -603,6 +621,10 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
         });
       };
 
+    if (!isActive) {
+      return;
+    }
+
     const disposeRuntimeEvents = subscribeRuntimeEventStream({
       getActiveSessionId: () => activeSessionIdRef.current,
       onPhaseStart: ({ sessionId, phase }) => {
@@ -642,7 +664,7 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
     return () => {
       disposeRuntimeEvents();
     };
-  }, [upsertProgressCard]);
+  }, [isActive, upsertProgressCard]);
 
   const handleToggleMultiChoice = async () => {
     if (isSavingMode || loading) return;

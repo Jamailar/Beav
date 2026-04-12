@@ -65,7 +65,9 @@ pub fn get_runtime_task_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    with_store(state, |store| Ok(runtime_task_lookup_value(&store, &task_id)))
+    with_store(state, |store| {
+        Ok(runtime_task_lookup_value(&store, &task_id))
+    })
 }
 
 pub fn cancel_runtime_task_value(
@@ -87,5 +89,14 @@ pub fn runtime_task_trace_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    with_store(state, |store| Ok(runtime_task_traces_lookup_value(&store, &task_id)))
+    let include_children = payload_field(payload, "includeChildren")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    with_store(state, |store| {
+        Ok(runtime_task_traces_lookup_value(
+            &store,
+            &task_id,
+            include_children,
+        ))
+    })
 }

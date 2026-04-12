@@ -68,7 +68,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) use app_shared::*;
@@ -619,6 +619,7 @@ struct EditorRuntimeStateRecord {
 struct AppState {
     store_path: PathBuf,
     store: Mutex<AppStore>,
+    workspace_root_cache: Mutex<PathBuf>,
     store_persist_version: Arc<AtomicU64>,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
     editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
@@ -878,18 +879,18 @@ fn should_force_preferred_workspace_dir(configured: Option<&Path>, store_path: &
     false
 }
 
-fn active_space_workspace_root_from_store(
-    store: &AppStore,
+fn workspace_root_from_snapshot(
+    settings: &Value,
     active_space_id: &str,
     store_path: &Path,
 ) -> Result<PathBuf, String> {
     let base = if should_force_preferred_workspace_dir(
-        configured_workspace_dir(&store.settings).as_deref(),
+        configured_workspace_dir(settings).as_deref(),
         store_path,
     ) {
         preferred_workspace_dir()
     } else {
-        configured_workspace_dir(&store.settings).unwrap_or_else(preferred_workspace_dir)
+        configured_workspace_dir(settings).unwrap_or_else(preferred_workspace_dir)
     };
     let root = if active_space_id == "default" {
         base
@@ -900,10 +901,44 @@ fn active_space_workspace_root_from_store(
     Ok(root)
 }
 
+fn active_space_workspace_root_from_store(
+    store: &AppStore,
+    active_space_id: &str,
+    store_path: &Path,
+) -> Result<PathBuf, String> {
+    workspace_root_from_snapshot(&store.settings, active_space_id, store_path)
+}
+
+pub(crate) fn update_workspace_root_cache(
+    state: &State<'_, AppState>,
+    settings: &Value,
+    active_space_id: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace_root_from_snapshot(settings, active_space_id, &state.store_path)?;
+    let mut cache = state
+        .workspace_root_cache
+        .lock()
+        .map_err(|_| "workspace root cache lock 已损坏".to_string())?;
+    *cache = root.clone();
+    Ok(root)
+}
+
 fn workspace_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
-    with_store(state, |store| {
-        active_space_workspace_root_from_store(&store, &store.active_space_id, &state.store_path)
-    })
+    let cached_root = state
+        .workspace_root_cache
+        .lock()
+        .map_err(|_| "workspace root cache lock 已损坏".to_string())?
+        .clone();
+    if !cached_root.as_os_str().is_empty() {
+        ensure_workspace_dirs(&cached_root)?;
+        return Ok(cached_root);
+    }
+
+    let (settings_snapshot, active_space_id) = with_store(state, |store| {
+        Ok((store.settings.clone(), store.active_space_id.clone()))
+    })?;
+    let root = update_workspace_root_cache(state, &settings_snapshot, &active_space_id)?;
+    Ok(root)
 }
 
 fn ensure_workspace_dirs(root: &Path) -> Result<(), String> {
@@ -1576,7 +1611,7 @@ fn append_debug_log(store: &mut AppStore, line: String) {
     }
 }
 
-fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
+pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
     let _ = with_store_mut(state, |store| {
         append_debug_log(store, line);
@@ -5563,6 +5598,22 @@ fn ipc_send(
     }
 }
 
+const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(180);
+
+fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
+    thread::spawn(move || loop {
+        {
+            let state = app.state::<AppState>();
+            if let Err(error) = commands::official::refresh_official_cached_data(&app, &state) {
+                if error != "官方账号未登录" {
+                    eprintln!("[RedBox official cache refresher] {error}");
+                }
+            }
+        }
+        thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
+    })
+}
+
 fn main() {
     let store_path = build_store_path();
     let mut store = load_store(&store_path);
@@ -5573,11 +5624,15 @@ fn main() {
     if let Err(error) = persist_store(&store_path, &store) {
         eprintln!("[RedBox store persist] {error}");
     }
+    let initial_workspace_root =
+        workspace_root_from_snapshot(&store.settings, &store.active_space_id, &store_path)
+            .unwrap_or_else(|_| preferred_workspace_dir());
 
     tauri::Builder::default()
         .manage(AppState {
             store_path,
             store: Mutex::new(store),
+            workspace_root_cache: Mutex::new(initial_workspace_root),
             store_persist_version: Arc::new(AtomicU64::new(0)),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
@@ -5600,6 +5655,7 @@ fn main() {
             {
                 eprintln!("[RedBox runtime warmup] {error}");
             }
+            let _ = run_official_cache_refresher(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

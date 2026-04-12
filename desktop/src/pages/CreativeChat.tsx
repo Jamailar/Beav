@@ -506,6 +506,10 @@ export function CreativeChat({ activeFile, isActive = true }: { activeFile?: { p
             // Reset all thinking states
             setThinkingState({});
         };
+        if (!isActive) {
+            return;
+        }
+
         const disposeRuntimeEvents = subscribeRuntimeEventStream({
             onCreativeChatUserMessage: ({ roomId, message }) => {
                 handleUserMessage({
@@ -575,7 +579,7 @@ export function CreativeChat({ activeFile, isActive = true }: { activeFile?: { p
             }
             disposeRuntimeEvents();
         };
-    }, [flushBufferedStreams, loadMessages, loadRooms, scheduleBufferedStreamFlush]);
+    }, [flushBufferedStreams, isActive, loadMessages, loadRooms, scheduleBufferedStreamFlush]);
 
 
     const handleSelectRoom = (room: ChatRoom) => {
