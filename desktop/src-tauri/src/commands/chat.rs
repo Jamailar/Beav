@@ -32,7 +32,7 @@ pub fn handle_send_channel(
                 payload_field(&payload, "modelConfig"),
                 payload_field(&payload, "attachment").cloned(),
             );
-            let prepared_turn = PreparedSessionAgentTurn::ChatSend(turn);
+            let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let execution = execute_prepared_session_agent_turn(Some(app), state, &prepared_turn)?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;

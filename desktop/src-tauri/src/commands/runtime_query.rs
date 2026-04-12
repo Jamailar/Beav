@@ -51,7 +51,7 @@ pub fn handle_runtime_query(
         &message,
         payload_field(payload, "modelConfig"),
     );
-    let turn = PreparedSessionAgentTurn::RuntimeQuery(prepared);
+    let turn = PreparedSessionAgentTurn::runtime_query(prepared);
     let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
     let _ = with_store_mut(state, |store| {

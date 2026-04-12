@@ -62,7 +62,7 @@ pub fn handle_bridge_channel(
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
             let message = payload_string(payload, "message").unwrap_or_default();
-            let turn = PreparedSessionAgentTurn::SessionBridge(
+            let turn = PreparedSessionAgentTurn::session_bridge(
                 build_session_bridge_turn(session_id.clone(), message),
             );
             execute_prepared_session_agent_turn(None, state, &turn)

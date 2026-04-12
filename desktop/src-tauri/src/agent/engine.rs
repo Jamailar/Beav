@@ -136,6 +136,18 @@ pub enum PreparedSessionAgentTurn<'a> {
 }
 
 impl<'a> PreparedSessionAgentTurn<'a> {
+    pub fn chat_send(turn: PreparedChatSendTurn<'a>) -> Self {
+        Self::ChatSend(turn)
+    }
+
+    pub fn runtime_query(turn: PreparedRuntimeQueryTurn<'a>) -> Self {
+        Self::RuntimeQuery(turn)
+    }
+
+    pub fn session_bridge(turn: PreparedSessionBridgeTurn<'a>) -> Self {
+        Self::SessionBridge(turn)
+    }
+
     pub fn request(&self) -> &ChatExchangeRequest<'a> {
         match self {
             Self::ChatSend(turn) => &turn.request,
@@ -206,7 +218,7 @@ mod tests {
 
     #[test]
     fn prepared_session_agent_turn_exposes_common_request_surface() {
-        let turn = PreparedSessionAgentTurn::SessionBridge(PreparedSessionBridgeTurn {
+        let turn = PreparedSessionAgentTurn::session_bridge(PreparedSessionBridgeTurn {
             request: ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()),
         });
         assert_eq!(turn.request().session_id.as_deref(), Some("s"));
@@ -218,7 +230,7 @@ mod tests {
 
     #[test]
     fn prepared_runtime_query_turn_exposes_query_specific_accessors() {
-        let turn = PreparedSessionAgentTurn::RuntimeQuery(PreparedRuntimeQueryTurn {
+        let turn = PreparedSessionAgentTurn::runtime_query(PreparedRuntimeQueryTurn {
             route: crate::runtime::runtime_direct_route_record("default", "draft", None),
             route_value: serde_json::json!({ "intent": "direct_answer" }),
             orchestration: Some(serde_json::json!({ "outputs": [] })),
@@ -242,7 +254,7 @@ mod tests {
 
     #[test]
     fn prepared_chat_send_turn_reports_redclaw_flag_through_shared_surface() {
-        let turn = PreparedSessionAgentTurn::ChatSend(PreparedChatSendTurn {
+        let turn = PreparedSessionAgentTurn::chat_send(PreparedChatSendTurn {
             request: ChatExchangeRequest::chat_send(
                 Some("context-session:redclaw:test".to_string()),
                 "message".to_string(),
