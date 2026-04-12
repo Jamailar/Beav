@@ -196,10 +196,50 @@ mod tests {
             request: ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()),
         });
         assert_eq!(turn.request().session_id.as_deref(), Some("s"));
+        assert_eq!(turn.request_cloned().message, "m");
         assert_eq!(turn.display_content(), "m");
         assert!(!turn.is_redclaw_session());
         assert!(turn.route_value().is_none());
         assert!(turn.orchestration().is_none());
         assert!(turn.route_reasoning().is_none());
+    }
+
+    #[test]
+    fn prepared_runtime_query_turn_exposes_query_specific_accessors() {
+        let turn = PreparedSessionAgentTurn::RuntimeQuery(PreparedRuntimeQueryTurn {
+            route: crate::runtime::runtime_direct_route_record("default", "draft", None),
+            route_value: serde_json::json!({ "intent": "direct_answer" }),
+            orchestration: Some(serde_json::json!({ "outputs": [] })),
+            request: ChatExchangeRequest::runtime_query(
+                Some("session-1".to_string()),
+                "effective".to_string(),
+                "display".to_string(),
+                None,
+            ),
+        });
+
+        assert_eq!(
+            turn.route_value()
+                .and_then(|value| value.get("intent"))
+                .and_then(Value::as_str),
+            Some("direct_answer")
+        );
+        assert!(turn.orchestration().is_some());
+        assert!(turn.route_reasoning().is_some());
+    }
+
+    #[test]
+    fn prepared_chat_send_turn_reports_redclaw_flag_through_shared_surface() {
+        let turn = PreparedSessionAgentTurn::ChatSend(PreparedChatSendTurn {
+            request: ChatExchangeRequest::chat_send(
+                Some("context-session:redclaw:test".to_string()),
+                "message".to_string(),
+                "display".to_string(),
+                None,
+                None,
+            ),
+            is_redclaw_session: true,
+        });
+        assert!(turn.is_redclaw_session());
     }
 }
