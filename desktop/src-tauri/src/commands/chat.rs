@@ -2,11 +2,11 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{
-    build_chat_send_turn, build_redclaw_chat_postprocess, emit_session_agent_turn_postprocess,
+    build_chat_send_turn, build_redclaw_chat_postprocess, emit_session_agent_completion,
     execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::commands::chat_state::{
-    latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
+    latest_session_id, request_chat_runtime_cancel,
 };
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::events::{
@@ -78,19 +78,12 @@ pub fn handle_send_channel(
                     Ok(())
                 });
             }
-            let runtime_mode = with_store(state, |store| {
-                Ok(resolve_runtime_mode_for_session(
-                    &store,
-                    execution.session_id(),
-                ))
-            })?;
-
-            emit_session_agent_turn_postprocess(
+            emit_session_agent_completion(
                 app,
+                state,
                 &execution,
-                &runtime_mode,
-                "正在分析输入并生成回答。",
-            );
+                crate::agent::SessionAgentTurnKind::ChatSend,
+            )?;
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",

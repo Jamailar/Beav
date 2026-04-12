@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::agent::{
-    build_runtime_query_turn, emit_session_agent_turn_postprocess,
+    build_runtime_query_turn, emit_session_agent_completion,
     execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
@@ -97,12 +97,12 @@ pub fn handle_runtime_query(
             payload,
         );
     }
-    emit_session_agent_turn_postprocess(
+    emit_session_agent_completion(
         app,
+        state,
         &execution,
-        &runtime_mode,
-        "正在规划并调用模型生成响应。",
-    );
+        crate::agent::SessionAgentTurnKind::RuntimeQuery,
+    )?;
     Ok(json!({
         "success": true,
         "sessionId": execution.session_id(),
