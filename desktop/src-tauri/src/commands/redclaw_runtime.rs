@@ -1,64 +1,14 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::chat_state::ensure_chat_session;
+use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::append_session_checkpoint;
 use crate::{
-    append_session_transcript, build_placeholder_assistant_response, create_work_item,
-    infer_protocol, invoke_chat_by_protocol, make_id, now_iso, payload_string, redclaw_root,
-    resolve_manuscript_path, slug_from_relative_path, write_text_file, AppState, ChatMessageRecord,
+    create_work_item,
+    make_id, now_iso, redclaw_root,
+    resolve_manuscript_path, slug_from_relative_path, write_text_file, AppState,
     RedclawProjectRecord,
 };
-
-pub fn resolve_default_model_config(
-    settings: &Value,
-) -> Option<(String, String, Option<String>, String)> {
-    if let Some(ai_sources_json) = payload_string(settings, "ai_sources_json") {
-        if let Ok(items) = serde_json::from_str::<Vec<Value>>(&ai_sources_json) {
-            let default_id = payload_string(settings, "default_ai_source_id");
-            let selected = items
-                .iter()
-                .find(|item| {
-                    item.get("id").and_then(|value| value.as_str()) == default_id.as_deref()
-                })
-                .or_else(|| items.first())?;
-            let base_url = selected
-                .get("baseURL")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let api_key = selected
-                .get("apiKey")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string());
-            let model_name = selected
-                .get("model")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let protocol = selected
-                .get("protocol")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| infer_protocol(&base_url, None, None));
-            if !base_url.is_empty() && !model_name.is_empty() {
-                return Some((protocol, base_url, api_key, model_name));
-            }
-        }
-    }
-
-    let base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
-    let model_name = payload_string(settings, "model_name").unwrap_or_default();
-    if base_url.trim().is_empty() || model_name.trim().is_empty() {
-        return None;
-    }
-    let api_key = payload_string(settings, "api_key");
-    let protocol = infer_protocol(&base_url, None, None);
-    Some((protocol, base_url, api_key, model_name))
-}
 
 pub fn redclaw_session_id_for_space(space_id: &str) -> String {
     let context_id = format!("redclaw-singleton:{space_id}");
@@ -167,24 +117,14 @@ pub fn execute_redclaw_run(
     project_id: Option<String>,
     source_label: &str,
 ) -> Result<Value, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
     let session_id = redclaw_session_id_for_space(&active_space_id);
-
-    let response = if let Some((protocol, base_url, api_key, model_name)) =
-        resolve_default_model_config(&settings_snapshot)
-    {
-        invoke_chat_by_protocol(
-            &protocol,
-            &base_url,
-            api_key.as_deref(),
-            &model_name,
-            &prompt,
-        )
-        .unwrap_or_else(|_| build_placeholder_assistant_response(&prompt))
-    } else {
-        build_placeholder_assistant_response(&prompt)
-    };
+    let turn = PreparedSessionAgentTurn::redclaw_run(RedclawRunTurn::new(
+        source_label,
+        session_id.clone(),
+        prompt.clone(),
+    ));
+    let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
 
     let target_project_id = with_store(state, |store| {
         Ok(project_id.unwrap_or_else(|| {
@@ -203,64 +143,11 @@ pub fn execute_redclaw_run(
         &target_project_id,
         &session_id,
         &prompt,
-        &response,
+        execution.response(),
         source_label,
     )?;
 
     with_store_mut(state, |store| {
-        let (session, _) = ensure_chat_session(
-            &mut store.chat_sessions,
-            Some(session_id.clone()),
-            Some("RedClaw".to_string()),
-        );
-        session.updated_at = now_iso();
-
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session_id.clone(),
-            role: "user".to_string(),
-            content: prompt.clone(),
-            display_content: None,
-            attachment: None,
-            created_at: now_iso(),
-        });
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session_id.clone(),
-            role: "assistant".to_string(),
-            content: response.clone(),
-            display_content: None,
-            attachment: None,
-            created_at: now_iso(),
-        });
-        append_session_transcript(
-            store,
-            &session_id,
-            "message",
-            "user",
-            prompt.clone(),
-            Some(json!({ "source": source_label })),
-        );
-        append_session_transcript(
-            store,
-            &session_id,
-            "message",
-            "assistant",
-            response.clone(),
-            Some(json!({ "source": source_label })),
-        );
-        append_session_checkpoint(
-            store,
-            &session_id,
-            "redclaw-run",
-            format!("RedClaw completed {source_label}"),
-            Some(json!({
-                "responsePreview": response.chars().take(120).collect::<String>(),
-                "artifactKind": artifact_kind,
-                "artifacts": artifacts,
-            })),
-        );
-
         if let Some(project) = store
             .redclaw_state
             .projects
@@ -290,7 +177,7 @@ pub fn execute_redclaw_run(
             Some(prompt.clone()),
             Some(json!({
                 "projectId": target_project_id,
-                "sessionId": session_id,
+                "sessionId": execution.session_id(),
                 "source": source_label,
                 "artifactKind": artifact_kind,
                 "artifacts": artifacts,
@@ -304,15 +191,15 @@ pub fn execute_redclaw_run(
     let _ = app.emit(
         "redclaw:runner-message",
         json!({
-            "sessionId": session_id.clone(),
+            "sessionId": execution.session_id(),
             "artifactKind": artifact_kind,
             "artifacts": artifacts,
         }),
     );
     Ok(json!({
         "success": true,
-        "sessionId": session_id,
-        "response": response,
+        "sessionId": execution.session_id(),
+        "response": execution.response(),
         "artifactKind": artifact_kind,
         "artifacts": artifacts
     }))

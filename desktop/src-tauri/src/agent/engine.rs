@@ -10,6 +10,8 @@ pub enum SessionAgentTurnKind {
     ChatSend,
     RuntimeQuery,
     SessionBridge,
+    AssistantDaemon,
+    RedclawRun,
 }
 
 impl SessionAgentTurnKind {
@@ -18,6 +20,8 @@ impl SessionAgentTurnKind {
             Self::ChatSend => "chat-send",
             Self::RuntimeQuery => "runtime-query",
             Self::SessionBridge => "session-bridge",
+            Self::AssistantDaemon => "assistant-daemon",
+            Self::RedclawRun => "redclaw-run",
         }
     }
 
@@ -26,6 +30,8 @@ impl SessionAgentTurnKind {
             Self::ChatSend => "Chat response completed",
             Self::RuntimeQuery => "Runtime query completed",
             Self::SessionBridge => "Session bridge message completed",
+            Self::AssistantDaemon => "Assistant daemon handled request",
+            Self::RedclawRun => "RedClaw run completed",
         }
     }
 }
@@ -38,6 +44,8 @@ pub struct ChatExchangeRequest<'a> {
     pub model_config: Option<&'a Value>,
     pub attachment: Option<Value>,
     pub turn_kind: SessionAgentTurnKind,
+    pub checkpoint_summary_override: Option<String>,
+    pub session_title_override: Option<String>,
 }
 
 impl<'a> ChatExchangeRequest<'a> {
@@ -55,6 +63,8 @@ impl<'a> ChatExchangeRequest<'a> {
             model_config,
             attachment,
             turn_kind: SessionAgentTurnKind::ChatSend,
+            checkpoint_summary_override: None,
+            session_title_override: None,
         }
     }
 
@@ -71,6 +81,8 @@ impl<'a> ChatExchangeRequest<'a> {
             model_config,
             attachment: None,
             turn_kind: SessionAgentTurnKind::RuntimeQuery,
+            checkpoint_summary_override: None,
+            session_title_override: None,
         }
     }
 
@@ -82,6 +94,70 @@ impl<'a> ChatExchangeRequest<'a> {
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::SessionBridge,
+            checkpoint_summary_override: None,
+            session_title_override: None,
+        }
+    }
+
+    pub fn assistant_daemon(session_id: String, prompt: String, route_kind: &str) -> Self {
+        Self {
+            session_id: Some(session_id),
+            display_content: prompt.clone(),
+            message: prompt,
+            model_config: None,
+            attachment: None,
+            turn_kind: SessionAgentTurnKind::AssistantDaemon,
+            checkpoint_summary_override: Some(format!("Assistant daemon handled {}", route_kind)),
+            session_title_override: Some(format!("Assistant · {}", route_kind)),
+        }
+    }
+
+    pub fn redclaw_run(session_id: String, prompt: String, source_label: &str) -> Self {
+        Self {
+            session_id: Some(session_id),
+            display_content: prompt.clone(),
+            message: prompt,
+            model_config: None,
+            attachment: None,
+            turn_kind: SessionAgentTurnKind::RedclawRun,
+            checkpoint_summary_override: Some(format!("RedClaw completed {}", source_label)),
+            session_title_override: Some("RedClaw".to_string()),
+        }
+    }
+
+    pub fn checkpoint_summary_text(&self) -> String {
+        self.checkpoint_summary_override
+            .clone()
+            .unwrap_or_else(|| self.turn_kind.checkpoint_summary().to_string())
+    }
+
+    pub fn session_title_hint_override(&self) -> Option<&str> {
+        self.session_title_override.as_deref()
+    }
+}
+
+#[derive(Clone)]
+pub struct AssistantDaemonTurn {
+    pub request: ChatExchangeRequest<'static>,
+}
+
+#[derive(Clone)]
+pub struct RedclawRunTurn {
+    pub request: ChatExchangeRequest<'static>,
+}
+
+impl AssistantDaemonTurn {
+    pub fn new(route_kind: &str, session_id: String, prompt: String) -> Self {
+        Self {
+            request: ChatExchangeRequest::assistant_daemon(session_id, prompt, route_kind),
+        }
+    }
+}
+
+impl RedclawRunTurn {
+    pub fn new(source_label: &str, session_id: String, prompt: String) -> Self {
+        Self {
+            request: ChatExchangeRequest::redclaw_run(session_id, prompt, source_label),
         }
     }
 }
@@ -133,6 +209,8 @@ pub enum PreparedSessionAgentTurn<'a> {
     ChatSend(PreparedChatSendTurn<'a>),
     RuntimeQuery(PreparedRuntimeQueryTurn<'a>),
     SessionBridge(PreparedSessionBridgeTurn<'a>),
+    AssistantDaemon(AssistantDaemonTurn),
+    RedclawRun(RedclawRunTurn),
 }
 
 impl<'a> PreparedSessionAgentTurn<'a> {
@@ -148,11 +226,21 @@ impl<'a> PreparedSessionAgentTurn<'a> {
         Self::SessionBridge(turn)
     }
 
+    pub fn assistant_daemon(turn: AssistantDaemonTurn) -> Self {
+        Self::AssistantDaemon(turn)
+    }
+
+    pub fn redclaw_run(turn: RedclawRunTurn) -> Self {
+        Self::RedclawRun(turn)
+    }
+
     pub fn request(&self) -> &ChatExchangeRequest<'a> {
         match self {
             Self::ChatSend(turn) => &turn.request,
             Self::RuntimeQuery(turn) => &turn.request,
             Self::SessionBridge(turn) => &turn.request,
+            Self::AssistantDaemon(turn) => &turn.request,
+            Self::RedclawRun(turn) => &turn.request,
         }
     }
 
@@ -214,6 +302,19 @@ mod tests {
             ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()).turn_kind,
             SessionAgentTurnKind::SessionBridge
         );
+        assert_eq!(
+            ChatExchangeRequest::assistant_daemon(
+                "s".to_string(),
+                "m".to_string(),
+                "feishu"
+            )
+            .turn_kind,
+            SessionAgentTurnKind::AssistantDaemon
+        );
+        assert_eq!(
+            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler").turn_kind,
+            SessionAgentTurnKind::RedclawRun
+        );
     }
 
     #[test]
@@ -226,6 +327,25 @@ mod tests {
         assert_eq!(turn.display_content(), "m");
         assert!(!turn.is_redclaw_session());
         assert!(turn.runtime_query_checkpoint_bundle().is_none());
+    }
+
+    #[test]
+    fn request_overrides_are_available_for_special_turns() {
+        let assistant = ChatExchangeRequest::assistant_daemon(
+            "session-a".to_string(),
+            "prompt".to_string(),
+            "feishu",
+        );
+        assert_eq!(
+            assistant.checkpoint_summary_text(),
+            "Assistant daemon handled feishu"
+        );
+        assert_eq!(assistant.session_title_hint_override(), Some("Assistant · feishu"));
+
+        let redclaw =
+            ChatExchangeRequest::redclaw_run("session-r".to_string(), "prompt".to_string(), "cron");
+        assert_eq!(redclaw.checkpoint_summary_text(), "RedClaw completed cron");
+        assert_eq!(redclaw.session_title_hint_override(), Some("RedClaw"));
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub fn execute_session_agent_turn(
     state: &State<'_, AppState>,
     request: ChatExchangeRequest<'_>,
 ) -> Result<SessionAgentTurnExecution, String> {
+    let checkpoint_summary = request.checkpoint_summary_text();
+    let session_title_override = request.session_title_hint_override().map(ToString::to_string);
     let ChatExchangeRequest {
         session_id,
         message,
@@ -28,6 +30,8 @@ pub fn execute_session_agent_turn(
         model_config,
         attachment,
         turn_kind,
+        checkpoint_summary_override: _,
+        session_title_override: _,
     } = request;
     let context = resolve_chat_exchange_context(state, session_id, turn_kind)?;
     let _ = update_chat_runtime_state(state, &context.working_session_id, true, String::new(), None);
@@ -70,6 +74,8 @@ pub fn execute_session_agent_turn(
         attachment.clone(),
         &response,
         turn_kind,
+        checkpoint_summary,
+        session_title_override,
     )?;
     let _ = update_chat_runtime_state(
         state,

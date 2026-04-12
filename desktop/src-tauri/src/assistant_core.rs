@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use crate::agent::{execute_prepared_session_agent_turn, AssistantDaemonTurn, PreparedSessionAgentTurn};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,11 +12,7 @@ use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
-    append_session_checkpoint, append_session_transcript, build_placeholder_assistant_response,
-    commands::chat_state::ensure_chat_session,
-    commands::redclaw_runtime::resolve_default_model_config, invoke_chat_by_protocol, make_id,
-    now_iso, with_store, with_store_mut, AppState, AssistantSidecarRuntime, AssistantStateRecord,
-    ChatMessageRecord,
+    now_iso, with_store, AppState, AssistantSidecarRuntime, AssistantStateRecord,
 };
 
 pub(crate) fn value_to_i64_string(value: Option<&Value>) -> Option<String> {
@@ -224,7 +221,6 @@ pub(crate) fn execute_assistant_message(
     body: &str,
 ) -> Result<Value, String> {
     let state = app.state::<AppState>();
-    let settings_snapshot = with_store(&state, |store| Ok(store.settings.clone()))?;
     let assistant_snapshot = with_store(&state, |store| Ok(store.assistant_state.clone()))?;
     let parsed_body = serde_json::from_str::<Value>(body).unwrap_or_else(|_| json!({}));
     if let Some(response) =
@@ -241,73 +237,13 @@ pub(crate) fn execute_assistant_message(
         }));
     };
 
-    let response = if let Some((protocol, base_url, api_key, model_name)) =
-        resolve_default_model_config(&settings_snapshot)
-    {
-        invoke_chat_by_protocol(
-            &protocol,
-            &base_url,
-            api_key.as_deref(),
-            &model_name,
-            &prompt,
-        )
-        .unwrap_or_else(|_| build_placeholder_assistant_response(&prompt))
-    } else {
-        build_placeholder_assistant_response(&prompt)
-    };
-
     let session_id = assistant_session_id_for_route(route_kind);
-    with_store_mut(&state, |store| {
-        let (session, _) = ensure_chat_session(
-            &mut store.chat_sessions,
-            Some(session_id.clone()),
-            Some(format!("Assistant · {}", route_kind)),
-        );
-        session.updated_at = now_iso();
-
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session_id.clone(),
-            role: "user".to_string(),
-            content: prompt.clone(),
-            display_content: None,
-            attachment: None,
-            created_at: now_iso(),
-        });
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session_id.clone(),
-            role: "assistant".to_string(),
-            content: response.clone(),
-            display_content: None,
-            attachment: None,
-            created_at: now_iso(),
-        });
-        append_session_transcript(
-            store,
-            &session_id,
-            "message",
-            "user",
-            prompt.clone(),
-            Some(json!({ "routeKind": route_kind })),
-        );
-        append_session_transcript(
-            store,
-            &session_id,
-            "message",
-            "assistant",
-            response.clone(),
-            Some(json!({ "routeKind": route_kind })),
-        );
-        append_session_checkpoint(
-            store,
-            &session_id,
-            "assistant-daemon",
-            format!("Assistant daemon handled {}", route_kind),
-            Some(json!({ "responsePreview": response.chars().take(120).collect::<String>() })),
-        );
-        Ok(())
-    })?;
+    let turn = PreparedSessionAgentTurn::assistant_daemon(AssistantDaemonTurn::new(
+        route_kind,
+        session_id.clone(),
+        prompt.clone(),
+    ));
+    let execution = execute_prepared_session_agent_turn(Some(app), &state, &turn)?;
     emit_assistant_log(
         app,
         &format!("assistant daemon completed {} request", route_kind),
@@ -315,8 +251,8 @@ pub(crate) fn execute_assistant_message(
     Ok(json!({
         "success": true,
         "routeKind": route_kind,
-        "reply": response,
-        "sessionId": session_id
+        "reply": execution.response(),
+        "sessionId": execution.session_id()
     }))
 }
 

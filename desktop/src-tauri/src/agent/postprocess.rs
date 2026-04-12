@@ -58,6 +58,8 @@ fn pending_label_for_turn_kind(turn_kind: SessionAgentTurnKind) -> &'static str 
         SessionAgentTurnKind::ChatSend => "正在分析输入并生成回答。",
         SessionAgentTurnKind::RuntimeQuery => "正在规划并调用模型生成响应。",
         SessionAgentTurnKind::SessionBridge => "正在处理会话桥接消息。",
+        SessionAgentTurnKind::AssistantDaemon => "正在处理助手守护消息。",
+        SessionAgentTurnKind::RedclawRun => "正在执行 RedClaw 运行。",
     }
 }
 
