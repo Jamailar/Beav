@@ -2,17 +2,16 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::agent::{
-    build_runtime_query_turn, emit_session_agent_completion,
-    execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+    build_runtime_query_turn, emit_session_agent_completion, execute_prepared_session_agent_turn,
+    PreparedSessionAgentTurn,
 };
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
-use crate::{
-    payload_field, payload_string, resolve_runtime_mode_for_session, AppState,
-};
+use crate::skills::active_skill_activation_items;
+use crate::{payload_field, payload_string, resolve_runtime_mode_for_session, AppState};
 
 pub fn handle_runtime_query(
     app: &AppHandle,
@@ -37,12 +36,15 @@ pub fn handle_runtime_query(
     let orchestration = if route.requires_multi_agent || route.requires_long_running_task {
         Some(run_subagent_orchestration_for_task(
             Some(app),
+            state,
             &settings_snapshot,
             &runtime_mode,
             session_id.as_deref().unwrap_or("runtime-query"),
             session_id.as_deref(),
             &route,
             &message,
+            payload_field(payload, "metadata"),
+            payload_field(payload, "modelConfig"),
         )?)
     } else {
         None
@@ -57,6 +59,30 @@ pub fn handle_runtime_query(
     let turn = PreparedSessionAgentTurn::runtime_query(prepared);
     let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
+    let (resolved_runtime_mode, activated_skills) = with_store(state, |store| {
+        let runtime_mode = resolve_runtime_mode_for_session(&store, execution.session_id());
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == execution.session_id())
+            .and_then(|item| item.metadata.as_ref());
+        let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
+        Ok((runtime_mode, items))
+    })?;
+    for (name, description) in activated_skills {
+        emit_runtime_task_checkpoint_saved(
+            app,
+            None,
+            Some(execution.session_id()),
+            "chat.skill_activated",
+            "skill activated",
+            Some(json!({
+                "name": name,
+                "description": description,
+                "runtimeMode": resolved_runtime_mode,
+            })),
+        );
+    }
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(
             store,

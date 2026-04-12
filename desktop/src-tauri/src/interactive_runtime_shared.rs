@@ -3,7 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-use crate::tools::registry::{openai_schemas_for_runtime_mode, prompt_tool_lines_for_runtime_mode};
+use crate::persistence::with_store;
+use crate::skills::build_skill_runtime_state;
+use crate::tools::registry::{
+    base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
+    openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
+};
 use crate::{
     load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, render_redbox_prompt,
     truncate_chars, workspace_root, AppState, AppStore,
@@ -12,6 +17,7 @@ use crate::{
 pub(crate) fn interactive_runtime_system_prompt(
     state: &State<'_, AppState>,
     runtime_mode: &str,
+    session_id: Option<&str>,
 ) -> String {
     if let Ok(runtime_warm) = state.runtime_warm.lock() {
         if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
@@ -31,7 +37,51 @@ pub(crate) fn interactive_runtime_system_prompt(
         ]
         .join(" ");
     }
-    let available_tools = prompt_tool_lines_for_runtime_mode(runtime_mode);
+    let (available_tools, project_context, skills_section, prompt_prefix, prompt_suffix) =
+        with_store(state, |store| {
+            let metadata = session_id.and_then(|id| {
+                store
+                    .chat_sessions
+                    .iter()
+                    .find(|item| item.id == id)
+                    .and_then(|item| item.metadata.as_ref())
+            });
+            let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
+            let skill_state =
+                build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
+            let mut project_context = format!("runtime_mode={runtime_mode}");
+            if !skill_state.active_skills.is_empty() {
+                project_context.push_str("; active_skills=");
+                project_context.push_str(
+                    &skill_state
+                        .active_skills
+                        .iter()
+                        .map(|item| item.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+            }
+            if !skill_state.context_note.trim().is_empty() {
+                project_context.push_str("; skill_context=");
+                project_context.push_str(skill_state.context_note.trim());
+            }
+            Ok((
+                prompt_tool_lines_for_session(&store, runtime_mode, session_id),
+                project_context,
+                skill_state.skills_section,
+                skill_state.prompt_prefix,
+                skill_state.prompt_suffix,
+            ))
+        })
+        .unwrap_or_else(|_| {
+            (
+                prompt_tool_lines_for_runtime_mode(runtime_mode),
+                format!("runtime_mode={runtime_mode}"),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+        });
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
@@ -68,14 +118,17 @@ pub(crate) fn interactive_runtime_system_prompt(
                     workspace_root_value.clone() + "/redclaw/profile",
                 ),
                 ("memory_path", workspace_root_value.clone() + "/memory"),
-                ("project_context", format!("runtime_mode={runtime_mode}")),
-                ("skills_section", String::new()),
+                ("project_context", project_context),
+                ("skills_section", skills_section.clone()),
                 ("subjects_section", String::new()),
                 ("current_date", now_iso()),
                 ("current_working_directory", workspace_root_value),
                 ("pi_documentation", "Tauri Rust host runtime".to_string()),
             ],
         );
+        if !prompt_prefix.trim().is_empty() {
+            rendered = format!("{}\n\n{}", prompt_prefix.trim(), rendered);
+        }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
                 rendered.push_str("\n\n## RedClaw 个性化档案（空间隔离）\n");
@@ -134,6 +187,10 @@ pub(crate) fn interactive_runtime_system_prompt(
         rendered.push_str(
             "\n\nRuntime compatibility note:\n- In this Tauri runtime, the callable tools are the `redbox_*` functions shown above.\n- Prefer `redbox_app_query` for app-managed data and `redbox_fs` for file inspection.\n- Use `redbox_profile_doc` to read/update RedClaw long-term docs (Agent.md / Soul.md / user.md / CreatorProfile.md).\n- Do not emit or assume `app_cli`, `bash`, `workspace`, shell commands, or pseudo tools like `read --path` unless they are explicitly present in available_tools.\n- To inspect material folders, use `redbox_fs` with `action=list` first, then `redbox_fs` with `action=read` on concrete files such as meta.json, content.md, transcript files.\n",
         );
+        if !prompt_suffix.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(prompt_suffix.trim());
+        }
         return rendered;
     }
     format!(
@@ -238,6 +295,13 @@ pub(crate) fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Va
     Ok(entries)
 }
 
-pub(crate) fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
-    openai_schemas_for_runtime_mode(runtime_mode)
+pub(crate) fn interactive_runtime_tools_for_mode(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Value {
+    with_store(state, |store| {
+        Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
+    })
+    .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
 }

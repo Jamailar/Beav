@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app_shared;
 mod agent;
+mod app_shared;
 mod assistant_core;
 mod chat_helpers;
 mod commands;
@@ -20,6 +20,8 @@ mod persistence;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
+mod skills;
+mod subagents;
 mod tools;
 mod workspace_loaders;
 
@@ -43,12 +45,12 @@ use runtime::{
     append_runtime_task_trace, append_session_checkpoint, infer_protocol,
     next_memory_maintenance_at_ms, resolve_chat_config, resolve_runtime_mode_from_context_type,
     role_sequence_for_route, runtime_direct_route, runtime_graph_for_route,
-    runtime_warm_settings_fingerprint, session_title_from_message, set_runtime_graph_node,
-    InteractiveToolCall, McpServerRecord, RedclawJobDefinitionRecord, RedclawJobExecutionRecord,
-    RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord,
-    RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord, RuntimeTaskRecord,
-    RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord,
-    SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
+    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
+    set_runtime_graph_node, InteractiveToolCall, McpServerRecord, RedclawJobDefinitionRecord,
+    RedclawJobExecutionRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime,
+    RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord,
+    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState,
+    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::{
     next_long_cycle_timestamp, next_scheduled_timestamp, parse_millis_string,
@@ -625,6 +627,7 @@ struct AppState {
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
     runtime_warm: Mutex<RuntimeWarmState>,
+    skill_watch: Mutex<skills::SkillWatcherSnapshot>,
 }
 
 struct AssistantRuntime {
@@ -729,7 +732,7 @@ fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Re
     for mode in modes {
         let entry = RuntimeWarmEntry {
             mode: (*mode).to_string(),
-            system_prompt: interactive_runtime_system_prompt(state, mode),
+            system_prompt: interactive_runtime_system_prompt(state, mode, None),
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
             } else {
@@ -1067,62 +1070,17 @@ fn collect_related_manuscript_evidence(
         .collect())
 }
 
-fn load_skill_bundle_sections(skill_name: &str) -> (String, String, String, String) {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let candidates = [
-        home.join(".codex").join("skills").join(skill_name),
-        home.join(".agents").join("skills").join(skill_name),
-    ];
-    for root in candidates {
-        let skill_path = root.join("SKILL.md");
-        if !skill_path.exists() {
-            continue;
-        }
-        let body = fs::read_to_string(&skill_path).unwrap_or_default();
-        let references = root.join("references");
-        let scripts = root.join("scripts");
-        let mut refs_parts = Vec::new();
-        let mut script_parts = Vec::new();
-        if let Ok(entries) = fs::read_dir(&references) {
-            for entry in entries.flatten().take(8) {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let content = fs::read_to_string(&path).unwrap_or_default();
-                let name = path
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .unwrap_or("reference");
-                refs_parts.push(format!("## {}\n{}", name, content));
-            }
-        }
-        if let Ok(entries) = fs::read_dir(&scripts) {
-            for entry in entries.flatten().take(8) {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let content = fs::read_to_string(&path).unwrap_or_default();
-                let name = path
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .unwrap_or("script");
-                script_parts.push(format!("## {}\n{}", name, content));
-            }
-        }
-        return (
-            skill_name.to_string(),
-            body,
-            refs_parts.join("\n\n"),
-            script_parts.join("\n\n"),
-        );
-    }
+fn load_skill_bundle_sections(
+    state: &State<'_, AppState>,
+    skill_name: &str,
+) -> (String, String, String, String) {
+    let workspace = workspace_root(state).ok();
+    let bundle = skills::load_skill_bundle_sections_from_sources(skill_name, workspace.as_deref());
     (
-        skill_name.to_string(),
-        String::new(),
-        String::new(),
-        String::new(),
+        bundle.skill_name,
+        bundle.body,
+        bundle.references,
+        bundle.scripts,
     )
 }
 
@@ -2183,11 +2141,7 @@ fn generate_wander_response(
     config: &Value,
     prompt: &str,
 ) -> Result<String, String> {
-    let turn = PreparedWanderTurn::new(
-        session_id.to_string(),
-        prompt.to_string(),
-        Some(config),
-    );
+    let turn = PreparedWanderTurn::new(session_id.to_string(), prompt.to_string(), Some(config));
     execute_prepared_wander_turn(state, &turn).map(|execution| execution.response)
 }
 
@@ -2244,8 +2198,12 @@ fn generate_chat_response(settings: &Value, model_config: Option<&Value>, prompt
     }
 }
 
-fn interactive_runtime_system_prompt(state: &State<'_, AppState>, runtime_mode: &str) -> String {
-    interactive_runtime_shared::interactive_runtime_system_prompt(state, runtime_mode)
+fn interactive_runtime_system_prompt(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> String {
+    interactive_runtime_shared::interactive_runtime_system_prompt(state, runtime_mode, session_id)
 }
 
 fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
@@ -2275,8 +2233,12 @@ fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Value>, Strin
     interactive_runtime_shared::list_directory_entries(path, limit)
 }
 
-fn interactive_runtime_tools_for_mode(runtime_mode: &str) -> Value {
-    interactive_runtime_shared::interactive_runtime_tools_for_mode(runtime_mode)
+fn interactive_runtime_tools_for_mode(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Value {
+    interactive_runtime_shared::interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
 }
 
 fn resolve_editor_tool_file_path(
@@ -2328,7 +2290,7 @@ fn execute_interactive_tool_call(
     let normalized_call = tools::compat::normalize_tool_call(name, arguments);
     let name = normalized_call.name;
     let arguments = &normalized_call.arguments;
-    tools::guards::ensure_tool_allowed_for_runtime_mode(runtime_mode, name)?;
+    tools::guards::ensure_tool_allowed_for_session(state, runtime_mode, session_id, name)?;
     let call_mcp_channel = |channel: &str, payload: Value| -> Result<Value, String> {
         commands::mcp_tools::handle_mcp_tools_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("MCP channel not handled: {channel}")))
@@ -2362,7 +2324,12 @@ fn execute_interactive_tool_call(
                     "manuscripts:get-editor-runtime-state",
                     json!({ "filePath": file_path }),
                 ),
-                "timeline_zoom_read" | "timeline-zoom-read" | "timeline_scroll_read" | "timeline-scroll-read" | "panel_read" | "panel-read" => call_manuscript_channel(
+                "timeline_zoom_read"
+                | "timeline-zoom-read"
+                | "timeline_scroll_read"
+                | "timeline-scroll-read"
+                | "panel_read"
+                | "panel-read" => call_manuscript_channel(
                     "manuscripts:get-editor-runtime-state",
                     json!({ "filePath": file_path }),
                 ),
@@ -2569,7 +2536,11 @@ fn execute_interactive_tool_call(
                 "track_reorder" | "track-reorder" => {
                     let result = call_manuscript_channel(
                         "manuscripts:move-package-track",
-                        editor_tool_payload(file_path.clone(), arguments, &["trackId", "direction"]),
+                        editor_tool_payload(
+                            file_path.clone(),
+                            arguments,
+                            &["trackId", "direction"],
+                        ),
                     )?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
@@ -2670,7 +2641,11 @@ fn execute_interactive_tool_call(
                 "subtitle_add" | "subtitle-add" => {
                     let result = call_manuscript_channel(
                         "manuscripts:insert-package-subtitle-at-playhead",
-                        editor_tool_payload(file_path.clone(), arguments, &["text", "track", "order", "durationMs"]),
+                        editor_tool_payload(
+                            file_path.clone(),
+                            arguments,
+                            &["text", "track", "order", "durationMs"],
+                        ),
                     )?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
@@ -2690,7 +2665,11 @@ fn execute_interactive_tool_call(
                 "text_add" | "text-add" => {
                     let result = call_manuscript_channel(
                         "manuscripts:insert-package-text-at-playhead",
-                        editor_tool_payload(file_path.clone(), arguments, &["text", "track", "durationMs", "textStyle"]),
+                        editor_tool_payload(
+                            file_path.clone(),
+                            arguments,
+                            &["text", "track", "durationMs", "textStyle"],
+                        ),
                     )?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
@@ -3309,7 +3288,7 @@ fn interactive_runtime_message_bundle(
     runtime_mode: &str,
     message: &str,
 ) -> Result<(String, Vec<Value>), String> {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode);
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
@@ -3325,8 +3304,12 @@ fn interactive_runtime_message_bundle(
     Ok((system_prompt, messages))
 }
 
-fn anthropic_tools_for_runtime_mode(runtime_mode: &str) -> Vec<Value> {
-    interactive_runtime_tools_for_mode(runtime_mode)
+fn anthropic_tools_for_session(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Vec<Value> {
+    interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -3346,8 +3329,12 @@ fn anthropic_tools_for_runtime_mode(runtime_mode: &str) -> Vec<Value> {
         .collect()
 }
 
-fn gemini_tools_for_runtime_mode(runtime_mode: &str) -> Vec<Value> {
-    let declarations = interactive_runtime_tools_for_mode(runtime_mode)
+fn gemini_tools_for_session(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Vec<Value> {
+    let declarations = interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -3642,7 +3629,7 @@ fn run_anthropic_interactive_chat_runtime(
             })
         })
         .collect::<Vec<_>>();
-    let tools = anthropic_tools_for_runtime_mode(runtime_mode);
+    let tools = anthropic_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -4048,9 +4035,14 @@ fn run_anthropic_interactive_chat_runtime(
                     }));
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
+                            let (runtime_id, parent_runtime_id, source_task_id) =
+                                session_lineage_fields(store, session_id);
                             store.session_tool_results.push(SessionToolResultRecord {
                                 id: make_id("tool-result"),
                                 session_id: session_id.to_string(),
+                                runtime_id,
+                                parent_runtime_id,
+                                source_task_id,
                                 call_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 command: None,
@@ -4132,7 +4124,7 @@ fn run_gemini_interactive_chat_runtime(
             }))
         })
         .collect::<Vec<_>>();
-    let tools = gemini_tools_for_runtime_mode(runtime_mode);
+    let tools = gemini_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -4494,9 +4486,14 @@ fn run_gemini_interactive_chat_runtime(
                     }));
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
+                            let (runtime_id, parent_runtime_id, source_task_id) =
+                                session_lineage_fields(store, session_id);
                             store.session_tool_results.push(SessionToolResultRecord {
                                 id: make_id("tool-result"),
                                 session_id: session_id.to_string(),
+                                runtime_id,
+                                parent_runtime_id,
+                                source_task_id,
                                 call_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 command: None,
@@ -4554,7 +4551,7 @@ fn run_openai_interactive_chat_runtime(
     message: &str,
     runtime_mode: &str,
 ) -> Result<String, String> {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode);
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
@@ -4611,7 +4608,7 @@ fn run_openai_interactive_chat_runtime(
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tools": interactive_runtime_tools_for_mode(runtime_mode),
+            "tools": interactive_runtime_tools_for_mode(state, runtime_mode, session_id),
             "tool_choice": if is_wander && turn == 0 { "required" } else { "auto" },
             "stream": !is_wander
         });
@@ -4806,9 +4803,14 @@ fn run_openai_interactive_chat_runtime(
                         let target_session_id = session_id
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| latest_session_id(store));
+                        let (runtime_id, parent_runtime_id, source_task_id) =
+                            session_lineage_fields(store, &target_session_id);
                         store.session_tool_results.push(SessionToolResultRecord {
                             id: make_id("tool-result"),
                             session_id: target_session_id.clone(),
+                            runtime_id,
+                            parent_runtime_id,
+                            source_task_id,
                             call_id: call.id.clone(),
                             tool_name: effective_tool_name.to_string(),
                             command: None,
@@ -4874,9 +4876,14 @@ fn run_openai_interactive_chat_runtime(
                         let target_session_id = session_id
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| latest_session_id(store));
+                        let (runtime_id, parent_runtime_id, source_task_id) =
+                            session_lineage_fields(store, &target_session_id);
                         store.session_tool_results.push(SessionToolResultRecord {
                             id: make_id("tool-result"),
                             session_id: target_session_id.clone(),
+                            runtime_id,
+                            parent_runtime_id,
+                            source_task_id,
                             call_id: call.id.clone(),
                             tool_name: effective_tool_name.to_string(),
                             command: None,
@@ -5579,6 +5586,7 @@ fn main() {
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
+            skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
         })
         .invoke_handler(tauri::generate_handler![ipc_invoke, ipc_send])
         .setup(|app| {

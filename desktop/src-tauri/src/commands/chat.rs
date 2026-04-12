@@ -1,17 +1,15 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{
-    build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn,
-};
+use crate::agent::{build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn};
 use crate::commands::chat_state::{
-    latest_session_id, request_chat_runtime_cancel,
+    latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
-use crate::events::{
-    emit_runtime_task_checkpoint_saved, emit_runtime_tool_result,
-};
+use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
+use crate::session_lineage_fields;
+use crate::skills::active_skill_activation_items;
 use crate::{make_id, now_i64, payload_field, payload_string, AppState};
 
 pub fn handle_send_channel(
@@ -27,7 +25,7 @@ pub fn handle_send_channel(
             let display_content =
                 payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());
             let turn = build_chat_send_turn(
-                session_id,
+                session_id.clone(),
                 message.clone(),
                 display_content.clone(),
                 payload_field(&payload, "modelConfig"),
@@ -35,6 +33,33 @@ pub fn handle_send_channel(
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let completed = run_chat_send_turn(app, state, &prepared_turn, &message)?;
+            let session_hint = session_id.clone();
+            let (active_session_id, activated_skills) = with_store(state, |store| {
+                let target_session_id = session_hint
+                    .clone()
+                    .unwrap_or_else(|| latest_session_id(&store));
+                let runtime_mode = resolve_runtime_mode_for_session(&store, &target_session_id);
+                let metadata = store
+                    .chat_sessions
+                    .iter()
+                    .find(|item| item.id == target_session_id)
+                    .and_then(|item| item.metadata.as_ref());
+                let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
+                Ok((target_session_id, items))
+            })?;
+            for (name, description) in activated_skills {
+                emit_runtime_task_checkpoint_saved(
+                    app,
+                    None,
+                    Some(&active_session_id),
+                    "chat.skill_activated",
+                    "skill activated",
+                    Some(json!({
+                        "name": name,
+                        "description": description,
+                    })),
+                );
+            }
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
@@ -77,9 +102,14 @@ pub fn handle_send_channel(
                 .unwrap_or(false);
             let session_id = with_store_mut(state, |store| {
                 let session_id = latest_session_id(store);
+                let (runtime_id, parent_runtime_id, source_task_id) =
+                    session_lineage_fields(store, &session_id);
                 store.session_tool_results.push(SessionToolResultRecord {
                     id: make_id("tool-result"),
                     session_id: session_id.clone(),
+                    runtime_id,
+                    parent_runtime_id,
+                    source_task_id,
                     call_id: call_id.clone(),
                     tool_name: "confirmation".to_string(),
                     command: None,

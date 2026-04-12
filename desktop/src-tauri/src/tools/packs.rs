@@ -9,6 +9,19 @@ pub enum ToolPack {
     Diagnostics,
 }
 
+pub fn pack_by_name(name: &str) -> Option<ToolPack> {
+    match name.trim().to_lowercase().as_str() {
+        "wander" => Some(ToolPack::Wander),
+        "chatroom" | "default" => Some(ToolPack::Chatroom),
+        "knowledge" => Some(ToolPack::Knowledge),
+        "redclaw" => Some(ToolPack::Redclaw),
+        "background-maintenance" => Some(ToolPack::BackgroundMaintenance),
+        "editor" | "video-editor" | "audio-editor" => Some(ToolPack::Editor),
+        "diagnostics" => Some(ToolPack::Diagnostics),
+        _ => None,
+    }
+}
+
 pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
     match runtime_mode.trim().to_lowercase().as_str() {
         "wander" => ToolPack::Wander,

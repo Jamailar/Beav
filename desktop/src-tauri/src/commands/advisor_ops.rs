@@ -352,7 +352,7 @@ pub fn handle_advisor_channel(
                 )
                 .unwrap_or_default();
                 let (skill_name, skill_body, skill_references, skill_scripts) =
-                    load_skill_bundle_sections("agent-persona-creator");
+                    load_skill_bundle_sections(state, "agent-persona-creator");
                 let search_summary = if search_results.is_empty() {
                     "(无外部搜索结果)".to_string()
                 } else {

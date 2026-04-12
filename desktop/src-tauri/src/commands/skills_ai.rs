@@ -1,4 +1,8 @@
 use crate::persistence::{with_store, with_store_mut};
+use crate::skills::{
+    build_market_skill_record, build_user_skill_record, compute_skill_discovery_fingerprint,
+    skill_catalog_changed, skills_catalog_list_value,
+};
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -27,25 +31,41 @@ pub fn handle_skills_ai_channel(
 
     Some((|| -> Result<Value, String> {
         match channel {
-            "skills:list" => with_store(state, |store| Ok(json!(store.skills.clone()))),
+            "skills:list" => {
+                let workspace = workspace_root(state).ok();
+                let discovery_fingerprint =
+                    compute_skill_discovery_fingerprint(workspace.as_deref());
+                let (list, watcher_snapshot) = with_store(state, |store| {
+                    Ok(skills_catalog_list_value(
+                        &store.skills,
+                        Some(discovery_fingerprint.as_str()),
+                    ))
+                })?;
+                let changed = {
+                    let mut guard = state
+                        .skill_watch
+                        .lock()
+                        .map_err(|_| "skill watcher lock 已损坏".to_string())?;
+                    let changed = skill_catalog_changed(&guard, &watcher_snapshot);
+                    *guard = watcher_snapshot;
+                    changed
+                };
+                if changed {
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                }
+                Ok(list)
+            }
             "skills:create" => {
                 let name = payload_string(payload, "name").unwrap_or_default();
                 if name.is_empty() {
                     return Ok(json!({ "success": false, "error": "技能名称不能为空" }));
                 }
                 let created = with_store_mut(state, |store| {
-                    let item = SkillRecord {
-                        name: name.clone(),
-                        description: format!("{name} skill"),
-                        location: format!("redbox://skills/{}", slug_from_relative_path(&name)),
-                        body: format!("# {name}\n\nCreated by RedClaw for RedBox."),
-                        source_scope: Some("user".to_string()),
-                        is_builtin: Some(false),
-                        disabled: Some(false),
-                    };
+                    let item = build_user_skill_record(&name);
                     store.skills.push(item.clone());
                     Ok(item)
                 })?;
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
                 Ok(json!({ "success": true, "location": created.location }))
             }
             "skills:save" => {
@@ -62,6 +82,10 @@ pub fn handle_skills_ai_channel(
                     skill.body = content;
                     Ok(json!({ "success": true }))
                 })
+                .map(|value| {
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                    value
+                })
             }
             "skills:disable" | "skills:enable" => {
                 let name = payload_string(payload, "name").unwrap_or_default();
@@ -73,6 +97,10 @@ pub fn handle_skills_ai_channel(
                     skill.disabled = Some(disabled);
                     Ok(json!({ "success": true }))
                 })
+                .map(|value| {
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                    value
+                })
             }
             "skills:market-install" => {
                 let slug = payload_string(payload, "slug").unwrap_or_default();
@@ -80,20 +108,11 @@ pub fn handle_skills_ai_channel(
                     return Ok(json!({ "success": false, "error": "缺少技能 slug" }));
                 }
                 let created = with_store_mut(state, |store| {
-                    let item = SkillRecord {
-                        name: slug.clone(),
-                        description: format!("Installed from market: {slug}"),
-                        location: format!("redbox://skills/market/{}", slug),
-                        body: format!(
-                            "# {slug}\n\nThis skill was registered from the RedBox market installer.\n\nAdd the skill instructions here, or replace this body with content from the upstream skill package when a remote market source is configured."
-                        ),
-                        source_scope: Some("user".to_string()),
-                        is_builtin: Some(false),
-                        disabled: Some(false),
-                    };
+                    let item = build_market_skill_record(&slug);
                     store.skills.push(item);
                     Ok(json!({ "success": true, "displayName": slug }))
                 })?;
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
                 Ok(created)
             }
             "ai:roles:list" => Ok(json!([
