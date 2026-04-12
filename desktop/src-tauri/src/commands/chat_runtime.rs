@@ -1,13 +1,12 @@
 use tauri::{AppHandle, State};
 use crate::agent::{
     resolve_chat_exchange_context, resolve_chat_exchange_response_stage, ChatExchangeRequest,
-    PreparedSessionAgentTurn, persist_chat_exchange,
+    PreparedSessionAgentTurn, SessionAgentTurnExecution, persist_chat_exchange,
     update_post_exchange_maintenance,
 };
 use crate::commands::chat_state::{
     is_chat_runtime_cancel_requested, update_chat_runtime_state,
 };
-use crate::runtime::ChatExecutionResult;
 use crate::{
     ensure_redclaw_onboarding_completed_with_defaults,
     handle_redclaw_onboarding_turn, AppState,
@@ -17,7 +16,7 @@ pub fn execute_prepared_session_agent_turn(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     turn: &PreparedSessionAgentTurn<'_>,
-) -> Result<ChatExecutionResult, String> {
+) -> Result<SessionAgentTurnExecution, String> {
     execute_session_agent_turn(app, state, turn.request_cloned())
 }
 
@@ -25,7 +24,7 @@ pub fn execute_session_agent_turn(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     request: ChatExchangeRequest<'_>,
-) -> Result<ChatExecutionResult, String> {
+) -> Result<SessionAgentTurnExecution, String> {
     let ChatExchangeRequest {
         session_id,
         message,
@@ -85,7 +84,7 @@ pub fn execute_session_agent_turn(
     );
     let _ = update_post_exchange_maintenance(state, &response);
 
-    Ok(ChatExecutionResult {
+    Ok(SessionAgentTurnExecution {
         session_id: persistence.final_session_id,
         response,
         title_update: persistence.title_update,
