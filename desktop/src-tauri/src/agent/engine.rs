@@ -116,6 +116,10 @@ impl<'a> PreparedSessionAgentTurn<'a> {
         }
     }
 
+    pub fn request_cloned(&self) -> ChatExchangeRequest<'a> {
+        self.request().clone()
+    }
+
     pub fn display_content(&self) -> &str {
         self.request().display_content.as_str()
     }
@@ -134,6 +138,13 @@ impl<'a> PreparedSessionAgentTurn<'a> {
     pub fn orchestration(&self) -> Option<&Value> {
         match self {
             Self::RuntimeQuery(turn) => turn.orchestration.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn route_reasoning(&self) -> Option<&str> {
+        match self {
+            Self::RuntimeQuery(turn) => Some(turn.route.reasoning.as_str()),
             _ => None,
         }
     }
@@ -189,5 +200,6 @@ mod tests {
         assert!(!turn.is_redclaw_session());
         assert!(turn.route_value().is_none());
         assert!(turn.orchestration().is_none());
+        assert!(turn.route_reasoning().is_none());
     }
 }

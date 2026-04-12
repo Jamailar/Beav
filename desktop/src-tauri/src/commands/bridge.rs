@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{build_session_bridge_turn, PreparedSessionAgentTurn};
-use crate::commands::chat_runtime::execute_session_agent_turn_request;
+use crate::commands::chat_runtime::execute_prepared_session_agent_turn;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     session_bridge_detail_value, session_bridge_summary_value,
@@ -66,11 +66,7 @@ pub fn handle_bridge_channel(
             let turn = PreparedSessionAgentTurn::SessionBridge(
                 build_session_bridge_turn(session_id.clone(), message),
             );
-            execute_session_agent_turn_request(
-                None,
-                state,
-                turn.request().clone(),
-            )
+            execute_prepared_session_agent_turn(None, state, &turn)
             .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id }))
         }
         "session-bridge:resolve-permission" => Ok(json!({ "success": true })),

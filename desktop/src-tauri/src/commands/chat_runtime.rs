@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
 use crate::agent::{
     resolve_chat_exchange_context, resolve_chat_exchange_response_stage, ChatExchangeRequest,
-    persist_chat_exchange,
+    PreparedSessionAgentTurn, persist_chat_exchange,
     update_post_exchange_maintenance,
 };
 use crate::commands::chat_state::{
@@ -13,12 +13,12 @@ use crate::{
     handle_redclaw_onboarding_turn, AppState,
 };
 
-pub fn execute_session_agent_turn_request(
+pub fn execute_prepared_session_agent_turn(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
-    request: ChatExchangeRequest<'_>,
+    turn: &PreparedSessionAgentTurn<'_>,
 ) -> Result<ChatExecutionResult, String> {
-    execute_session_agent_turn(app, state, request)
+    execute_session_agent_turn(app, state, turn.request_cloned())
 }
 
 pub fn execute_session_agent_turn(

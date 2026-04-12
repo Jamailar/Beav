@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{build_chat_send_turn, PreparedSessionAgentTurn};
-use crate::commands::chat_runtime::execute_session_agent_turn_request;
+use crate::commands::chat_runtime::execute_prepared_session_agent_turn;
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
@@ -34,11 +34,7 @@ pub fn handle_send_channel(
                 payload_field(&payload, "attachment").cloned(),
             );
             let prepared_turn = PreparedSessionAgentTurn::ChatSend(turn);
-            let execution = execute_session_agent_turn_request(
-                Some(app),
-                state,
-                prepared_turn.request().clone(),
-            )?;
+            let execution = execute_prepared_session_agent_turn(Some(app), state, &prepared_turn)?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;
 
