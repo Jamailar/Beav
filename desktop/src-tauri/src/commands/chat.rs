@@ -2,19 +2,18 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{
-    build_chat_send_turn, build_redclaw_chat_postprocess, emit_session_agent_completion,
-    execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+    build_chat_send_turn, emit_session_agent_completion, execute_prepared_session_agent_turn,
+    run_redclaw_chat_postprocess, PreparedSessionAgentTurn,
 };
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel,
 };
-use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::events::{
     emit_runtime_task_checkpoint_saved, emit_runtime_tool_result,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
-use crate::{create_work_item, make_id, now_i64, payload_field, payload_string, AppState};
+use crate::{make_id, now_i64, payload_field, payload_string, AppState};
 
 pub fn handle_send_channel(
     app: &AppHandle,
@@ -37,49 +36,8 @@ pub fn handle_send_channel(
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let execution = execute_prepared_session_agent_turn(Some(app), state, &prepared_turn)?;
-            let mut redclaw_artifacts: Vec<Value> = Vec::new();
-            let mut redclaw_artifact_kind: Option<&str> = None;
-            let mut redclaw_postprocess: Option<crate::agent::RedclawChatPostprocess> = None;
-
-            if prepared_turn.is_redclaw_session() {
-                let project_id = with_store(state, |store| {
-                    Ok(store
-                        .redclaw_state
-                        .projects
-                        .first()
-                        .map(|item| item.id.clone())
-                        .unwrap_or_else(|| "redclaw-chat".to_string()))
-                })?;
-                let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
-                redclaw_artifacts = save_redclaw_outputs(
-                    state,
-                    artifact_kind,
-                    &project_id,
-                    execution.session_id(),
-                    &message,
-                    execution.response(),
-                    "chat-session",
-                )?;
-                redclaw_artifact_kind = Some(artifact_kind);
-                let postprocess = build_redclaw_chat_postprocess(
-                    artifact_kind,
-                    execution.session_id(),
-                    prepared_turn.display_content(),
-                    redclaw_artifacts.clone(),
-                );
-                let _ = with_store_mut(state, |store| {
-                    store.work_items.push(create_work_item(
-                        "redclaw-note",
-                        postprocess.work_item_title.clone(),
-                        Some(postprocess.work_item_summary.clone()),
-                        Some(postprocess.work_item_description.clone()),
-                        Some(postprocess.work_item_metadata.clone()),
-                        2,
-                    ));
-                    Ok(())
-                });
-                redclaw_postprocess = Some(postprocess);
-            }
+            let redclaw_postprocess =
+                run_redclaw_chat_postprocess(state, &prepared_turn, &execution, &message)?;
             emit_session_agent_completion(
                 app,
                 state,
@@ -91,11 +49,7 @@ pub fn handle_send_channel(
                     "redclaw:runner-message",
                     redclaw_postprocess
                         .map(|postprocess| postprocess.runner_payload)
-                        .unwrap_or_else(|| json!({
-                            "sessionId": execution.session_id(),
-                            "artifactKind": redclaw_artifact_kind.unwrap_or("run"),
-                            "artifacts": redclaw_artifacts,
-                        })),
+                        .unwrap_or(Value::Null),
                 );
             }
             Ok(())

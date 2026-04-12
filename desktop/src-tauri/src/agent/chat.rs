@@ -1,6 +1,10 @@
 use serde_json::{json, Value};
+use tauri::State;
 
-use crate::agent::ChatExchangeRequest;
+use crate::agent::{ChatExchangeRequest, PreparedSessionAgentTurn, SessionAgentTurnExecution};
+use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
+use crate::persistence::{with_store, with_store_mut};
+use crate::{create_work_item, AppState};
 
 pub struct PreparedChatSendTurn<'a> {
     pub request: ChatExchangeRequest<'a>,
@@ -59,6 +63,53 @@ pub fn build_redclaw_chat_postprocess(
             "artifacts": artifacts,
         }),
     }
+}
+
+pub fn run_redclaw_chat_postprocess(
+    state: &State<'_, AppState>,
+    prepared_turn: &PreparedSessionAgentTurn<'_>,
+    execution: &SessionAgentTurnExecution,
+    message: &str,
+) -> Result<Option<RedclawChatPostprocess>, String> {
+    if !prepared_turn.is_redclaw_session() {
+        return Ok(None);
+    }
+    let project_id = with_store(state, |store| {
+        Ok(store
+            .redclaw_state
+            .projects
+            .first()
+            .map(|item| item.id.clone())
+            .unwrap_or_else(|| "redclaw-chat".to_string()))
+    })?;
+    let artifact_kind = detect_redclaw_artifact_kind(message, "chat-session");
+    let artifacts = save_redclaw_outputs(
+        state,
+        artifact_kind,
+        &project_id,
+        execution.session_id(),
+        message,
+        execution.response(),
+        "chat-session",
+    )?;
+    let postprocess = build_redclaw_chat_postprocess(
+        artifact_kind,
+        execution.session_id(),
+        prepared_turn.display_content(),
+        artifacts,
+    );
+    let _ = with_store_mut(state, |store| {
+        store.work_items.push(create_work_item(
+            "redclaw-note",
+            postprocess.work_item_title.clone(),
+            Some(postprocess.work_item_summary.clone()),
+            Some(postprocess.work_item_description.clone()),
+            Some(postprocess.work_item_metadata.clone()),
+            2,
+        ));
+        Ok(())
+    });
+    Ok(Some(postprocess))
 }
 
 #[cfg(test)]
@@ -126,6 +177,24 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(|items| items.len()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn build_redclaw_chat_postprocess_runner_payload_matches_work_item_metadata() {
+        let postprocess = build_redclaw_chat_postprocess(
+            "run",
+            "session-1",
+            "display body",
+            vec![json!({ "kind": "run-log", "path": "/tmp/run.md" })],
+        );
+        assert_eq!(
+            postprocess.work_item_metadata.get("artifactKind"),
+            postprocess.runner_payload.get("artifactKind")
+        );
+        assert_eq!(
+            postprocess.work_item_metadata.get("artifacts"),
+            postprocess.runner_payload.get("artifacts")
         );
     }
 }
