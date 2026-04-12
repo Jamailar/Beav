@@ -39,6 +39,7 @@ pub fn handle_send_channel(
             let execution = execute_prepared_session_agent_turn(Some(app), state, &prepared_turn)?;
             let mut redclaw_artifacts: Vec<Value> = Vec::new();
             let mut redclaw_artifact_kind: Option<&str> = None;
+            let mut redclaw_postprocess: Option<crate::agent::RedclawChatPostprocess> = None;
 
             if prepared_turn.is_redclaw_session() {
                 let project_id = with_store(state, |store| {
@@ -69,14 +70,15 @@ pub fn handle_send_channel(
                 let _ = with_store_mut(state, |store| {
                     store.work_items.push(create_work_item(
                         "redclaw-note",
-                        postprocess.work_item_title,
-                        Some(postprocess.work_item_summary),
-                        Some(postprocess.work_item_description),
-                        Some(postprocess.work_item_metadata),
+                        postprocess.work_item_title.clone(),
+                        Some(postprocess.work_item_summary.clone()),
+                        Some(postprocess.work_item_description.clone()),
+                        Some(postprocess.work_item_metadata.clone()),
                         2,
                     ));
                     Ok(())
                 });
+                redclaw_postprocess = Some(postprocess);
             }
             emit_session_agent_completion(
                 app,
@@ -87,13 +89,13 @@ pub fn handle_send_channel(
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
-                    build_redclaw_chat_postprocess(
-                        redclaw_artifact_kind.unwrap_or("run"),
-                        execution.session_id(),
-                        prepared_turn.display_content(),
-                        redclaw_artifacts,
-                    )
-                    .runner_payload,
+                    redclaw_postprocess
+                        .map(|postprocess| postprocess.runner_payload)
+                        .unwrap_or_else(|| json!({
+                            "sessionId": execution.session_id(),
+                            "artifactKind": redclaw_artifact_kind.unwrap_or("run"),
+                            "artifacts": redclaw_artifacts,
+                        })),
                 );
             }
             Ok(())
