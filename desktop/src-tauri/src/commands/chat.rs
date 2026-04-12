@@ -2,8 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{
-    build_chat_send_turn, emit_session_agent_completion, execute_prepared_session_agent_turn,
-    run_redclaw_chat_postprocess, PreparedSessionAgentTurn,
+    build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn,
 };
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel,
@@ -35,19 +34,12 @@ pub fn handle_send_channel(
                 payload_field(&payload, "attachment").cloned(),
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
-            let execution = execute_prepared_session_agent_turn(Some(app), state, &prepared_turn)?;
-            let redclaw_postprocess =
-                run_redclaw_chat_postprocess(state, &prepared_turn, &execution, &message)?;
-            emit_session_agent_completion(
-                app,
-                state,
-                &execution,
-                crate::agent::SessionAgentTurnKind::ChatSend,
-            )?;
+            let completed = run_chat_send_turn(app, state, &prepared_turn, &message)?;
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
-                    redclaw_postprocess
+                    completed
+                        .redclaw_postprocess
                         .map(|postprocess| postprocess.runner_payload)
                         .unwrap_or(Value::Null),
                 );

@@ -1,7 +1,10 @@
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use crate::agent::{ChatExchangeRequest, PreparedSessionAgentTurn, SessionAgentTurnExecution};
+use crate::agent::{
+    emit_session_agent_completion, execute_prepared_session_agent_turn, ChatExchangeRequest,
+    PreparedSessionAgentTurn, SessionAgentTurnExecution, SessionAgentTurnKind,
+};
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{create_work_item, AppState};
@@ -17,6 +20,10 @@ pub struct RedclawChatPostprocess {
     pub work_item_description: String,
     pub work_item_metadata: Value,
     pub runner_payload: Value,
+}
+
+pub struct CompletedChatSendTurn {
+    pub redclaw_postprocess: Option<RedclawChatPostprocess>,
 }
 
 pub fn build_chat_send_turn<'a>(
@@ -112,6 +119,21 @@ pub fn run_redclaw_chat_postprocess(
     Ok(Some(postprocess))
 }
 
+pub fn run_chat_send_turn(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    prepared_turn: &PreparedSessionAgentTurn<'_>,
+    message: &str,
+) -> Result<CompletedChatSendTurn, String> {
+    let execution = execute_prepared_session_agent_turn(Some(app), state, prepared_turn)?;
+    let redclaw_postprocess =
+        run_redclaw_chat_postprocess(state, prepared_turn, &execution, message)?;
+    emit_session_agent_completion(app, state, &execution, SessionAgentTurnKind::ChatSend)?;
+    Ok(CompletedChatSendTurn {
+        redclaw_postprocess,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +218,18 @@ mod tests {
             postprocess.work_item_metadata.get("artifacts"),
             postprocess.runner_payload.get("artifacts")
         );
+    }
+
+    #[test]
+    fn completed_chat_send_turn_can_carry_optional_redclaw_postprocess() {
+        let completed = CompletedChatSendTurn {
+            redclaw_postprocess: Some(build_redclaw_chat_postprocess(
+                "run",
+                "session-1",
+                "display body",
+                vec![json!({ "kind": "run-log" })],
+            )),
+        };
+        assert!(completed.redclaw_postprocess.is_some());
     }
 }
