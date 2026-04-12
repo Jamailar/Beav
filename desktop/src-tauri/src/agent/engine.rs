@@ -101,6 +101,13 @@ pub struct ChatExchangePersistenceStage {
     pub title_update: Option<(String, String)>,
 }
 
+pub struct SessionAgentTurnExecution {
+    pub session_id: String,
+    pub response: String,
+    pub title_update: Option<(String, String)>,
+    pub emitted_live_events: bool,
+}
+
 pub enum PreparedSessionAgentTurn<'a> {
     ChatSend(PreparedChatSendTurn<'a>),
     RuntimeQuery(PreparedRuntimeQueryTurn<'a>),
@@ -241,5 +248,22 @@ mod tests {
             is_redclaw_session: true,
         });
         assert!(turn.is_redclaw_session());
+    }
+
+    #[test]
+    fn session_agent_turn_execution_exposes_expected_fields() {
+        let execution = SessionAgentTurnExecution {
+            session_id: "session-1".to_string(),
+            response: "done".to_string(),
+            title_update: Some(("session-1".to_string(), "Title".to_string())),
+            emitted_live_events: true,
+        };
+        assert_eq!(execution.session_id, "session-1");
+        assert_eq!(execution.response, "done");
+        assert!(execution.emitted_live_events);
+        assert_eq!(
+            execution.title_update.as_ref().map(|(_, title)| title.as_str()),
+            Some("Title")
+        );
     }
 }
