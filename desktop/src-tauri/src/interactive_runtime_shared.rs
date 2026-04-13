@@ -87,6 +87,7 @@ pub(crate) fn interactive_runtime_system_prompt(
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
+    let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
     if let Some(template) = load_redbox_prompt("runtime/pi/system_base.txt") {
         let mut rendered = render_redbox_prompt(
             &template,
@@ -130,6 +131,10 @@ pub(crate) fn interactive_runtime_system_prompt(
         );
         if !prompt_prefix.trim().is_empty() {
             rendered = format!("{}\n\n{}", prompt_prefix.trim(), rendered);
+        }
+        if !runtime_agent_overlay.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(runtime_agent_overlay.trim());
         }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
@@ -203,6 +208,16 @@ If no tool is needed, answer directly and concisely. \
 When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise.",
         runtime_mode
     )
+}
+
+fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
+    match runtime_mode {
+        "video-editor" => load_redbox_prompt("runtime/agents/video_editor/base.txt")
+            .unwrap_or_default(),
+        "audio-editor" => load_redbox_prompt("runtime/agents/audio_editor/base.txt")
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {

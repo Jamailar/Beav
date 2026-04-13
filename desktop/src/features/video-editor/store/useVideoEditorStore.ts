@@ -19,7 +19,7 @@ export type VideoEditorTrackUiState = {
 };
 
 export type VideoEditorPreviewTab = 'preview' | 'motion' | 'script';
-export type VideoEditorRatioPreset = '16:9' | '9:16';
+export type VideoEditorRatioPreset = '16:9' | '9:16' | '4:3' | '3:4';
 export type VideoEditorLeftPanel =
     | 'uploads'
     | 'videos'

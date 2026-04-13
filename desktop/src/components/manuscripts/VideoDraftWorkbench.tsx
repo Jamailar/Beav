@@ -23,6 +23,7 @@ import {
   Undo2,
   Wand2,
 } from 'lucide-react';
+import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
 import { EditableTrackTimeline } from './EditableTrackTimeline';
 import { TimelinePreviewComposition } from './TimelinePreviewComposition';
 import { VideoEditorSidebarShell } from './VideoEditorSidebarShell';
@@ -157,6 +158,8 @@ const OVERLAY_ANIMATIONS: Array<{ value: OverlayAnimation; label: string }> = [
 const RATIO_PRESET_SIZE: Record<VideoEditorRatioPreset, { width: number; height: number }> = {
   '16:9': { width: 1920, height: 1080 },
   '9:16': { width: 1080, height: 1920 },
+  '4:3': { width: 1440, height: 1080 },
+  '3:4': { width: 1080, height: 1440 },
 };
 
 function inferAssetKind(asset: MediaAssetLike): 'image' | 'video' | 'audio' | 'unknown' {
@@ -627,6 +630,8 @@ export function VideoDraftWorkbench({
   const materialPaneWidth = useVideoEditorStore(editorStore, (state) => state.panels.materialPaneWidth);
   const timelineHeight = useVideoEditorStore(editorStore, (state) => state.panels.timelineHeight);
   const redclawDrawerOpen = useVideoEditorStore(editorStore, (state) => state.panels.redclawDrawerOpen);
+  const [materialsCollapsed, setMaterialsCollapsed] = useState(false);
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
   const selectedSceneItemId = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemId);
   const selectedSceneItemIds = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemIds);
   const selectedSceneItemKind = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemKind);
@@ -880,7 +885,7 @@ export function VideoDraftWorkbench({
             },
             project: {
               ...state.project,
-              ratioPreset: nextRatioPreset === '16:9' || nextRatioPreset === '9:16'
+              ratioPreset: nextRatioPreset === '16:9' || nextRatioPreset === '9:16' || nextRatioPreset === '4:3' || nextRatioPreset === '3:4'
                 ? nextRatioPreset
                 : state.project.ratioPreset,
             },
@@ -3185,6 +3190,18 @@ export function VideoDraftWorkbench({
               <Download className="h-3.5 w-3.5" />
               {isRenderingRemotion ? '导出中...' : '导出 MP4'}
             </button>
+            <EditorLayoutToggleButton
+              kind="timeline"
+              collapsed={timelineCollapsed}
+              onClick={() => setTimelineCollapsed((value) => !value)}
+              title={timelineCollapsed ? '展开时间轴' : '折叠时间轴'}
+            />
+            <EditorLayoutToggleButton
+              kind="materials"
+              collapsed={materialsCollapsed}
+              onClick={() => setMaterialsCollapsed((value) => !value)}
+              title={materialsCollapsed ? '展开素材栏' : '折叠素材栏'}
+            />
             <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-100">
               <MessageSquare className="h-3.5 w-3.5" />
               AI 对话常驻
@@ -3195,10 +3212,11 @@ export function VideoDraftWorkbench({
         <div
           className="grid min-h-0 flex-1"
           style={{
-            gridTemplateColumns: `${materialPaneWidth}px 8px minmax(0,1fr) 8px ${RIGHT_PANEL_WIDTH}px`,
-            gridTemplateRows: `minmax(0,1fr) 8px ${timelineHeight}px`,
+            gridTemplateColumns: `${materialsCollapsed ? 0 : materialPaneWidth}px ${materialsCollapsed ? 0 : 8}px minmax(0,1fr) 8px ${RIGHT_PANEL_WIDTH}px`,
+            gridTemplateRows: `minmax(0,1fr) ${timelineCollapsed ? '0px' : '8px'} ${timelineCollapsed ? '0px' : `${timelineHeight}px`}`,
           }}
         >
+          {!materialsCollapsed ? (
           <VideoEditorSidebarShell
             title={sidebarShellTitle}
             subtitle={sidebarShellSubtitle}
@@ -5503,7 +5521,9 @@ export function VideoDraftWorkbench({
                   </>
                 )}
           </VideoEditorSidebarShell>
+          ) : null}
 
+          {!materialsCollapsed ? (
           <div
             className="col-start-2 row-start-1 cursor-col-resize border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-cyan-400/20"
             onPointerDown={(event) => {
@@ -5517,6 +5537,7 @@ export function VideoDraftWorkbench({
               });
             }}
           />
+          ) : null}
 
           <VideoEditorStageShell
             title={stageShellTitle}
@@ -5778,6 +5799,7 @@ export function VideoDraftWorkbench({
             </div>
           </div>
 
+          {!timelineCollapsed ? (
           <VideoEditorTimelineShell
             onResizeStart={(event) => {
               event.preventDefault();
@@ -5823,6 +5845,7 @@ export function VideoDraftWorkbench({
               onMoveSceneItemsToEdge={handleMoveSceneItemsToEdge}
             />
           </VideoEditorTimelineShell>
+          ) : null}
         </div>
 
       </div>

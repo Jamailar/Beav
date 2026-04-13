@@ -3309,6 +3309,14 @@ fn editor_session_prompt_context(
     let file_path = payload_string(&metadata, "associatedFilePath")
         .or_else(|| payload_string(&metadata, "contextId"))
         .unwrap_or_default();
+    let package_root = PathBuf::from(&file_path);
+    let manifest_path = package_manifest_path(&package_root).display().to_string();
+    let editor_project_path = package_editor_project_path(&package_root).display().to_string();
+    let timeline_path = package_timeline_path(&package_root).display().to_string();
+    let remotion_scene_path = package_remotion_path(&package_root).display().to_string();
+    let track_ui_path = package_track_ui_path(&package_root).display().to_string();
+    let scene_ui_path = package_scene_ui_path(&package_root).display().to_string();
+    let assets_path = package_assets_path(&package_root).display().to_string();
     let title = payload_string(&metadata, "associatedPackageTitle").unwrap_or_default();
     let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
     let clips = metadata
@@ -3323,12 +3331,29 @@ fn editor_session_prompt_context(
         "\n\n## 当前剪辑工程上下文\n\
 runtime_mode: {runtime_mode}\n\
 filePath: {file_path}\n\
+packageRoot: {}\n\
 title: {title}\n\
 packageKind: {package_kind}\n\
 trackNames: {}\n\
 clips: {}\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / track_reorder / track_delete / focus_clip / remotion_generate / remotion_save / export。修改时间线后，最终回答要简要说明改动。",
+## 工程关键文件\n\
+manifest: {manifest_path}\n\
+editorProject: {editor_project_path}\n\
+timelineOtio: {timeline_path}\n\
+remotionScene: {remotion_scene_path}\n\
+trackUi: {track_ui_path}\n\
+sceneUi: {scene_ui_path}\n\
+assets: {assets_path}\n\
+\n\
+## 工程理解规则\n\
+- `editor.project.json` 是实验视频/音频编辑工程的主结构文件，包含资产、轨道、items 与舞台状态。\n\
+- `timeline.otio.json` 是兼容时间线表示，适合对照旧式片段结构。\n\
+- `remotion.scene.json` 是动画与导出场景配置；需要制作动画或最终导出时重点关注。\n\
+- `track-ui.json` / `scene-ui.json` 是编辑器 UI 与舞台对象状态，不要把它们误当成正文内容。\n\
+\n\
+工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / track_reorder / track_delete / focus_clip / remotion_generate / remotion_save / export。导出成片与最终渲染优先通过 `export` 完成；动画生成与保存优先通过 `remotion_generate` / `remotion_save` 完成。修改时间线后，最终回答要简要说明改动。",
+        package_root.display(),
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
     )

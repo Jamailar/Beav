@@ -2,6 +2,7 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{with_store, with_store_mut};
 use crate::*;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use tauri::{AppHandle, State};
 
@@ -904,6 +905,84 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
             _ => {}
         }
     }
+    normalize_editor_project_timeline(project)?;
+    Ok(())
+}
+
+fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> {
+    let tracks = project
+        .get("tracks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut ordered_tracks = tracks;
+    ordered_tracks.sort_by_key(|track| track.get("order").and_then(|value| value.as_i64()).unwrap_or(0));
+    let main_video_track_id = ordered_tracks
+        .iter()
+        .find(|track| track.get("kind").and_then(|value| value.as_str()) == Some("video"))
+        .and_then(|track| track.get("id").and_then(|value| value.as_str()))
+        .map(ToString::to_string);
+    let items = editor_project_items_mut(project)?;
+    let original_order = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| item.get("id").and_then(|value| value.as_str()).map(|id| (id.to_string(), index)))
+        .collect::<BTreeMap<_, _>>();
+    let mut rebuilt = Vec::new();
+    for track in &ordered_tracks {
+        let Some(track_id) = track.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let mut track_items = items
+            .iter()
+            .filter(|item| item.get("trackId").and_then(|value| value.as_str()) == Some(track_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        track_items.sort_by(|left, right| {
+            let left_from = left.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            let right_from = right.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            if left_from != right_from {
+                return left_from.cmp(&right_from);
+            }
+            let left_id = left.get("id").and_then(|value| value.as_str()).unwrap_or("");
+            let right_id = right.get("id").and_then(|value| value.as_str()).unwrap_or("");
+            original_order
+                .get(left_id)
+                .unwrap_or(&0usize)
+                .cmp(original_order.get(right_id).unwrap_or(&0usize))
+        });
+        let mut cursor = 0_i64;
+        for mut item in track_items {
+            let from_ms = item.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            let duration_ms = item.get("durationMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            let next_from_ms = if main_video_track_id.as_deref() == Some(track_id) {
+                cursor
+            } else {
+                from_ms.max(cursor)
+            };
+            if let Some(object) = item.as_object_mut() {
+                object.insert("fromMs".to_string(), json!(next_from_ms));
+            }
+            cursor = next_from_ms + duration_ms.max(0);
+            rebuilt.push(item);
+        }
+    }
+    let known_track_ids = ordered_tracks
+        .iter()
+        .filter_map(|track| track.get("id").and_then(|value| value.as_str()).map(ToString::to_string))
+        .collect::<BTreeSet<_>>();
+    let remainder = items
+        .iter()
+        .filter(|item| {
+            item.get("trackId")
+                .and_then(|value| value.as_str())
+                .map(|track_id| !known_track_ids.contains(track_id))
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    rebuilt.extend(remainder);
+    *items = rebuilt;
     Ok(())
 }
 

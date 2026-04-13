@@ -86,7 +86,7 @@ export type EditorProjectFile = {
         width: number;
         height: number;
         fps: number;
-        ratioPreset: '16:9' | '9:16';
+        ratioPreset: '16:9' | '9:16' | '4:3' | '3:4';
         backgroundColor?: string;
     };
     script: {
@@ -333,6 +333,49 @@ export function buildScriptBriefSections(project: EditorProjectFile): ScriptBrie
     }));
 }
 
+function normalizeTimelineItems(next: EditorProjectFile): EditorProjectFile {
+    const orderedTracks = trackOrder(next);
+    const mainVideoTrackId = orderedTracks.find((track) => track.kind === 'video')?.id || null;
+    const itemOriginalIndex = new Map(next.items.map((item, index) => [item.id, index]));
+    const grouped = new Map<string, EditorItem[]>();
+
+    next.items.forEach((item) => {
+        const bucket = grouped.get(item.trackId) || [];
+        bucket.push(item);
+        grouped.set(item.trackId, bucket);
+    });
+
+    const normalizedItems: EditorItem[] = [];
+    orderedTracks.forEach((track) => {
+        const items = (grouped.get(track.id) || []).slice().sort((left, right) => {
+            if (left.fromMs !== right.fromMs) return left.fromMs - right.fromMs;
+            return (itemOriginalIndex.get(left.id) ?? 0) - (itemOriginalIndex.get(right.id) ?? 0);
+        });
+        let cursor = 0;
+        items.forEach((item) => {
+            const normalizedFromMs = track.id === mainVideoTrackId
+                ? cursor
+                : Math.max(item.fromMs, cursor);
+            const nextItem = {
+                ...item,
+                fromMs: normalizedFromMs,
+            } as EditorItem;
+            normalizedItems.push(nextItem);
+            cursor = normalizedFromMs + item.durationMs;
+        });
+    });
+
+    const trackIdSet = new Set(orderedTracks.map((track) => track.id));
+    next.items
+        .filter((item) => !trackIdSet.has(item.trackId))
+        .forEach((item) => normalizedItems.push(item));
+
+    return {
+        ...next,
+        items: normalizedItems,
+    };
+}
+
 function cloneProject(project: EditorProjectFile): EditorProjectFile {
     return {
         ...project,
@@ -394,20 +437,20 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
             const trackIdSet = new Set(command.trackIds);
             next.tracks = next.tracks.filter((track) => !trackIdSet.has(track.id)).map((track, order) => ({ ...track, order }));
             next.items = next.items.filter((item) => !trackIdSet.has(item.trackId));
-            return next;
+            return normalizeTimelineItems(next);
         }
         case 'add_item':
             next.items.push(command.item);
-            return next;
+            return normalizeTimelineItems(next);
         case 'update_item':
             next.items = next.items.map((item) => item.id === command.itemId ? ({ ...item, ...command.patch } as EditorItem) : item);
-            return next;
+            return normalizeTimelineItems(next);
         case 'delete_item':
             next.items = next.items.filter((item) => item.id !== command.itemId);
-            return next;
+            return normalizeTimelineItems(next);
         case 'delete_items':
             next.items = next.items.filter((item) => !command.itemIds.includes(item.id));
-            return next;
+            return normalizeTimelineItems(next);
         case 'split_item': {
             const target = next.items.find((item) => item.id === command.itemId);
             if (!target || target.type === 'motion') return next;
@@ -431,7 +474,7 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
                 if (item.id !== command.itemId) return [item];
                 return [{ ...item, durationMs: splitOffset } as EditorItem, duplicate];
             });
-            return next;
+            return normalizeTimelineItems(next);
         }
         case 'move_items':
             next.items = next.items.map((item) => {
@@ -442,14 +485,14 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
                     trackId: command.targetTrackId || item.trackId,
                 } as EditorItem;
             });
-            return next;
+            return normalizeTimelineItems(next);
         case 'retime_item':
             next.items = next.items.map((item) => item.id === command.itemId ? ({
                 ...item,
                 fromMs: command.fromMs ?? item.fromMs,
                 durationMs: command.durationMs ?? item.durationMs,
             } as EditorItem) : item);
-            return next;
+            return normalizeTimelineItems(next);
         case 'set_track_ui':
             next.tracks = next.tracks.map((track) => track.id === command.trackId ? normalizeTrackUiPatch(track, command.patch) : track);
             return next;
@@ -462,7 +505,7 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
             const [track] = next.tracks.splice(index, 1);
             next.tracks.splice(targetIndex, 0, track);
             next.tracks = next.tracks.map((item, order) => ({ ...item, order }));
-            return next;
+            return normalizeTimelineItems(next);
         }
         case 'update_stage_item':
             if (command.patch) {

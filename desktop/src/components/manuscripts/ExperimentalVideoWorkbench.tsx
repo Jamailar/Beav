@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { PlayerRef } from '@remotion/player';
-import { AudioLines, Clapperboard, Image as ImageIcon, MessageSquare, Plus, SlidersHorizontal, Sparkles, Type, Upload, Video, Wand2, X } from 'lucide-react';
+import { AudioLines, Check, ChevronsUpDown, Clapperboard, Image as ImageIcon, MessageSquare, Plus, SlidersHorizontal, Sparkles, Type, Upload, Video, Wand2, X } from 'lucide-react';
 import { VideoEditorSidebarShell } from './VideoEditorSidebarShell';
 import { VideoEditorStageShell } from './VideoEditorStageShell';
 import { VideoEditorTimelineShell } from './VideoEditorTimelineShell';
@@ -9,7 +9,7 @@ import { TimelinePreviewComposition } from './TimelinePreviewComposition';
 import { RemotionTransportBar } from './remotion/RemotionTransportBar';
 import { RemotionVideoPreview } from './remotion/RemotionVideoPreview';
 import type { RemotionCompositionConfig } from './remotion/types';
-import { createVideoEditorStore, useVideoEditorStore } from '../../features/video-editor/store/useVideoEditorStore';
+import { createVideoEditorStore, useVideoEditorStore, type VideoEditorRatioPreset } from '../../features/video-editor/store/useVideoEditorStore';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import {
     applyEditorCommandLocal,
@@ -30,6 +30,13 @@ import { ExperimentalTimeline } from './ExperimentalTimeline';
 const ChatWorkspace = lazy(async () => ({
     default: (await import('../../pages/Chat')).Chat,
 }));
+
+const RATIO_PRESET_OPTIONS: Array<{ preset: VideoEditorRatioPreset; label: string; width: number; height: number }> = [
+    { preset: '9:16', label: '9:16', width: 1080, height: 1920 },
+    { preset: '3:4', label: '3:4', width: 1080, height: 1440 },
+    { preset: '16:9', label: '16:9', width: 1920, height: 1080 },
+    { preset: '4:3', label: '4:3', width: 1440, height: 1080 },
+];
 
 type MediaAssetLike = {
     id: string;
@@ -183,6 +190,7 @@ export function ExperimentalVideoWorkbench({
     const [chatPaneWidth, setChatPaneWidth] = useState(420);
     const [chatResizeState, setChatResizeState] = useState<ChatResizeState | null>(null);
     const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('assets');
+    const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
     const [stageSelection, setStageSelection] = useState<{
         ids: string[];
         primaryId: string | null;
@@ -298,6 +306,22 @@ export function ExperimentalVideoWorkbench({
     const updateProject = (nextProject: EditorProjectFile) => {
         setLocalProject(nextProject);
         setSaveNonce((value) => value + 1);
+    };
+
+    const handleChangeRatioPreset = (preset: VideoEditorRatioPreset) => {
+        if (!localProject) return;
+        const nextOption = RATIO_PRESET_OPTIONS.find((option) => option.preset === preset);
+        if (!nextOption) return;
+        updateProject({
+            ...localProject,
+            project: {
+                ...localProject.project,
+                ratioPreset: nextOption.preset,
+                width: nextOption.width,
+                height: nextOption.height,
+            },
+        });
+        setRatioMenuOpen(false);
     };
 
     const dispatchEditorCommands = async (commands: EditorCommand[]) => {
@@ -744,19 +768,31 @@ export function ExperimentalVideoWorkbench({
                         </div>
                         <div className="flex items-center gap-3">
                             {previewTab === 'preview' ? (
-                                <button
-                                    type="button"
-                                    onClick={() => updateProject({
-                                        ...localProject,
-                                        project: {
-                                            ...localProject.project,
-                                            ratioPreset: localProject.project.ratioPreset === '16:9' ? '9:16' : '16:9',
-                                        },
-                                    })}
-                                    className="text-xs text-white/55 transition hover:text-white"
-                                >
-                                    {localProject.project.ratioPreset}
-                                </button>
+                                <div className="relative">
+                                    <button
+                                        type="button"
+                                        onClick={() => setRatioMenuOpen((open) => !open)}
+                                        className="inline-flex items-center gap-1.5 text-xs text-white/55 transition hover:text-white"
+                                    >
+                                        <span>{localProject.project.ratioPreset}</span>
+                                        <ChevronsUpDown className="h-3.5 w-3.5" />
+                                    </button>
+                                    {ratioMenuOpen ? (
+                                        <div className="absolute right-0 top-7 z-50 min-w-[120px] overflow-hidden rounded-xl border border-white/10 bg-[#1c1d20] shadow-[0_16px_40px_rgba(0,0,0,0.45)]">
+                                            {RATIO_PRESET_OPTIONS.map((option) => (
+                                                <button
+                                                    key={option.preset}
+                                                    type="button"
+                                                    onClick={() => handleChangeRatioPreset(option.preset)}
+                                                    className="flex w-full items-center justify-between px-3 py-2 text-sm text-white/86 transition hover:bg-white/8"
+                                                >
+                                                    <span>{option.label}</span>
+                                                    {localProject.project.ratioPreset === option.preset ? <Check className="h-4 w-4 text-cyan-300" /> : null}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                </div>
                             ) : null}
                         {previewTab === 'motion' ? (
                             <button
@@ -809,7 +845,7 @@ export function ExperimentalVideoWorkbench({
                         onTogglePlayback={() => editorStore.setState((state) => ({ player: { ...state.player, isPlaying: !state.player.isPlaying } }))}
                         onSeekFrame={(frame) => seekTimeMs((frame / localProject.project.fps) * 1000)}
                         onStepFrame={(deltaFrames) => seekTimeMs(((Math.round(currentTime * localProject.project.fps) + deltaFrames) / localProject.project.fps) * 1000)}
-                        onChangeRatioPreset={() => {}}
+                        onChangeRatioPreset={handleChangeRatioPreset}
                         onSelectSceneItem={(kind, id, options) => {
                             setStageSelection((current) => {
                                 const nextIds = options?.additive
@@ -1014,56 +1050,16 @@ export function ExperimentalVideoWorkbench({
             />
 
             <div
-                className={`${aiPanelClassName} min-h-0 border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]`}
+                className={`${aiPanelClassName} flex min-h-0 flex-col border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]`}
                 hidden={!drawerOpen}
             >
-                <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-                    <div className="flex items-center gap-2 text-sm font-medium text-white">
-                        <MessageSquare className="h-4 w-4 text-cyan-400" />
-                        视频剪辑助手
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => editorStore.setState((state) => ({ panels: { ...state.panels, redclawDrawerOpen: false } }))}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/70"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
-                <div className="border-b border-white/10 px-4 py-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-white/35">AI Command</div>
-                    <textarea
-                        value={commandInput}
-                        onChange={(event) => setCommandInput(event.target.value)}
-                        placeholder="例如：把当前选中的片段往后移 1 秒；隐藏字幕轨；把第一段分成两半。"
-                        className="mt-3 h-24 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/30"
-                    />
-                    <div className="mt-3 flex items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                void generateEditorCommands(commandInput);
-                            }}
-                            disabled={isApplyingAiCommand || !commandInput.trim()}
-                            className="inline-flex items-center gap-2 rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-40"
-                        >
-                            <Sparkles className="h-3.5 w-3.5" />
-                            {isApplyingAiCommand ? '应用中...' : '生成并应用命令'}
-                        </button>
-                    </div>
-                    {commandBrief ? (
-                        <div className="mt-3 whitespace-pre-wrap rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/70">
-                            {commandBrief}
-                        </div>
-                    ) : null}
-                </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
                     {editorChatSessionId ? (
                         <Suspense fallback={<div className="flex h-full items-center justify-center text-white/45">AI 会话加载中...</div>}>
                             <ChatWorkspace
                                 fixedSessionId={editorChatSessionId}
                                 defaultCollapsed={true}
-                                showClearButton={true}
+                                showClearButton={false}
                                 fixedSessionBannerText=""
                                 shortcuts={[
                                     { label: '生成编辑 Brief', text: '请只输出当前工程的编辑 brief，不要直接修改时间轴。' },
@@ -1075,7 +1071,11 @@ export function ExperimentalVideoWorkbench({
                                     { label: '生成 Motion', text: '请为当前选中片段规划动画节奏，并给出 motion item 方案。' },
                                 ]}
                                 showWelcomeShortcuts={true}
-                                showComposerShortcuts={true}
+                                showComposerShortcuts={false}
+                                fixedSessionContextIndicatorMode="none"
+                                showWelcomeHeader={true}
+                                emptyStateComposerPlacement="bottom"
+                                embeddedTheme="dark"
                                 welcomeTitle="视频剪辑助手"
                                 welcomeSubtitle="实验分支：围绕 editor.project.json 组织剪辑与动画。"
                                 contentLayout="default"

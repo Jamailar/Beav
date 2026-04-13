@@ -55,6 +55,9 @@ interface ChatProps {
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
+  embeddedTheme?: 'default' | 'dark';
+  showWelcomeHeader?: boolean;
+  emptyStateComposerPlacement?: 'inline' | 'bottom';
 }
 
 interface UploadedFileAttachment {
@@ -392,6 +395,9 @@ export function Chat({
   messageWorkflowPlacement = 'bottom',
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
+  embeddedTheme = 'default',
+  showWelcomeHeader = true,
+  emptyStateComposerPlacement = 'inline',
 }: ChatProps) {
   const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
     uiDebug('chat', event, extra);
@@ -1929,6 +1935,196 @@ export function Chat({
       ? 'text-amber-500'
       : 'text-emerald-500';
   const isCompactWorkflowMode = Boolean(fixedSessionId && fixedSessionContextIndicatorMode === 'corner-ring');
+  const darkEmbedded = embeddedTheme === 'dark';
+  const composerShellClass = darkEmbedded
+    ? 'bg-[#121417] border border-white/10 rounded-[24px] p-1.5'
+    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5';
+  const composerShellEmptyClass = darkEmbedded
+    ? 'bg-[#121417] border border-white/10 rounded-[28px] p-2'
+    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2';
+  const composerTextClass = darkEmbedded
+    ? 'text-white placeholder:text-white/28'
+    : 'text-text-primary placeholder:text-[#b4b2a8]';
+  const composerSubtleButtonClass = darkEmbedded
+    ? 'text-white/48 hover:text-white/82'
+    : 'text-text-tertiary hover:text-text-secondary';
+  const composerModelPickerClass = darkEmbedded
+    ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
+    : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
+  const composerAttachmentClass = darkEmbedded
+    ? 'rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/68 flex items-center justify-between'
+    : 'rounded-lg border border-border bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary flex items-center justify-between';
+  const composerSendButtonClass = input.trim() || pendingAttachment
+    ? 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]'
+    : darkEmbedded
+      ? 'bg-white/10 text-white/45 opacity-80'
+      : 'bg-[#edebe4] text-white opacity-60';
+  const inputAreaShellClass = darkEmbedded
+    ? 'bg-transparent pb-4 pt-2 md:pb-5'
+    : 'bg-surface-primary pb-4 pt-2 md:pb-5';
+  const shortcutChipClass = darkEmbedded
+    ? 'flex-shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/62 transition-colors hover:border-white/20 hover:text-white disabled:opacity-50'
+    : 'flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50';
+  const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+
+  const welcomeHeaderBlock = showWelcomeHeader ? (
+    <>
+      <div className="flex justify-center">
+        {welcomeIconSrc ? (
+          <img
+            src={welcomeIconSrc}
+            alt={welcomeTitle}
+            className="w-24 h-24 object-contain"
+          />
+        ) : (
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
+            <Sparkles className="w-8 h-8 text-white" />
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
+        {welcomeSubtitle ? (
+          <p className={clsx('text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>{welcomeSubtitle}</p>
+        ) : null}
+      </div>
+    </>
+  ) : null;
+
+  const welcomeShortcutsBlock = showWelcomeShortcuts && welcomeShortcuts.length > 0 ? (
+    <div className="flex flex-wrap justify-center gap-2 text-xs">
+      {welcomeShortcuts.map((shortcut) => (
+        <button
+          key={shortcut.label}
+          onClick={() => sendMessage(shortcut.text)}
+          className={darkEmbedded
+            ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
+            : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
+        >
+          {shortcut.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  const emptyComposerForm = (
+    <form onSubmit={handleSubmit} className="relative w-full">
+      <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
+      <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
+        {composerSuppressed ? (
+          <button
+            type="button"
+            onClick={() => resumeComposerFocus('empty')}
+            className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
+          >
+            对话已完成，点击后继续输入...
+          </button>
+        ) : (
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              syncInputHeight();
+            }}
+            onFocus={() => handleComposerFocus('empty')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
+                e.preventDefault();
+                handleSubmit(e as any);
+                if (inputRef.current) inputRef.current.style.height = 'auto';
+              }
+            }}
+            placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
+            className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
+            data-ime="chat-composer-empty"
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            readOnly={isProcessing}
+            aria-disabled={isProcessing}
+            rows={1}
+          />
+        )}
+        <div className="flex items-center justify-between px-2 pb-1">
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
+              <Plus className="w-[18px] h-[18px]" />
+            </button>
+            <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
+              <button
+                type="button"
+                onClick={() => setShowModelPicker((prev) => !prev)}
+                className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
+              >
+                <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
+                <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
+              </button>
+              {showModelPicker && (
+                <div className={composerModelPickerClass}>
+                  {chatModelOptions.length ? chatModelOptions.map((option) => {
+                    const active = option.key === selectedChatModelKey;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => {
+                          setSelectedChatModelKey(option.key);
+                          closeModelPicker();
+                        }}
+                        className={clsx(
+                          'w-full px-3 py-2.5 text-left transition-colors',
+                          active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
+                        )}
+                      >
+                        <div className="text-sm font-medium truncate">{option.modelName}</div>
+                        <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
+                      </button>
+                    );
+                  }) : (
+                    <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAudioInput}
+              disabled={isTranscribingAudio}
+              className={clsx(
+                'p-2 transition-colors',
+                isRecordingAudio ? 'text-red-500 hover:text-red-600' : composerSubtleButtonClass,
+                isTranscribingAudio && 'opacity-60 cursor-not-allowed'
+              )}
+              title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
+            >
+              {isTranscribingAudio ? (
+                <Loader2 className="w-[18px] h-[18px] animate-spin" />
+              ) : isRecordingAudio ? (
+                <Square className="w-[18px] h-[18px] fill-current" />
+              ) : (
+                <Mic className="w-[18px] h-[18px]" />
+              )}
+            </button>
+            <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+      </div>
+      {pendingAttachment && (
+        <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
+          <span className="truncate">附件: {pendingAttachment.name}</span>
+          <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
+            <FileX className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+    </form>
+  );
 
   return (
     <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
@@ -2082,31 +2278,34 @@ export function Chat({
         )}
 
         {/* Content Area */}
-        {isEmptySession ? (
+        {isEmptySession && !dockedEmptyState ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto">
             <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
               {/* Logo/Icon */}
-              <div className="flex justify-center">
-                {welcomeIconSrc ? (
-                  <img
-                    src={welcomeIconSrc}
-                    alt={welcomeTitle}
-                    className="w-24 h-24 object-contain"
-                  />
-                ) : (
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-                    <Sparkles className="w-8 h-8 text-white" />
+              {showWelcomeHeader ? (
+                <>
+                  <div className="flex justify-center">
+                    {welcomeIconSrc ? (
+                      <img
+                        src={welcomeIconSrc}
+                        alt={welcomeTitle}
+                        className="w-24 h-24 object-contain"
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
+                        <Sparkles className="w-8 h-8 text-white" />
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              {/* 欢迎文字 */}
-              <div className="space-y-2">
-                <h1 className="text-2xl font-semibold text-text-primary">{welcomeTitle}</h1>
-                {welcomeSubtitle ? (
-                  <p className="text-sm text-text-tertiary">{welcomeSubtitle}</p>
-                ) : null}
-              </div>
+                  <div className="space-y-2">
+                    <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
+                    {welcomeSubtitle ? (
+                      <p className={clsx('text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>{welcomeSubtitle}</p>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
 
               {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
                 <div className="flex flex-wrap justify-center gap-2 text-xs">
@@ -2125,12 +2324,12 @@ export function Chat({
               {/* 居中的输入框 (Codex Style) */}
               <form onSubmit={handleSubmit} className="relative w-full mt-10">
                 <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                <div className="group relative flex flex-col w-full bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2 transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20">
+                <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
                   {composerSuppressed ? (
                     <button
                       type="button"
                       onClick={() => resumeComposerFocus('empty')}
-                      className="w-full rounded-2xl px-4 py-6 text-left text-[16px] text-text-tertiary"
+                      className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
                     >
                       对话已完成，点击后继续输入...
                     </button>
@@ -2151,7 +2350,7 @@ export function Chat({
                         }
                       }}
                       placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-                      className="w-full bg-transparent px-4 py-3 text-[16px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[100px] overflow-y-auto"
+                      className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
                       data-ime="chat-composer-empty"
                       spellCheck={false}
                       autoCorrect="off"
@@ -2163,20 +2362,20 @@ export function Chat({
                   )}
                   <div className="flex items-center justify-between px-2 pb-1">
                     <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => void pickAttachment()} className="p-2 text-text-tertiary hover:text-text-secondary transition-colors" title="添加文件">
+                      <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
                         <Plus className="w-[18px] h-[18px]" />
                       </button>
                       <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
                         <button
                           type="button"
                           onClick={() => setShowModelPicker((prev) => !prev)}
-                          className="flex items-center gap-1.5 text-text-tertiary hover:text-text-secondary transition-colors text-[13px] font-medium"
+                          className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
                         >
                           <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
                           <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
                         </button>
                         {showModelPicker && (
-                          <div className="absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]">
+                          <div className={composerModelPickerClass}>
                             {chatModelOptions.length ? chatModelOptions.map((option) => {
                               const active = option.key === selectedChatModelKey;
                               return (
@@ -2189,7 +2388,7 @@ export function Chat({
                                   }}
                                   className={clsx(
                                     'w-full px-3 py-2.5 text-left transition-colors',
-                                    active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/50 text-text-secondary'
+                                    active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
                                   )}
                                 >
                                   <div className="text-sm font-medium truncate">{option.modelName}</div>
@@ -2223,14 +2422,14 @@ export function Chat({
                           <Mic className="w-[18px] h-[18px]" />
                         )}
                       </button>
-                      <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", input.trim() || pendingAttachment ? "bg-[#b4b2a8] text-white hover:bg-accent-primary" : "bg-[#edebe4] text-white opacity-60")}>
+                      <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
                         {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
                       </button>
                     </div>
                   </div>
                 </div>
                 {pendingAttachment && (
-                  <div className="mt-3 mx-4 rounded-lg border border-border bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary flex items-center justify-between">
+                  <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
                     <span className="truncate">附件: {pendingAttachment.name}</span>
                     <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
                       <FileX className="w-3.5 h-3.5" />
@@ -2244,33 +2443,46 @@ export function Chat({
           <>
             {/* Messages */}
             <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', contentOuterPaddingClass)}>
-              <div className={clsx('mx-auto min-w-0 space-y-4 md:space-y-5', contentMaxWidthClass, contentWidthClass)}>
-                {messages.map((msg) => (
-                  <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
-                    <MessageItem
-                      msg={msg}
-                      copiedMessageId={copiedMessageId}
-                      onCopyMessage={handleCopyMessage}
-                      workflowPlacement={messageWorkflowPlacement}
-                      workflowVariant={messageWorkflowVariant}
-                      workflowEmphasis={messageWorkflowEmphasis}
-                    />
-                  </ErrorBoundary>
-                ))}
-                <div ref={messagesEndRef} />
+              <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
+                {dockedEmptyState ? (
+                  <div className="text-center space-y-6 py-10">
+                    {welcomeHeaderBlock}
+                    {welcomeShortcutsBlock}
+                  </div>
+                ) : (
+                  <>
+                    {messages.map((msg) => (
+                      <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
+                        <MessageItem
+                          msg={msg}
+                          copiedMessageId={copiedMessageId}
+                          onCopyMessage={handleCopyMessage}
+                          workflowPlacement={messageWorkflowPlacement}
+                          workflowVariant={messageWorkflowVariant}
+                          workflowEmphasis={messageWorkflowEmphasis}
+                        />
+                      </ErrorBoundary>
+                    ))}
+                    <div ref={messagesEndRef} />
+                  </>
+                )}
               </div>
             </div>
 
             {/* Input Area - Bottom Fixed */}
-            <div className={clsx('bg-surface-primary pb-4 pt-2 md:pb-5', contentOuterPaddingClass)}>
+            <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
               <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
+                {dockedEmptyState ? (
+                  emptyComposerForm
+                ) : (
+                  <>
                 {errorNotice && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{errorNotice}</div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                     {shortcuts.map((shortcut) => (
-                      <button key={shortcut.label} onClick={() => sendMessage(shortcut.text)} disabled={isProcessing} className="flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50">
+                      <button key={shortcut.label} onClick={() => sendMessage(shortcut.text)} disabled={isProcessing} className={shortcutChipClass}>
                         {shortcut.label}
                       </button>
                     ))}
@@ -2280,17 +2492,17 @@ export function Chat({
                 <form onSubmit={handleSubmit} className="relative w-full">
                   <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
                   {pendingAttachment && (
-                    <div className="mb-3 rounded-lg border border-border bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary flex items-center justify-between">
+                    <div className={clsx('mb-3', composerAttachmentClass)}>
                       <span className="truncate">附件: {pendingAttachment.name}</span>
                       <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary"><FileX className="w-3.5 h-3.5" /></button>
                     </div>
                   )}
-                  <div className="group relative flex flex-col w-full bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5 transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20">
+                  <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellClass)}>
                     {composerSuppressed ? (
                       <button
                         type="button"
                         onClick={() => resumeComposerFocus('composer')}
-                        className="w-full rounded-2xl px-3.5 py-6 text-left text-[14px] text-text-tertiary"
+                        className={clsx('w-full rounded-2xl px-3.5 py-6 text-left text-[14px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
                       >
                         对话已完成，点击后继续输入...
                       </button>
@@ -2311,7 +2523,7 @@ export function Chat({
                           }
                         }}
                         placeholder="发送消息..."
-                        className="w-full bg-transparent px-3.5 py-2.5 text-[14px] text-text-primary placeholder:text-[#b4b2a8] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto"
+                        className={clsx('w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto', composerTextClass)}
                         data-ime="chat-composer-main"
                         spellCheck={false}
                         autoCorrect="off"
@@ -2323,20 +2535,20 @@ export function Chat({
                     )}
                     <div className="flex items-center justify-between px-1.5 pb-0.5">
                       <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => void pickAttachment()} className="p-2 text-text-tertiary hover:text-text-secondary transition-colors" title="添加文件">
+                        <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
                           <Plus className="w-[18px] h-[18px]" />
                         </button>
                         <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
                           <button
                             type="button"
                             onClick={() => setShowModelPicker((prev) => !prev)}
-                            className="flex items-center gap-1.5 text-text-tertiary hover:text-text-secondary transition-colors text-[13px] font-medium"
+                            className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
                           >
                             <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
                             <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
                           </button>
                           {showModelPicker && (
-                            <div className="absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]">
+                            <div className={composerModelPickerClass}>
                               {chatModelOptions.length ? chatModelOptions.map((option) => {
                                 const active = option.key === selectedChatModelKey;
                                 return (
@@ -2349,7 +2561,7 @@ export function Chat({
                                     }}
                                     className={clsx(
                                       'w-full px-3 py-2.5 text-left transition-colors',
-                                      active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/50 text-text-secondary'
+                                      active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
                                     )}
                                   >
                                     <div className="text-sm font-medium truncate">{option.modelName}</div>
@@ -2365,7 +2577,7 @@ export function Chat({
                       </div>
                       <div className="flex items-center gap-2">
                         {isProcessing ? (
-                          <button type="button" onClick={handleCancel} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="停止生成"><StopCircle className="w-5 h-5" /></button>
+                          <button type="button" onClick={handleCancel} className={clsx('p-2 rounded-lg transition-colors', darkEmbedded ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50')} title="停止生成"><StopCircle className="w-5 h-5" /></button>
                         ) : (
                           <button
                             type="button"
@@ -2387,13 +2599,15 @@ export function Chat({
                             )}
                           </button>
                         )}
-                        <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", input.trim() || pendingAttachment ? "bg-[#b4b2a8] text-white hover:bg-accent-primary" : "bg-[#edebe4] text-white opacity-60")}>
+                        <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
                           {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
                         </button>
                       </div>
                     </div>
                   </div>
                 </form>
+                  </>
+                )}
               </div>
             </div>
           </>
