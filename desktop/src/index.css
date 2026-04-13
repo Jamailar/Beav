@@ -100,6 +100,34 @@ select {
   border-radius: var(--ui-radius-sm);
 }
 
+.editor-ui-shell {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.editor-ui-shell button,
+.editor-ui-shell [role='button'],
+.editor-ui-shell a,
+.editor-ui-shell summary,
+.editor-ui-shell label {
+  cursor: pointer;
+}
+
+.editor-ui-shell input,
+.editor-ui-shell textarea,
+.editor-ui-shell select,
+.editor-ui-shell [contenteditable='true'],
+.editor-ui-shell .cm-content,
+.editor-ui-shell .cm-editor,
+.editor-ui-shell .chat-ai-content,
+.editor-ui-shell .chat-markdown-body,
+.editor-ui-shell .chat-user-bubble {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
 .app-sidebar-shell {
   background:
     linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.96) 100%);

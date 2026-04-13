@@ -95,6 +95,8 @@ export interface AudioDraftWorkbenchProps {
   editorBody: string;
   editorBodyDirty: boolean;
   isSavingEditorBody: boolean;
+  materialsCollapsed?: boolean;
+  timelineCollapsed?: boolean;
   editorChatSessionId: string | null;
   onEditorBodyChange: (value: string) => void;
   onOpenBindAssets: () => void;
@@ -111,6 +113,8 @@ export function AudioDraftWorkbench({
   editorBody,
   editorBodyDirty,
   isSavingEditorBody,
+  materialsCollapsed = false,
+  timelineCollapsed = false,
   editorChatSessionId,
   onEditorBodyChange,
   onOpenBindAssets,
@@ -323,20 +327,21 @@ export function AudioDraftWorkbench({
   };
 
   return (
-    <div
-      className="flex-1 min-h-0 grid bg-[#171717] text-white"
-      style={{
-        gridTemplateColumns: `minmax(0,1fr) 8px ${chatPaneWidth}px`,
-        gridTemplateRows: `minmax(0,1fr) 8px ${timelineHeight}px`,
-      }}
-    >
+    <div className="flex-1 min-h-0 flex flex-col bg-[#171717] text-white">
       <div
-        className="min-h-0 grid"
+        className="flex-1 min-h-0 grid"
         style={{
-          gridTemplateColumns: `${materialPaneWidth}px 8px minmax(0,1fr)`,
+          gridTemplateColumns: `minmax(0,1fr) 8px ${chatPaneWidth}px`,
+          gridTemplateRows: `minmax(0,1fr) ${timelineCollapsed ? '0px' : '8px'} ${timelineCollapsed ? '0px' : `${timelineHeight}px`}`,
         }}
       >
-        <div className="min-h-0 border-r border-b border-white/10 bg-[#1f1f1f]">
+      <div
+        className="col-start-1 row-start-1 min-h-0 grid"
+        style={{
+          gridTemplateColumns: materialsCollapsed ? 'minmax(0,1fr)' : `${materialPaneWidth}px 8px minmax(0,1fr)`,
+        }}
+      >
+        <div className="col-start-1 row-start-1 min-h-0 border-r border-b border-white/10 bg-[#1f1f1f]" hidden={materialsCollapsed}>
           <div className="flex h-full min-h-0 flex-col">
             <div className="border-b border-white/10 px-4 py-3">
               <div className="flex items-center justify-between gap-3">
@@ -497,7 +502,8 @@ export function AudioDraftWorkbench({
         </div>
 
         <div
-          className="cursor-col-resize border-b border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
+          className="col-start-2 row-start-1 cursor-col-resize border-b border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
+          hidden={materialsCollapsed}
           onPointerDown={(event) => {
             event.preventDefault();
             setDragState({
@@ -511,7 +517,7 @@ export function AudioDraftWorkbench({
           }}
         />
 
-        <div className="min-h-0 border-r border-b border-white/10 bg-[#111111]">
+        <div className={clsx(materialsCollapsed ? 'col-start-1 row-start-1' : 'col-start-3 row-start-1', 'min-h-0 border-r border-b border-white/10 bg-[#111111]')}>
           <div className="flex h-full min-h-0 flex-col px-5 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-5 text-sm">
@@ -568,7 +574,7 @@ export function AudioDraftWorkbench({
       </div>
 
       <div
-        className="row-span-3 cursor-col-resize bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
+        className="col-start-2 row-start-1 row-span-3 cursor-col-resize bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
         onPointerDown={(event) => {
           event.preventDefault();
           setDragState({
@@ -582,7 +588,7 @@ export function AudioDraftWorkbench({
         }}
       />
 
-      <div className="row-span-3 min-h-0 border-l border-white/10 bg-[#131313] text-white">
+      <div className="col-start-3 row-start-1 row-span-3 min-h-0 border-l border-white/10 bg-[#131313] text-white">
         <div className="flex h-full min-h-0 flex-col">
           <div className="border-b border-white/10 px-5 py-4">
             <div className="flex items-center gap-2 text-sm font-medium text-white">
@@ -620,7 +626,8 @@ export function AudioDraftWorkbench({
       </div>
 
       <div
-        className="col-span-1 border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
+        className="col-start-1 row-start-2 border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-emerald-400/20"
+        hidden={timelineCollapsed}
         onPointerDown={(event) => {
           event.preventDefault();
           setDragState({
@@ -634,7 +641,7 @@ export function AudioDraftWorkbench({
         }}
       />
 
-      <div className="min-h-0 border-r border-white/10 bg-[#151515] px-5 py-4">
+      <div className="col-start-1 row-start-3 min-h-0 border-r border-white/10 bg-[#151515] px-5 py-4" hidden={timelineCollapsed}>
         <EditableTrackTimeline
           filePath={editorFile}
           clips={timelineClips as Array<Record<string, unknown>>}
@@ -680,6 +687,7 @@ export function AudioDraftWorkbench({
         </div>,
         document.body
       ) : null}
+    </div>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { AudioLines, Check, ChevronsUpDown, Clapperboard, Image as ImageIcon, Type } from 'lucide-react';
-import { RemotionTransportBar } from './remotion/RemotionTransportBar';
+import { AudioLines, Clapperboard, Image as ImageIcon, Pause, Play, Type } from 'lucide-react';
 import { resolveSubtitlePreset } from './subtitles/subtitlePresets';
 import { resolveTextPreset } from './texts/textPresets';
 import { resolveTransitionPreset } from './transitions/transitionPresets';
@@ -573,7 +572,6 @@ export function TimelinePreviewComposition({
     const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
     const stageViewportRef = useRef<HTMLDivElement | null>(null);
     const stageRef = useRef<HTMLDivElement | null>(null);
-    const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
     const [interaction, setInteraction] = useState<InteractionState | null>(null);
     const [marquee, setMarquee] = useState<MarqueeState | null>(null);
     const [stageRenderSize, setStageRenderSize] = useState({ width: 0, height: 0 });
@@ -706,11 +704,6 @@ export function TimelinePreviewComposition({
     const safeStageHeight = Math.max(1, stageHeight || 1920);
     const stageAspectRatio = `${safeStageWidth} / ${safeStageHeight}`;
     const stageAspectRatioValue = safeStageWidth / safeStageHeight;
-    const ratioOptions: Array<{ preset: VideoEditorRatioPreset; label: string }> = [
-        { preset: '16:9', label: '16:9（横屏）' },
-        { preset: '9:16', label: '9:16（竖屏）' },
-    ];
-
     const activeTransition = useMemo(() => {
         if (!activeVisualClip) return null;
         const preset = resolveTransitionPreset(activeVisualClip.transitionStyle?.presetId);
@@ -1405,12 +1398,12 @@ export function TimelinePreviewComposition({
 
     return (
         <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 bg-[linear-gradient(180deg,#1b1b1c,#121213)] px-4 py-2">
+            <div className="min-h-0 flex-1">
                 <div ref={stageViewportRef} className="flex h-full w-full items-center justify-center">
                     <div
                         ref={stageRef}
                         tabIndex={0}
-                        className="relative overflow-hidden rounded-[18px] border border-white/10 bg-[#050505] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
+                        className="relative overflow-hidden rounded-[18px] bg-[#050505]"
                         onPointerDown={(event) => {
                             if (event.target !== event.currentTarget) return;
                             stageRef.current?.focus({ preventScroll: true });
@@ -1495,19 +1488,6 @@ export function TimelinePreviewComposition({
                                     height: marqueeBox.height,
                                 }}
                             />
-                        ) : null}
-
-                        {selectedStageItem && selectedStageItems.length <= 1 ? (
-                            <div
-                                className="pointer-events-none absolute z-40 rounded-full border border-white/10 bg-black/72 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/80 shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-                                style={{
-                                    left: `${((selectedStageItem.transform.x + selectedStageItem.transform.width / 2) / safeStageWidth) * 100}%`,
-                                    top: `${(Math.max(8, selectedStageItem.transform.y - 18) / safeStageHeight) * 100}%`,
-                                    transform: 'translate(-50%, -100%)',
-                                }}
-                            >
-                                {selectedStageItem.label} · X {Math.round(selectedStageItem.transform.x)} · Y {Math.round(selectedStageItem.transform.y)} · W {Math.round(selectedStageItem.transform.width)} · H {Math.round(selectedStageItem.transform.height)}
-                            </div>
                         ) : null}
 
                         {selectedStageItems.length > 1 ? (
@@ -1838,57 +1818,18 @@ export function TimelinePreviewComposition({
                             );
                         })}
 
-                        <div className="absolute bottom-3 right-3 z-40 flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setRatioMenuOpen((open) => !open)}
-                                className="inline-flex items-center gap-2 rounded-lg border border-white/12 bg-black/55 px-3 py-1.5 text-xs font-medium text-white/85 backdrop-blur"
-                            >
-                                <span>{ratioPreset}</span>
-                                <ChevronsUpDown className="h-3.5 w-3.5" />
-                            </button>
-                            {ratioMenuOpen ? (
-                                <div className="absolute bottom-11 right-0 min-w-[170px] overflow-hidden rounded-xl border border-white/10 bg-[#2a2a2b] shadow-[0_16px_40px_rgba(0,0,0,0.45)]">
-                                    {ratioOptions.map((option) => (
-                                        <button
-                                            key={option.preset}
-                                            type="button"
-                                            onClick={() => {
-                                                onChangeRatioPreset(option.preset);
-                                                setRatioMenuOpen(false);
-                                            }}
-                                            className="flex w-full items-center justify-between px-4 py-3 text-sm text-white/88 transition hover:bg-white/8"
-                                        >
-                                            <span>{option.label}</span>
-                                            {ratioPreset === option.preset ? <Check className="h-4 w-4 text-cyan-300" /> : null}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : null}
-                            {selectedSceneItemId && selectedSceneItemKind ? (
-                                <button
-                                    type="button"
-                                    onClick={() => onDeleteSceneItem(selectedSceneItemKind, selectedSceneItemId)}
-                                    className="inline-flex items-center gap-1 rounded-lg border border-red-400/25 bg-red-500/12 px-3 py-1.5 text-xs font-medium text-red-100 transition hover:border-red-300/40 hover:bg-red-500/18"
-                                >
-                                    删除
-                                </button>
-                            ) : null}
-                        </div>
                     </div>
                 </div>
             </div>
-            <div className="border-t border-white/10 px-4 py-3">
-                <RemotionTransportBar
-                    fps={fps}
-                    durationInFrames={durationInFrames}
-                    currentFrame={currentFrame}
-                    playing={isPlaying}
-                    onTogglePlayback={onTogglePlayback}
-                    onSeekFrame={onSeekFrame}
-                    onStepFrame={onStepFrame}
-                    disabled={!timelineClips.length}
-                />
+            <div className="flex items-center justify-center pt-3">
+                <button
+                    type="button"
+                    onClick={onTogglePlayback}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/58 text-white/88 transition hover:bg-black/72 hover:text-white"
+                    title={isPlaying ? '暂停' : '播放'}
+                >
+                    {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="ml-0.5 h-3.5 w-3.5" />}
+                </button>
             </div>
         </div>
     );

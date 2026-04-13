@@ -25,6 +25,7 @@ import {
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -640,6 +641,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [editorMetadata, setEditorMetadata] = useState<Record<string, unknown>>({});
     const [editorBodyDirty, setEditorBodyDirty] = useState(false);
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
+    const [immersiveMaterialsCollapsed, setImmersiveMaterialsCollapsed] = useState(false);
+    const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
     const treeRequestIdRef = useRef(0);
     const assetsRequestIdRef = useRef(0);
     const hasLoadedSnapshotRef = useRef(false);
@@ -1891,7 +1894,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         ]));
 
         return (
-            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'bg-[#0f0f0f] text-white' : 'bg-background')}>
+            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-[#0f0f0f] text-white' : 'bg-background')}>
                 <div className={clsx(
                     'flex items-center justify-between gap-3 px-6 py-3 backdrop-blur-sm',
                     isImmersiveWorkbench
@@ -1923,6 +1926,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {isImmersiveWorkbench && (
+                            <>
+                                <EditorLayoutToggleButton
+                                    kind="timeline"
+                                    collapsed={immersiveTimelineCollapsed}
+                                    onClick={() => setImmersiveTimelineCollapsed((value) => !value)}
+                                    title={immersiveTimelineCollapsed ? '展开时间轴' : '折叠时间轴'}
+                                />
+                                <EditorLayoutToggleButton
+                                    kind="materials"
+                                    collapsed={immersiveMaterialsCollapsed}
+                                    onClick={() => setImmersiveMaterialsCollapsed((value) => !value)}
+                                    title={immersiveMaterialsCollapsed ? '展开素材栏' : '折叠素材栏'}
+                                />
+                            </>
+                        )}
                         {canUpgradeToArticle && (
                             <button
                                 type="button"
@@ -1991,7 +2010,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 </button>
                             </>
                         )}
-                        {(isVideoPackage || isAudioPackage) && (
+                        {isVideoPackage && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleRenderRemotionVideo();
+                                }}
+                                disabled={isRenderingRemotion}
+                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white disabled:opacity-40"
+                            >
+                                <ExternalLink className="h-4 w-4" />
+                                {isRenderingRemotion ? '导出中...' : '导出'}
+                            </button>
+                        )}
+                        {isAudioPackage && (
                             <button
                                 type="button"
                                 onClick={() => {
@@ -2021,6 +2053,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             editorBody={editorBody}
                             editorBodyDirty={editorBodyDirty}
                             isSavingEditorBody={isSavingEditorBody}
+                            materialsCollapsed={immersiveMaterialsCollapsed}
+                            timelineCollapsed={immersiveTimelineCollapsed}
                             editorChatSessionId={editorChatSessionId}
                             remotionComposition={packageState?.remotion || null}
                             remotionRenderPath={packageState?.remotion?.render?.outputPath || null}
@@ -2061,6 +2095,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             editorBody={editorBody}
                             editorBodyDirty={editorBodyDirty}
                             isSavingEditorBody={isSavingEditorBody}
+                            materialsCollapsed={immersiveMaterialsCollapsed}
+                            timelineCollapsed={immersiveTimelineCollapsed}
                             editorChatSessionId={editorChatSessionId}
                             onEditorBodyChange={(value) => {
                                 setEditorBody(value);

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { PlayerRef } from '@remotion/player';
-import { AudioLines, Clapperboard, Image as ImageIcon, MessageSquare, Plus, Sparkles, Type, Upload, Video, Wand2, X } from 'lucide-react';
+import { AudioLines, Clapperboard, Image as ImageIcon, MessageSquare, Plus, SlidersHorizontal, Sparkles, Type, Upload, Video, Wand2, X } from 'lucide-react';
 import { VideoEditorSidebarShell } from './VideoEditorSidebarShell';
 import { VideoEditorStageShell } from './VideoEditorStageShell';
 import { VideoEditorTimelineShell } from './VideoEditorTimelineShell';
@@ -44,6 +44,13 @@ type PackageStateLike = Record<string, unknown> & {
     editorProject?: EditorProjectFile | null;
 };
 
+type ChatResizeState = {
+    startX: number;
+    chatPaneWidth: number;
+};
+
+type SidebarTabId = 'assets' | 'video' | 'audio' | 'text' | 'selection';
+
 type ExperimentalVideoWorkbenchProps = {
     title: string;
     editorFile: string;
@@ -57,6 +64,8 @@ type ExperimentalVideoWorkbenchProps = {
     editorBody: string;
     editorBodyDirty: boolean;
     isSavingEditorBody: boolean;
+    materialsCollapsed?: boolean;
+    timelineCollapsed?: boolean;
     isActive?: boolean;
     editorChatSessionId: string | null;
     remotionComposition?: RemotionCompositionConfig | null;
@@ -128,6 +137,10 @@ function buildEditBrief(project: EditorProjectFile): string {
     return lines.join('\n');
 }
 
+function clamp(value: number, min: number, max: number) {
+    return Math.min(Math.max(value, min), max);
+}
+
 export function ExperimentalVideoWorkbench({
     title,
     editorFile,
@@ -141,6 +154,8 @@ export function ExperimentalVideoWorkbench({
     editorBody,
     editorBodyDirty,
     isSavingEditorBody,
+    materialsCollapsed = false,
+    timelineCollapsed = false,
     isActive = true,
     editorChatSessionId,
     remotionComposition: _remotionComposition,
@@ -165,6 +180,9 @@ export function ExperimentalVideoWorkbench({
     const [commandInput, setCommandInput] = useState('');
     const [commandBrief, setCommandBrief] = useState('');
     const [isApplyingAiCommand, setIsApplyingAiCommand] = useState(false);
+    const [chatPaneWidth, setChatPaneWidth] = useState(420);
+    const [chatResizeState, setChatResizeState] = useState<ChatResizeState | null>(null);
+    const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('assets');
     const [stageSelection, setStageSelection] = useState<{
         ids: string[];
         primaryId: string | null;
@@ -176,6 +194,7 @@ export function ExperimentalVideoWorkbench({
     const currentTime = useVideoEditorStore(editorStore, (state) => state.player.currentTime);
     const zoomPercent = useVideoEditorStore(editorStore, (state) => state.timeline.zoomPercent);
     const selection = useVideoEditorStore(editorStore, (state) => state.editor.selection);
+    const selectedAssetId = useVideoEditorStore(editorStore, (state) => state.assets.selectedAssetId);
     const drawerOpen = useVideoEditorStore(editorStore, (state) => state.panels.redclawDrawerOpen);
 
     useEffect(() => {
@@ -249,6 +268,33 @@ export function ExperimentalVideoWorkbench({
         return () => window.clearInterval(timer);
     }, [editorStore, isPlaying, localProject]);
 
+    useEffect(() => {
+        if (!chatResizeState) return;
+
+        const handlePointerMove = (event: PointerEvent) => {
+            const deltaX = chatResizeState.startX - event.clientX;
+            setChatPaneWidth(clamp(chatResizeState.chatPaneWidth + deltaX, 320, 720));
+        };
+
+        const handlePointerUp = () => {
+            setChatResizeState(null);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+
+        return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+    }, [chatResizeState]);
+
     const updateProject = (nextProject: EditorProjectFile) => {
         setLocalProject(nextProject);
         setSaveNonce((value) => value + 1);
@@ -288,6 +334,47 @@ export function ExperimentalVideoWorkbench({
     }, [localProject, motionItems, selection.primaryItemId]);
     const selectedScene = useMemo(() => localProject ? inferSceneFromMotion(localProject, selectedMotionItem) : null, [localProject, selectedMotionItem]);
     const briefSections = useMemo(() => localProject ? buildScriptBriefSections({ ...localProject, script: { body: editorBody } }) : [], [editorBody, localProject]);
+    const selectedEditorItem = useMemo(
+        () => localProject?.items.find((item) => item.id === selection.primaryItemId) || null,
+        [localProject, selection.primaryItemId]
+    );
+    const selectedEditorTrack = useMemo(
+        () => selectedEditorItem ? localProject?.tracks.find((track) => track.id === selectedEditorItem.trackId) || null : null,
+        [localProject, selectedEditorItem]
+    );
+    const selectedAsset = useMemo(() => {
+        if (!localProject) return null;
+        if (selectedAssetId) {
+            return localProject.assets.find((asset) => asset.id === selectedAssetId) || null;
+        }
+        if (selectedEditorItem?.type === 'media') {
+            return localProject.assets.find((asset) => asset.id === selectedEditorItem.assetId) || null;
+        }
+        return null;
+    }, [localProject, selectedAssetId, selectedEditorItem]);
+    const selectedStageTransform = useMemo(
+        () => stageSelection.primaryId ? localProject?.stage.itemTransforms[stageSelection.primaryId] || null : null,
+        [localProject, stageSelection.primaryId]
+    );
+    const filteredAssets = useMemo(() => {
+        const assets = packagePreviewAssets;
+        if (activeSidebarTab === 'video') {
+            return assets.filter((asset) => {
+                const normalized = normalizeAssetFromPreviewAsset(asset);
+                return normalized.kind === 'video' || normalized.kind === 'image';
+            });
+        }
+        if (activeSidebarTab === 'audio') {
+            return assets.filter((asset) => normalizeAssetFromPreviewAsset(asset).kind === 'audio');
+        }
+        if (activeSidebarTab === 'text') {
+            return assets.filter((asset) => {
+                const normalized = normalizeAssetFromPreviewAsset(asset);
+                return normalized.kind === 'text' || normalized.kind === 'subtitle';
+            });
+        }
+        return assets;
+    }, [activeSidebarTab, packagePreviewAssets]);
 
     const setPreviewTab = (tab: 'preview' | 'motion' | 'script') => {
         editorStore.setState((state) => ({
@@ -303,6 +390,15 @@ export function ExperimentalVideoWorkbench({
             editor: {
                 ...state.editor,
                 selection: nextSelection,
+            },
+        }));
+    };
+
+    const setSelectedAsset = (assetId: string | null) => {
+        editorStore.setState((state) => ({
+            assets: {
+                ...state.assets,
+                selectedAssetId: assetId,
             },
         }));
     };
@@ -411,10 +507,42 @@ export function ExperimentalVideoWorkbench({
             : 'Preview 继续负责低延迟校对与舞台布局，读取统一工程状态。';
 
     const sidebarTabs = [
-        { id: 'assets', label: '资源', icon: Clapperboard },
+        { id: 'assets', label: '全部', icon: Clapperboard },
+        { id: 'video', label: '视频', icon: Video },
         { id: 'audio', label: '音频', icon: AudioLines },
         { id: 'text', label: '文本', icon: Type },
+        { id: 'selection', label: '属性', icon: SlidersHorizontal },
     ];
+    const sidebarTitle = activeSidebarTab === 'selection'
+        ? '属性'
+        : activeSidebarTab === 'video'
+            ? '视频素材'
+            : activeSidebarTab === 'audio'
+                ? '音频素材'
+                : activeSidebarTab === 'text'
+                    ? '文本素材'
+                    : '全部素材';
+    const sidebarSubtitle = activeSidebarTab === 'selection'
+        ? (
+            selectedEditorItem
+                ? `当前选中 ${selectedEditorItem.type === 'media' ? '时间轴素材' : selectedEditorItem.type}`
+                : selectedAsset
+                    ? `当前选中素材：${selectedAsset.title}`
+                    : stageSelection.primaryId
+                        ? `当前选中舞台对象：${stageSelection.kind || 'asset'}`
+                        : '点击素材或时间轴对象后可查看属性'
+        )
+        : primaryVideoAsset
+            ? `主预览：${primaryVideoAsset.title || primaryVideoAsset.id}`
+            : '拖动素材到时间轴以创建 item';
+    const sidebarTrackLabel = activeSidebarTab === 'selection'
+        ? 'Inspector'
+        : `${filteredAssets.length} Assets`;
+    const stageGridClassName = materialsCollapsed ? 'col-start-1 row-start-1' : 'col-start-3 row-start-1';
+    const timelineBarClassName = materialsCollapsed ? 'col-start-1 col-end-2 row-start-2' : 'col-start-1 col-end-4 row-start-2';
+    const timelineSectionClassName = materialsCollapsed ? 'col-start-1 col-end-2 row-start-3' : 'col-start-1 col-end-4 row-start-3';
+    const aiDividerClassName = materialsCollapsed ? 'col-start-2 row-start-1 row-span-3' : 'col-start-4 row-start-1 row-span-3';
+    const aiPanelClassName = materialsCollapsed ? 'col-start-3 row-start-1 row-end-4' : 'col-start-5 row-start-1 row-end-4';
 
     const currentDurationFrames = remotionComposition?.durationInFrames || Math.max(90, Math.round((projectDurationMs(localProject || packageState?.editorProject || {
         version: 1,
@@ -438,101 +566,167 @@ export function ExperimentalVideoWorkbench({
     return (
         <div
             className="grid h-full min-h-0"
-            style={{ gridTemplateColumns: `${300}px 8px minmax(0,1fr) ${drawerOpen ? 8 : 0}px ${drawerOpen ? 420 : 0}px`, gridTemplateRows: 'minmax(0,1fr) 8px 360px' }}
+            style={{
+                gridTemplateColumns: `${materialsCollapsed ? 'minmax(0,1fr)' : '300px 8px minmax(0,1fr)'} ${drawerOpen ? '8px' : '0px'} ${drawerOpen ? `${chatPaneWidth}px` : '0px'}`,
+                gridTemplateRows: `minmax(0,1fr) ${timelineCollapsed ? '0px' : '8px'} ${timelineCollapsed ? '0px' : '360px'}`,
+            }}
         >
+            {!materialsCollapsed ? (
             <VideoEditorSidebarShell
-                title="Assets"
-                subtitle={primaryVideoAsset ? `主预览：${primaryVideoAsset.title || primaryVideoAsset.id}` : '拖动素材到时间轴以创建 item'}
+                title={sidebarTitle}
+                subtitle={sidebarSubtitle}
                 tabs={sidebarTabs}
-                activeTabId="assets"
-                trackLabel={`${localProject.assets.length} Assets`}
-                onSelectTab={() => {}}
+                activeTabId={activeSidebarTab}
+                trackLabel={sidebarTrackLabel}
+                onSelectTab={(id) => setActiveSidebarTab(id as SidebarTabId)}
             >
-                <div className="space-y-3">
-                    <button
-                        type="button"
-                        onClick={onOpenBindAssets}
-                        className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm text-white/80 transition hover:border-cyan-300/45 hover:text-white"
-                    >
-                        <Upload className="h-4 w-4" />
-                        导入素材
-                    </button>
-                    <div className="grid grid-cols-2 gap-2.5">
-                        {packagePreviewAssets.map((asset) => {
-                            const normalized = normalizeAssetFromPreviewAsset(asset);
-                            const previewSrc = resolveAssetUrl(normalized.metadata?.previewUrl as string || normalized.metadata?.relativePath as string || normalized.src || '');
-                            const assetKind = inferAssetKindFromEditorAsset(normalized);
-                            return (
-                                <div
-                                    key={asset.id}
-                                    draggable={true}
-                                    onDragStart={(event) => {
-                                        event.dataTransfer.effectAllowed = 'copy';
-                                        event.dataTransfer.setData('application/x-redbox-editor-asset', JSON.stringify(normalized));
-                                    }}
-                                    className="group cursor-grab overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] text-left transition hover:border-white/20 hover:bg-white/[0.05] active:cursor-grabbing"
-                                >
-                                    <div className="relative aspect-[3/4] overflow-hidden bg-[#0c0d10]">
-                                        {assetKind === 'image' && previewSrc ? (
-                                            <img
-                                                src={previewSrc}
-                                                alt={asset.title || asset.id}
-                                                className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
-                                            />
-                                        ) : assetKind === 'video' && previewSrc ? (
-                                            <video
-                                                src={previewSrc}
-                                                className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
-                                                muted
-                                                preload="metadata"
-                                                playsInline
-                                            />
-                                        ) : (
-                                            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#171b22] to-[#0c0f14]">
-                                                {assetKind === 'audio' ? (
-                                                    <AudioLines className="h-8 w-8 text-white/45" />
-                                                ) : assetKind === 'text' ? (
-                                                    <Type className="h-8 w-8 text-white/45" />
-                                                ) : (
-                                                    <ImageIcon className="h-8 w-8 text-white/45" />
-                                                )}
-                                            </div>
-                                        )}
-                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-2.5 pb-2.5 pt-8">
-                                            <div className="truncate text-[12px] font-medium text-white">{asset.title || asset.id}</div>
-                                            <div className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-white/55">{normalized.kind}</div>
+                {activeSidebarTab === 'selection' ? (
+                    <div className="space-y-4">
+                        {selectedEditorItem || selectedAsset || stageSelection.primaryId ? (
+                            <>
+                                {selectedAsset ? (
+                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">素材</div>
+                                        <div className="mt-2 text-sm font-medium text-white">{selectedAsset.title || selectedAsset.id}</div>
+                                        <div className="mt-2 space-y-1.5 text-xs text-white/62">
+                                            <div>ID: {selectedAsset.id}</div>
+                                            <div>类型: {selectedAsset.kind}</div>
+                                            <div className="break-all">路径: {selectedAsset.src || '无'}</div>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={(event) => {
-                                                event.preventDefault();
-                                                event.stopPropagation();
-                                                void appendAssetToTimeline(asset);
-                                            }}
-                                            className="absolute bottom-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/18 text-cyan-50 shadow-[0_8px_24px_rgba(6,182,212,0.28)] transition hover:scale-105 hover:bg-cyan-400/24"
-                                            title="加入当前轨道末尾"
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                        </button>
                                     </div>
-                                    <div className="px-2.5 py-2">
-                                        <div className="truncate text-[10px] text-white/40">{normalized.src || '无可用路径'}</div>
+                                ) : null}
+                                {selectedEditorItem ? (
+                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">时间轴对象</div>
+                                        <div className="mt-2 text-sm font-medium text-white">{selectedEditorItem.id}</div>
+                                        <div className="mt-2 space-y-1.5 text-xs text-white/62">
+                                            <div>类型: {selectedEditorItem.type}</div>
+                                            <div>轨道: {selectedEditorTrack?.name || selectedEditorItem.trackId}</div>
+                                            <div>开始: {selectedEditorItem.fromMs}ms</div>
+                                            <div>时长: {selectedEditorItem.durationMs}ms</div>
+                                            <div>状态: {selectedEditorItem.enabled ? '启用' : '禁用'}</div>
+                                        </div>
                                     </div>
-                                </div>
-                            );
-                        })}
+                                ) : null}
+                                {stageSelection.primaryId && selectedStageTransform ? (
+                                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">舞台属性</div>
+                                        <div className="mt-2 text-sm font-medium text-white">{stageSelection.kind || 'asset'} · {stageSelection.primaryId}</div>
+                                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-white/62">
+                                            <div>X: {Math.round(selectedStageTransform.x)}</div>
+                                            <div>Y: {Math.round(selectedStageTransform.y)}</div>
+                                            <div>W: {Math.round(selectedStageTransform.width)}</div>
+                                            <div>H: {Math.round(selectedStageTransform.height)}</div>
+                                        </div>
+                                    </div>
+                                ) : null}
+                            </>
+                        ) : (
+                            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-sm text-white/45">
+                                点击素材卡片、时间轴对象或预览画布中的对象后，这里会显示属性。
+                            </div>
+                        )}
                     </div>
-                </div>
+                ) : (
+                    <div className="space-y-3">
+                        <button
+                            type="button"
+                            onClick={onOpenBindAssets}
+                            className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm text-white/80 transition hover:border-cyan-300/45 hover:text-white"
+                        >
+                            <Upload className="h-4 w-4" />
+                            导入素材
+                        </button>
+                        <div className="grid grid-cols-2 gap-2.5">
+                            {filteredAssets.map((asset) => {
+                                const normalized = normalizeAssetFromPreviewAsset(asset);
+                                const previewSrc = resolveAssetUrl(normalized.metadata?.previewUrl as string || normalized.metadata?.relativePath as string || normalized.src || '');
+                                const assetKind = inferAssetKindFromEditorAsset(normalized);
+                                const active = selectedAssetId === asset.id;
+                                return (
+                                    <div
+                                        key={asset.id}
+                                        draggable={true}
+                                        onDragStart={(event) => {
+                                            event.dataTransfer.effectAllowed = 'copy';
+                                            event.dataTransfer.setData('application/x-redbox-editor-asset', JSON.stringify(normalized));
+                                        }}
+                                        onClick={() => setSelectedAsset(asset.id)}
+                                        className={clsx(
+                                            'group cursor-grab overflow-hidden rounded-xl border bg-white/[0.03] text-left transition hover:border-white/20 hover:bg-white/[0.05] active:cursor-grabbing',
+                                            active ? 'border-cyan-300/45 ring-1 ring-cyan-300/30' : 'border-white/10'
+                                        )}
+                                    >
+                                        <div className="relative aspect-[3/4] overflow-hidden bg-[#0c0d10]">
+                                            {assetKind === 'image' && previewSrc ? (
+                                                <img
+                                                    src={previewSrc}
+                                                    alt={asset.title || asset.id}
+                                                    className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                />
+                                            ) : assetKind === 'video' && previewSrc ? (
+                                                <video
+                                                    src={previewSrc}
+                                                    className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                    muted
+                                                    preload="metadata"
+                                                    playsInline
+                                                />
+                                            ) : (
+                                                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#171b22] to-[#0c0f14]">
+                                                    {assetKind === 'audio' ? (
+                                                        <AudioLines className="h-8 w-8 text-white/45" />
+                                                    ) : assetKind === 'text' ? (
+                                                        <Type className="h-8 w-8 text-white/45" />
+                                                    ) : (
+                                                        <ImageIcon className="h-8 w-8 text-white/45" />
+                                                    )}
+                                                </div>
+                                            )}
+                                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-2.5 pb-2.5 pt-8">
+                                                <div className="truncate text-[12px] font-medium text-white">{asset.title || asset.id}</div>
+                                                <div className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-white/55">{normalized.kind}</div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    void appendAssetToTimeline(asset);
+                                                }}
+                                                className="absolute bottom-2.5 right-2.5 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/18 text-cyan-50 shadow-[0_8px_24px_rgba(6,182,212,0.28)] transition hover:scale-105 hover:bg-cyan-400/24"
+                                                title="加入当前轨道末尾"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                        <div className="px-2.5 py-2">
+                                            <div className="truncate text-[10px] text-white/40">{normalized.src || '无可用路径'}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        {filteredAssets.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-sm text-white/45">
+                                当前分类下还没有素材。
+                            </div>
+                        ) : null}
+                    </div>
+                )}
             </VideoEditorSidebarShell>
+            ) : null}
 
-            <div className="col-start-2 row-start-1 border-r border-white/10 bg-white/[0.03]" />
+            {!materialsCollapsed ? <div className="col-start-2 row-start-1 border-r border-white/10 bg-white/[0.03]" /> : null}
 
             <VideoEditorStageShell
                 title={stageTitle}
                 subtitle={stageSubtitle}
-                compact={false}
+                compact={true}
+                gridClassName={stageGridClassName}
+                contentChrome="none"
                 toolbar={(
-                    <>
+                    <div className="flex w-full items-center justify-between gap-3">
                         <div className="flex items-center rounded-full border border-white/10 bg-white/[0.03] p-1">
                             {(['preview', 'script', 'motion'] as const).map((tabId) => (
                                 <button
@@ -548,6 +742,22 @@ export function ExperimentalVideoWorkbench({
                                 </button>
                             ))}
                         </div>
+                        <div className="flex items-center gap-3">
+                            {previewTab === 'preview' ? (
+                                <button
+                                    type="button"
+                                    onClick={() => updateProject({
+                                        ...localProject,
+                                        project: {
+                                            ...localProject.project,
+                                            ratioPreset: localProject.project.ratioPreset === '16:9' ? '9:16' : '16:9',
+                                        },
+                                    })}
+                                    className="text-xs text-white/55 transition hover:text-white"
+                                >
+                                    {localProject.project.ratioPreset}
+                                </button>
+                            ) : null}
                         {previewTab === 'motion' ? (
                             <button
                                 type="button"
@@ -559,15 +769,8 @@ export function ExperimentalVideoWorkbench({
                                 {isGeneratingMotion ? '生成中...' : '生成 Motion Items'}
                             </button>
                         ) : null}
-                        <button
-                            type="button"
-                            onClick={onRenderRemotionVideo}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white/80"
-                        >
-                            <Wand2 className="h-3.5 w-3.5" />
-                            导出
-                        </button>
-                    </>
+                        </div>
+                    </div>
                 )}
             >
                 {previewTab === 'preview' ? (
@@ -799,12 +1002,19 @@ export function ExperimentalVideoWorkbench({
             </VideoEditorStageShell>
 
             <div
-                className="col-start-4 row-start-1 row-span-3 border-r border-white/10 bg-white/[0.03]"
+                className={`${aiDividerClassName} cursor-col-resize border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-cyan-400/14`}
                 hidden={!drawerOpen}
+                onPointerDown={(event) => {
+                    event.preventDefault();
+                    setChatResizeState({
+                        startX: event.clientX,
+                        chatPaneWidth,
+                    });
+                }}
             />
 
             <div
-                className="col-start-5 row-start-1 row-end-4 min-h-0 border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]"
+                className={`${aiPanelClassName} min-h-0 border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]`}
                 hidden={!drawerOpen}
             >
                 <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
@@ -882,8 +1092,11 @@ export function ExperimentalVideoWorkbench({
                 </div>
             </div>
 
+            {!timelineCollapsed ? (
             <VideoEditorTimelineShell
                 onResizeStart={() => {}}
+                barClassName={timelineBarClassName}
+                sectionClassName={timelineSectionClassName}
             >
                 <ExperimentalTimeline
                     project={localProject}
@@ -902,6 +1115,7 @@ export function ExperimentalVideoWorkbench({
                     onZoomPercentChange={(nextZoom) => editorStore.setState((state) => ({ timeline: { ...state.timeline, zoomPercent: nextZoom } }))}
                 />
             </VideoEditorTimelineShell>
+            ) : null}
         </div>
     );
 }
