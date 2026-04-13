@@ -11,8 +11,6 @@ import {
   FolderOpen,
   Image as ImageIcon,
   MessageSquare,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   Redo2,
   Save,
@@ -24,7 +22,6 @@ import {
   GitBranchPlus,
   Undo2,
   Wand2,
-  X,
 } from 'lucide-react';
 import { EditableTrackTimeline } from './EditableTrackTimeline';
 import { TimelinePreviewComposition } from './TimelinePreviewComposition';
@@ -598,7 +595,7 @@ export function VideoDraftWorkbench({
           leftPanel: 'uploads',
           materialPaneWidth: 320,
           timelineHeight: 296,
-          redclawDrawerOpen: false,
+          redclawDrawerOpen: true,
         },
         remotion: {
           motionPrompt: createDefaultMotionPrompt(),
@@ -914,7 +911,7 @@ export function VideoDraftWorkbench({
             panels: {
               ...state.panels,
               leftPanel: nextPanel ? nextPanel as VideoEditorLeftPanel : state.panels.leftPanel,
-              redclawDrawerOpen: hasDrawerPanel ? nextDrawerPanel === 'redclaw' : false,
+              redclawDrawerOpen: hasDrawerPanel ? nextDrawerPanel === 'redclaw' : true,
             },
           };
         });
@@ -940,7 +937,7 @@ export function VideoDraftWorkbench({
         previewTab,
         canvasRatioPreset: ratioPreset,
         activePanel: leftPanel,
-        drawerPanel: redclawDrawerOpen ? 'redclaw' : null,
+        drawerPanel: 'redclaw',
         sceneItemTransforms: itemTransforms,
         sceneItemVisibility: sceneItemVisibility,
         sceneItemOrder: sceneItemOrder,
@@ -1315,7 +1312,7 @@ export function VideoDraftWorkbench({
             panels: {
               ...state.panels,
               leftPanel: nextPanel ? nextPanel as VideoEditorLeftPanel : state.panels.leftPanel,
-              redclawDrawerOpen: hasDrawerPanel ? nextDrawerPanel === 'redclaw' : false,
+              redclawDrawerOpen: hasDrawerPanel ? nextDrawerPanel === 'redclaw' : true,
             },
           }));
         }
@@ -3188,26 +3185,17 @@ export function VideoDraftWorkbench({
               <Download className="h-3.5 w-3.5" />
               {isRenderingRemotion ? '导出中...' : '导出 MP4'}
             </button>
-            <button
-              type="button"
-              onClick={() => editorStore.setState((state) => ({
-                panels: {
-                  ...state.panels,
-                  redclawDrawerOpen: !state.panels.redclawDrawerOpen,
-                },
-              }))}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:border-white/20 hover:text-white"
-            >
-              {redclawDrawerOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-              AI 对话
-            </button>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-100">
+              <MessageSquare className="h-3.5 w-3.5" />
+              AI 对话常驻
+            </div>
           </div>
         </header>
 
         <div
           className="grid min-h-0 flex-1"
           style={{
-            gridTemplateColumns: `${materialPaneWidth}px 8px minmax(0,1fr) ${redclawDrawerOpen ? '8px' : '0px'} ${redclawDrawerOpen ? `${RIGHT_PANEL_WIDTH}px` : '0px'}`,
+            gridTemplateColumns: `${materialPaneWidth}px 8px minmax(0,1fr) 8px ${RIGHT_PANEL_WIDTH}px`,
             gridTemplateRows: `minmax(0,1fr) 8px ${timelineHeight}px`,
           }}
         >
@@ -5696,18 +5684,9 @@ export function VideoDraftWorkbench({
                       <div className="mt-4 rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
                         <div className="flex items-center justify-between gap-3">
                           <div className="text-sm font-medium text-white">执行面板</div>
-                          <button
-                            type="button"
-                            onClick={() => editorStore.setState((state) => ({
-                              panels: {
-                                ...state.panels,
-                                redclawDrawerOpen: true,
-                              },
-                            }))}
-                            className="inline-flex items-center rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1 text-[11px] text-cyan-100 transition hover:border-cyan-300/60"
-                          >
-                            打开 AI
-                          </button>
+                          <div className="inline-flex items-center rounded-full border border-cyan-300/25 bg-cyan-400/10 px-3 py-1 text-[11px] text-cyan-100/90">
+                            AI 助手常驻
+                          </div>
                         </div>
                         <div className="mt-4 space-y-3">
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3">
@@ -5759,30 +5738,17 @@ export function VideoDraftWorkbench({
 
           <div
             className="col-start-4 row-start-1 row-span-3 border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-cyan-400/20"
-            hidden={!redclawDrawerOpen}
           />
 
           <div
             className="col-start-5 row-start-1 row-end-4 min-h-0 border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]"
-            hidden={!redclawDrawerOpen}
           >
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div className="flex items-center gap-2 text-sm font-medium text-white">
                 <MessageSquare className="h-4 w-4 text-cyan-400" />
                 视频剪辑助手
               </div>
-              <button
-                type="button"
-                onClick={() => editorStore.setState((state) => ({
-                  panels: {
-                    ...state.panels,
-                    redclawDrawerOpen: false,
-                  },
-                }))}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/70 transition hover:border-white/20 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-white/55">始终显示</span>
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               {editorChatSessionId ? (

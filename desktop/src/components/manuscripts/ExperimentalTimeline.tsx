@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import clsx from 'clsx';
-import { AudioLines, Eye, EyeOff, Lock, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
+import { AudioLines, Eye, EyeOff, Lock, Minus, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
 import {
     buildAssetMap,
     type EditorCommand,
@@ -102,13 +102,37 @@ function itemLabel(item: EditorItem, assetMap: Record<string, EditorAsset>) {
 }
 
 function itemToneClass(item: EditorItem, assetMap: Record<string, EditorAsset>) {
-    if (item.type === 'motion') return 'border-fuchsia-300/35 bg-fuchsia-400/18';
-    if (item.type === 'subtitle') return 'border-amber-300/35 bg-amber-400/18';
-    if (item.type === 'text') return 'border-violet-300/35 bg-violet-400/18';
+    if (item.type === 'motion') return 'border-violet-300/40 bg-violet-500/22';
+    if (item.type === 'subtitle') return 'border-amber-700/45 bg-amber-700/30';
+    if (item.type === 'text') return 'border-amber-700/45 bg-amber-700/30';
     const assetKind = assetMap[item.assetId]?.kind || 'video';
-    if (assetKind === 'audio') return 'border-pink-300/35 bg-pink-400/18';
-    if (assetKind === 'image') return 'border-emerald-300/35 bg-emerald-400/18';
-    return 'border-cyan-300/35 bg-cyan-400/18';
+    if (assetKind === 'audio') return 'border-sky-300/40 bg-sky-500/22';
+    if (assetKind === 'image') return 'border-emerald-300/40 bg-emerald-500/22';
+    return 'border-emerald-300/40 bg-emerald-500/22';
+}
+
+function audioWaveHeights(seed: string, count: number): number[] {
+    const base = Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) || 37;
+    return Array.from({ length: count }, (_, index) => {
+        const value = (base + index * 17) % 100;
+        return 26 + (value % 56);
+    });
+}
+
+function splitPointWithinItem(item: EditorItem, currentTimeMs: number): number | null {
+    if (item.type === 'motion') return null;
+    const minEdgeOffset = Math.min(120, Math.max(1, Math.floor(item.durationMs / 4)));
+    const minSplitMs = item.fromMs + minEdgeOffset;
+    const maxSplitMs = item.fromMs + item.durationMs - minEdgeOffset;
+    if (maxSplitMs <= minSplitMs) return null;
+    return clamp(currentTimeMs, minSplitMs, maxSplitMs);
+}
+
+function splitPointForItem(item: EditorItem, currentTimeMs: number): number | null {
+    const clamped = splitPointWithinItem(item, currentTimeMs);
+    if (clamped !== null) return clamped;
+    if (item.type === 'motion' || item.durationMs <= 2) return null;
+    return item.fromMs + Math.floor(item.durationMs / 2);
 }
 
 export function ExperimentalTimeline({
@@ -128,11 +152,13 @@ export function ExperimentalTimeline({
     const bodyRef = useRef<HTMLDivElement | null>(null);
     const [dragState, setDragState] = useState<DragState | null>(null);
     const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemId: string } | null>(null);
     const tracks = useMemo(() => timelineTracks(project), [project]);
     const assetMap = useMemo(() => buildAssetMap(project), [project]);
     const pixelsPerSecond = 72 * (zoomPercent / 100);
     const totalDurationMs = useMemo(() => project.items.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 6000), [project.items]);
     const contentWidth = RAIL_WIDTH + Math.max(12_000, totalDurationMs) / 1000 * pixelsPerSecond + 120;
+    const playheadLeft = RAIL_WIDTH + (currentTimeMs / 1000) * pixelsPerSecond;
     const rowOffsets = useMemo(() => {
         let top = 0;
         return tracks.map((track) => {
@@ -142,15 +168,20 @@ export function ExperimentalTimeline({
         });
     }, [tracks]);
 
+    const clientXToTimelineMs = (clientX: number) => {
+        const rect = bodyRef.current?.getBoundingClientRect();
+        const scrollLeft = bodyRef.current?.scrollLeft || 0;
+        if (!rect) return 0;
+        const contentX = clamp(clientX - rect.left - RAIL_WIDTH + scrollLeft, 0, Math.max(0, contentWidth - RAIL_WIDTH));
+        return (contentX / pixelsPerSecond) * 1000;
+    };
+
     useEffect(() => {
         if (!dragState) return;
         const handlePointerMove = (event: PointerEvent) => {
             if (event.pointerId !== dragState.pointerId) return;
             if (dragState.mode === 'playhead') {
-                if (!bodyRef.current) return;
-                const rect = bodyRef.current.getBoundingClientRect();
-                const relativeX = clamp(event.clientX - rect.left - RAIL_WIDTH, 0, Math.max(0, rect.width - RAIL_WIDTH));
-                onSeekTimeMs((relativeX / pixelsPerSecond) * 1000);
+                onSeekTimeMs(clientXToTimelineMs(event.clientX));
                 return;
             }
             const deltaMs = Math.round(((event.clientX - dragState.startClientX) / pixelsPerSecond) * 1000);
@@ -232,11 +263,22 @@ export function ExperimentalTimeline({
             window.removeEventListener('pointerup', handlePointerUp);
             window.removeEventListener('pointercancel', handlePointerUp);
         };
-    }, [dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond]);
+    }, [clientXToTimelineMs, contentWidth, dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond]);
 
     const selectedItems = project.items.filter((item) => selectedItemIds.includes(item.id));
     const primaryItem = primaryItemId ? project.items.find((item) => item.id === primaryItemId) || null : null;
     const activeTrack = selectedTrackIds[0] ? project.tracks.find((track) => track.id === selectedTrackIds[0]) || null : null;
+    const contextMenuItem = contextMenu ? project.items.find((item) => item.id === contextMenu.itemId) || null : null;
+    const itemAtPlayhead = project.items.find((item) => (
+        item.type !== 'motion'
+        && currentTimeMs >= item.fromMs
+        && currentTimeMs <= item.fromMs + item.durationMs
+    )) || null;
+    const splitTargetItem = primaryItem || selectedItems[0] || itemAtPlayhead;
+    const primarySplitMs = splitTargetItem ? splitPointForItem(splitTargetItem, currentTimeMs) : null;
+    const contextSplitMs = contextMenuItem ? splitPointForItem(contextMenuItem, currentTimeMs) : null;
+    const canSplitPrimary = primarySplitMs !== null;
+    const canSplitContextItem = contextSplitMs !== null;
 
     const addTrack = (kind: EditorTrackKind) => {
         onApplyCommands([{ type: 'add_track', kind, trackId: nextTrackId(project, kind) }]);
@@ -255,13 +297,24 @@ export function ExperimentalTimeline({
     };
 
     const splitPrimary = () => {
-        if (!primaryItem || primaryItem.type === 'motion') return;
+        if (!splitTargetItem || primarySplitMs === null) return;
         onApplyCommands([{
             type: 'split_item',
-            itemId: primaryItem.id,
-            splitMs: currentTimeMs,
+            itemId: splitTargetItem.id,
+            splitMs: primarySplitMs,
         }]);
     };
+
+    useEffect(() => {
+        if (!contextMenu) return;
+        const closeMenu = () => setContextMenu(null);
+        window.addEventListener('pointerdown', closeMenu);
+        window.addEventListener('scroll', closeMenu, true);
+        return () => {
+            window.removeEventListener('pointerdown', closeMenu);
+            window.removeEventListener('scroll', closeMenu, true);
+        };
+    }, [contextMenu]);
 
     const onDropAsset = (event: DragEvent<HTMLDivElement>) => {
         event.preventDefault();
@@ -275,8 +328,9 @@ export function ExperimentalTimeline({
         }
         if (!asset) return;
         const rect = bodyRef.current?.getBoundingClientRect();
+        const scrollLeft = bodyRef.current?.scrollLeft || 0;
         if (!rect) return;
-        const relativeX = clamp(event.clientX - rect.left - RAIL_WIDTH, 0, Math.max(0, rect.width - RAIL_WIDTH));
+        const relativeX = clamp(event.clientX - rect.left - RAIL_WIDTH + scrollLeft, 0, Math.max(0, contentWidth - RAIL_WIDTH));
         const relativeY = event.clientY - rect.top - RULER_HEIGHT;
         const row = rowOffsets.find((offset) => relativeY >= offset.top && relativeY < offset.top + offset.height) || null;
         const desiredKind = assetTrackKind(asset);
@@ -304,27 +358,72 @@ export function ExperimentalTimeline({
         onSelectionChange({ itemIds: [item.id], primaryItemId: item.id, trackIds: [] });
     };
 
+    const seekFromPointer = (clientX: number) => {
+        onSeekTimeMs(clientXToTimelineMs(clientX));
+    };
+
+    const toolbarIconButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-md text-white/60 transition hover:bg-white/[0.06] hover:text-white';
+
     return (
         <div className="flex h-full min-h-0 flex-col">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
                 <button
                     type="button"
                     onClick={onTogglePlayback}
-                    className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80 hover:border-cyan-300/45 hover:text-white"
+                    className={toolbarIconButtonClass}
+                    title={isPlaying ? '暂停' : '播放'}
+                    aria-label={isPlaying ? '暂停' : '播放'}
                 >
                     {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                    {isPlaying ? '暂停' : '播放'}
                 </button>
-                <button type="button" onClick={() => onZoomPercentChange(clamp(zoomPercent - 10, 40, 240))} className="inline-flex h-8 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80">缩小</button>
-                <button type="button" onClick={() => onZoomPercentChange(100)} className="inline-flex h-8 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80">{zoomPercent}%</button>
-                <button type="button" onClick={() => onZoomPercentChange(clamp(zoomPercent + 10, 40, 240))} className="inline-flex h-8 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80">放大</button>
-                <button type="button" onClick={splitPrimary} disabled={!primaryItem || primaryItem.type === 'motion'} className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80 disabled:opacity-40"><Scissors className="h-3.5 w-3.5" />分割</button>
-                <button type="button" onClick={deleteSelected} disabled={selectedItemIds.length === 0 && selectedTrackIds.length === 0} className="inline-flex h-8 items-center gap-2 rounded-full border border-red-400/20 bg-red-400/10 px-3 text-xs text-red-100 disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" />删除</button>
-                <span className="mx-1 h-5 w-px bg-white/10" />
-                <button type="button" onClick={() => addTrack('video')} className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80"><Plus className="h-3.5 w-3.5" />视频轨</button>
-                <button type="button" onClick={() => addTrack('audio')} className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80"><Plus className="h-3.5 w-3.5" />音频轨</button>
-                <button type="button" onClick={() => addTrack('subtitle')} className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80"><Plus className="h-3.5 w-3.5" />字幕轨</button>
-                <button type="button" onClick={() => addTrack('text')} className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs text-white/80"><Plus className="h-3.5 w-3.5" />文本轨</button>
+                <div className="flex items-center gap-0.5">
+                    <button
+                        type="button"
+                        onClick={() => onZoomPercentChange(clamp(zoomPercent - 10, 40, 240))}
+                        className={toolbarIconButtonClass}
+                        title="缩小时间轴"
+                        aria-label="缩小时间轴"
+                    >
+                        <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="min-w-[42px] text-center text-[11px] font-medium tabular-nums text-white/42">
+                        {zoomPercent}%
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => onZoomPercentChange(clamp(zoomPercent + 10, 40, 240))}
+                        className={toolbarIconButtonClass}
+                        title="放大时间轴"
+                        aria-label="放大时间轴"
+                    >
+                        <Plus className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+                <button
+                    type="button"
+                    onClick={splitPrimary}
+                    disabled={!canSplitPrimary}
+                    className={clsx(toolbarIconButtonClass, 'disabled:opacity-40')}
+                    title="分割"
+                    aria-label="分割"
+                >
+                    <Scissors className="h-3.5 w-3.5" />
+                </button>
+                <button
+                    type="button"
+                    onClick={deleteSelected}
+                    disabled={selectedItemIds.length === 0 && selectedTrackIds.length === 0}
+                    className={clsx(toolbarIconButtonClass, 'text-red-200/80 hover:bg-red-400/10 hover:text-red-100 disabled:opacity-40')}
+                    title="删除"
+                    aria-label="删除"
+                >
+                    <Trash2 className="h-3.5 w-3.5" />
+                </button>
+                <span className="mx-1 h-4 w-px bg-white/10" />
+                <button type="button" onClick={() => addTrack('video')} className={toolbarIconButtonClass} title="新增视频轨" aria-label="新增视频轨"><Video className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => addTrack('audio')} className={toolbarIconButtonClass} title="新增音频轨" aria-label="新增音频轨"><AudioLines className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => addTrack('subtitle')} className={toolbarIconButtonClass} title="新增字幕轨" aria-label="新增字幕轨"><Type className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => addTrack('text')} className={toolbarIconButtonClass} title="新增文本轨" aria-label="新增文本轨"><Rows className="h-3.5 w-3.5" /></button>
             </div>
 
             <div
@@ -333,12 +432,13 @@ export function ExperimentalTimeline({
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={onDropAsset}
             >
-                <div style={{ width: contentWidth, minHeight: RULER_HEIGHT + rowOffsets.reduce((sum, row) => sum + row.height, 0) }}>
+                <div className="relative" style={{ width: contentWidth, minHeight: RULER_HEIGHT + rowOffsets.reduce((sum, row) => sum + row.height, 0) }}>
                     <div className="sticky top-0 z-20 flex h-[38px] border-b border-white/10 bg-[#141519]">
                         <div className="flex w-[184px] items-center px-4 text-[11px] uppercase tracking-[0.2em] text-white/35">Tracks</div>
                         <div
                             className="relative flex-1 cursor-pointer"
                             onPointerDown={(event) => {
+                                onSeekTimeMs(clientXToTimelineMs(event.clientX));
                                 setDragState({
                                     mode: 'playhead',
                                     pointerId: event.pointerId,
@@ -353,8 +453,17 @@ export function ExperimentalTimeline({
                                 </div>
                             ))}
                             <div className="absolute inset-y-0 w-[2px] bg-cyan-300" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
+                            <div className="absolute -top-[1px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border border-cyan-200/70 bg-cyan-300 shadow-[0_0_0_3px_rgba(34,211,238,0.18)]" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
                         </div>
                     </div>
+                    <div
+                        className="pointer-events-none absolute z-[18] w-[2px] bg-cyan-300/95 shadow-[0_0_0_1px_rgba(34,211,238,0.18)]"
+                        style={{
+                            left: playheadLeft,
+                            top: RULER_HEIGHT,
+                            height: rowOffsets.reduce((sum, row) => sum + row.height, 0),
+                        }}
+                    />
 
                     {rowOffsets.map(({ track, top, height }) => {
                         const TrackIcon = kindIcon(track.kind);
@@ -388,26 +497,46 @@ export function ExperimentalTimeline({
                                         <button type="button" onClick={(event) => { event.stopPropagation(); onApplyCommands([{ type: 'set_track_ui', trackId: track.id, patch: { locked: !track.ui.locked } }]); }} className="text-white/55 hover:text-white">{track.ui.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button>
                                     </div>
                                 </div>
-                                <div className={clsx('relative flex-1', selectedTrackIds.includes(track.id) && 'bg-cyan-400/[0.04]')}>
+                                <div
+                                    className={clsx('relative flex-1', selectedTrackIds.includes(track.id) && 'bg-cyan-400/[0.04]')}
+                                    onPointerDown={(event) => {
+                                        if (event.target !== event.currentTarget) return;
+                                        seekFromPointer(event.clientX);
+                                        onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [track.id] });
+                                    }}
+                                >
                                     {rowItems.map((item) => {
                                         const preview = dragPreview?.[item.id] || null;
                                         const effectiveFromMs = preview?.fromMs ?? item.fromMs;
                                         const effectiveDurationMs = preview?.durationMs ?? item.durationMs;
-                                        const left = (effectiveFromMs / 1000) * pixelsPerSecond;
-                                        const width = Math.max(28, (effectiveDurationMs / 1000) * pixelsPerSecond);
+                                        const rawLeft = (effectiveFromMs / 1000) * pixelsPerSecond;
+                                        const rawWidth = Math.max(28, (effectiveDurationMs / 1000) * pixelsPerSecond);
+                                        const left = rawLeft + 1;
+                                        const width = Math.max(24, rawWidth - 2);
                                         const selected = selectedItemIds.includes(item.id);
                                         return (
                                             <div
                                                 key={item.id}
                                                 className={clsx(
-                                                    'absolute top-1.5 bottom-1.5 rounded-xl border text-left shadow-[0_6px_16px_rgba(0,0,0,0.18)] transition-shadow',
+                                                    'absolute top-1.5 bottom-1.5 rounded-md border text-left shadow-[0_6px_16px_rgba(0,0,0,0.18)] transition-[box-shadow,transform,border-color] cursor-grab active:cursor-grabbing select-none overflow-hidden hover:shadow-[0_10px_24px_rgba(0,0,0,0.24)]',
                                                     itemToneClass(item, assetMap),
                                                     dragPreview?.[item.id] && 'z-10 shadow-[0_10px_28px_rgba(0,0,0,0.26)]',
                                                     selected && 'ring-1 ring-white/70'
                                                 )}
                                                 style={{ left, width }}
+                                                onContextMenu={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    onSelectionChange({ itemIds: [item.id], primaryItemId: item.id, trackIds: [] });
+                                                    setContextMenu({
+                                                        x: event.clientX,
+                                                        y: event.clientY,
+                                                        itemId: item.id,
+                                                    });
+                                                }}
                                                 onPointerDown={(event) => {
                                                     if (track.ui.locked) return;
+                                                    setContextMenu(null);
                                                     event.stopPropagation();
                                                     const nextSelection = event.metaKey || event.ctrlKey
                                                         ? Array.from(new Set(selected ? selectedItemIds.filter((id) => id !== item.id) : [...selectedItemIds, item.id]))
@@ -430,6 +559,17 @@ export function ExperimentalTimeline({
                                                 }}
                                                 onDoubleClick={() => onSeekTimeMs(item.fromMs)}
                                             >
+                                                {item.type === 'media' && assetMap[item.assetId]?.kind === 'audio' ? (
+                                                    <div className="pointer-events-none absolute inset-x-2 bottom-1.5 top-1.5 flex items-end gap-[2px] opacity-90">
+                                                        {audioWaveHeights(item.id, Math.max(12, Math.floor(width / 5))).map((heightPercent, index) => (
+                                                            <span
+                                                                key={`${item.id}-wave-${index}`}
+                                                                className="min-w-[2px] flex-1 rounded-full bg-white/70"
+                                                                style={{ height: `${heightPercent}%` }}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                ) : null}
                                                 {item.type !== 'motion' ? (
                                                     <>
                                                         <div
@@ -474,7 +614,7 @@ export function ExperimentalTimeline({
                                                         />
                                                     </>
                                                 ) : null}
-                                                <div className="truncate px-3 py-2 text-xs font-medium text-white">
+                                                <div className="pointer-events-none truncate px-2.5 py-1.5 text-[10px] font-medium text-white/78">
                                                     {itemLabel(item, assetMap)}
                                                 </div>
                                             </div>
@@ -499,6 +639,60 @@ export function ExperimentalTimeline({
             {selectedItems.length > 0 ? (
                 <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/65">
                     已选 {selectedItems.length} 项
+                </div>
+            ) : null}
+            {contextMenu && contextMenuItem ? (
+                <div
+                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                >
+                    <button
+                        type="button"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                        onClick={() => {
+                            onSelectionChange({ itemIds: [contextMenuItem.id], primaryItemId: contextMenuItem.id, trackIds: [] });
+                            setContextMenu(null);
+                        }}
+                    >
+                        选中片段
+                    </button>
+                    <button
+                        type="button"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                        onClick={() => {
+                            onSeekTimeMs(contextMenuItem.fromMs);
+                            setContextMenu(null);
+                        }}
+                    >
+                        定位到开始
+                    </button>
+                    <button
+                        type="button"
+                        disabled={!canSplitContextItem}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => {
+                            if (!canSplitContextItem) return;
+                            onApplyCommands([{
+                                type: 'split_item',
+                                itemId: contextMenuItem.id,
+                                splitMs: contextSplitMs!,
+                            }]);
+                            setContextMenu(null);
+                        }}
+                    >
+                        在播放头分割
+                    </button>
+                    <button
+                        type="button"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
+                        onClick={() => {
+                            onApplyCommands([{ type: 'delete_item', itemId: contextMenuItem.id }]);
+                            onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
+                            setContextMenu(null);
+                        }}
+                    >
+                        删除
+                    </button>
                 </div>
             ) : null}
         </div>
