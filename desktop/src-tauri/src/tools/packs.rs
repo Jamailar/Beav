@@ -87,3 +87,20 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
 pub fn tool_names_for_runtime_mode(runtime_mode: &str) -> &'static [&'static str] {
     tool_names_for_pack(pack_for_runtime_mode(runtime_mode))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_editor_runtime_includes_editor_tool_pack() {
+        let tools = tool_names_for_runtime_mode("video-editor");
+        assert!(tools.contains(&"redbox_editor"));
+    }
+
+    #[test]
+    fn audio_editor_runtime_includes_editor_tool_pack() {
+        let tools = tool_names_for_runtime_mode("audio-editor");
+        assert!(tools.contains(&"redbox_editor"));
+    }
+}

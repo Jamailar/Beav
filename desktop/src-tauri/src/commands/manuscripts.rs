@@ -9,6 +9,8 @@ use tauri::{AppHandle, State};
 const DEFAULT_TIMELINE_CLIP_MS: i64 = 4000;
 const IMAGE_TIMELINE_CLIP_MS: i64 = 500;
 const DEFAULT_MIN_CLIP_MS: i64 = 1000;
+const DEFAULT_EDITOR_MOTION_PROMPT: &str =
+    "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。";
 
 fn min_clip_duration_ms_for_asset_kind(asset_kind: &str) -> i64 {
     if asset_kind.eq_ignore_ascii_case("image") {
@@ -16,6 +18,266 @@ fn min_clip_duration_ms_for_asset_kind(asset_kind: &str) -> i64 {
     } else {
         DEFAULT_MIN_CLIP_MS
     }
+}
+
+fn ensure_editor_project_ai_state(
+    project: &mut Value,
+) -> Result<&mut serde_json::Map<String, Value>, String> {
+    let project_object = project
+        .as_object_mut()
+        .ok_or_else(|| "Editor project must be an object".to_string())?;
+    let ai = project_object
+        .entry("ai".to_string())
+        .or_insert_with(|| json!({}));
+    if !ai.is_object() {
+        *ai = json!({});
+    }
+    let ai_object = ai
+        .as_object_mut()
+        .ok_or_else(|| "Editor project ai must be an object".to_string())?;
+    ai_object
+        .entry("motionPrompt".to_string())
+        .or_insert(json!(DEFAULT_EDITOR_MOTION_PROMPT));
+    ai_object
+        .entry("lastEditBrief".to_string())
+        .or_insert(Value::Null);
+    ai_object
+        .entry("lastMotionBrief".to_string())
+        .or_insert(Value::Null);
+    let approval = ai_object
+        .entry("scriptApproval".to_string())
+        .or_insert_with(|| json!({}));
+    if !approval.is_object() {
+        *approval = json!({});
+    }
+    let approval_object = approval
+        .as_object_mut()
+        .ok_or_else(|| "Editor project scriptApproval must be an object".to_string())?;
+    approval_object
+        .entry("status".to_string())
+        .or_insert(json!("pending"));
+    approval_object
+        .entry("lastScriptUpdateAt".to_string())
+        .or_insert(Value::Null);
+    approval_object
+        .entry("lastScriptUpdateSource".to_string())
+        .or_insert(Value::Null);
+    approval_object
+        .entry("confirmedAt".to_string())
+        .or_insert(Value::Null);
+    Ok(ai_object)
+}
+
+fn package_script_state_value(project: &Value) -> Value {
+    let approval = project
+        .pointer("/ai/scriptApproval")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "status": "pending",
+                "lastScriptUpdateAt": Value::Null,
+                "lastScriptUpdateSource": Value::Null,
+                "confirmedAt": Value::Null
+            })
+        });
+    json!({
+        "body": project
+            .pointer("/script/body")
+            .and_then(|value| value.as_str())
+            .unwrap_or(""),
+        "approval": approval
+    })
+}
+
+fn mark_editor_project_script_pending(
+    project: &mut Value,
+    content: &str,
+    source: &str,
+) -> Result<(), String> {
+    let project_object = project
+        .as_object_mut()
+        .ok_or_else(|| "Editor project must be an object".to_string())?;
+    let script = project_object
+        .entry("script".to_string())
+        .or_insert_with(|| json!({}));
+    if !script.is_object() {
+        *script = json!({});
+    }
+    if let Some(script_object) = script.as_object_mut() {
+        script_object.insert("body".to_string(), json!(content));
+    }
+    let ai_object = ensure_editor_project_ai_state(project)?;
+    ai_object.insert("lastEditBrief".to_string(), Value::Null);
+    ai_object.insert("lastMotionBrief".to_string(), Value::Null);
+    let approval = ai_object
+        .get_mut("scriptApproval")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Editor project scriptApproval must be an object".to_string())?;
+    approval.insert("status".to_string(), json!("pending"));
+    approval.insert("lastScriptUpdateAt".to_string(), json!(now_i64()));
+    approval.insert("lastScriptUpdateSource".to_string(), json!(source));
+    approval.insert("confirmedAt".to_string(), Value::Null);
+    Ok(())
+}
+
+fn confirm_editor_project_script(project: &mut Value) -> Result<Value, String> {
+    let ai_object = ensure_editor_project_ai_state(project)?;
+    let approval = ai_object
+        .get_mut("scriptApproval")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Editor project scriptApproval must be an object".to_string())?;
+    if approval
+        .get("lastScriptUpdateAt")
+        .map(Value::is_null)
+        .unwrap_or(true)
+    {
+        approval.insert("lastScriptUpdateAt".to_string(), json!(now_i64()));
+    }
+    approval.insert("status".to_string(), json!("confirmed"));
+    approval.insert("confirmedAt".to_string(), json!(now_i64()));
+    Ok(project
+        .pointer("/ai/scriptApproval")
+        .cloned()
+        .unwrap_or(Value::Null))
+}
+
+fn first_orchestration_output_artifact(orchestration: &Value) -> Result<(String, String), String> {
+    let output = orchestration
+        .get("outputs")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .ok_or_else(|| "动画子代理没有返回输出".to_string())?;
+    let status = output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if status != "completed" {
+        let summary = output
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("动画子代理执行失败");
+        return Err(summary.to_string());
+    }
+    let artifact = output
+        .get("artifact")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            output
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("动画子代理未返回 artifact")
+                .to_string()
+        })?;
+    let summary = output
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok((artifact.to_string(), summary))
+}
+
+fn run_animation_director_subagent(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    model_config: Option<&Value>,
+    user_input: &str,
+) -> Result<(Value, String), String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let system_prompt_patch =
+        load_redbox_prompt("runtime/agents/video_editor/animation_director.txt")
+            .unwrap_or_default();
+    let metadata = json!({
+        "intent": "direct_answer",
+        "useRealSubagents": true,
+        "subagentRoles": ["animation-director"],
+        "allowedTools": ["redbox_fs"],
+        "systemPromptPatch": system_prompt_patch,
+    });
+    let route = crate::runtime::runtime_direct_route_record(
+        "video-editor",
+        user_input,
+        Some(&metadata),
+    );
+    let task_id = make_id("video-animation");
+    let orchestration = crate::commands::runtime_orchestration::run_subagent_orchestration_for_task(
+        Some(app),
+        state,
+        &settings_snapshot,
+        "video-editor",
+        &task_id,
+        session_id,
+        &route,
+        user_input,
+        Some(&metadata),
+        model_config,
+    )?;
+    let (artifact, summary) = first_orchestration_output_artifact(&orchestration)?;
+    let parsed = parse_json_value_from_text(&artifact)
+        .ok_or_else(|| "动画子代理返回的 artifact 不是合法 JSON".to_string())?;
+    Ok((parsed, summary))
+}
+
+fn persist_package_script_body(
+    package_path: &std::path::Path,
+    file_name: &str,
+    content: &str,
+    metadata: Option<&serde_json::Map<String, Value>>,
+    source: &str,
+) -> Result<(Value, Value), String> {
+    let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    if let Some(object) = manifest.as_object_mut() {
+        if let Some(metadata_object) = metadata {
+            for (key, value) in metadata_object {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+        object
+            .entry("title".to_string())
+            .or_insert(json!(title_from_relative_path(file_name)));
+        object
+            .entry("entry".to_string())
+            .or_insert(json!(get_default_package_entry(file_name)));
+        object
+            .entry("draftType".to_string())
+            .or_insert(json!(get_draft_type_from_file_name(file_name)));
+        object
+            .entry("packageKind".to_string())
+            .or_insert(json!(get_package_kind_from_file_name(file_name)));
+    }
+    write_json_value(&package_manifest_path(package_path), &manifest)?;
+    write_text_file(
+        &package_entry_path(package_path, file_name, Some(&manifest)),
+        content,
+    )?;
+
+    if matches!(
+        get_package_kind_from_file_name(file_name),
+        Some("video" | "audio")
+    ) {
+        let mut project = ensure_editor_project(package_path)?;
+        mark_editor_project_script_pending(&mut project, content, source)?;
+        write_json_value(&package_editor_project_path(package_path), &project)?;
+        return Ok((
+            get_manuscript_package_state(package_path)?,
+            package_script_state_value(&project),
+        ));
+    }
+
+    Ok((
+        get_manuscript_package_state(package_path)?,
+        json!({
+            "body": content,
+            "approval": {
+                "status": "pending",
+                "lastScriptUpdateAt": Value::Null,
+                "lastScriptUpdateSource": source,
+                "confirmedAt": Value::Null
+            }
+        }),
+    ))
 }
 
 fn default_clip_duration_ms_for_asset(asset: &MediaAssetRecord) -> i64 {
@@ -446,6 +708,7 @@ fn generate_motion_items_for_project(
     project: &Value,
     instructions: &str,
     selected_item_ids: &[String],
+    model_config: Option<&Value>,
 ) -> Result<(Vec<Value>, String), String> {
     let media_items = project
         .get("items")
@@ -473,8 +736,8 @@ fn generate_motion_items_for_project(
         .enumerate()
         .map(|(index, item)| default_motion_item_from_media(item, project, index))
         .collect::<Vec<_>>();
-    let prompt = format!(
-        "你是 RedClaw 的短视频动画导演。请基于当前脚本和媒体片段，生成 motion item 列表。\n\
+    let user_prompt = format!(
+        "请基于当前脚本和媒体片段，生成 motion item 列表。\n\
 只输出 JSON，不要输出解释。\n\
 结构：{{\"brief\":string,\"items\":[{{\"bindItemId\":string,\"fromMs\":number,\"durationMs\":number,\"templateId\":\"static|slow-zoom-in|slow-zoom-out|pan-left|pan-right|slide-up|slide-down\",\"props\":{{\"overlayTitle\":string|null,\"overlayBody\":string|null,\"overlays\":[{{\"id\":string,\"text\":string,\"startFrame\":number,\"durationInFrames\":number,\"position\":\"top|center|bottom\",\"animation\":\"fade-up|fade-in|slide-left|pop\",\"fontSize\":number}}]}}}}]}}\n\
 要求：\n\
@@ -490,7 +753,13 @@ fn generate_motion_items_for_project(
         serde_json::to_string(&media_items).map_err(|error| error.to_string())?
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_response_with_settings(&settings_snapshot, None, &prompt);
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        model_config,
+        "你是 RedClaw 的短视频动画导演。只输出严格 JSON。",
+        &user_prompt,
+        true,
+    )?;
     let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
     let normalized_items = parsed
         .get("items")
@@ -499,7 +768,12 @@ fn generate_motion_items_for_project(
             items
                 .iter()
                 .enumerate()
-                .map(|(index, item)| normalize_motion_item(item, fallback_items.get(index).unwrap_or(&fallback_items[0])))
+                .map(|(index, item)| {
+                    normalize_motion_item(
+                        item,
+                        fallback_items.get(index).unwrap_or(&fallback_items[0]),
+                    )
+                })
                 .collect::<Vec<_>>()
         })
         .filter(|items| !items.is_empty())
@@ -581,9 +855,10 @@ fn generate_editor_commands_for_project(
     state: &State<'_, AppState>,
     project: &Value,
     instructions: &str,
+    model_config: Option<&Value>,
 ) -> Result<(Vec<Value>, String), String> {
-    let prompt = format!(
-        "你是 RedClaw 的视频编辑命令规划器。把用户的编辑要求转换成结构化命令 JSON。\n\
+    let user_prompt = format!(
+        "把用户的编辑要求转换成结构化命令 JSON。\n\
 只输出 JSON，不要输出解释。\n\
 允许命令：add_track, delete_tracks, update_item, delete_item, split_item, move_items, retime_item, set_track_ui, reorder_tracks, update_stage_item。\n\
 输出结构：{{\"brief\":string,\"commands\":[...]}}\n\
@@ -599,12 +874,23 @@ fn generate_editor_commands_for_project(
         instructions
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_response_with_settings(&settings_snapshot, None, &prompt);
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        model_config,
+        "你是 RedClaw 的视频编辑命令规划器。只输出严格 JSON。",
+        &user_prompt,
+        true,
+    )?;
     let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
     let commands = parsed
         .get("commands")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(normalize_editor_ai_command).collect::<Vec<_>>())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(normalize_editor_ai_command)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let brief = parsed
         .get("brief")
@@ -634,11 +920,16 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     .and_then(Value::as_array_mut)
                     .ok_or_else(|| "Editor project assets missing".to_string())?;
                 for asset in assets {
-                    let asset_id = asset.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                    let asset_id = asset
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     if asset_id.is_empty() {
                         continue;
                     }
-                    if let Some(existing) = current_assets.iter_mut().find(|item| item.get("id").and_then(|value| value.as_str()) == Some(asset_id)) {
+                    if let Some(existing) = current_assets.iter_mut().find(|item| {
+                        item.get("id").and_then(|value| value.as_str()) == Some(asset_id)
+                    }) {
                         *existing = asset.clone();
                     } else {
                         current_assets.push(asset.clone());
@@ -646,7 +937,10 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "add_track" => {
-                let kind = command.get("kind").and_then(|value| value.as_str()).unwrap_or("video");
+                let kind = command
+                    .get("kind")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("video");
                 let prefix = match kind {
                     "audio" => "A",
                     "subtitle" => "S",
@@ -659,11 +953,18 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     .and_then(|value| value.as_str())
                     .map(ToString::to_string)
                     .unwrap_or_else(|| {
-                        let tracks = project.get("tracks").and_then(Value::as_array).cloned().unwrap_or_default();
+                        let tracks = project
+                            .get("tracks")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
                         let max_index = tracks
                             .iter()
                             .filter_map(|track| {
-                                let id = track.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                                let id = track
+                                    .get("id")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("");
                                 if !id.starts_with(prefix) {
                                     return None;
                                 }
@@ -699,11 +1000,17 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     .filter_map(|value| value.as_str().map(ToString::to_string))
                     .collect::<Vec<_>>();
                 editor_project_tracks_mut(project)?.retain(|track| {
-                    let track_id = track.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                    let track_id = track
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     !track_ids.iter().any(|value| value == track_id)
                 });
                 editor_project_items_mut(project)?.retain(|item| {
-                    let track_id = item.get("trackId").and_then(|value| value.as_str()).unwrap_or("");
+                    let track_id = item
+                        .get("trackId")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     !track_ids.iter().any(|value| value == track_id)
                 });
                 for (order, track) in editor_project_tracks_mut(project)?.iter_mut().enumerate() {
@@ -718,13 +1025,17 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "update_item" => {
-                let item_id = command.get("itemId").and_then(|value| value.as_str()).unwrap_or("");
+                let item_id = command
+                    .get("itemId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 let patch = command.get("patch").cloned().unwrap_or_else(|| json!({}));
                 if let Some(item) = editor_project_items_mut(project)?
                     .iter_mut()
                     .find(|item| item.get("id").and_then(|value| value.as_str()) == Some(item_id))
                 {
-                    if let (Some(target), Some(source)) = (item.as_object_mut(), patch.as_object()) {
+                    if let (Some(target), Some(source)) = (item.as_object_mut(), patch.as_object())
+                    {
                         for (key, value) in source {
                             target.insert(key.to_string(), value.clone());
                         }
@@ -742,23 +1053,37 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     .filter_map(|value| value.as_str().map(ToString::to_string))
                     .collect::<Vec<_>>();
                 editor_project_items_mut(project)?.retain(|item| {
-                    let item_id = item.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                    let item_id = item
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     !normalized.iter().any(|value| value == item_id)
                 });
             }
             "split_item" => {
-                let item_id = command.get("itemId").and_then(|value| value.as_str()).unwrap_or("");
+                let item_id = command
+                    .get("itemId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 let split_ms = command
                     .get("splitMs")
                     .and_then(|value| value.as_i64())
                     .unwrap_or(0);
                 let items = editor_project_items_mut(project)?;
-                let Some(index) = items.iter().position(|item| item.get("id").and_then(|value| value.as_str()) == Some(item_id)) else {
+                let Some(index) = items.iter().position(|item| {
+                    item.get("id").and_then(|value| value.as_str()) == Some(item_id)
+                }) else {
                     continue;
                 };
                 let mut original = items[index].clone();
-                let from_ms = original.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
-                let duration_ms = original.get("durationMs").and_then(|value| value.as_i64()).unwrap_or(0);
+                let from_ms = original
+                    .get("fromMs")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                let duration_ms = original
+                    .get("durationMs")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
                 if split_ms <= from_ms || split_ms >= from_ms + duration_ms {
                     continue;
                 }
@@ -773,15 +1098,23 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     object.insert("id".to_string(), json!(make_id("item")));
                     object.insert("fromMs".to_string(), json!(split_ms));
                     object.insert("durationMs".to_string(), json!(second_duration));
-                    if let Some(trim_in_ms) = object.get("trimInMs").and_then(|value| value.as_i64()) {
+                    if let Some(trim_in_ms) =
+                        object.get("trimInMs").and_then(|value| value.as_i64())
+                    {
                         object.insert("trimInMs".to_string(), json!(trim_in_ms + first_duration));
                     }
                 }
                 items.insert(index + 1, second);
             }
             "move_items" => {
-                let delta_ms = command.get("deltaMs").and_then(|value| value.as_i64()).unwrap_or(0);
-                let target_track_id = command.get("targetTrackId").and_then(|value| value.as_str()).map(ToString::to_string);
+                let delta_ms = command
+                    .get("deltaMs")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                let target_track_id = command
+                    .get("targetTrackId")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string);
                 let item_ids = command
                     .get("itemIds")
                     .and_then(Value::as_array)
@@ -791,12 +1124,18 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                     .filter_map(|value| value.as_str().map(ToString::to_string))
                     .collect::<Vec<_>>();
                 for item in editor_project_items_mut(project)?.iter_mut() {
-                    let item_id = item.get("id").and_then(|value| value.as_str()).unwrap_or("");
+                    let item_id = item
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     if !item_ids.iter().any(|value| value == item_id) {
                         continue;
                     }
                     if let Some(object) = item.as_object_mut() {
-                        let from_ms = object.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+                        let from_ms = object
+                            .get("fromMs")
+                            .and_then(|value| value.as_i64())
+                            .unwrap_or(0);
                         object.insert("fromMs".to_string(), json!((from_ms + delta_ms).max(0)));
                         if let Some(track_id) = target_track_id.as_ref() {
                             object.insert("trackId".to_string(), json!(track_id));
@@ -805,7 +1144,10 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "retime_item" => {
-                let item_id = command.get("itemId").and_then(|value| value.as_str()).unwrap_or("");
+                let item_id = command
+                    .get("itemId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 if let Some(item) = editor_project_items_mut(project)?
                     .iter_mut()
                     .find(|item| item.get("id").and_then(|value| value.as_str()) == Some(item_id))
@@ -821,15 +1163,22 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "set_track_ui" => {
-                let track_id = command.get("trackId").and_then(|value| value.as_str()).unwrap_or("");
+                let track_id = command
+                    .get("trackId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
                 let patch = command.get("patch").cloned().unwrap_or_else(|| json!({}));
                 if let Some(track) = editor_project_tracks_mut(project)?
                     .iter_mut()
-                    .find(|track| track.get("id").and_then(|value| value.as_str()) == Some(track_id))
+                    .find(|track| {
+                        track.get("id").and_then(|value| value.as_str()) == Some(track_id)
+                    })
                 {
                     let current_ui = track.get("ui").cloned().unwrap_or_else(|| json!({}));
                     let mut next_ui = current_ui;
-                    if let (Some(target), Some(source)) = (next_ui.as_object_mut(), patch.as_object()) {
+                    if let (Some(target), Some(source)) =
+                        (next_ui.as_object_mut(), patch.as_object())
+                    {
                         for (key, value) in source {
                             target.insert(key.to_string(), value.clone());
                         }
@@ -840,10 +1189,18 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "reorder_tracks" => {
-                let track_id = command.get("trackId").and_then(|value| value.as_str()).unwrap_or("");
-                let direction = command.get("direction").and_then(|value| value.as_str()).unwrap_or("up");
+                let track_id = command
+                    .get("trackId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let direction = command
+                    .get("direction")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("up");
                 let tracks = editor_project_tracks_mut(project)?;
-                let Some(index) = tracks.iter().position(|track| track.get("id").and_then(|value| value.as_str()) == Some(track_id)) else {
+                let Some(index) = tracks.iter().position(|track| {
+                    track.get("id").and_then(|value| value.as_str()) == Some(track_id)
+                }) else {
                     continue;
                 };
                 let target_index = if direction == "down" {
@@ -860,8 +1217,14 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "update_stage_item" => {
-                let item_id = command.get("itemId").and_then(|value| value.as_str()).unwrap_or("");
-                let stage = project.get_mut("stage").and_then(Value::as_object_mut).ok_or_else(|| "Editor project stage missing".to_string())?;
+                let item_id = command
+                    .get("itemId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let stage = project
+                    .get_mut("stage")
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| "Editor project stage missing".to_string())?;
                 if let Some(transform_patch) = command.get("patch").and_then(Value::as_object) {
                     let transforms = stage
                         .entry("itemTransforms".to_string())
@@ -871,7 +1234,9 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                         .ok_or_else(|| "Stage itemTransforms missing".to_string())?
                         .entry(item_id.to_string())
                         .or_insert_with(|| json!({}));
-                    if let (Some(target), Some(source)) = (entry.as_object_mut(), Some(transform_patch)) {
+                    if let (Some(target), Some(source)) =
+                        (entry.as_object_mut(), Some(transform_patch))
+                    {
                         for (key, value) in source {
                             target.insert(key.to_string(), value.clone());
                         }
@@ -916,7 +1281,12 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
         .cloned()
         .unwrap_or_default();
     let mut ordered_tracks = tracks;
-    ordered_tracks.sort_by_key(|track| track.get("order").and_then(|value| value.as_i64()).unwrap_or(0));
+    ordered_tracks.sort_by_key(|track| {
+        track
+            .get("order")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0)
+    });
     let main_video_track_id = ordered_tracks
         .iter()
         .find(|track| track.get("kind").and_then(|value| value.as_str()) == Some("video"))
@@ -926,7 +1296,11 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
     let original_order = items
         .iter()
         .enumerate()
-        .filter_map(|(index, item)| item.get("id").and_then(|value| value.as_str()).map(|id| (id.to_string(), index)))
+        .filter_map(|(index, item)| {
+            item.get("id")
+                .and_then(|value| value.as_str())
+                .map(|id| (id.to_string(), index))
+        })
         .collect::<BTreeMap<_, _>>();
     let mut rebuilt = Vec::new();
     for track in &ordered_tracks {
@@ -939,13 +1313,25 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
             .cloned()
             .collect::<Vec<_>>();
         track_items.sort_by(|left, right| {
-            let left_from = left.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
-            let right_from = right.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            let left_from = left
+                .get("fromMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0);
+            let right_from = right
+                .get("fromMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0);
             if left_from != right_from {
                 return left_from.cmp(&right_from);
             }
-            let left_id = left.get("id").and_then(|value| value.as_str()).unwrap_or("");
-            let right_id = right.get("id").and_then(|value| value.as_str()).unwrap_or("");
+            let left_id = left
+                .get("id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let right_id = right
+                .get("id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
             original_order
                 .get(left_id)
                 .unwrap_or(&0usize)
@@ -953,8 +1339,14 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
         });
         let mut cursor = 0_i64;
         for mut item in track_items {
-            let from_ms = item.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
-            let duration_ms = item.get("durationMs").and_then(|value| value.as_i64()).unwrap_or(0);
+            let from_ms = item
+                .get("fromMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0);
+            let duration_ms = item
+                .get("durationMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0);
             let next_from_ms = if main_video_track_id.as_deref() == Some(track_id) {
                 cursor
             } else {
@@ -969,7 +1361,12 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
     }
     let known_track_ids = ordered_tracks
         .iter()
-        .filter_map(|track| track.get("id").and_then(|value| value.as_str()).map(ToString::to_string))
+        .filter_map(|track| {
+            track
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        })
         .collect::<BTreeSet<_>>();
     let remainder = items
         .iter()
@@ -1020,7 +1417,10 @@ fn ensure_package_asset_entry(
     let editor_project_path = package_editor_project_path(package_path);
     if editor_project_path.exists() {
         let mut editor_project = read_json_value_or(&editor_project_path, json!({}));
-        if let Some(editor_assets) = editor_project.get_mut("assets").and_then(Value::as_array_mut) {
+        if let Some(editor_assets) = editor_project
+            .get_mut("assets")
+            .and_then(Value::as_array_mut)
+        {
             let editor_asset = json!({
                 "id": asset.id,
                 "kind": infer_editor_asset_kind(
@@ -1152,35 +1552,18 @@ pub fn handle_manuscripts_channel(
                         .file_name()
                         .and_then(|value| value.to_str())
                         .unwrap_or("");
-                    let mut manifest = read_json_value_or(&package_manifest_path(&path), json!({}));
-                    if let Some(object) = manifest.as_object_mut() {
-                        if let Some(metadata) =
-                            payload_field(&payload, "metadata").and_then(Value::as_object)
-                        {
-                            for (key, value) in metadata {
-                                object.insert(key.clone(), value.clone());
-                            }
-                        }
-                        object.insert("updatedAt".to_string(), json!(now_i64()));
-                        object
-                            .entry("title".to_string())
-                            .or_insert(json!(title_from_relative_path(file_name)));
-                        object
-                            .entry("entry".to_string())
-                            .or_insert(json!(get_default_package_entry(file_name)));
-                        object
-                            .entry("draftType".to_string())
-                            .or_insert(json!(get_draft_type_from_file_name(file_name)));
-                        object
-                            .entry("packageKind".to_string())
-                            .or_insert(json!(get_package_kind_from_file_name(file_name)));
-                    }
-                    write_json_value(&package_manifest_path(&path), &manifest)?;
-                    write_text_file(
-                        &package_entry_path(&path, file_name, Some(&manifest)),
+                    let (next_state, script_state) = persist_package_script_body(
+                        &path,
+                        file_name,
                         &content,
+                        payload_field(&payload, "metadata").and_then(Value::as_object),
+                        "user",
                     )?;
-                    return Ok(json!({ "success": true }));
+                    return Ok(json!({
+                        "success": true,
+                        "state": next_state,
+                        "script": script_state
+                    }));
                 }
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1267,13 +1650,29 @@ pub fn handle_manuscripts_channel(
                 let mut target_relative = join_relative(&parent_rel, &new_name);
                 if !target_relative.contains('.') {
                     if source_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
-                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), ARTICLE_DRAFT_EXTENSION);
+                        target_relative = format!(
+                            "{}{}",
+                            normalize_relative_path(&target_relative),
+                            ARTICLE_DRAFT_EXTENSION
+                        );
                     } else if source_name.ends_with(POST_DRAFT_EXTENSION) {
-                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), POST_DRAFT_EXTENSION);
+                        target_relative = format!(
+                            "{}{}",
+                            normalize_relative_path(&target_relative),
+                            POST_DRAFT_EXTENSION
+                        );
                     } else if source_name.ends_with(VIDEO_DRAFT_EXTENSION) {
-                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), VIDEO_DRAFT_EXTENSION);
+                        target_relative = format!(
+                            "{}{}",
+                            normalize_relative_path(&target_relative),
+                            VIDEO_DRAFT_EXTENSION
+                        );
                     } else if source_name.ends_with(AUDIO_DRAFT_EXTENSION) {
-                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), AUDIO_DRAFT_EXTENSION);
+                        target_relative = format!(
+                            "{}{}",
+                            normalize_relative_path(&target_relative),
+                            AUDIO_DRAFT_EXTENSION
+                        );
                     } else if source.is_file() {
                         target_relative = ensure_markdown_extension(&target_relative);
                     } else {
@@ -1345,7 +1744,7 @@ pub fn handle_manuscripts_channel(
             }
             "manuscripts:save-editor-project" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
-                let project = payload_field(&payload, "project")
+                let mut project = payload_field(&payload, "project")
                     .cloned()
                     .unwrap_or(Value::Null);
                 if file_path.is_empty() {
@@ -1355,9 +1754,26 @@ pub fn handle_manuscripts_channel(
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
+                let existing_project = ensure_editor_project(&full_path)?;
+                let next_script_body = project
+                    .pointer("/script/body")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string);
+                let existing_script_body = existing_project
+                    .pointer("/script/body")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string);
+                if let Some(script_body) = next_script_body.as_deref() {
+                    if existing_script_body.as_deref() != Some(script_body) {
+                        mark_editor_project_script_pending(&mut project, script_body, "user")?;
+                    } else {
+                        let _ = ensure_editor_project_ai_state(&mut project)?;
+                    }
+                }
                 write_json_value(&package_editor_project_path(&full_path), &project)?;
-                if let Some(script_body) = project.pointer("/script/body").and_then(|value| value.as_str()) {
-                    let manifest = read_json_value_or(package_manifest_path(&full_path).as_path(), json!({}));
+                if let Some(script_body) = next_script_body.as_deref() {
+                    let manifest =
+                        read_json_value_or(package_manifest_path(&full_path).as_path(), json!({}));
                     let entry_path = package_entry_path(&full_path, &file_path, Some(&manifest));
                     write_text_file(&entry_path, script_body)?;
                 }
@@ -1416,18 +1832,30 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 let mut project = ensure_editor_project(&full_path)?;
-                let (motion_items, brief) =
-                    generate_motion_items_for_project(state, &project, &instructions, &selected_item_ids)?;
+                let (motion_items, brief) = generate_motion_items_for_project(
+                    state,
+                    &project,
+                    &instructions,
+                    &selected_item_ids,
+                    payload_field(&payload, "modelConfig"),
+                )?;
                 ensure_motion_track(&mut project)?;
                 let target_bind_ids = motion_items
                     .iter()
-                    .filter_map(|item| item.get("bindItemId").and_then(|value| value.as_str()).map(ToString::to_string))
+                    .filter_map(|item| {
+                        item.get("bindItemId")
+                            .and_then(|value| value.as_str())
+                            .map(ToString::to_string)
+                    })
                     .collect::<Vec<_>>();
                 editor_project_items_mut(&mut project)?.retain(|item| {
                     if item.get("type").and_then(|value| value.as_str()) != Some("motion") {
                         return true;
                     }
-                    let bind_item_id = item.get("bindItemId").and_then(|value| value.as_str()).unwrap_or("");
+                    let bind_item_id = item
+                        .get("bindItemId")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
                     !target_bind_ids.iter().any(|value| value == bind_item_id)
                 });
                 editor_project_items_mut(&mut project)?.extend(motion_items.clone());
@@ -1454,11 +1882,76 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 let project = ensure_editor_project(&full_path)?;
-                let (commands, brief) = generate_editor_commands_for_project(state, &project, &instructions)?;
+                let (commands, brief) =
+                    generate_editor_commands_for_project(
+                        state,
+                        &project,
+                        &instructions,
+                        payload_field(&payload, "modelConfig"),
+                    )?;
                 Ok(json!({
                     "success": true,
                     "brief": brief,
                     "commands": commands
+                }))
+            }
+            "manuscripts:get-package-script-state" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let project = ensure_editor_project(&full_path)?;
+                Ok(json!({
+                    "success": true,
+                    "script": package_script_state_value(&project)
+                }))
+            }
+            "manuscripts:update-package-script" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let content = payload_string(&payload, "content").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                let source = payload_string(&payload, "source")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "ai".to_string());
+                let (next_state, script_state) =
+                    persist_package_script_body(&full_path, file_name, &content, None, &source)?;
+                Ok(json!({
+                    "success": true,
+                    "state": next_state,
+                    "script": script_state
+                }))
+            }
+            "manuscripts:confirm-package-script" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let mut project = ensure_editor_project(&full_path)?;
+                let approval = confirm_editor_project_script(&mut project)?;
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({
+                    "success": true,
+                    "script": package_script_state_value(&project),
+                    "approval": approval,
+                    "state": get_manuscript_package_state(&full_path)?
                 }))
             }
             "manuscripts:get-editor-runtime-state" => {
@@ -2475,16 +2968,15 @@ pub fn handle_manuscripts_channel(
                 }
                 let fallback = build_default_remotion_scene(&title, &clips);
                 let prompt = format!(
-                "你是 RedClaw 的视频动画导演。请基于当前视频脚本和时间线，为 RedBox 生成 Remotion JSON 动画方案。\n\
-只输出 JSON，不要输出解释。\n\
-允许的 motionPreset 只有：static, slow-zoom-in, slow-zoom-out, pan-left, pan-right, slide-up, slide-down。\n\
-字段结构：{{\"title\":string,\"width\":1080,\"height\":1920,\"fps\":30,\"backgroundColor\":\"#05070b\",\"scenes\":[{{\"id\":string,\"clipId\":string,\"assetId\":string,\"durationInFrames\":number,\"motionPreset\":string,\"overlayTitle\":string,\"overlayBody\":string,\"overlays\":[{{\"id\":string,\"text\":string,\"startFrame\":number,\"durationInFrames\":number,\"position\":\"top|center|bottom\",\"animation\":\"fade-up|fade-in|slide-left|pop\",\"fontSize\":number}}]}}]}}\n\
+                "请基于当前视频脚本和时间线，为 RedBox 设计一份 Remotion JSON 动画方案。\n\
 要求：\n\
 1. 每个场景必须对应现有片段。\n\
-2. 先做成适合短视频的动画：慢推、慢拉、平移、标题、底部字幕卡。\n\
-3. 不要修改 src / assetKind / trimInFrames，这些字段由宿主兜底。\n\
-4. overlayTitle 用镜头标题，overlayBody 用屏幕文案或强调点。\n\
-5. 如果脚本有明确节奏，请让前几个场景更强，后面更稳。\n\
+2. Remotion 的时序是按帧控制的；请用 durationInFrames 和 overlay.startFrame / overlay.durationInFrames 表达节奏，不要描述宿主不存在的自由动画系统。\n\
+3. 每个场景内部等价于一个 Sequence，overlay.startFrame + overlay.durationInFrames 必须落在该场景 durationInFrames 之内。\n\
+4. 先做成适合短视频的简单动画：慢推、慢拉、平移、标题、底部字幕卡。当前阶段优先简单、可执行，不追求复杂特效。\n\
+5. 不要修改 src / assetKind / trimInFrames，这些字段由宿主兜底。\n\
+6. overlayTitle 用镜头标题，overlayBody 用屏幕文案或强调点。\n\
+7. 如果脚本有明确节奏，请让前几个场景更强，后面更稳。\n\
 \n\
 工程标题：{}\n\
 脚本：{}\n\
@@ -2493,15 +2985,88 @@ pub fn handle_manuscripts_channel(
                 instructions,
                 serde_json::to_string(&clips).map_err(|error| error.to_string())?
             );
+                let model_config = payload_field(&payload, "modelConfig").cloned();
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                let raw = generate_response_with_settings(&settings_snapshot, None, &prompt);
-                let candidate = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
+                let resolved_config = resolve_chat_config(&settings_snapshot, model_config.as_ref());
+                let session_id = payload_string(&payload, "sessionId");
+                let model_config_summary = model_config
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .map(|object| {
+                        format!(
+                            "baseURL={} | modelName={} | protocol={} | apiKeyPresent={}",
+                            object.get("baseURL").and_then(Value::as_str).unwrap_or(""),
+                            object.get("modelName").and_then(Value::as_str).unwrap_or(""),
+                            object.get("protocol").and_then(Value::as_str).unwrap_or(""),
+                            object
+                                .get("apiKey")
+                                .and_then(Value::as_str)
+                                .map(|value| !value.trim().is_empty())
+                                .unwrap_or(false)
+                        )
+                    })
+                    .unwrap_or_else(|| "none".to_string());
+                let resolved_config_summary = resolved_config
+                    .as_ref()
+                    .map(|config| {
+                        format!(
+                            "base_url={} | model_name={} | protocol={} | api_key_present={}",
+                            config.base_url,
+                            config.model_name,
+                            config.protocol,
+                            config
+                                .api_key
+                                .as_ref()
+                                .map(|value| !value.trim().is_empty())
+                                .unwrap_or(false)
+                        )
+                    })
+                    .unwrap_or_else(|| "none".to_string());
+                let start_log = format!(
+                    "[video][remotion_generate] start | filePath={} | sessionId={} | clips={} | instructionsChars={} | payloadModelConfig={} | resolvedConfig={}",
+                    file_path,
+                    session_id.clone().unwrap_or_default(),
+                    clips.len(),
+                    instructions.chars().count(),
+                    model_config_summary,
+                    resolved_config_summary
+                );
+                eprintln!("{}", start_log);
+                append_debug_log_state(state, start_log);
+                let (candidate, subagent_summary) = run_animation_director_subagent(
+                    app,
+                    state,
+                    session_id.as_deref(),
+                    model_config.as_ref(),
+                    &prompt,
+                )?;
+                let raw_log = format!(
+                    "[video][remotion_generate] subagent-response | parsedJson=true | summary={}",
+                    subagent_summary.replace('\n', "\\n")
+                );
+                eprintln!("{}", raw_log);
+                append_debug_log_state(state, raw_log);
                 let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &clips, &title);
+                let normalized_scene_count = normalized
+                    .get("scenes")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                let normalized_log = format!(
+                    "[video][remotion_generate] normalized | scenes={} | title={}",
+                    normalized_scene_count,
+                    normalized
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                );
+                eprintln!("{}", normalized_log);
+                append_debug_log_state(state, normalized_log);
                 write_json_value(&package_remotion_path(&full_path), &normalized)?;
                 Ok(json!({
                     "success": true,
                     "state": get_manuscript_package_state(&full_path)?,
-                    "raw": raw
+                    "summary": subagent_summary
                 }))
             }
             "manuscripts:render-remotion-video" => {

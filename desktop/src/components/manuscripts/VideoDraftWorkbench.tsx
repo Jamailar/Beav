@@ -64,7 +64,20 @@ type MediaAssetLike = {
   mimeType?: string;
 };
 
-type PackageStateLike = Record<string, unknown>;
+type ScriptApprovalLike = {
+  status?: 'pending' | 'confirmed';
+  lastScriptUpdateAt?: number | null;
+  lastScriptUpdateSource?: 'user' | 'ai' | 'system' | null;
+  confirmedAt?: number | null;
+};
+
+type PackageStateLike = Record<string, unknown> & {
+  editorProject?: {
+    ai?: {
+      scriptApproval?: ScriptApprovalLike;
+    };
+  };
+};
 
 type VideoClipLike = {
   clipId?: string;
@@ -244,29 +257,30 @@ function buildVideoExecutionPrompts(options: {
     .map((paragraph, index) => `${index + 1}. ${paragraph}`);
   const scriptSummary = beats.join('\n');
   const editPrompt = [
-    `你现在要先做“脚本执行规划”，再做时间轴剪辑。`,
+    `你现在要先做“脚本执行规划”，再做时间轴剪辑。没有脚本确认前，不要改时间线。`,
     `项目：${options.title}`,
     `当前工程：${options.trackCount} 条轨道，${options.clipCount} 个片段。`,
     `脚本要点：`,
     scriptSummary,
     `请先输出一个执行 brief，至少包含：镜头段落、每段要保留/删减的素材、节奏点、字幕策略、转场策略、动画配合策略。`,
-    `输出 brief 之后，再说明应该如何调用剪辑工具按顺序执行。`,
+    `等用户确认脚本后，再说明应该如何调用剪辑工具按顺序执行。`,
   ].join('\n');
   const motionExecutionPrompt = [
-    `你现在要基于脚本先规划动画，再调用 Remotion 生成。`,
+    `你现在要基于脚本先规划动画，再调用 Remotion 生成。没有脚本确认前，不要生成动画。`,
     `项目：${options.title}`,
     `脚本段落：`,
     scriptSummary,
     `当前动画提示：${options.motionPrompt || '尚未设置'}`,
     `请先给出动画执行 brief：每段应该用什么运动、标题、字幕节奏、强调方式；再给出可直接用于 Remotion 的动画提示词。`,
+    `Remotion 在当前工程里是按帧场景系统：scene.durationInFrames 控制片段时长，overlay.startFrame / overlay.durationInFrames 控制字幕或标题出现时间，先做简单可执行的推拉、平移、标题卡和底部字幕卡。`,
   ].join('\n');
   const masterPrompt = [
-    `按照“脚本 -> 执行 brief -> 时间轴剪辑 -> Remotion 动画”的顺序完成当前视频工程。`,
+    `严格按照“script_read -> script_update -> 用户阅读 -> script_confirm -> 时间轴剪辑 -> Remotion 动画”的顺序完成当前视频工程。`,
     `项目：${options.title}`,
     `时间轴概况：${options.trackCount} 轨 / ${options.clipCount} 段`,
     `脚本：`,
     scriptSummary,
-    `要求：先明确 brief，再分别说明剪辑动作和动画动作，最后再调用工具执行。`,
+    `要求：先输出一版可直接给用户阅读的完整脚本草案，并写回脚本区；用户确认前不要动时间轴和动画。`,
   ].join('\n');
   return {
     beats,
@@ -487,6 +501,7 @@ export interface VideoDraftWorkbenchProps {
   onEditorBodyChange: (value: string) => void;
   onOpenBindAssets: () => void;
   onPackageStateChange: (state: PackageStateLike) => void;
+  onConfirmScript: () => void;
   onGenerateRemotionScene: (instructions?: string) => void;
   onSaveRemotionScene: (scene: RemotionCompositionConfig) => void;
   onRenderRemotionVideo: () => void;
@@ -514,6 +529,7 @@ export function VideoDraftWorkbench({
   onEditorBodyChange,
   onOpenBindAssets,
   onPackageStateChange,
+  onConfirmScript,
   onGenerateRemotionScene,
   onSaveRemotionScene,
   onRenderRemotionVideo,
@@ -650,6 +666,16 @@ export function VideoDraftWorkbench({
     [timelineClips]
   );
   const timelineDurationInFrames = Math.max(1, Math.round(timelineDurationSeconds * effectiveFps));
+  const scriptApproval = packageState?.editorProject?.ai?.scriptApproval || null;
+  const scriptConfirmed = scriptApproval?.status === 'confirmed';
+  const scriptStatusLabel = isSavingEditorBody
+    ? '脚本保存中...'
+    : editorBodyDirty
+      ? '脚本待保存'
+      : scriptConfirmed
+        ? '脚本已确认'
+        : '脚本待确认';
+  const canRunAiExecution = scriptConfirmed && !editorBodyDirty && !isSavingEditorBody;
 
   const setPreviewTab = useCallback((tab: VideoEditorState['player']['previewTab']) => {
     editorStore.setState((state) => ({
@@ -2923,9 +2949,9 @@ export function VideoDraftWorkbench({
   );
   const stageShellTitle = previewTab === 'motion' ? 'Motion Studio' : previewTab === 'script' ? 'Script Workspace' : 'Stage Preview';
   const stageShellSubtitle = previewTab === 'script'
-    ? (isSavingEditorBody ? '脚本保存中...' : editorBodyDirty ? '脚本待保存' : '脚本已保存')
+    ? (scriptConfirmed ? `${scriptStatusLabel} · 允许进入剪辑与动画` : `${scriptStatusLabel} · 先确认脚本再进入剪辑与动画`)
     : previewTab === 'motion'
-      ? `${editableComposition?.scenes?.length || 0} 个动画场景`
+      ? `${editableComposition?.scenes?.length || 0} 个动画场景 · ${scriptStatusLabel}`
       : `${timelineClipCount} 个片段 · ${previewStatusLabel}`;
   const stageShellCompact = previewTab === 'preview';
   const scriptExecutionPrompts = useMemo(
@@ -2940,10 +2966,10 @@ export function VideoDraftWorkbench({
   );
   const videoEditingShortcuts = useMemo(
     () => [
-      { label: '脚本 Brief', text: scriptExecutionPrompts.masterPrompt },
+      { label: '改写脚本', text: scriptExecutionPrompts.masterPrompt },
       { label: '规划剪辑', text: scriptExecutionPrompts.editPrompt },
       { label: '规划动画', text: scriptExecutionPrompts.motionExecutionPrompt },
-      { label: '执行导出', text: `${scriptExecutionPrompts.editPrompt}\n\n如果工程已经具备导出条件，按 brief 先执行再导出。` },
+      { label: '确认后导出', text: `${scriptExecutionPrompts.editPrompt}\n\n如果用户已经明确确认脚本，并且工程具备导出条件，按 brief 先执行再导出。` },
     ],
     [scriptExecutionPrompts]
   );
@@ -3179,13 +3205,14 @@ export function VideoDraftWorkbench({
             <button
               type="button"
               onClick={onRenderRemotionVideo}
-              disabled={isRenderingRemotion || !editableComposition?.scenes?.length}
+              disabled={isRenderingRemotion || !editableComposition?.scenes?.length || !canRunAiExecution}
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                isRenderingRemotion || !editableComposition?.scenes?.length
+                isRenderingRemotion || !editableComposition?.scenes?.length || !canRunAiExecution
                   ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
                   : 'border-cyan-400/40 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
               )}
+              title={canRunAiExecution ? '导出当前 Remotion 成片' : '先确认脚本，再导出成片'}
             >
               <Download className="h-3.5 w-3.5" />
               {isRenderingRemotion ? '导出中...' : '导出 MP4'}
@@ -3202,6 +3229,17 @@ export function VideoDraftWorkbench({
               onClick={() => setMaterialsCollapsed((value) => !value)}
               title={materialsCollapsed ? '展开素材栏' : '折叠素材栏'}
             />
+            <div
+              className={clsx(
+                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium',
+                scriptConfirmed
+                  ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
+                  : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+              )}
+            >
+              <Save className="h-3.5 w-3.5" />
+              {scriptStatusLabel}
+            </div>
             <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-100">
               <MessageSquare className="h-3.5 w-3.5" />
               AI 对话常驻
@@ -5549,13 +5587,14 @@ export function VideoDraftWorkbench({
                     <button
                       type="button"
                       onClick={() => onGenerateRemotionScene(motionPrompt)}
-                      disabled={isGeneratingRemotion || timelineClipCount <= 0}
+                      disabled={isGeneratingRemotion || timelineClipCount <= 0 || !canRunAiExecution}
                       className={clsx(
                         'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                        isGeneratingRemotion || timelineClipCount <= 0
+                        isGeneratingRemotion || timelineClipCount <= 0 || !canRunAiExecution
                           ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
                           : 'border-fuchsia-400/40 bg-fuchsia-400/14 text-fuchsia-100 hover:border-fuchsia-300/70'
                       )}
+                      title={canRunAiExecution ? '基于已确认脚本生成动画' : '先确认脚本，再生成动画'}
                     >
                       <Sparkles className="h-3.5 w-3.5" />
                       {isGeneratingRemotion ? 'AI 生成中...' : 'AI 生成动画'}
@@ -5692,7 +5731,32 @@ export function VideoDraftWorkbench({
                       <div className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
                         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/35">Script First</div>
                         <div className="mt-2 text-sm text-white/80">
-                          先让 AI 基于脚本生成执行 brief，再分别去做时间轴剪辑和 Remotion 动画。
+                          先让 AI 改脚本文字并写回脚本区，用户读完并确认后，才能去做时间轴剪辑和 Remotion 动画。
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <div
+                            className={clsx(
+                              'inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium',
+                              scriptConfirmed
+                                ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
+                                : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+                            )}
+                          >
+                            {scriptStatusLabel}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={onConfirmScript}
+                            disabled={scriptConfirmed || editorBodyDirty || isSavingEditorBody}
+                            className={clsx(
+                              'rounded-full border px-3 py-1 text-[11px] font-medium transition',
+                              scriptConfirmed || editorBodyDirty || isSavingEditorBody
+                                ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
+                                : 'border-emerald-400/35 bg-emerald-400/12 text-emerald-100 hover:border-emerald-300/60'
+                            )}
+                          >
+                            {scriptConfirmed ? '脚本已确认' : editorBodyDirty || isSavingEditorBody ? '保存后确认脚本' : '确认脚本，解锁剪辑/动画'}
+                          </button>
                         </div>
                         <div className="mt-4 space-y-2">
                           {scriptExecutionPrompts.beats.map((beat) => (
@@ -5744,7 +5808,13 @@ export function VideoDraftWorkbench({
                               <button
                                 type="button"
                                 onClick={() => onGenerateRemotionScene(scriptExecutionPrompts.motionExecutionPrompt)}
-                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/75 transition hover:border-white/20 hover:text-white"
+                                disabled={!canRunAiExecution}
+                                className={clsx(
+                                  'rounded-full border px-3 py-1 text-[11px] transition',
+                                  canRunAiExecution
+                                    ? 'border-white/10 bg-white/[0.05] text-white/75 hover:border-white/20 hover:text-white'
+                                    : 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
+                                )}
                               >
                                 直接生成动画
                               </button>
@@ -5784,7 +5854,7 @@ export function VideoDraftWorkbench({
                     shortcuts={videoEditingShortcuts}
                     welcomeShortcuts={videoEditingShortcuts}
                     welcomeTitle="视频剪辑助手"
-                    welcomeSubtitle="先基于脚本生成执行 brief，再去剪辑时间轴和制作 Remotion 动画"
+                    welcomeSubtitle="先改脚本并确认，再去剪辑时间轴和制作 Remotion 动画"
                     contentLayout="default"
                     contentWidthPreset="narrow"
                     allowFileUpload={true}

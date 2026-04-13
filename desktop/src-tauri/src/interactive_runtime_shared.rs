@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::persistence::with_store;
+use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
 use crate::skills::build_skill_runtime_state;
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
@@ -11,7 +12,7 @@ use crate::tools::registry::{
 };
 use crate::{
     load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, render_redbox_prompt,
-    truncate_chars, workspace_root, AppState, AppStore,
+    truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(
@@ -212,10 +213,12 @@ When using tools, synthesize the final answer in Chinese unless the user clearly
 
 fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
     match runtime_mode {
-        "video-editor" => load_redbox_prompt("runtime/agents/video_editor/base.txt")
-            .unwrap_or_default(),
-        "audio-editor" => load_redbox_prompt("runtime/agents/audio_editor/base.txt")
-            .unwrap_or_default(),
+        "video-editor" => {
+            load_redbox_prompt("runtime/agents/video_editor/base.txt").unwrap_or_default()
+        }
+        "audio-editor" => {
+            load_redbox_prompt("runtime/agents/audio_editor/base.txt").unwrap_or_default()
+        }
         _ => String::new(),
     }
 }
@@ -238,31 +241,46 @@ pub(crate) fn text_snippet(value: &str, limit: usize) -> String {
 }
 
 pub(crate) fn collect_recent_chat_messages(
-    store: &AppStore,
+    state: &State<'_, AppState>,
     session_id: Option<&str>,
     limit: usize,
 ) -> Vec<Value> {
     let Some(session_id) = session_id else {
         return Vec::new();
     };
-    let mut items = store
-        .chat_messages
-        .iter()
-        .filter(|item| item.session_id == session_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    items.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    let start = items.len().saturating_sub(limit);
-    items[start..]
-        .iter()
-        .filter(|item| item.role == "user" || item.role == "assistant")
-        .map(|item| {
-            json!({
-                "role": item.role,
-                "content": item.content
+    if let Ok(bundle_messages) = load_session_bundle_messages(state, session_id) {
+        if !bundle_messages.is_empty() {
+            let summary_prompt = with_store(state, |store| {
+                Ok(
+                    store
+                        .session_context_records
+                        .iter()
+                        .find(|item| {
+                            item.session_id == session_id && item.compacted_message_count > 0
+                        })
+                        .map(|item| {
+                            format!(
+                                "[Session resume summary]\n{}\n\nUse this archived context together with the recent messages below.",
+                                item.summary
+                            )
+                        }),
+                )
             })
-        })
-        .collect()
+            .ok()
+            .flatten();
+            return crate::runtime::bundle_messages_for_runtime(
+                &bundle_messages,
+                summary_prompt,
+                limit,
+            );
+        }
+    }
+    with_store(state, |store| {
+        Ok(runtime_context_messages_for_session(
+            None, &store, session_id, limit,
+        ))
+    })
+    .unwrap_or_default()
 }
 
 pub(crate) fn resolve_workspace_tool_path(

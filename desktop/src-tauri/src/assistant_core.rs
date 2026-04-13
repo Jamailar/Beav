@@ -72,10 +72,7 @@ fn assistant_channel_public_value(channel: &Value, base_url: &str, fallback_path
 }
 
 fn normalize_request_path(path: &str) -> String {
-    let without_query = path
-        .split_once('?')
-        .map(|(head, _)| head)
-        .unwrap_or(path);
+    let without_query = path.split_once('?').map(|(head, _)| head).unwrap_or(path);
     let clean = without_query
         .split_once('#')
         .map(|(head, _)| head)
@@ -86,7 +83,10 @@ fn normalize_request_path(path: &str) -> String {
 fn assistant_route_kind_for_path(path: &str, state: &AssistantStateRecord) -> &'static str {
     let normalized = normalize_request_path(path);
     let feishu_path = normalize_endpoint_path(
-        state.feishu.get("endpointPath").and_then(|item| item.as_str()),
+        state
+            .feishu
+            .get("endpointPath")
+            .and_then(|item| item.as_str()),
         "/hooks/feishu/events",
     );
     if state
@@ -99,7 +99,10 @@ fn assistant_route_kind_for_path(path: &str, state: &AssistantStateRecord) -> &'
         return "feishu";
     }
     let weixin_path = normalize_endpoint_path(
-        state.weixin.get("endpointPath").and_then(|item| item.as_str()),
+        state
+            .weixin
+            .get("endpointPath")
+            .and_then(|item| item.as_str()),
         "/hooks/weixin/relay",
     );
     if state
@@ -112,7 +115,10 @@ fn assistant_route_kind_for_path(path: &str, state: &AssistantStateRecord) -> &'
         return "weixin";
     }
     let relay_path = normalize_endpoint_path(
-        state.relay.get("endpointPath").and_then(|item| item.as_str()),
+        state
+            .relay
+            .get("endpointPath")
+            .and_then(|item| item.as_str()),
         "/hooks/channel/relay",
     );
     if state
@@ -153,10 +159,18 @@ fn extract_feishu_prompt(parsed: &Value) -> Option<String> {
                 .and_then(|value| value.as_str())
                 .and_then(extract_json_text)
         })
-        .or_else(|| parsed.get("text").and_then(|value| value.as_str()).and_then(extract_json_text))
+        .or_else(|| {
+            parsed
+                .get("text")
+                .and_then(|value| value.as_str())
+                .and_then(extract_json_text)
+        })
 }
 
-fn resolve_feishu_receive_target(body: &Value, prefer_chat_id: bool) -> Option<(&'static str, String)> {
+fn resolve_feishu_receive_target(
+    body: &Value,
+    prefer_chat_id: bool,
+) -> Option<(&'static str, String)> {
     let chat_id = body
         .pointer("/event/message/chat_id")
         .and_then(|value| value.as_str())
@@ -197,7 +211,12 @@ fn fetch_feishu_tenant_access_token(app_id: &str, app_secret: &str) -> Result<St
             "app_secret": app_secret
         })),
     )?;
-    if response.get("code").and_then(|value| value.as_i64()).unwrap_or(0) != 0 {
+    if response
+        .get("code")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0)
+        != 0
+    {
         let code = response.get("code").cloned().unwrap_or(Value::Null);
         let message = response
             .get("msg")
@@ -255,7 +274,12 @@ fn send_feishu_text_reply(
                 .map_err(|error| error.to_string())?,
         })),
     )?;
-    if response.get("code").and_then(|value| value.as_i64()).unwrap_or(0) != 0 {
+    if response
+        .get("code")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0)
+        != 0
+    {
         let code = response.get("code").cloned().unwrap_or(Value::Null);
         let message = response
             .get("msg")
@@ -395,7 +419,9 @@ pub(crate) fn validate_assistant_request(
     match route_kind {
         "feishu" => {
             if body.get("encrypt").is_some() {
-                return Err("Feishu 加密事件当前未实现解密，请先关闭 encrypt 或改走明文校验".to_string());
+                return Err(
+                    "Feishu 加密事件当前未实现解密，请先关闭 encrypt 或改走明文校验".to_string(),
+                );
             }
             if let Some(expected) = assistant_state
                 .feishu
@@ -544,9 +570,10 @@ pub(crate) fn run_assistant_listener(
                         &app,
                         &format!("assistant daemon request from {}: {}", addr, first_line),
                     );
-                    let assistant_snapshot =
-                        with_store(&app.state::<AppState>(), |store| Ok(store.assistant_state.clone()))
-                            .unwrap_or_else(|_| AssistantStateRecord::default());
+                    let assistant_snapshot = with_store(&app.state::<AppState>(), |store| {
+                        Ok(store.assistant_state.clone())
+                    })
+                    .unwrap_or_else(|_| AssistantStateRecord::default());
                     let route_kind = assistant_route_kind_for_path(&path, &assistant_snapshot);
                     emit_assistant_log(
                         &app,
@@ -715,15 +742,21 @@ mod tests {
     fn assistant_state_value_populates_webhook_urls_from_runtime_host() {
         let value = assistant_state_value(&sample_assistant_state());
         assert_eq!(
-            value.pointer("/feishu/webhookUrl").and_then(|item| item.as_str()),
+            value
+                .pointer("/feishu/webhookUrl")
+                .and_then(|item| item.as_str()),
             Some("http://127.0.0.1:31937/custom/feishu")
         );
         assert_eq!(
-            value.pointer("/relay/webhookUrl").and_then(|item| item.as_str()),
+            value
+                .pointer("/relay/webhookUrl")
+                .and_then(|item| item.as_str()),
             Some("http://127.0.0.1:31937/hooks/channel/custom-relay")
         );
         assert_eq!(
-            value.pointer("/weixin/webhookUrl").and_then(|item| item.as_str()),
+            value
+                .pointer("/weixin/webhookUrl")
+                .and_then(|item| item.as_str()),
             Some("http://127.0.0.1:31937/hooks/weixin/custom")
         );
     }

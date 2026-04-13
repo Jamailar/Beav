@@ -126,7 +126,10 @@ fn editor_track_kind_for_name(track_name: &str) -> &'static str {
     "video"
 }
 
-pub(crate) fn infer_editor_asset_kind(mime_type: Option<&str>, source: Option<&str>) -> &'static str {
+pub(crate) fn infer_editor_asset_kind(
+    mime_type: Option<&str>,
+    source: Option<&str>,
+) -> &'static str {
     let mime = mime_type.unwrap_or("").trim().to_lowercase();
     if mime.starts_with("video/") {
         return "video";
@@ -229,20 +232,23 @@ pub(crate) fn build_default_editor_project(
         "ai": {
             "motionPrompt": "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。",
             "lastEditBrief": Value::Null,
-            "lastMotionBrief": Value::Null
+            "lastMotionBrief": Value::Null,
+            "scriptApproval": {
+                "status": "pending",
+                "lastScriptUpdateAt": now_i64(),
+                "lastScriptUpdateSource": "system",
+                "confirmedAt": Value::Null
+            }
         }
     })
 }
 
 fn read_package_entry_text(package_path: &Path, file_name: &str, manifest: &Value) -> String {
-    fs::read_to_string(package_entry_path(package_path, file_name, Some(manifest))).unwrap_or_default()
+    fs::read_to_string(package_entry_path(package_path, file_name, Some(manifest)))
+        .unwrap_or_default()
 }
 
-fn track_ui_value(
-    track_id: &str,
-    track_ui: &Value,
-    fallback_kind: &str,
-) -> Value {
+fn track_ui_value(track_id: &str, track_ui: &Value, fallback_kind: &str) -> Value {
     let current = track_ui
         .get(track_id)
         .cloned()
@@ -283,11 +289,26 @@ pub(crate) fn build_editor_project_from_legacy(
         build_default_remotion_scene(&title, &clips),
     );
     let track_ui = read_json_value_or(package_track_ui_path(package_path).as_path(), json!({}));
-    let scene_ui = read_json_value_or(package_scene_ui_path(package_path).as_path(), editor_stage_default());
-    let package_assets = read_json_value_or(package_assets_path(package_path).as_path(), json!({ "items": [] }));
-    let width = remotion.get("width").and_then(|value| value.as_i64()).unwrap_or(1080);
-    let height = remotion.get("height").and_then(|value| value.as_i64()).unwrap_or(1920);
-    let fps = remotion.get("fps").and_then(|value| value.as_i64()).unwrap_or(30);
+    let scene_ui = read_json_value_or(
+        package_scene_ui_path(package_path).as_path(),
+        editor_stage_default(),
+    );
+    let package_assets = read_json_value_or(
+        package_assets_path(package_path).as_path(),
+        json!({ "items": [] }),
+    );
+    let width = remotion
+        .get("width")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1080);
+    let height = remotion
+        .get("height")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1920);
+    let fps = remotion
+        .get("fps")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(30);
     let mut project = build_default_editor_project(&title, &script_body, width, height, fps);
 
     let assets = package_assets
@@ -365,8 +386,14 @@ pub(crate) fn build_editor_project_from_legacy(
 
     let mut items = Vec::new();
     for clip in &clips {
-        let asset_kind = clip.get("assetKind").and_then(|value| value.as_str()).unwrap_or("video");
-        let raw_track_id = clip.get("track").and_then(|value| value.as_str()).unwrap_or("V1");
+        let asset_kind = clip
+            .get("assetKind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("video");
+        let raw_track_id = clip
+            .get("track")
+            .and_then(|value| value.as_str())
+            .unwrap_or("V1");
         let track_id = if asset_kind == "text" {
             "T1".to_string()
         } else if asset_kind == "subtitle" {
@@ -416,7 +443,10 @@ pub(crate) fn build_editor_project_from_legacy(
         .cloned()
         .unwrap_or_default();
     for scene in scenes {
-        let scene_id = scene.get("id").and_then(|value| value.as_str()).unwrap_or("");
+        let scene_id = scene
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         items.push(json!({
             "id": if scene_id.is_empty() { make_id("motion-item") } else { format!("motion:{scene_id}") },
             "type": "motion",
@@ -456,7 +486,13 @@ pub(crate) fn build_editor_project_from_legacy(
             json!({
                 "motionPrompt": "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。",
                 "lastEditBrief": Value::Null,
-                "lastMotionBrief": remotion.get("raw").cloned().unwrap_or(Value::Null)
+                "lastMotionBrief": remotion.get("raw").cloned().unwrap_or(Value::Null),
+                "scriptApproval": {
+                    "status": "pending",
+                    "lastScriptUpdateAt": now_i64(),
+                    "lastScriptUpdateSource": "system",
+                    "confirmedAt": Value::Null
+                }
             }),
         );
     }
@@ -467,7 +503,49 @@ pub(crate) fn build_editor_project_from_legacy(
 pub(crate) fn ensure_editor_project(package_path: &Path) -> Result<Value, String> {
     let path = package_editor_project_path(package_path);
     if path.exists() {
-        return Ok(read_json_value_or(&path, json!({})));
+        let mut project = read_json_value_or(&path, json!({}));
+        let original = project.clone();
+        if let Some(object) = project.as_object_mut() {
+            let ai = object.entry("ai".to_string()).or_insert_with(|| json!({}));
+            if !ai.is_object() {
+                *ai = json!({});
+            }
+            if let Some(ai_object) = ai.as_object_mut() {
+                ai_object.entry("motionPrompt".to_string()).or_insert(json!(
+                    "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。"
+                ));
+                ai_object
+                    .entry("lastEditBrief".to_string())
+                    .or_insert(Value::Null);
+                ai_object
+                    .entry("lastMotionBrief".to_string())
+                    .or_insert(Value::Null);
+                let approval = ai_object
+                    .entry("scriptApproval".to_string())
+                    .or_insert_with(|| json!({}));
+                if !approval.is_object() {
+                    *approval = json!({});
+                }
+                if let Some(approval_object) = approval.as_object_mut() {
+                    approval_object
+                        .entry("status".to_string())
+                        .or_insert(json!("pending"));
+                    approval_object
+                        .entry("lastScriptUpdateAt".to_string())
+                        .or_insert(Value::Null);
+                    approval_object
+                        .entry("lastScriptUpdateSource".to_string())
+                        .or_insert(Value::Null);
+                    approval_object
+                        .entry("confirmedAt".to_string())
+                        .or_insert(Value::Null);
+                }
+            }
+        }
+        if project != original {
+            write_json_value(&path, &project)?;
+        }
+        return Ok(project);
     }
     let file_name = package_path
         .file_name()
@@ -504,7 +582,10 @@ pub(crate) fn build_timeline_summary_from_editor_project(project: &Value) -> Val
         .unwrap_or_default()
         .into_iter()
         .filter_map(|track| {
-            let id = track.get("id").and_then(|value| value.as_str())?.to_string();
+            let id = track
+                .get("id")
+                .and_then(|value| value.as_str())?
+                .to_string();
             Some((id, track))
         })
         .collect::<BTreeMap<_, _>>();
@@ -512,18 +593,31 @@ pub(crate) fn build_timeline_summary_from_editor_project(project: &Value) -> Val
     let mut tracks = track_lookup
         .values()
         .filter(|track| {
-            track.get("kind")
+            track
+                .get("kind")
                 .and_then(|value| value.as_str())
                 .map(|value| value != "motion")
                 .unwrap_or(true)
         })
         .cloned()
         .collect::<Vec<_>>();
-    tracks.sort_by_key(|track| track.get("order").and_then(|value| value.as_i64()).unwrap_or(0));
+    tracks.sort_by_key(|track| {
+        track
+            .get("order")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0)
+    });
     let mut track_clips: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    let items = project.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let items = project
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     for item in items {
-        let item_type = item.get("type").and_then(|value| value.as_str()).unwrap_or("");
+        let item_type = item
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         if item_type == "motion" {
             continue;
         }
@@ -536,12 +630,25 @@ pub(crate) fn build_timeline_summary_from_editor_project(project: &Value) -> Val
     }
     let mut clips = Vec::new();
     for track in &tracks {
-        let track_id = track.get("id").and_then(|value| value.as_str()).unwrap_or("V1");
-        let track_kind = track.get("kind").and_then(|value| value.as_str()).unwrap_or("video");
+        let track_id = track
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("V1");
+        let track_kind = track
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("video");
         let mut items = track_clips.remove(track_id).unwrap_or_default();
-        items.sort_by_key(|item| item.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0));
+        items.sort_by_key(|item| {
+            item.get("fromMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0)
+        });
         for (index, item) in items.into_iter().enumerate() {
-            let item_type = item.get("type").and_then(|value| value.as_str()).unwrap_or("media");
+            let item_type = item
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("media");
             let asset = item
                 .get("assetId")
                 .and_then(|value| value.as_str())
@@ -553,15 +660,22 @@ pub(crate) fn build_timeline_summary_from_editor_project(project: &Value) -> Val
                 _ => asset
                     .as_ref()
                     .map(|value| {
-                        value.get("kind")
+                        value
+                            .get("kind")
                             .and_then(|kind| kind.as_str())
                             .unwrap_or("video")
                             .to_string()
                     })
                     .unwrap_or_else(|| track_kind.to_string()),
             };
-            let from_ms = item.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
-            let duration_ms = item.get("durationMs").and_then(|value| value.as_i64()).unwrap_or(3000);
+            let from_ms = item
+                .get("fromMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0);
+            let duration_ms = item
+                .get("durationMs")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(3000);
             clips.push(json!({
                 "clipId": item.get("id").cloned().unwrap_or_else(|| json!(make_id("clip"))),
                 "assetId": item.get("assetId").cloned().unwrap_or(Value::Null),
@@ -619,9 +733,18 @@ pub(crate) fn build_timeline_summary_from_editor_project(project: &Value) -> Val
 
 pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Value {
     let project_meta = project.get("project").cloned().unwrap_or_else(|| json!({}));
-    let width = project_meta.get("width").and_then(|value| value.as_i64()).unwrap_or(1080);
-    let height = project_meta.get("height").and_then(|value| value.as_i64()).unwrap_or(1920);
-    let fps = project_meta.get("fps").and_then(|value| value.as_i64()).unwrap_or(30);
+    let width = project_meta
+        .get("width")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1080);
+    let height = project_meta
+        .get("height")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1920);
+    let fps = project_meta
+        .get("fps")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(30);
     let title = project_meta
         .get("title")
         .and_then(|value| value.as_str())
@@ -632,22 +755,40 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         .and_then(|value| value.as_str())
         .unwrap_or("#05070b");
     let asset_lookup = editor_project_assets_map(project);
-    let tracks = project.get("tracks").and_then(Value::as_array).cloned().unwrap_or_default();
+    let tracks = project
+        .get("tracks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let track_kind_lookup = tracks
         .into_iter()
         .filter_map(|track| {
-            let id = track.get("id").and_then(|value| value.as_str())?.to_string();
-            let kind = track.get("kind").and_then(|value| value.as_str()).unwrap_or("video").to_string();
+            let id = track
+                .get("id")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            let kind = track
+                .get("kind")
+                .and_then(|value| value.as_str())
+                .unwrap_or("video")
+                .to_string();
             Some((id, kind))
         })
         .collect::<BTreeMap<_, _>>();
-    let items = project.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let items = project
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let media_items = items
         .iter()
         .filter(|item| item.get("type").and_then(|value| value.as_str()) == Some("media"))
         .filter(|item| item_enabled(item))
         .filter(|item| {
-            let track_id = item.get("trackId").and_then(|value| value.as_str()).unwrap_or("V1");
+            let track_id = item
+                .get("trackId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("V1");
             track_kind_lookup
                 .get(track_id)
                 .map(|kind| kind == "video")
@@ -664,8 +805,14 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
     let mut scenes = Vec::new();
     let mut duration_in_frames = 90_i64;
     for media_item in media_items {
-        let item_id = media_item.get("id").and_then(|value| value.as_str()).unwrap_or("");
-        let asset_id = media_item.get("assetId").and_then(|value| value.as_str()).unwrap_or("");
+        let item_id = media_item
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let asset_id = media_item
+            .get("assetId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         let asset = asset_lookup.get(asset_id);
         let src = asset
             .and_then(|value| value.get("src").and_then(|src| src.as_str()))
@@ -677,7 +824,10 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         if src.trim().is_empty() || media_kind == "audio" {
             continue;
         }
-        let from_ms = media_item.get("fromMs").and_then(|value| value.as_i64()).unwrap_or(0);
+        let from_ms = media_item
+            .get("fromMs")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
         let item_duration_ms = media_item
             .get("durationMs")
             .and_then(|value| value.as_i64())
@@ -699,7 +849,9 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
             .unwrap_or(item_duration_ms)
             .max(500);
         let start_frame = ((from_ms as f64 / 1000.0) * fps as f64).round() as i64;
-        let scene_duration_frames = ((scene_duration_ms as f64 / 1000.0) * fps as f64).round().max(12.0) as i64;
+        let scene_duration_frames = ((scene_duration_ms as f64 / 1000.0) * fps as f64)
+            .round()
+            .max(12.0) as i64;
         duration_in_frames = duration_in_frames.max(start_frame + scene_duration_frames);
         let props = bound_motion
             .as_ref()
@@ -1214,7 +1366,10 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         )
     };
     let scene_ui = if let Some(project) = editor_project.as_ref() {
-        project.get("stage").cloned().unwrap_or_else(editor_stage_default)
+        project
+            .get("stage")
+            .cloned()
+            .unwrap_or_else(editor_stage_default)
     } else {
         read_json_value_or(
             package_scene_ui_path(package_path).as_path(),
@@ -1300,7 +1455,13 @@ pub(crate) fn create_manuscript_package(
         )?;
         write_json_value(
             &package_editor_project_path(package_path),
-            &build_default_editor_project(title, content, 1080, if package_kind == "audio" { 1080 } else { 1920 }, 30),
+            &build_default_editor_project(
+                title,
+                content,
+                1080,
+                if package_kind == "audio" { 1080 } else { 1920 },
+                30,
+            ),
         )?;
     } else if package_kind == "article" {
         write_text_file(&package_path.join("layout.html"), "")?;

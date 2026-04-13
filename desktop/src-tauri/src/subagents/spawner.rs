@@ -21,9 +21,47 @@ use crate::subagents::{
     SubAgentSpawnResult,
 };
 use crate::{
-    make_id, now_i64, now_iso, parse_json_value_from_text, payload_string, AppState, AppStore,
-    ChatSessionRecord,
+    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text,
+    payload_string, AppState, AppStore, ChatSessionRecord,
 };
+
+fn snippet(value: &str, limit: usize) -> String {
+    let text = value.replace('\n', "\\n");
+    if text.chars().count() <= limit {
+        text
+    } else {
+        let preview = text.chars().take(limit).collect::<String>();
+        format!("{preview}...")
+    }
+}
+
+fn model_config_summary(config: Option<&Value>) -> String {
+    config
+        .and_then(Value::as_object)
+        .map(|object| {
+            format!(
+                "baseURL={} | modelName={} | protocol={} | apiKeyPresent={} | reasoningEffort={}",
+                object.get("baseURL").and_then(Value::as_str).unwrap_or(""),
+                object.get("modelName").and_then(Value::as_str).unwrap_or(""),
+                object.get("protocol").and_then(Value::as_str).unwrap_or(""),
+                object
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false),
+                object
+                    .get("reasoningEffort")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            )
+        })
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn log_subagent_state(state: &State<'_, AppState>, line: String) {
+    eprintln!("{}", line);
+    append_debug_log_state(state, line);
+}
 
 fn context_type_for_runtime_mode(runtime_mode: &str) -> &'static str {
     match runtime_mode {
@@ -441,6 +479,31 @@ fn execute_subagent_config(
 ) -> Result<SubAgentOutput, String> {
     let state = app.state::<AppState>();
     let child_prompt = build_child_prompt(&config, &route, &user_input, &prior_outputs);
+    log_subagent_state(
+        &state,
+        format!(
+            "[subagent][start] role={} | parentTaskId={} | childTaskId={} | childSessionId={} | runtimeMode={} | modelConfig={} | userInputChars={} | priorOutputs={} | goal={} ",
+            config.role_id,
+            config.parent_task_id,
+            spawn.child_task_id,
+            spawn.child_session_id,
+            config.runtime_mode,
+            model_config_summary(config.model_config.as_ref()),
+            user_input.chars().count(),
+            prior_outputs.len(),
+            snippet(&route.goal, 220)
+        ),
+    );
+    log_subagent_state(
+        &state,
+        format!(
+            "[subagent][prompt] role={} | childTaskId={} | promptChars={} | preview={}",
+            config.role_id,
+            spawn.child_task_id,
+            child_prompt.chars().count(),
+            snippet(&child_prompt, 800)
+        ),
+    );
     let turn = PreparedSessionAgentTurn::runtime_query(build_runtime_query_turn(
         Some(spawn.child_session_id.clone()),
         route.clone(),
@@ -458,11 +521,37 @@ fn execute_subagent_config(
         None,
     );
     let execution = execute_prepared_session_agent_turn(Some(&app), &state, &turn)?;
+    log_subagent_state(
+        &state,
+        format!(
+            "[subagent][response] role={} | childTaskId={} | responseChars={} | preview={}",
+            config.role_id,
+            spawn.child_task_id,
+            execution.response().chars().count(),
+            snippet(execution.response(), 1200)
+        ),
+    );
     let output = parse_child_output(
         execution.response(),
         &config.role_id,
         &spawn.child_task_id,
         &spawn.child_session_id,
+    );
+    log_subagent_state(
+        &state,
+        format!(
+            "[subagent][parsed] role={} | childTaskId={} | approved={} | summary={} | artifactChars={} | artifactPreview={}",
+            config.role_id,
+            spawn.child_task_id,
+            output.approved,
+            snippet(&output.summary, 280),
+            output.artifact.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            output
+                .artifact
+                .as_ref()
+                .map(|value| snippet(value, 800))
+                .unwrap_or_default()
+        ),
     );
     persist_child_execution(
         &state,
@@ -484,6 +573,15 @@ fn execute_subagent_config(
             "childSessionId": output.child_session_id,
             "approved": output.approved,
         })),
+    );
+    log_subagent_state(
+        &state,
+        format!(
+            "[subagent][finished] role={} | childTaskId={} | childSessionId={} | status=completed",
+            config.role_id,
+            spawn.child_task_id,
+            spawn.child_session_id
+        ),
     );
     Ok(output)
 }
@@ -581,6 +679,17 @@ pub fn run_real_subagent_orchestration_for_task(
                 }
                 Err(error) => {
                     let child_state = app_handle.state::<AppState>();
+                    log_subagent_state(
+                        &child_state,
+                        format!(
+                            "[subagent][failed] role={} | parentTaskId={} | childTaskId={} | childSessionId={} | error={}",
+                            config.role_id,
+                            config.parent_task_id,
+                            spawn.child_task_id,
+                            spawn.child_session_id,
+                            snippet(&error, 1200)
+                        ),
+                    );
                     let _ = mark_child_failure(&child_state, &spawn, &config, &error);
                     emit_runtime_subagent_finished(
                         &app_handle,

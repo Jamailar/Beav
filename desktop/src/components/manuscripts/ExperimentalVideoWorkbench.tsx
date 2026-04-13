@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { PlayerRef } from '@remotion/player';
-import { AudioLines, Check, ChevronsUpDown, Clapperboard, Image as ImageIcon, MessageSquare, Plus, SlidersHorizontal, Sparkles, Type, Upload, Video, Wand2, X } from 'lucide-react';
+import { AudioLines, Check, ChevronsUpDown, Clapperboard, Image as ImageIcon, Plus, SlidersHorizontal, Sparkles, Type, Upload, Video } from 'lucide-react';
 import { VideoEditorSidebarShell } from './VideoEditorSidebarShell';
 import { VideoEditorStageShell } from './VideoEditorStageShell';
 import { VideoEditorTimelineShell } from './VideoEditorTimelineShell';
@@ -11,10 +11,10 @@ import { RemotionVideoPreview } from './remotion/RemotionVideoPreview';
 import type { RemotionCompositionConfig } from './remotion/types';
 import { createVideoEditorStore, useVideoEditorStore, type VideoEditorRatioPreset } from '../../features/video-editor/store/useVideoEditorStore';
 import { resolveAssetUrl } from '../../utils/pathManager';
+import { subscribeRuntimeEventStream } from '../../runtime/runtimeEventStream';
 import {
     applyEditorCommandLocal,
     buildRemotionCompositionFromEditorProject,
-    buildScriptBriefSections,
     buildAssetMap,
     type EditorCommand,
     deriveLegacyTimelineClips,
@@ -82,6 +82,7 @@ type ExperimentalVideoWorkbenchProps = {
     onEditorBodyChange: (value: string) => void;
     onOpenBindAssets: () => void;
     onPackageStateChange: (state: PackageStateLike) => void;
+    onConfirmScript?: () => void;
     onGenerateRemotionScene?: (instructions?: string) => void;
     onSaveRemotionScene?: (scene: RemotionCompositionConfig) => void;
     onRenderRemotionVideo: () => void;
@@ -130,20 +131,6 @@ function inferSceneFromMotion(project: EditorProjectFile, motionItem: EditorMoti
     return composition.scenes.find((scene) => scene.id === motionItem.id || scene.clipId === motionItem.bindItemId) || null;
 }
 
-function buildEditBrief(project: EditorProjectFile): string {
-    const sections = buildScriptBriefSections(project);
-    const visibleItemCount = project.items.filter((item) => item.type !== 'motion').length;
-    const motionCount = project.items.filter((item) => item.type === 'motion').length;
-    const lines = [
-        `当前脚本共 ${sections.length} 段，时间轴已落 ${visibleItemCount} 个基础 item，${motionCount} 个动画 item。`,
-        '建议顺序：先确认每段素材是否对应，再检查开头 3 秒钩子是否有更强标题动画，最后再统一清理字幕节奏。',
-    ];
-    sections.slice(0, 6).forEach((section, index) => {
-        lines.push(`${index + 1}. ${section.text}`);
-    });
-    return lines.join('\n');
-}
-
 function clamp(value: number, min: number, max: number) {
     return Math.min(Math.max(value, min), max);
 }
@@ -172,6 +159,7 @@ export function ExperimentalVideoWorkbench({
     onEditorBodyChange,
     onOpenBindAssets,
     onPackageStateChange,
+    onConfirmScript,
     onGenerateRemotionScene: _onGenerateRemotionScene,
     onSaveRemotionScene: _onSaveRemotionScene,
     onRenderRemotionVideo,
@@ -183,10 +171,6 @@ export function ExperimentalVideoWorkbench({
     const [localProject, setLocalProject] = useState<EditorProjectFile | null>(packageState?.editorProject || null);
     const [saveNonce, setSaveNonce] = useState(0);
     const [isGeneratingMotion, setIsGeneratingMotion] = useState(false);
-    const [briefText, setBriefText] = useState('');
-    const [commandInput, setCommandInput] = useState('');
-    const [commandBrief, setCommandBrief] = useState('');
-    const [isApplyingAiCommand, setIsApplyingAiCommand] = useState(false);
     const [chatPaneWidth, setChatPaneWidth] = useState(420);
     const [chatResizeState, setChatResizeState] = useState<ChatResizeState | null>(null);
     const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('assets');
@@ -215,6 +199,36 @@ export function ExperimentalVideoWorkbench({
             },
         }));
     }, [editorStore, packageState?.editorProject]);
+
+    useEffect(() => {
+        if (!isActive || !editorChatSessionId) return;
+        const parseJsonOutput = (raw: unknown): Record<string, unknown> | null => {
+            const text = String(raw || '').trim();
+            if (!text) return null;
+            try {
+                const parsed = JSON.parse(text) as Record<string, unknown>;
+                return parsed && typeof parsed === 'object' ? parsed : null;
+            } catch {
+                return null;
+            }
+        };
+        return subscribeRuntimeEventStream({
+            getActiveSessionId: () => editorChatSessionId,
+            onToolResult: ({ name, output }) => {
+                if (name !== 'redbox_editor' || !output?.success) return;
+                const parsed = parseJsonOutput(output.content);
+                const nextState = parsed?.state;
+                if (nextState && typeof nextState === 'object') {
+                    onPackageStateChange(nextState as PackageStateLike);
+                }
+            },
+            onTaskCheckpointSaved: ({ checkpointType }) => {
+                if (checkpointType === 'editor.script_changed') {
+                    setPreviewTab('script');
+                }
+            },
+        });
+    }, [editorChatSessionId, isActive, onPackageStateChange]);
 
     useEffect(() => {
         if (!localProject) return;
@@ -357,7 +371,14 @@ export function ExperimentalVideoWorkbench({
             || null;
     }, [localProject, motionItems, selection.primaryItemId]);
     const selectedScene = useMemo(() => localProject ? inferSceneFromMotion(localProject, selectedMotionItem) : null, [localProject, selectedMotionItem]);
-    const briefSections = useMemo(() => localProject ? buildScriptBriefSections({ ...localProject, script: { body: editorBody } }) : [], [editorBody, localProject]);
+    const scriptConfirmed = localProject?.ai?.scriptApproval?.status === 'confirmed';
+    const scriptStatusLabel = isSavingEditorBody
+        ? '脚本保存中...'
+        : editorBodyDirty
+            ? '脚本待保存'
+            : scriptConfirmed
+                ? '脚本已确认'
+                : '脚本待确认';
     const selectedEditorItem = useMemo(
         () => localProject?.items.find((item) => item.id === selection.primaryItemId) || null,
         [localProject, selection.primaryItemId]
@@ -492,9 +513,6 @@ export function ExperimentalVideoWorkbench({
                 selectedItemIds: selectedItemIds || [],
             }) as { success?: boolean; state?: PackageStateLike; brief?: string };
             if (result?.success && result.state) {
-                if (result.brief) {
-                    setBriefText(result.brief);
-                }
                 onPackageStateChange(result.state);
             }
         } catch (error) {
@@ -504,30 +522,11 @@ export function ExperimentalVideoWorkbench({
         }
     };
 
-    const generateEditorCommands = async (instructions: string) => {
-        if (!instructions.trim()) return;
-        setIsApplyingAiCommand(true);
-        try {
-            const result = await window.ipcRenderer.invoke('manuscripts:generate-editor-commands', {
-                filePath: editorFile,
-                instructions,
-            }) as { success?: boolean; brief?: string; commands?: EditorCommand[] };
-            if (!result?.success) return;
-            setCommandBrief(String(result.brief || '').trim());
-            const commands = Array.isArray(result.commands) ? result.commands : [];
-            await dispatchEditorCommands(commands);
-        } catch (error) {
-            console.error('Failed to generate editor commands:', error);
-        } finally {
-            setIsApplyingAiCommand(false);
-        }
-    };
-
     const stageTitle = previewTab === 'motion' ? 'Motion Inspector' : previewTab === 'script' ? 'Script Workspace' : 'Stage Preview';
     const stageSubtitle = previewTab === 'motion'
-        ? '动画 item 是一等时间轴实体，预览和导出都从 editor.project.json 派生。'
+        ? `${scriptStatusLabel} · 动画 item 是一等时间轴实体，预览和导出都从 editor.project.json 派生。`
         : previewTab === 'script'
-            ? '脚本正文继续保留文本主导，但每一段都可以直接定位和生成 motion。'
+            ? (scriptConfirmed ? '脚本已确认，可以继续剪辑与生成 motion。' : '先让 AI 改脚本文字并确认，再继续剪辑与生成 motion。')
             : 'Preview 继续负责低延迟校对与舞台布局，读取统一工程状态。';
 
     const sidebarTabs = [
@@ -798,13 +797,24 @@ export function ExperimentalVideoWorkbench({
                             <button
                                 type="button"
                                 onClick={() => generateMotionItems(localProject.ai.motionPrompt || editorBody, selection.itemIds)}
-                                disabled={isGeneratingMotion}
+                                disabled={isGeneratingMotion || !scriptConfirmed}
                                 className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/35 bg-fuchsia-400/12 px-3 py-1.5 text-xs text-fuchsia-100 disabled:opacity-40"
+                                title={scriptConfirmed ? '基于已确认脚本生成 motion item' : '先确认脚本，再生成 motion item'}
                             >
                                 <Sparkles className="h-3.5 w-3.5" />
                                 {isGeneratingMotion ? '生成中...' : '生成 Motion Items'}
                             </button>
                         ) : null}
+                            <div
+                                className={clsx(
+                                    'inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium',
+                                    scriptConfirmed
+                                        ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
+                                        : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+                                )}
+                            >
+                                {scriptStatusLabel}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -964,75 +974,39 @@ export function ExperimentalVideoWorkbench({
                         </div>
                     </div>
                 ) : (
-                    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px]">
+                    <div className="flex h-full min-h-0 flex-col">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#121318] px-5 py-3">
+                            <div>
+                                <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/35">Markdown Script</div>
+                                <div className="mt-1 text-sm text-white/72">AI 如果要改视频内容，必须先改这里的脚本文字。用户确认后才进入动画制作。</div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div
+                                    className={clsx(
+                                        'inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium',
+                                        scriptConfirmed
+                                            ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
+                                            : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+                                    )}
+                                >
+                                    {scriptStatusLabel}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => onConfirmScript?.()}
+                                    disabled={!onConfirmScript || scriptConfirmed || editorBodyDirty || isSavingEditorBody}
+                                    className="rounded-full border border-emerald-400/35 bg-emerald-400/12 px-3 py-1 text-[11px] text-emerald-100 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/35"
+                                >
+                                    {scriptConfirmed ? '脚本已确认' : editorBodyDirty || isSavingEditorBody ? '保存后确认脚本' : '确认脚本'}
+                                </button>
+                            </div>
+                        </div>
                         <textarea
                             value={editorBody}
                             onChange={(event) => onEditorBodyChange(event.target.value)}
                             placeholder="在这里写视频脚本、镜头安排、剪辑目标和导出要求。"
-                            className="h-full w-full resize-none bg-transparent px-5 py-5 text-sm leading-7 text-white outline-none placeholder:text-white/30"
+                            className="h-full w-full min-h-0 resize-none bg-transparent px-5 py-5 text-sm leading-7 text-white outline-none placeholder:text-white/30"
                         />
-                        <div className="min-h-0 overflow-y-auto border-l border-white/10 bg-[#121318] px-4 py-4">
-                            <div className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
-                                <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/35">Brief Sections</div>
-                                <div className="mt-3 space-y-3">
-                                    {briefSections.map((section) => (
-                                        <div key={section.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                                            <div className="text-sm font-medium text-white">{section.title}</div>
-                                            <div className="mt-2 text-xs leading-5 text-white/70">{section.text}</div>
-                                            <div className="mt-3 flex flex-wrap gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        if (!section.linkedItemId) return;
-                                                        setSelection({ itemIds: [section.linkedItemId], primaryItemId: section.linkedItemId, trackIds: [] });
-                                                        const linked = localProject.items.find((item) => item.id === section.linkedItemId);
-                                                        if (linked) {
-                                                            seekTimeMs(linked.fromMs);
-                                                            setPreviewTab('preview');
-                                                        }
-                                                    }}
-                                                    className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/75"
-                                                >
-                                                    定位
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => generateMotionItems(`${section.title}\n${section.text}`, section.linkedItemId ? [section.linkedItemId] : undefined)}
-                                                    className="rounded-full border border-fuchsia-300/35 bg-fuchsia-400/12 px-3 py-1 text-[11px] text-fuchsia-100"
-                                                >
-                                                    为这一段生成 motion
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="mt-4 rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div className="text-sm font-medium text-white">编辑 Brief</div>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const nextBrief = buildEditBrief({ ...localProject, script: { body: editorBody } });
-                                            setBriefText(nextBrief);
-                                            updateProject({
-                                                ...localProject,
-                                                ai: {
-                                                    ...localProject.ai,
-                                                    lastEditBrief: nextBrief,
-                                                },
-                                            });
-                                        }}
-                                        className="inline-flex items-center rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1 text-[11px] text-cyan-100"
-                                    >
-                                        生成编辑 Brief
-                                    </button>
-                                </div>
-                                <div className="mt-3 whitespace-pre-wrap rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-5 text-white/72">
-                                    {briefText || localProject.ai.lastEditBrief || '还没有生成编辑 brief。'}
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 )}
             </VideoEditorStageShell>
@@ -1062,13 +1036,13 @@ export function ExperimentalVideoWorkbench({
                                 showClearButton={false}
                                 fixedSessionBannerText=""
                                 shortcuts={[
-                                    { label: '生成编辑 Brief', text: '请只输出当前工程的编辑 brief，不要直接修改时间轴。' },
-                                    { label: '生成 Motion', text: '请为当前选中片段规划动画节奏，并给出 motion item 方案。' },
+                                    { label: '改写脚本', text: '请先读取当前脚本，输出一版完整脚本草案，并使用 redbox_editor 的 script_update 写回脚本区。先不要修改时间轴或动画。' },
+                                    { label: '确认后生成 Motion', text: '仅在脚本已确认后，为当前选中片段规划动画节奏，并给出 motion item 方案。' },
                                     { label: '检查节奏', text: '请检查当前脚本和时间轴节奏，指出最值得调整的 3 个点。' },
                                 ]}
                                 welcomeShortcuts={[
-                                    { label: '生成编辑 Brief', text: '请只输出当前工程的编辑 brief，不要直接修改时间轴。' },
-                                    { label: '生成 Motion', text: '请为当前选中片段规划动画节奏，并给出 motion item 方案。' },
+                                    { label: '改写脚本', text: '请先读取当前脚本，输出一版完整脚本草案，并使用 redbox_editor 的 script_update 写回脚本区。先不要修改时间轴或动画。' },
+                                    { label: '确认后生成 Motion', text: '仅在脚本已确认后，为当前选中片段规划动画节奏，并给出 motion item 方案。' },
                                 ]}
                                 showWelcomeShortcuts={true}
                                 showComposerShortcuts={false}
@@ -1077,7 +1051,7 @@ export function ExperimentalVideoWorkbench({
                                 emptyStateComposerPlacement="bottom"
                                 embeddedTheme="dark"
                                 welcomeTitle="视频剪辑助手"
-                                welcomeSubtitle="实验分支：围绕 editor.project.json 组织剪辑与动画。"
+                                welcomeSubtitle="实验分支：先改脚本并确认，再围绕 editor.project.json 组织剪辑与动画。"
                                 contentLayout="default"
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}

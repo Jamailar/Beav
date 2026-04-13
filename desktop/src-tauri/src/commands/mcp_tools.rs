@@ -168,7 +168,10 @@ pub fn mcp_import_local_value(state: &State<'_, AppState>) -> Result<Value, Stri
     })
 }
 
-pub fn mcp_oauth_status_value(state: &State<'_, AppState>, server_id: &str) -> Result<Value, String> {
+pub fn mcp_oauth_status_value(
+    state: &State<'_, AppState>,
+    server_id: &str,
+) -> Result<Value, String> {
     with_store(state, |store| {
         let status = store
             .mcp_servers
@@ -184,7 +187,10 @@ pub fn mcp_oauth_status_value(state: &State<'_, AppState>, server_id: &str) -> R
     })
 }
 
-pub fn mcp_disconnect_value(state: &State<'_, AppState>, server: &McpServerRecord) -> Result<Value, String> {
+pub fn mcp_disconnect_value(
+    state: &State<'_, AppState>,
+    server: &McpServerRecord,
+) -> Result<Value, String> {
     Ok(json!({
         "success": true,
         "disconnected": state.mcp_manager.disconnect_server(server)?,
@@ -268,7 +274,9 @@ pub fn handle_mcp_tools_channel(
                 let server: McpServerRecord = payload_field(payload, "server")
                     .cloned()
                     .ok_or_else(|| "缺少 server".to_string())
-                    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))?;
+                    .and_then(|value| {
+                        serde_json::from_value(value).map_err(|error| error.to_string())
+                    })?;
                 mcp_disconnect_value(state, &server)
             }
             "mcp:disconnect-all" => mcp_disconnect_all_value(state),

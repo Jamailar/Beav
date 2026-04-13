@@ -115,6 +115,12 @@ export type EditorProjectFile = {
         motionPrompt: string;
         lastEditBrief?: string | null;
         lastMotionBrief?: string | null;
+        scriptApproval?: {
+            status: 'pending' | 'confirmed';
+            lastScriptUpdateAt?: number | null;
+            lastScriptUpdateSource?: 'user' | 'ai' | 'system' | null;
+            confirmedAt?: number | null;
+        };
     };
 };
 

@@ -411,11 +411,7 @@ fn read_text_prefix(path: &Path, max_bytes: u64) -> String {
     String::from_utf8_lossy(&buffer).into_owned()
 }
 
-fn list_tree_internal(
-    root: &Path,
-    current: &Path,
-    depth: usize,
-) -> Result<Vec<FileNode>, String> {
+fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<FileNode>, String> {
     if depth > MANUSCRIPTS_TREE_MAX_DEPTH {
         return Ok(Vec::new());
     }

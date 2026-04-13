@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
@@ -149,6 +150,24 @@ struct ChatMessageRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatSessionContextRecord {
+    session_id: String,
+    summary: String,
+    summary_source: String,
+    total_message_count: i64,
+    compacted_message_count: i64,
+    tail_message_count: i64,
+    compact_rounds: i64,
+    summary_chars: i64,
+    estimated_total_tokens: i64,
+    first_user_message: Option<String>,
+    last_user_message: Option<String>,
+    last_assistant_message: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AdvisorRecord {
     id: String,
     name: String,
@@ -282,6 +301,7 @@ struct AppStore {
     wander_history: Vec<WanderHistoryRecord>,
     chat_sessions: Vec<ChatSessionRecord>,
     chat_messages: Vec<ChatMessageRecord>,
+    session_context_records: Vec<ChatSessionContextRecord>,
     youtube_videos: Vec<YoutubeVideoRecord>,
     knowledge_notes: Vec<KnowledgeNoteRecord>,
     document_sources: Vec<DocumentKnowledgeSourceRecord>,
@@ -2254,11 +2274,11 @@ fn text_snippet(value: &str, limit: usize) -> String {
 }
 
 fn collect_recent_chat_messages(
-    store: &AppStore,
+    state: &State<'_, AppState>,
     session_id: Option<&str>,
     limit: usize,
 ) -> Vec<Value> {
-    interactive_runtime_shared::collect_recent_chat_messages(store, session_id, limit)
+    interactive_runtime_shared::collect_recent_chat_messages(state, session_id, limit)
 }
 
 fn resolve_workspace_tool_path(
@@ -2318,6 +2338,15 @@ fn editor_tool_payload(file_path: String, arguments: &Value, keys: &[&str]) -> V
     Value::Object(object)
 }
 
+fn model_config_value_from_resolved(config: &ResolvedChatConfig) -> Value {
+    json!({
+        "baseURL": config.base_url,
+        "apiKey": config.api_key,
+        "modelName": config.model_name,
+        "protocol": config.protocol
+    })
+}
+
 fn execute_interactive_tool_call(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -2325,6 +2354,7 @@ fn execute_interactive_tool_call(
     session_id: Option<&str>,
     name: &str,
     arguments: &Value,
+    model_config: Option<&Value>,
 ) -> Result<Value, String> {
     let normalized_call = tools::compat::normalize_tool_call(name, arguments);
     let name = normalized_call.name;
@@ -2351,7 +2381,64 @@ fn execute_interactive_tool_call(
         "redbox_editor" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
             let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
+            let ensure_script_confirmed = |next_action: &str| -> Result<(), String> {
+                let script_state = call_manuscript_channel(
+                    "manuscripts:get-package-script-state",
+                    json!({ "filePath": file_path.clone() }),
+                )?;
+                let status = script_state
+                    .pointer("/script/approval/status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("pending");
+                if status == "confirmed" {
+                    return Ok(());
+                }
+                Err(format!(
+                    "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
+                ))
+            };
             match action.as_str() {
+                "script_read" | "script-read" => call_manuscript_channel(
+                    "manuscripts:get-package-script-state",
+                    json!({ "filePath": file_path }),
+                ),
+                "script_update" | "script-update" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:update-package-script",
+                        editor_tool_payload(file_path.clone(), arguments, &["content", "source"]),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.script_changed",
+                            "editor script changed",
+                            Some(json!({
+                                "filePath": file_path,
+                                "source": payload_string(arguments, "source").unwrap_or_else(|| "ai".to_string())
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "script_confirm" | "script-confirm" => {
+                    let result = call_manuscript_channel(
+                        "manuscripts:confirm-package-script",
+                        json!({ "filePath": file_path.clone() }),
+                    )?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.script_confirmed",
+                            "editor script confirmed",
+                            Some(json!({ "filePath": file_path })),
+                        );
+                    }
+                    Ok(result)
+                }
                 "timeline_read" | "clips" => {
                     call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
                 }
@@ -2564,11 +2651,14 @@ fn execute_interactive_tool_call(
                     }
                     Ok(result)
                 }
-                "track_add" | "track-add" => call_manuscript_channel(
-                    "manuscripts:add-package-track",
-                    editor_tool_payload(file_path, arguments, &["kind"]),
-                ),
+                "track_add" | "track-add" => {
+                    call_manuscript_channel("manuscripts:add-package-track", {
+                        ensure_script_confirmed("track_add")?;
+                        editor_tool_payload(file_path, arguments, &["kind"])
+                    })
+                }
                 "track_reorder" | "track-reorder" => {
+                    ensure_script_confirmed("track_reorder")?;
                     let result = call_manuscript_channel(
                         "manuscripts:move-package-track",
                         editor_tool_payload(
@@ -2594,6 +2684,7 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "track_delete" | "track-delete" => {
+                    ensure_script_confirmed("track_delete")?;
                     let result = call_manuscript_channel(
                         "manuscripts:delete-package-track",
                         editor_tool_payload(file_path.clone(), arguments, &["trackId"]),
@@ -2613,15 +2704,18 @@ fn execute_interactive_tool_call(
                     }
                     Ok(result)
                 }
-                "clip_add" | "clip-add" => call_manuscript_channel(
-                    "manuscripts:add-package-clip",
-                    editor_tool_payload(
-                        file_path,
-                        arguments,
-                        &["assetId", "track", "order", "durationMs"],
-                    ),
-                ),
+                "clip_add" | "clip-add" => {
+                    call_manuscript_channel("manuscripts:add-package-clip", {
+                        ensure_script_confirmed("clip_add")?;
+                        editor_tool_payload(
+                            file_path,
+                            arguments,
+                            &["assetId", "track", "order", "durationMs"],
+                        )
+                    })
+                }
                 "clip_insert_at_playhead" | "clip-insert-at-playhead" => {
+                    ensure_script_confirmed("clip_insert_at_playhead")?;
                     let result = call_manuscript_channel(
                         "manuscripts:insert-package-clip-at-playhead",
                         editor_tool_payload(
@@ -2674,6 +2768,7 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "subtitle_add" | "subtitle-add" => {
+                    ensure_script_confirmed("subtitle_add")?;
                     let result = call_manuscript_channel(
                         "manuscripts:insert-package-subtitle-at-playhead",
                         editor_tool_payload(
@@ -2698,6 +2793,7 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "text_add" | "text-add" => {
+                    ensure_script_confirmed("text_add")?;
                     let result = call_manuscript_channel(
                         "manuscripts:insert-package-text-at-playhead",
                         editor_tool_payload(
@@ -2721,55 +2817,81 @@ fn execute_interactive_tool_call(
                     }
                     Ok(result)
                 }
-                "clip_update" | "clip-update" => call_manuscript_channel(
-                    "manuscripts:update-package-clip",
-                    editor_tool_payload(
-                        file_path,
-                        arguments,
-                        &[
-                            "clipId",
-                            "name",
-                            "assetKind",
-                            "subtitleStyle",
-                            "textStyle",
-                            "transitionStyle",
-                            "track",
-                            "order",
-                            "durationMs",
-                            "trimInMs",
-                            "trimOutMs",
-                            "enabled",
-                        ],
-                    ),
-                ),
-                "clip_move" | "clip-move" => call_manuscript_channel(
-                    "manuscripts:update-package-clip",
-                    editor_tool_payload(file_path, arguments, &["clipId", "track", "order"]),
-                ),
-                "clip_toggle_enabled" | "clip-toggle-enabled" => call_manuscript_channel(
-                    "manuscripts:update-package-clip",
-                    editor_tool_payload(file_path, arguments, &["clipId", "enabled"]),
-                ),
-                "clip_delete" | "clip-delete" => call_manuscript_channel(
-                    "manuscripts:delete-package-clip",
-                    editor_tool_payload(file_path, arguments, &["clipId"]),
-                ),
-                "clip_split" | "clip-split" => call_manuscript_channel(
-                    "manuscripts:split-package-clip",
-                    editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"]),
-                ),
-                "remotion_generate" | "remotion-generate" => call_manuscript_channel(
-                    "manuscripts:generate-remotion-scene",
-                    editor_tool_payload(file_path, arguments, &["instructions"]),
-                ),
-                "remotion_save" | "remotion-save" => call_manuscript_channel(
-                    "manuscripts:save-remotion-scene",
-                    editor_tool_payload(file_path, arguments, &["scene"]),
-                ),
-                "export" => call_manuscript_channel(
-                    "manuscripts:render-remotion-video",
-                    editor_tool_payload(file_path, arguments, &[]),
-                ),
+                "clip_update" | "clip-update" => {
+                    call_manuscript_channel("manuscripts:update-package-clip", {
+                        ensure_script_confirmed("clip_update")?;
+                        editor_tool_payload(
+                            file_path,
+                            arguments,
+                            &[
+                                "clipId",
+                                "name",
+                                "assetKind",
+                                "subtitleStyle",
+                                "textStyle",
+                                "transitionStyle",
+                                "track",
+                                "order",
+                                "durationMs",
+                                "trimInMs",
+                                "trimOutMs",
+                                "enabled",
+                            ],
+                        )
+                    })
+                }
+                "clip_move" | "clip-move" => {
+                    call_manuscript_channel("manuscripts:update-package-clip", {
+                        ensure_script_confirmed("clip_move")?;
+                        editor_tool_payload(file_path, arguments, &["clipId", "track", "order"])
+                    })
+                }
+                "clip_toggle_enabled" | "clip-toggle-enabled" => {
+                    call_manuscript_channel("manuscripts:update-package-clip", {
+                        ensure_script_confirmed("clip_toggle_enabled")?;
+                        editor_tool_payload(file_path, arguments, &["clipId", "enabled"])
+                    })
+                }
+                "clip_delete" | "clip-delete" => {
+                    call_manuscript_channel("manuscripts:delete-package-clip", {
+                        ensure_script_confirmed("clip_delete")?;
+                        editor_tool_payload(file_path, arguments, &["clipId"])
+                    })
+                }
+                "clip_split" | "clip-split" => {
+                    call_manuscript_channel("manuscripts:split-package-clip", {
+                        ensure_script_confirmed("clip_split")?;
+                        editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"])
+                    })
+                }
+                "remotion_generate" | "remotion-generate" => {
+                    call_manuscript_channel("manuscripts:generate-remotion-scene", {
+                        ensure_script_confirmed("remotion_generate")?;
+                        let mut payload =
+                            editor_tool_payload(file_path, arguments, &["instructions"]);
+                        if let Some(active_session_id) = session_id {
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("sessionId".to_string(), json!(active_session_id));
+                            }
+                        }
+                        if let (Some(object), Some(config)) =
+                            (payload.as_object_mut(), model_config)
+                        {
+                            object.insert("modelConfig".to_string(), config.clone());
+                        }
+                        payload
+                    })
+                }
+                "remotion_save" | "remotion-save" => {
+                    call_manuscript_channel("manuscripts:save-remotion-scene", {
+                        ensure_script_confirmed("remotion_save")?;
+                        editor_tool_payload(file_path, arguments, &["scene"])
+                    })
+                }
+                "export" => call_manuscript_channel("manuscripts:render-remotion-video", {
+                    ensure_script_confirmed("export")?;
+                    editor_tool_payload(file_path, arguments, &[])
+                }),
                 _ => Err(format!("unsupported redbox_editor action: {action}")),
             }
         }
@@ -3311,7 +3433,9 @@ fn editor_session_prompt_context(
         .unwrap_or_default();
     let package_root = PathBuf::from(&file_path);
     let manifest_path = package_manifest_path(&package_root).display().to_string();
-    let editor_project_path = package_editor_project_path(&package_root).display().to_string();
+    let editor_project_path = package_editor_project_path(&package_root)
+        .display()
+        .to_string();
     let timeline_path = package_timeline_path(&package_root).display().to_string();
     let remotion_scene_path = package_remotion_path(&package_root).display().to_string();
     let track_ui_path = package_track_ui_path(&package_root).display().to_string();
@@ -3352,7 +3476,7 @@ assets: {assets_path}\n\
 - `remotion.scene.json` 是动画与导出场景配置；需要制作动画或最终导出时重点关注。\n\
 - `track-ui.json` / `scene-ui.json` 是编辑器 UI 与舞台对象状态，不要把它们误当成正文内容。\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程。先调用 action=timeline_read 获取完整时间线；需要定位时优先用 selection_read / playhead_read / focus_item；插入素材优先用 clip_insert_at_playhead；面板和视口控制优先用 panel_open / timeline_zoom_set / timeline_scroll_set；再按需使用 clip_add / clip_move / clip_update / clip_toggle_enabled / clip_delete / clip_split / track_add / track_reorder / track_delete / focus_clip / remotion_generate / remotion_save / export。导出成片与最终渲染优先通过 `export` 完成；动画生成与保存优先通过 `remotion_generate` / `remotion_save` 完成。修改时间线后，最终回答要简要说明改动。",
+工具规则：使用 `redbox_editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、改字幕、做导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；写回脚本后必须明确告诉用户“脚本已更新，请先阅读并确认，确认后我再开始制作动画”；只有用户明确确认后，才能调用 `script_confirm`，之后才允许执行时间线修改、Remotion 动画生成或导出。进入执行阶段前，再调用 `timeline_read` 获取完整时间线；需要定位时优先用 `selection_read` / `playhead_read` / `focus_item`；插入素材优先用 `clip_insert_at_playhead`；面板和视口控制优先用 `panel_open` / `timeline_zoom_set` / `timeline_scroll_set`；再按需使用 `clip_add` / `clip_move` / `clip_update` / `clip_toggle_enabled` / `clip_delete` / `clip_split` / `track_add` / `track_reorder` / `track_delete` / `focus_clip` / `remotion_generate` / `remotion_save` / `export`。Remotion 在当前宿主里是“按帧的场景序列”：每个 scene 对应一个片段，时序由 `durationInFrames` 与 overlay 的 `startFrame` / `durationInFrames` 控制；不要虚构 CSS keyframes、时间轴插件或不存在的特效系统。修改脚本、时间线或动画后，最终回答要简要说明改动与当前脚本确认状态。",
         package_root.display(),
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
@@ -3377,21 +3501,269 @@ fn interactive_runtime_message_bundle(
     session_id: Option<&str>,
     runtime_mode: &str,
     message: &str,
-) -> Result<(String, Vec<Value>), String> {
+) -> Result<(String, Vec<Value>, Vec<Value>), String> {
     let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
         runtime_mode,
     ));
-    let mut messages = with_store(state, |store| {
-        Ok(collect_recent_chat_messages(&store, session_id, 10))
-    })?;
-    messages.push(json!({
-        "role": "user",
-        "content": message
-    }));
-    Ok((system_prompt, messages))
+    let history_messages = load_runtime_history_messages(state, session_id)?;
+    let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
+    let user_message = canonical_text_message("user", message.to_string());
+    prompt_messages.push(user_message.clone());
+    let mut full_history_messages = history_messages;
+    full_history_messages.push(user_message);
+    Ok((system_prompt, prompt_messages, full_history_messages))
+}
+
+fn load_runtime_history_messages(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Result<Vec<Value>, String> {
+    let Some(session_id) = session_id else {
+        return Ok(Vec::new());
+    };
+    let bundle_messages = runtime::load_session_bundle_messages(state, session_id)?;
+    if !bundle_messages.is_empty() {
+        return Ok(bundle_messages);
+    }
+    with_store(state, |store| {
+        Ok(runtime::chat_messages_for_session(&store, session_id)
+            .into_iter()
+            .map(|item| canonical_text_message(&item.role, item.content))
+            .collect())
+    })
+}
+
+fn canonical_text_message(role: &str, content: String) -> Value {
+    json!({
+        "role": role,
+        "content": content
+    })
+}
+
+fn canonical_assistant_message(content: String, tool_calls: &[InteractiveToolCall]) -> Value {
+    json!({
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tool_calls.iter().map(|call| {
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string())
+                }
+            })
+        }).collect::<Vec<_>>()
+    })
+}
+
+fn canonical_tool_result_message(
+    call_id: &str,
+    tool_name: &str,
+    content: String,
+    success: bool,
+) -> Value {
+    json!({
+        "role": "tool",
+        "tool_call_id": call_id,
+        "tool_name": tool_name,
+        "content": content,
+        "success": success
+    })
+}
+
+fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            match role {
+                "user" => Some(json!({
+                    "role": "user",
+                    "content": message.get("content").and_then(Value::as_str).unwrap_or("")
+                })),
+                "assistant" => {
+                    let mut value = json!({
+                        "role": "assistant",
+                        "content": message.get("content").and_then(Value::as_str).unwrap_or("")
+                    });
+                    if let Some(tool_calls) = message
+                        .get("tool_calls")
+                        .and_then(Value::as_array)
+                        .filter(|items| !items.is_empty())
+                    {
+                        value["tool_calls"] = Value::Array(tool_calls.clone());
+                    }
+                    Some(value)
+                }
+                "tool" => Some(json!({
+                    "role": "tool",
+                    "tool_call_id": message.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
+                    "content": message.get("content").and_then(Value::as_str).unwrap_or("")
+                })),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn canonical_messages_to_anthropic_messages(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            match role {
+                "user" => Some(json!({
+                    "role": "user",
+                    "content": message.get("content").and_then(Value::as_str).unwrap_or("").to_string()
+                })),
+                "assistant" => {
+                    let mut blocks = Vec::<Value>::new();
+                    let text = message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    if !text.trim().is_empty() {
+                        blocks.push(json!({ "type": "text", "text": text }));
+                    }
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                        for tool_call in tool_calls {
+                            let function =
+                                tool_call.get("function").cloned().unwrap_or_else(|| json!({}));
+                            let input = function
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                                .unwrap_or_else(|| json!({}));
+                            blocks.push(json!({
+                                "type": "tool_use",
+                                "id": tool_call.get("id").and_then(Value::as_str).unwrap_or(""),
+                                "name": function.get("name").and_then(Value::as_str).unwrap_or(""),
+                                "input": input
+                            }));
+                        }
+                    }
+                    if blocks.is_empty() {
+                        None
+                    } else {
+                        Some(json!({ "role": "assistant", "content": blocks }))
+                    }
+                }
+                "tool" => Some(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": message.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
+                        "content": message.get("content").and_then(Value::as_str).unwrap_or(""),
+                        "is_error": !message.get("success").and_then(Value::as_bool).unwrap_or(true)
+                    }]
+                })),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn canonical_messages_to_gemini_contents(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+            match role {
+                "user" => {
+                    let text = message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(json!({
+                            "role": "user",
+                            "parts": [{ "text": text }]
+                        }))
+                    }
+                }
+                "assistant" => {
+                    let mut parts = Vec::<Value>::new();
+                    let text = message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !text.is_empty() {
+                        parts.push(json!({ "text": text }));
+                    }
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                        for tool_call in tool_calls {
+                            let function =
+                                tool_call.get("function").cloned().unwrap_or_else(|| json!({}));
+                            let args = function
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                                .unwrap_or_else(|| json!({}));
+                            parts.push(json!({
+                                "functionCall": {
+                                    "id": tool_call.get("id").and_then(Value::as_str).unwrap_or(""),
+                                    "name": function.get("name").and_then(Value::as_str).unwrap_or(""),
+                                    "args": args
+                                }
+                            }));
+                        }
+                    }
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(json!({ "role": "model", "parts": parts }))
+                    }
+                }
+                "tool" => Some(json!({
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "id": message.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
+                            "name": message.get("tool_name").and_then(Value::as_str).unwrap_or("tool"),
+                            "response": if message.get("success").and_then(Value::as_bool).unwrap_or(true) {
+                                json!({ "result": message.get("content").and_then(Value::as_str).unwrap_or("") })
+                            } else {
+                                json!({ "error": message.get("content").and_then(Value::as_str).unwrap_or("") })
+                            }
+                        }
+                    }]
+                })),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn save_runtime_session_bundle(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    protocol: &str,
+    runtime_mode: &str,
+    model_name: &str,
+    messages: &[Value],
+) -> Result<(), String> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    runtime::save_session_bundle_messages(
+        state,
+        session_id,
+        protocol,
+        runtime_mode,
+        Some(model_name),
+        messages,
+    )
 }
 
 fn anthropic_tools_for_session(
@@ -3708,17 +4080,9 @@ fn run_anthropic_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (system_prompt, openai_messages) =
+    let (system_prompt, prompt_messages, mut canonical_messages) =
         interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
-    let mut messages = openai_messages
-        .into_iter()
-        .map(|item| {
-            json!({
-                "role": item.get("role").and_then(|value| value.as_str()).unwrap_or("user"),
-                "content": item.get("content").and_then(|value| value.as_str()).unwrap_or("").to_string()
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut messages = canonical_messages_to_anthropic_messages(&prompt_messages);
     let tools = anthropic_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
@@ -4025,6 +4389,15 @@ fn run_anthropic_interactive_chat_runtime(
             if assistant_text.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
+            canonical_messages.push(canonical_text_message("assistant", assistant_text.clone()));
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "anthropic",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
             if let Some(current_session_id) = session_id {
                 emit_runtime_task_checkpoint_saved(
                     app,
@@ -4056,6 +4429,10 @@ fn run_anthropic_interactive_chat_runtime(
                 None,
             );
         }
+        canonical_messages.push(canonical_assistant_message(
+            assistant_text.clone(),
+            &tool_calls,
+        ));
 
         let mut assistant_blocks = Vec::<Value>::new();
         if !assistant_text.trim().is_empty() {
@@ -4095,6 +4472,7 @@ fn run_anthropic_interactive_chat_runtime(
                 session_id,
                 &call.name,
                 &call.arguments,
+                Some(&model_config_value_from_resolved(config)),
             );
             match result {
                 Ok(result_value) => {
@@ -4150,9 +4528,21 @@ fn run_anthropic_interactive_chat_runtime(
                             Ok(())
                         });
                     }
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        &call.name,
+                        result_text.clone(),
+                        true,
+                    ));
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        &call.name,
+                        error.clone(),
+                        false,
+                    ));
                     messages.push(json!({
                         "role": "user",
                         "content": [{
@@ -4175,6 +4565,14 @@ fn run_anthropic_interactive_chat_runtime(
                 ),
             );
         }
+        save_runtime_session_bundle(
+            state,
+            session_id,
+            "anthropic",
+            runtime_mode,
+            &config.model_name,
+            &canonical_messages,
+        )?;
     }
 
     Err("interactive runtime exceeded max turns".to_string())
@@ -4190,30 +4588,9 @@ fn run_gemini_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (system_prompt, openai_messages) =
+    let (system_prompt, prompt_messages, mut canonical_messages) =
         interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
-    let mut contents = openai_messages
-        .into_iter()
-        .filter_map(|item| {
-            let role = item
-                .get("role")
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-            let text = item
-                .get("content")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if text.is_empty() {
-                return None;
-            }
-            Some(json!({
-                "role": if role == "assistant" { "model" } else { "user" },
-                "parts": [{ "text": text }]
-            }))
-        })
-        .collect::<Vec<_>>();
+    let mut contents = canonical_messages_to_gemini_contents(&prompt_messages);
     let tools = gemini_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
@@ -4478,6 +4855,15 @@ fn run_gemini_interactive_chat_runtime(
             if assistant_text.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
+            canonical_messages.push(canonical_text_message("assistant", assistant_text.clone()));
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "gemini",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
             if let Some(current_session_id) = session_id {
                 emit_runtime_task_checkpoint_saved(
                     app,
@@ -4509,6 +4895,10 @@ fn run_gemini_interactive_chat_runtime(
                 None,
             );
         }
+        canonical_messages.push(canonical_assistant_message(
+            assistant_text.clone(),
+            &tool_calls,
+        ));
 
         let mut assistant_parts = Vec::<Value>::new();
         if !assistant_text.trim().is_empty() {
@@ -4547,6 +4937,7 @@ fn run_gemini_interactive_chat_runtime(
                 session_id,
                 &call.name,
                 &call.arguments,
+                Some(&model_config_value_from_resolved(config)),
             );
             match result {
                 Ok(result_value) => {
@@ -4601,9 +4992,21 @@ fn run_gemini_interactive_chat_runtime(
                             Ok(())
                         });
                     }
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        &call.name,
+                        result_text.clone(),
+                        true,
+                    ));
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        &call.name,
+                        error.clone(),
+                        false,
+                    ));
                     response_parts.push(json!({
                         "functionResponse": {
                             "id": call.id,
@@ -4624,6 +5027,14 @@ fn run_gemini_interactive_chat_runtime(
                 ),
             );
         }
+        save_runtime_session_bundle(
+            state,
+            session_id,
+            "gemini",
+            runtime_mode,
+            &config.model_name,
+            &canonical_messages,
+        )?;
         contents.push(json!({
             "role": "user",
             "parts": response_parts
@@ -4641,15 +5052,9 @@ fn run_openai_interactive_chat_runtime(
     message: &str,
     runtime_mode: &str,
 ) -> Result<String, String> {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
-    system_prompt.push_str(&editor_session_prompt_context(
-        state,
-        session_id,
-        runtime_mode,
-    ));
-    let mut messages = with_store(state, |store| {
-        Ok(collect_recent_chat_messages(&store, session_id, 10))
-    })?;
+    let (system_prompt, prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+    let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
     messages.insert(
         0,
         json!({
@@ -4657,10 +5062,6 @@ fn run_openai_interactive_chat_runtime(
             "content": system_prompt
         }),
     );
-    messages.push(json!({
-        "role": "user",
-        "content": message
-    }));
 
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
@@ -4793,6 +5194,18 @@ fn run_openai_interactive_chat_runtime(
             if assistant_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
+            canonical_messages.push(canonical_text_message(
+                "assistant",
+                assistant_content.clone(),
+            ));
+            save_runtime_session_bundle(
+                state,
+                session_id,
+                "openai",
+                runtime_mode,
+                &config.model_name,
+                &canonical_messages,
+            )?;
             if streaming_enabled {
                 if let Some(current_session_id) = session_id {
                     let final_content = assistant_content.clone();
@@ -4817,6 +5230,10 @@ fn run_openai_interactive_chat_runtime(
                 &assistant_content,
             );
         }
+        canonical_messages.push(canonical_assistant_message(
+            assistant_content.clone(),
+            &tool_calls,
+        ));
         messages.push(json!({
             "role": "assistant",
             "content": assistant_content,
@@ -4853,6 +5270,7 @@ fn run_openai_interactive_chat_runtime(
                 session_id,
                 effective_tool_name,
                 &effective_arguments,
+                Some(&model_config_value_from_resolved(config)),
             );
             match result {
                 Ok(result_value) => {
@@ -4936,6 +5354,12 @@ fn run_openai_interactive_chat_runtime(
                         );
                         Ok(())
                     })?;
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        effective_tool_name,
+                        result_text.clone(),
+                        true,
+                    ));
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": call.id,
@@ -5010,6 +5434,12 @@ fn run_openai_interactive_chat_runtime(
                         );
                         Ok(())
                     })?;
+                    canonical_messages.push(canonical_tool_result_message(
+                        &call.id,
+                        effective_tool_name,
+                        failure_text.clone(),
+                        false,
+                    ));
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": call.id,
@@ -5018,6 +5448,14 @@ fn run_openai_interactive_chat_runtime(
                 }
             }
         }
+        save_runtime_session_bundle(
+            state,
+            session_id,
+            "openai",
+            runtime_mode,
+            &config.model_name,
+            &canonical_messages,
+        )?;
     }
     Err(if is_wander {
         "wander interactive runtime exceeded max tool turns".to_string()
@@ -5578,7 +6016,8 @@ fn main() {
             if let Err(error) = ensure_redclaw_profile_files(&state) {
                 eprintln!("[RedBox redclaw profile init] {error}");
             }
-            if let Err(error) = commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state)
+            if let Err(error) =
+                commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state)
             {
                 eprintln!("[RedBox redclaw runtime restore] {error}");
             }

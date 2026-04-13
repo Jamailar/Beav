@@ -155,6 +155,48 @@ pub(crate) fn invoke_openai_chat(
     Ok(content)
 }
 
+pub(crate) fn invoke_openai_structured_chat(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    require_json: bool,
+) -> Result<String, String> {
+    let mut body = json!({
+        "model": model_name,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_prompt }
+        ],
+        "stream": false
+    });
+    if require_json {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    let response = run_curl_json_with_timeout(
+        "POST",
+        &format!("{}/chat/completions", normalize_base_url(base_url)),
+        api_key,
+        &[],
+        Some(body),
+        Some(45),
+    )?;
+    let content = response
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    if content.trim().is_empty() {
+        return Err("模型返回了空响应".to_string());
+    }
+    Ok(content)
+}
+
 pub(crate) fn invoke_anthropic_chat(
     base_url: &str,
     api_key: Option<&str>,
@@ -174,6 +216,46 @@ pub(crate) fn invoke_anthropic_chat(
             "max_tokens": 1024,
             "messages": [
                 { "role": "user", "content": message }
+            ]
+        })),
+        Some(45),
+    )?;
+    let text = response
+        .get("content")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("Anthropic returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
+pub(crate) fn invoke_anthropic_structured_chat(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    _require_json: bool,
+) -> Result<String, String> {
+    let response = run_curl_json_with_timeout(
+        "POST",
+        &format!("{}/messages", normalize_base_url(base_url)),
+        None,
+        &[
+            ("x-api-key", api_key.unwrap_or_default().to_string()),
+            ("anthropic-version", "2023-06-01".to_string()),
+        ],
+        Some(json!({
+            "model": model_name,
+            "system": system_prompt,
+            "max_tokens": 1024,
+            "messages": [
+                { "role": "user", "content": user_prompt }
             ]
         })),
         Some(45),
@@ -215,6 +297,60 @@ pub(crate) fn invoke_gemini_chat(
                 }
             ]
         })),
+        Some(45),
+    )?;
+    let text = response
+        .get("candidates")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|value| value.as_array())
+        .and_then(|parts| parts.first())
+        .and_then(|part| part.get("text"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("Gemini returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
+pub(crate) fn invoke_gemini_structured_chat(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    require_json: bool,
+) -> Result<String, String> {
+    let mut body = json!({
+        "system_instruction": {
+            "parts": [{ "text": system_prompt }]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{ "text": user_prompt }]
+            }
+        ]
+    });
+    if require_json {
+        body["generationConfig"] = json!({
+            "responseMimeType": "application/json"
+        });
+    }
+    let response = run_curl_json_with_timeout(
+        "POST",
+        &gemini_url(
+            base_url,
+            &format!("/models/{}:generateContent", model_name),
+            api_key,
+        ),
+        None,
+        &[],
+        Some(body),
         Some(45),
     )?;
     let text = response
@@ -759,5 +895,42 @@ pub(crate) fn invoke_chat_by_protocol(
         "anthropic" => invoke_anthropic_chat(base_url, api_key, model_name, message),
         "gemini" => invoke_gemini_chat(base_url, api_key, model_name, message),
         _ => invoke_openai_chat(base_url, api_key, model_name, message),
+    }
+}
+
+pub(crate) fn invoke_structured_chat_by_protocol(
+    protocol: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    require_json: bool,
+) -> Result<String, String> {
+    match protocol {
+        "anthropic" => invoke_anthropic_structured_chat(
+            base_url,
+            api_key,
+            model_name,
+            system_prompt,
+            user_prompt,
+            require_json,
+        ),
+        "gemini" => invoke_gemini_structured_chat(
+            base_url,
+            api_key,
+            model_name,
+            system_prompt,
+            user_prompt,
+            require_json,
+        ),
+        _ => invoke_openai_structured_chat(
+            base_url,
+            api_key,
+            model_name,
+            system_prompt,
+            user_prompt,
+            require_json,
+        ),
     }
 }

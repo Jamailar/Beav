@@ -4,7 +4,10 @@ use tauri::State;
 use crate::agent::{ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind};
 use crate::commands::chat_state::{ensure_chat_session, infer_context_type_from_session_id};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::append_session_checkpoint;
+use crate::runtime::{
+    append_session_checkpoint, chat_messages_for_session, load_session_bundle_messages,
+    save_session_bundle_messages, update_session_context_record,
+};
 use crate::{
     append_session_transcript, default_memory_maintenance_status, make_id,
     memory_maintenance_status_from_workspace, next_memory_maintenance_at_ms, now_i64, now_iso,
@@ -27,6 +30,8 @@ pub fn persist_chat_exchange(
         session_title_override.or_else(|| Some(session_title_from_message(display_content)));
     let mut title_update: Option<(String, String)> = None;
     let mut final_session_id = String::new();
+    let mut runtime_mode_snapshot = String::new();
+    let mut bundle_messages_snapshot = Vec::<Value>::new();
 
     with_store_mut(state, |store| {
         let (session, is_new) = ensure_chat_session(
@@ -42,6 +47,7 @@ pub fn persist_chat_exchange(
         }
         session.updated_at = now_iso();
         let runtime_mode = session_runtime_mode(session);
+        runtime_mode_snapshot = runtime_mode.clone();
 
         store.chat_messages.push(ChatMessageRecord {
             id: make_id("message"),
@@ -94,8 +100,42 @@ pub fn persist_chat_exchange(
             checkpoint_summary,
             Some(exchange_checkpoint_payload(response, &runtime_mode)),
         );
+        let _ = update_session_context_record(store, &final_session_id, "auto", false);
+        bundle_messages_snapshot = chat_messages_for_session(store, &final_session_id)
+            .into_iter()
+            .map(|item| {
+                json!({
+                    "role": item.role,
+                    "content": item.content
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(())
     })?;
+    let should_sync_bundle = load_session_bundle_messages(state, &final_session_id)
+        .map(|messages| {
+            messages
+                .last()
+                .and_then(|item| item.get("role"))
+                .and_then(Value::as_str)
+                != Some("assistant")
+                || messages
+                    .last()
+                    .and_then(|item| item.get("content"))
+                    .and_then(Value::as_str)
+                    != Some(response)
+        })
+        .unwrap_or(true);
+    if should_sync_bundle {
+        let _ = save_session_bundle_messages(
+            state,
+            &final_session_id,
+            "chat",
+            &runtime_mode_snapshot,
+            None,
+            &bundle_messages_snapshot,
+        );
+    }
     Ok(ChatExchangePersistenceStage {
         final_session_id,
         title_update,

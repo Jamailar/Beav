@@ -39,7 +39,9 @@ fn update_official_session_user(settings: &mut Value, user: &Value) {
 }
 
 fn refresh_official_cached_data_into_settings(settings: &mut Value) -> Result<Value, String> {
-    if official_settings_session(settings).is_none() || official_auth_token_from_settings(settings).is_none() {
+    if official_settings_session(settings).is_none()
+        || official_auth_token_from_settings(settings).is_none()
+    {
         return Err("官方账号未登录".to_string());
     }
 

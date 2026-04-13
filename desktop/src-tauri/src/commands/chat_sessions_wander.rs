@@ -1,8 +1,11 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    checkpoint_count_for_session, runtime_direct_route_record, session_detail_value,
-    session_list_item_value, session_resume_value, tool_results_for_session, trace_for_session,
-    transcript_count_for_session, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    append_compact_boundary_entry, checkpoint_count_for_session, runtime_direct_route_record,
+    session_context_usage_value, session_detail_value, session_list_item_value,
+    session_resume_value, tool_results_for_session, trace_for_session,
+    transcript_count_for_session, transcript_resume_messages, transcript_session_list_value,
+    transcript_session_meta_by_id, update_session_context_record, RuntimeArtifact,
+    RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -94,12 +97,50 @@ pub fn handle_chat_sessions_wander_channel(
             "sessions:list" => with_store(state, |store| {
                 let started_at = now_ms();
                 let request_id = format!("sessions:list:{}", started_at);
-                let mut sessions = store.chat_sessions.clone();
-                sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                let items: Vec<Value> = sessions
-                    .into_iter()
-                    .map(|session| session_list_item_value(&store, &session))
-                    .collect();
+                let transcript_items = transcript_session_list_value(state)
+                    .and_then(|value| {
+                        value
+                            .as_array()
+                            .cloned()
+                            .ok_or_else(|| "invalid transcript index".to_string())
+                    })
+                    .unwrap_or_default();
+                let items: Vec<Value> = if transcript_items.is_empty() {
+                    let mut sessions = store.chat_sessions.clone();
+                    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    sessions
+                        .into_iter()
+                        .map(|session| session_list_item_value(&store, &session))
+                        .collect()
+                } else {
+                    let mut merged = transcript_items;
+                    let known_ids = merged
+                        .iter()
+                        .filter_map(|item| item.get("id").and_then(Value::as_str))
+                        .map(ToString::to_string)
+                        .collect::<std::collections::HashSet<_>>();
+                    let mut store_only = store
+                        .chat_sessions
+                        .iter()
+                        .filter(|session| !known_ids.contains(&session.id))
+                        .map(|session| session_list_item_value(&store, session))
+                        .collect::<Vec<_>>();
+                    merged.append(&mut store_only);
+                    merged.sort_by(|a, b| {
+                        let left = a
+                            .get("chatSession")
+                            .and_then(|item| item.get("updatedAt"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let right = b
+                            .get("chatSession")
+                            .and_then(|item| item.get("updatedAt"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        right.cmp(left)
+                    });
+                    merged
+                };
                 log_timing_event(
                     state,
                     "settings",
@@ -116,7 +157,35 @@ pub fn handle_chat_sessions_wander_channel(
             }
             "sessions:resume" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| Ok(session_resume_value(&store, &session_id)))
+                let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                    .ok()
+                    .flatten();
+                with_store(state, |store| {
+                    let resume_messages = transcript_resume_messages(
+                        state,
+                        &store,
+                        &session_id,
+                        crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
+                    )
+                    .ok();
+                    let value = session_resume_value(&store, &session_id, resume_messages.clone());
+                    if !value.is_null() {
+                        return Ok(value);
+                    }
+                    Ok(json!({
+                        "chatSession": transcript_meta.as_ref().map(|meta| json!({
+                            "id": meta.session_id,
+                            "title": meta.title,
+                            "updatedAt": meta.updated_at,
+                            "createdAt": meta.created_at,
+                        })).unwrap_or(Value::Null),
+                        "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
+                        "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
+                        "context": Value::Null,
+                        "resumeMessages": resume_messages.unwrap_or_default(),
+                        "lastCheckpoint": Value::Null,
+                    }))
+                })
             }
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
@@ -152,6 +221,17 @@ pub fn handle_chat_sessions_wander_channel(
                         copy.created_at = timestamp.clone();
                         store.chat_messages.push(copy);
                     }
+                    if let Some(context) = store
+                        .session_context_records
+                        .iter()
+                        .find(|item| item.session_id == source.id)
+                        .cloned()
+                    {
+                        let mut copied = context;
+                        copied.session_id = new_id.clone();
+                        copied.updated_at = timestamp.clone();
+                        store.session_context_records.push(copied);
+                    }
                     Ok(json!({
                         "success": true,
                         "session": {
@@ -161,6 +241,13 @@ pub fn handle_chat_sessions_wander_channel(
                         }
                     }))
                 })?;
+                if let Some(new_id) = forked
+                    .get("session")
+                    .and_then(|item| item.get("id"))
+                    .and_then(Value::as_str)
+                {
+                    let _ = crate::runtime::duplicate_session_bundle(state, &session_id, new_id);
+                }
                 Ok(forked)
             }
             "sessions:get-transcript" => {
@@ -212,8 +299,13 @@ pub fn handle_chat_sessions_wander_channel(
                     store
                         .chat_messages
                         .retain(|item| item.session_id != session_id);
+                    store
+                        .session_context_records
+                        .retain(|item| item.session_id != session_id);
                     Ok(json!({ "success": true }))
-                })
+                })?;
+                let _ = crate::runtime::remove_session_bundle(state, &session_id);
+                Ok(json!({ "success": true }))
             }
             "chat:clear-messages" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
@@ -230,22 +322,73 @@ pub fn handle_chat_sessions_wander_channel(
                     store
                         .session_tool_results
                         .retain(|item| item.session_id != session_id);
+                    store
+                        .session_context_records
+                        .retain(|item| item.session_id != session_id);
                     Ok(json!({ "success": true }))
                 })?;
                 if let Ok(mut guard) = state.chat_runtime_states.lock() {
                     guard.remove(&session_id);
                 }
+                let _ = crate::runtime::remove_session_bundle(state, &session_id);
                 Ok(json!({ "success": true }))
             }
-            "chat:compact-context" => Ok(json!({ "success": true })),
-            "chat:get-context-usage" => Ok(json!({
-                "success": true,
-                "estimatedTotalTokens": 0,
-                "compactThreshold": 0,
-                "compactRatio": 0,
-                "compactRounds": 0,
-                "compactUpdatedAt": Value::Null,
-            })),
+            "chat:compact-context" => {
+                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                let result = with_store_mut(state, |store| {
+                    let total_messages =
+                        crate::runtime::session_message_count_for_session(store, &session_id);
+                    let snapshot =
+                        update_session_context_record(store, &session_id, "manual", true);
+                    Ok(match snapshot {
+                        Some(record) => json!({
+                            "success": true,
+                            "compacted": true,
+                            "message": format!(
+                                "已归档 {} 条历史消息，保留最近 {} 条用于继续对话",
+                                record.compacted_message_count,
+                                record.tail_message_count
+                            ),
+                            "context": crate::runtime::session_context_value_for_session(store, &session_id),
+                            "totalMessages": total_messages,
+                        }),
+                        None => json!({
+                            "success": true,
+                            "compacted": false,
+                            "message": if total_messages <= crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES as i64 {
+                                format!(
+                                    "当前仅有 {} 条消息，低于压缩阈值 {}",
+                                    total_messages,
+                                    crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES
+                                )
+                            } else {
+                                "暂无可压缩内容".to_string()
+                            }
+                        }),
+                    })
+                })?;
+                if result
+                    .get("compacted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let summary = result
+                        .get("context")
+                        .and_then(|value| value.get("summary"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let _ = with_store(state, |store| {
+                        append_compact_boundary_entry(state, &store, &session_id, summary)
+                    });
+                }
+                Ok(result)
+            }
+            "chat:get-context-usage" => {
+                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                with_store(state, |store| {
+                    Ok(session_context_usage_value(&store, &session_id))
+                })
+            }
             "chat:update-session-metadata" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let metadata = payload_field(&payload, "metadata").cloned();
@@ -545,7 +688,10 @@ pub fn handle_chat_sessions_wander_channel(
                 emit_runtime_task_node_changed(
                     app,
                     &task_id,
-                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    Some(&format!(
+                        "session_wander_{}",
+                        slug_from_relative_path(&request_id)
+                    )),
                     "collect",
                     "completed",
                     Some("已从知识库中选出本轮用于漫步的 3 条随机素材。"),
@@ -597,7 +743,10 @@ pub fn handle_chat_sessions_wander_channel(
                 emit_runtime_task_node_changed(
                     app,
                     &task_id,
-                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    Some(&format!(
+                        "session_wander_{}",
+                        slug_from_relative_path(&request_id)
+                    )),
                     "analyze",
                     "running",
                     Some(&format!(
@@ -655,7 +804,10 @@ pub fn handle_chat_sessions_wander_channel(
                 emit_runtime_task_node_changed(
                     app,
                     &task_id,
-                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    Some(&format!(
+                        "session_wander_{}",
+                        slug_from_relative_path(&request_id)
+                    )),
                     "analyze",
                     "completed",
                     Some("随机素材摘要与长期上下文已准备完成，Agent 将继续自行读取关键文件。"),

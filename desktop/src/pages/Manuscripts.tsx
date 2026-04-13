@@ -1448,6 +1448,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [editorFile, mode]);
 
     useEffect(() => {
+        if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
+        const nextScriptBody = packageState?.editorProject?.script?.body;
+        if (typeof nextScriptBody !== 'string' || nextScriptBody === editorBody) return;
+        setEditorBody(nextScriptBody);
+        setEditorBodyDirty(false);
+    }, [editorBody, editorBodyDirty, editorFile, mode, packageState?.editorProject?.script?.body]);
+
+    useEffect(() => {
         if (!editorFile || !editorBodyDirty) return;
         const timer = window.setTimeout(async () => {
             try {
@@ -1456,9 +1464,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     path: editorFile,
                     content: editorBody,
                     metadata: editorMetadata,
-                }) as { success?: boolean; error?: string };
+                }) as { success?: boolean; error?: string; state?: PackageState };
                 if (!result?.success) {
                     throw new Error(result?.error || '保存失败');
+                }
+                if (result.state) {
+                    setPackageState(result.state);
                 }
                 setEditorBodyDirty(false);
             } catch (error) {
@@ -1514,6 +1525,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
                 associatedPackageAssetCount: packageAssets.length,
                 associatedPackageClipCount: Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0),
+                associatedPackageScriptApprovalStatus: packageState?.editorProject?.ai?.scriptApproval?.status || 'pending',
                 associatedPackageTrackNames: timelineTrackNames,
                 associatedPackageClips: timelineClips.slice(0, 12).map((item) => ({
                     assetId: item?.assetId,
@@ -1538,6 +1550,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             onImmersiveModeChange?.(false);
         };
     }, [editorDescriptor?.draftType, mode, onImmersiveModeChange]);
+
+    const handleConfirmEditorScript = useCallback(async () => {
+        if (!editorFile || (editorDescriptor?.draftType !== 'video' && editorDescriptor?.draftType !== 'audio')) return;
+        if (editorBodyDirty || isSavingEditorBody) {
+            void appAlert('脚本正在保存或仍有未保存改动，请稍后再确认。');
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:confirm-package-script', {
+                filePath: editorFile,
+            }) as { success?: boolean; state?: PackageState; error?: string };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '确认脚本失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '确认脚本失败');
+        }
+    }, [editorBodyDirty, editorDescriptor?.draftType, editorFile, isSavingEditorBody]);
 
     const handleBindAssetToPackage = useCallback(async (assetId: string) => {
         if (!editorFile) return;
@@ -1809,6 +1840,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const isPostPackage = editorFile.endsWith(POST_DRAFT_EXTENSION);
         const isVideoPackage = editorFile.endsWith(VIDEO_DRAFT_EXTENSION);
         const isAudioPackage = editorFile.endsWith(AUDIO_DRAFT_EXTENSION);
+        const isScriptConfirmed = packageState?.editorProject?.ai?.scriptApproval?.status === 'confirmed';
         const packageCoverId = String(packageState?.cover?.assetId || '').trim();
         const packageImages = Array.isArray(packageState?.images?.items) ? packageState?.images?.items : [];
         const packageAssets = Array.isArray(packageState?.assets?.items) ? packageState?.assets?.items : [];
@@ -2016,7 +2048,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 onClick={() => {
                                     void handleRenderRemotionVideo();
                                 }}
-                                disabled={isRenderingRemotion}
+                                disabled={isRenderingRemotion || !isScriptConfirmed}
+                                title={isScriptConfirmed ? '导出当前视频' : '先确认脚本，再导出视频'}
                                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white disabled:opacity-40"
                             >
                                 <ExternalLink className="h-4 w-4" />
@@ -2068,6 +2101,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 void handleImportAndBindAssetsToPackage();
                             }}
                             onPackageStateChange={(state) => setPackageState(state as PackageState)}
+                            onConfirmScript={() => {
+                                void handleConfirmEditorScript();
+                            }}
                             onGenerateRemotionScene={(instructions) => {
                                 void handleGenerateRemotionScene(instructions);
                             }}

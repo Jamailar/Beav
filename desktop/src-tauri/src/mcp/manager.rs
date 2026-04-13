@@ -278,7 +278,9 @@ mod tests {
         };
         let manager = McpManager::default();
 
-        let _ = manager.invoke(&server, "ping", serde_json::json!({})).unwrap();
+        let _ = manager
+            .invoke(&server, "ping", serde_json::json!({}))
+            .unwrap();
         assert_eq!(manager.sessions().unwrap().len(), 1);
 
         manager.sync_servers(&[]).unwrap();
@@ -303,7 +305,9 @@ mod tests {
         };
         let manager = McpManager::default();
 
-        let _ = manager.invoke(&server, "ping", serde_json::json!({})).unwrap();
+        let _ = manager
+            .invoke(&server, "ping", serde_json::json!({}))
+            .unwrap();
         assert_eq!(manager.sessions().unwrap().len(), 1);
         assert!(manager.disconnect_server(&server).unwrap());
         assert!(manager.sessions().unwrap().is_empty());

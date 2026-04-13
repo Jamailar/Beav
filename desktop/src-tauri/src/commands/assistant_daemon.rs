@@ -105,8 +105,7 @@ pub fn handle_assistant_daemon_channel(
                         })?;
                         emit_assistant_status(app, &snapshot);
                         return Err(
-                            "Feishu websocket 接入尚未实现，请先切回 webhook 模式。"
-                                .to_string(),
+                            "Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string()
                         );
                     }
                     let mut runtime_guard = state

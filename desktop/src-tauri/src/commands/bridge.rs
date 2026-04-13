@@ -7,12 +7,12 @@ use crate::agent::{
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{session_bridge_detail_value, session_bridge_summary_value};
 use crate::scheduler::{
-    archive_job_execution, cancel_job_execution, derived_background_tasks,
-    emit_scheduler_snapshot, retry_job_execution, sync_redclaw_job_definitions,
+    archive_job_execution, cancel_job_execution, derived_background_tasks, emit_scheduler_snapshot,
+    retry_job_execution, sync_redclaw_job_definitions,
 };
 use crate::{
-    log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
-    AppState, ChatSessionRecord,
+    log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string, AppState,
+    ChatSessionRecord,
 };
 
 pub fn handle_bridge_channel(

@@ -67,7 +67,9 @@ pub fn handle_system_channel(
                     let started_at = now_ms();
                     let request_id = format!("db:save-settings:{}", started_at);
                     let active_space_id = with_store_mut(state, |store| {
-                        if let (Some(current), Some(next)) = (store.settings.as_object(), payload.as_object()) {
+                        if let (Some(current), Some(next)) =
+                            (store.settings.as_object(), payload.as_object())
+                        {
                             let mut merged = current.clone();
                             for (key, value) in next {
                                 merged.insert(key.to_string(), value.clone());

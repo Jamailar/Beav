@@ -96,12 +96,8 @@ fn spawn_redclaw_chat_postprocess(
             eprintln!("[RedClaw chat postprocess] failed to save outputs");
             return;
         };
-        let postprocess = build_redclaw_chat_postprocess(
-            artifact_kind,
-            &session_id,
-            &display_content,
-            artifacts,
-        );
+        let postprocess =
+            build_redclaw_chat_postprocess(artifact_kind, &session_id, &display_content, artifacts);
         let _ = app.emit("redclaw:runner-message", postprocess.runner_payload);
     });
 }
@@ -191,11 +187,17 @@ mod tests {
             vec![json!({ "kind": "run-log", "path": "/tmp/run.md" })],
         );
         assert_eq!(
-            postprocess.runner_payload.get("artifactKind").and_then(Value::as_str),
+            postprocess
+                .runner_payload
+                .get("artifactKind")
+                .and_then(Value::as_str),
             Some("run")
         );
         assert_eq!(
-            postprocess.runner_payload.get("displayContent").and_then(Value::as_str),
+            postprocess
+                .runner_payload
+                .get("displayContent")
+                .and_then(Value::as_str),
             Some("display body")
         );
     }

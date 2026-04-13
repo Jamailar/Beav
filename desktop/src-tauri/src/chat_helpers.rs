@@ -3,9 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    decode_base64_bytes, generate_chat_response, load_redbox_prompt_or_embedded, markdown_to_html,
-    normalize_base_url, now_ms, payload_field, payload_string, render_redbox_prompt,
-    resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json, url_encode_component,
+    decode_base64_bytes, generate_chat_response, invoke_structured_chat_by_protocol,
+    load_redbox_prompt_or_embedded, markdown_to_html, now_ms, payload_field, payload_string,
+    render_redbox_prompt, resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json,
+    url_encode_component,
     AdvisorRecord, WechatOfficialBindingRecord,
 };
 
@@ -220,38 +221,15 @@ pub(crate) fn generate_structured_response_with_settings(
 ) -> Result<String, String> {
     let config = resolve_chat_config(settings, model_config)
         .ok_or_else(|| "当前未配置可用模型".to_string())?;
-    let mut body = json!({
-        "model": config.model_name,
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": user_prompt }
-        ],
-        "stream": false
-    });
-    if require_json {
-        body["response_format"] = json!({ "type": "json_object" });
-    }
-    let response = run_curl_json(
-        "POST",
-        &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+    invoke_structured_chat_by_protocol(
+        &config.protocol,
+        &config.base_url,
         config.api_key.as_deref(),
-        &[],
-        Some(body),
-    )?;
-    let content = response
-        .get("choices")
-        .and_then(|value| value.as_array())
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("message"))
-        .and_then(|value| value.get("content"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if content.is_empty() {
-        return Err("模型未返回内容".to_string());
-    }
-    Ok(content)
+        &config.model_name,
+        system_prompt,
+        user_prompt,
+        require_json,
+    )
 }
 
 pub(crate) fn find_advisor_name(advisors: &[AdvisorRecord], advisor_id: &str) -> String {

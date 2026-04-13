@@ -25,6 +25,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "redbox_app_query" => passthrough("redbox_app_query", arguments),
         "redbox_fs" => passthrough("redbox_fs", arguments),
         "redbox_profile_doc" => passthrough("redbox_profile_doc", arguments),
+        "redbox_editor" => passthrough("redbox_editor", arguments),
         _ => NormalizedToolCall {
             name: "",
             arguments: json!({}),

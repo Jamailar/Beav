@@ -497,28 +497,26 @@ pub fn handle_redclaw_channel(
                 Err(error) => Err(error),
             }
         }
-        "redclaw:runner-run-long-cycle-now" => {
-            (|| {
-                let task_id = payload_string(payload, "taskId").unwrap_or_default();
-                let execution_id = with_store_mut(state, |store| {
-                    sync_redclaw_job_definitions(store);
-                    enqueue_manual_job_execution_for_source(
-                        store,
-                        "long_cycle",
-                        &task_id,
-                        "manual-long-cycle-now",
-                    )
-                })?;
-                let run_result = run_job_queue_once(app, state, Some(&execution_id))?
+        "redclaw:runner-run-long-cycle-now" => (|| {
+            let task_id = payload_string(payload, "taskId").unwrap_or_default();
+            let execution_id = with_store_mut(state, |store| {
+                sync_redclaw_job_definitions(store);
+                enqueue_manual_job_execution_for_source(
+                    store,
+                    "long_cycle",
+                    &task_id,
+                    "manual-long-cycle-now",
+                )
+            })?;
+            let run_result = run_job_queue_once(app, state, Some(&execution_id))?
                     .unwrap_or_else(|| json!({ "success": false, "executionId": execution_id, "status": "not-started" }));
-                with_store_mut(state, |store| {
-                    sync_redclaw_job_definitions(store);
-                    Ok(())
-                })?;
-                emit_scheduler_snapshot(app, state);
-                Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
-            })()
-        }
+            with_store_mut(state, |store| {
+                sync_redclaw_job_definitions(store);
+                Ok(())
+            })?;
+            emit_scheduler_snapshot(app, state);
+            Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
+        })(),
         _ => return None,
     };
     Some(result)

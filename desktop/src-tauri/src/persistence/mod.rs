@@ -121,6 +121,7 @@ pub fn default_store() -> AppStore {
         wander_history: Vec::new(),
         chat_sessions: Vec::new(),
         chat_messages: Vec::new(),
+        session_context_records: Vec::new(),
         youtube_videos: Vec::new(),
         knowledge_notes: Vec::new(),
         document_sources: Vec::new(),

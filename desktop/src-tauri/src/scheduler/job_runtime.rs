@@ -9,12 +9,8 @@ use crate::runtime::{RedclawJobDefinitionRecord, RedclawJobExecutionRecord};
 use crate::scheduler::dead_letter::mark_dead_lettered;
 use crate::scheduler::heartbeat::start_execution_heartbeat;
 use crate::scheduler::lease::lease_execution;
-use crate::scheduler::retry::{
-    retry_delay_ms, should_dead_letter, DEFAULT_HEARTBEAT_TIMEOUT_MS,
-};
-use crate::{
-    make_id, now_i64, now_iso, redclaw_state_value, AppState, AppStore,
-};
+use crate::scheduler::retry::{retry_delay_ms, should_dead_letter, DEFAULT_HEARTBEAT_TIMEOUT_MS};
+use crate::{make_id, now_i64, now_iso, redclaw_state_value, AppState, AppStore};
 
 use super::{next_long_cycle_timestamp, next_scheduled_timestamp, parse_millis_string};
 
@@ -49,7 +45,10 @@ pub fn is_active_execution_status(status: &str) -> bool {
 }
 
 pub fn is_terminal_execution_status(status: &str) -> bool {
-    matches!(status, "succeeded" | "completed" | "failed" | "cancelled" | "dead_lettered")
+    matches!(
+        status,
+        "succeeded" | "completed" | "failed" | "cancelled" | "dead_lettered"
+    )
 }
 
 fn is_valid_status_transition(from: &str, to: &str) -> bool {
@@ -150,7 +149,11 @@ fn definition_source_label(definition: &RedclawJobDefinitionRecord) -> &'static 
     }
 }
 
-fn next_definition_due_at(store: &AppStore, definition: &RedclawJobDefinitionRecord, now: i64) -> Option<String> {
+fn next_definition_due_at(
+    store: &AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    now: i64,
+) -> Option<String> {
     match definition.source_kind.as_deref() {
         Some("scheduled") => store
             .redclaw_state
@@ -248,7 +251,11 @@ fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecut
         .iter()
         .any(|item| item.id == execution.id)
     {
-        execution.id = format!("{}-{}", execution.id, store.redclaw_job_executions.len() + 1);
+        execution.id = format!(
+            "{}-{}",
+            execution.id,
+            store.redclaw_job_executions.len() + 1
+        );
     }
 }
 
@@ -339,7 +346,12 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
             execution.retry_not_before_at =
                 Some((now + retry_delay_ms(execution.attempt_count)).to_string());
             execution.completed_at = None;
-            append_execution_turn(&mut *execution, &now_iso, "system", "Heartbeat timeout; retry scheduled");
+            append_execution_turn(
+                &mut *execution,
+                &now_iso,
+                "system",
+                "Heartbeat timeout; retry scheduled",
+            );
         }
     }
 }
@@ -389,7 +401,10 @@ pub fn enqueue_manual_job_execution_for_source(
     Ok(execution_id)
 }
 
-fn prepare_execution(store: &AppStore, execution: &RedclawJobExecutionRecord) -> Result<PreparedJobExecution, String> {
+fn prepare_execution(
+    store: &AppStore,
+    execution: &RedclawJobExecutionRecord,
+) -> Result<PreparedJobExecution, String> {
     let definition = store
         .redclaw_job_definitions
         .iter()
@@ -433,10 +448,10 @@ fn claim_execution(
 
     let definition_id = store.redclaw_job_executions[index].definition_id.clone();
     if preferred_execution_id.is_none()
-        && store
-            .redclaw_job_executions
-            .iter()
-            .any(|item| item.definition_id == definition_id && matches!(item.status.as_str(), "leased" | "running"))
+        && store.redclaw_job_executions.iter().any(|item| {
+            item.definition_id == definition_id
+                && matches!(item.status.as_str(), "leased" | "running")
+        })
     {
         return Ok(None);
     }
@@ -477,7 +492,11 @@ fn mark_execution_running(store: &mut AppStore, execution_id: &str) -> Result<()
     Ok(())
 }
 
-fn mark_execution_cancelled(store: &mut AppStore, execution_id: &str, reason: &str) -> Result<(), String> {
+fn mark_execution_cancelled(
+    store: &mut AppStore,
+    execution_id: &str,
+    reason: &str,
+) -> Result<(), String> {
     let now_iso = now_iso();
     let execution = store
         .redclaw_job_executions
@@ -521,7 +540,12 @@ fn mark_execution_succeeded(
         .and_then(Value::as_str)
         .map(|value| value.chars().take(280).collect());
     if execution.status == "cancelled" {
-        append_execution_turn(execution, &now_iso, "system", "Execution finished after cancellation request");
+        append_execution_turn(
+            execution,
+            &now_iso,
+            "system",
+            "Execution finished after cancellation request",
+        );
         return Ok(());
     }
     transition_execution_status(execution, "succeeded", &now_iso)?;
@@ -529,7 +553,10 @@ fn mark_execution_succeeded(
         execution,
         &now_iso,
         "response",
-        execution.output_summary.clone().unwrap_or_else(|| "Execution completed".to_string()),
+        execution
+            .output_summary
+            .clone()
+            .unwrap_or_else(|| "Execution completed".to_string()),
     );
 
     match prepared.source_kind.as_deref() {
@@ -594,11 +621,17 @@ fn mark_execution_failed(
     append_execution_turn(execution, &now_iso, "system", error.to_string());
     if should_dead_letter(execution.attempt_count) {
         mark_dead_lettered(execution, Some(error.to_string()), &now_iso);
-        append_execution_turn(execution, &now_iso, "system", "Execution moved to dead-letter");
+        append_execution_turn(
+            execution,
+            &now_iso,
+            "system",
+            "Execution moved to dead-letter",
+        );
     } else {
         transition_execution_status(execution, "retrying", &now_iso)?;
         execution.completed_at = None;
-        execution.retry_not_before_at = Some((now + retry_delay_ms(execution.attempt_count)).to_string());
+        execution.retry_not_before_at =
+            Some((now + retry_delay_ms(execution.attempt_count)).to_string());
         append_execution_turn(execution, &now_iso, "system", "Retry scheduled");
     }
 
@@ -636,7 +669,10 @@ fn mark_execution_failed(
 
 pub fn emit_scheduler_snapshot(app: &AppHandle, state: &State<'_, AppState>) {
     if let Ok(store) = state.store.lock() {
-        let _ = app.emit("redclaw:runner-status", redclaw_state_value(&store.redclaw_state));
+        let _ = app.emit(
+            "redclaw:runner-status",
+            redclaw_state_value(&store.redclaw_state),
+        );
     }
 }
 
@@ -645,15 +681,20 @@ pub fn run_job_queue_once(
     state: &State<'_, AppState>,
     preferred_execution_id: Option<&str>,
 ) -> Result<Option<Value>, String> {
-    let prepared = with_store_mut(state, |store| claim_execution(store, now_i64(), preferred_execution_id))?;
+    let prepared = with_store_mut(state, |store| {
+        claim_execution(store, now_i64(), preferred_execution_id)
+    })?;
     let Some(prepared) = prepared else {
         return Ok(None);
     };
 
-    with_store_mut(state, |store| mark_execution_running(store, &prepared.execution_id))?;
+    with_store_mut(state, |store| {
+        mark_execution_running(store, &prepared.execution_id)
+    })?;
     emit_scheduler_snapshot(app, state);
 
-    let heartbeat = start_execution_heartbeat(app, prepared.execution_id.clone(), Duration::from_secs(5));
+    let heartbeat =
+        start_execution_heartbeat(app, prepared.execution_id.clone(), Duration::from_secs(5));
     let result = execute_redclaw_run(
         app,
         state,
@@ -665,7 +706,9 @@ pub fn run_job_queue_once(
 
     match result {
         Ok(value) => {
-            with_store_mut(state, |store| mark_execution_succeeded(store, &prepared, &value))?;
+            with_store_mut(state, |store| {
+                mark_execution_succeeded(store, &prepared, &value)
+            })?;
             emit_scheduler_snapshot(app, state);
             Ok(Some(json!({
                 "success": true,
@@ -679,7 +722,9 @@ pub fn run_job_queue_once(
             })))
         }
         Err(error) => {
-            with_store_mut(state, |store| mark_execution_failed(store, &prepared, &error))?;
+            with_store_mut(state, |store| {
+                mark_execution_failed(store, &prepared, &error)
+            })?;
             emit_scheduler_snapshot(app, state);
             Err(error)
         }
@@ -782,21 +827,24 @@ pub fn cancel_job_execution(
 }
 
 fn find_execution_definition_id(store: &AppStore, task_id: &str) -> Option<String> {
-    if let Some(execution) = store.redclaw_job_executions.iter().find(|item| {
-        item.id == task_id || item.definition_id == task_id
-    }) {
+    if let Some(execution) = store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| item.id == task_id || item.definition_id == task_id)
+    {
         return Some(execution.definition_id.clone());
     }
     store
         .redclaw_job_definitions
         .iter()
-        .find(|item| {
-            item.id == task_id || item.source_task_id.as_deref() == Some(task_id)
-        })
+        .find(|item| item.id == task_id || item.source_task_id.as_deref() == Some(task_id))
         .map(|item| item.id.clone())
 }
 
-pub fn retry_job_execution(store: &mut AppStore, task_id: &str) -> Result<(String, String), String> {
+pub fn retry_job_execution(
+    store: &mut AppStore,
+    task_id: &str,
+) -> Result<(String, String), String> {
     let definition_id = find_execution_definition_id(store, task_id)
         .ok_or_else(|| "任务执行实例不存在".to_string())?;
     if active_execution_exists(store, &definition_id) {
@@ -868,24 +916,27 @@ mod tests {
     use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
 
     fn seed_scheduled_definition(store: &mut AppStore) {
-        store.redclaw_state.scheduled_tasks.push(RedclawScheduledTaskRecord {
-            id: "scheduled-1".to_string(),
-            name: "Retry me".to_string(),
-            enabled: true,
-            mode: "interval".to_string(),
-            prompt: "hello".to_string(),
-            project_id: Some("project-1".to_string()),
-            interval_minutes: Some(15),
-            time: None,
-            weekdays: None,
-            run_at: None,
-            created_at: "1".to_string(),
-            updated_at: "1".to_string(),
-            last_run_at: None,
-            last_result: None,
-            last_error: None,
-            next_run_at: Some("1".to_string()),
-        });
+        store
+            .redclaw_state
+            .scheduled_tasks
+            .push(RedclawScheduledTaskRecord {
+                id: "scheduled-1".to_string(),
+                name: "Retry me".to_string(),
+                enabled: true,
+                mode: "interval".to_string(),
+                prompt: "hello".to_string(),
+                project_id: Some("project-1".to_string()),
+                interval_minutes: Some(15),
+                time: None,
+                weekdays: None,
+                run_at: None,
+                created_at: "1".to_string(),
+                updated_at: "1".to_string(),
+                last_run_at: None,
+                last_result: None,
+                last_error: None,
+                next_run_at: Some("1".to_string()),
+            });
         sync_redclaw_job_definitions(store);
     }
 
@@ -980,8 +1031,9 @@ mod tests {
                 .is_some(),
             true
         );
-        assert!(tasks
-            .iter()
-            .all(|item| item.get("executionId").and_then(|value| value.as_str()) != Some(execution_id.as_str())));
+        assert!(tasks.iter().all(
+            |item| item.get("executionId").and_then(|value| value.as_str())
+                != Some(execution_id.as_str())
+        ));
     }
 }
