@@ -972,6 +972,7 @@ fn ensure_workspace_dirs(root: &Path) -> Result<(), String> {
         root.join("memory"),
         root.join("subjects"),
         root.join("chatrooms"),
+        root.join("remotion-elements"),
     ] {
         fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }
@@ -1159,6 +1160,12 @@ fn redclaw_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
 
 fn knowledge_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = workspace_root(state)?.join("knowledge");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn remotion_elements_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = workspace_root(state)?.join("remotion-elements");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
 }
@@ -2402,6 +2409,10 @@ fn execute_interactive_tool_call(
                     "manuscripts:get-package-script-state",
                     json!({ "filePath": file_path }),
                 ),
+                "remotion_read" | "remotion-read" => call_manuscript_channel(
+                    "manuscripts:get-remotion-context",
+                    json!({ "filePath": file_path }),
+                ),
                 "script_update" | "script-update" => {
                     let result = call_manuscript_channel(
                         "manuscripts:update-package-script",
@@ -3473,10 +3484,10 @@ assets: {assets_path}\n\
 ## 工程理解规则\n\
 - `editor.project.json` 是实验视频/音频编辑工程的主结构文件，包含资产、轨道、items 与舞台状态。\n\
 - `timeline.otio.json` 是兼容时间线表示，适合对照旧式片段结构。\n\
-- `remotion.scene.json` 是动画与导出场景配置；需要制作动画或最终导出时重点关注。\n\
+- `remotion.scene.json` 是动画图层真相层；AI 生成动画后应优先写这里，并让编辑器直接预览这份结构，而不是中途强制导出文件。\n\
 - `track-ui.json` / `scene-ui.json` 是编辑器 UI 与舞台对象状态，不要把它们误当成正文内容。\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、改字幕、做导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；写回脚本后必须明确告诉用户“脚本已更新，请先阅读并确认，确认后我再开始制作动画”；只有用户明确确认后，才能调用 `script_confirm`，之后才允许执行时间线修改、Remotion 动画生成或导出。进入执行阶段前，再调用 `timeline_read` 获取完整时间线；需要定位时优先用 `selection_read` / `playhead_read` / `focus_item`；插入素材优先用 `clip_insert_at_playhead`；面板和视口控制优先用 `panel_open` / `timeline_zoom_set` / `timeline_scroll_set`；再按需使用 `clip_add` / `clip_move` / `clip_update` / `clip_toggle_enabled` / `clip_delete` / `clip_split` / `track_add` / `track_reorder` / `track_delete` / `focus_clip` / `remotion_generate` / `remotion_save` / `export`。Remotion 在当前宿主里是“按帧的场景序列”：每个 scene 对应一个片段，时序由 `durationInFrames` 与 overlay 的 `startFrame` / `durationInFrames` 控制；不要虚构 CSS keyframes、时间轴插件或不存在的特效系统。修改脚本、时间线或动画后，最终回答要简要说明改动与当前脚本确认状态。",
+工具规则：使用 `redbox_editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、改字幕、做导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；写回脚本后必须明确告诉用户“脚本已更新，请先阅读并确认，确认后我再开始制作动画”；只有用户明确确认后，才能调用 `script_confirm`，之后才允许执行时间线修改、Remotion 动画生成或导出。进入执行阶段前，再调用 `timeline_read` 获取完整时间线；涉及 Remotion 时，先调用 `remotion_read` 读取当前 Composition / scene / assets / selection；需要定位时优先用 `selection_read` / `playhead_read` / `focus_item`；插入素材优先用 `clip_insert_at_playhead`；面板和视口控制优先用 `panel_open` / `timeline_zoom_set` / `timeline_scroll_set`；再按需使用 `clip_add` / `clip_move` / `clip_update` / `clip_toggle_enabled` / `clip_delete` / `clip_split` / `track_add` / `track_reorder` / `track_delete` / `focus_clip` / `remotion_generate` / `remotion_save` / `export`。不要用 `text_add` / `clip_add` 往普通文字轨道塞标题来模拟动画；动画只能进入 `remotion.scene.json` 与 `M1` 动画轨道。Remotion 在当前宿主里是“一个工程文件 + 主 scene + elements + animations”的结构：默认应在主 scene（通常是 `scene-1`）里继续添加动画元素，而不是按底层片段数量机械生成多个 scene；只有用户明确要求跟随某个现有镜头时，才去绑定 clipId / assetId。创建动画时，先确定主体元素，再确定 React / Remotion 动画表达。生成动画后，默认目标是更新动画图层并在编辑器中直接预览，不要把“立即导出成视频”当作默认下一步；最终导出留到所有图层确认完成后再进行。`video-editor` 运行时会自动启用 `remotion-best-practices` 内置技能，用于补充官方 Remotion 最佳实践。修改脚本、时间线或动画后，最终回答要简要说明改动与当前脚本确认状态。",
         package_root.display(),
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),

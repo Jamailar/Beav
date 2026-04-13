@@ -190,6 +190,15 @@ mod tests {
                 is_builtin: Some(true),
                 disabled: Some(false),
             },
+            SkillRecord {
+                name: "remotion-best-practices".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/remotion-best-practices".to_string(),
+                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            },
         ]
     }
 
@@ -227,5 +236,36 @@ mod tests {
         assert_eq!(state.active_skills.len(), 2);
         assert_eq!(state.allowed_tools, Vec::<String>::new());
         assert!(state.skills_section.contains("cover-builder [forked]"));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_auto_activates_video_editor_remotion_skill_only_in_video_mode() {
+        let video_state = build_skill_runtime_state(
+            &skills(),
+            "video-editor",
+            None,
+            &[
+                "redbox_editor".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_skill".to_string(),
+            ],
+        );
+        assert_eq!(video_state.active_skills.len(), 1);
+        assert_eq!(
+            video_state.active_skills[0].name,
+            "remotion-best-practices".to_string()
+        );
+
+        let default_state = build_skill_runtime_state(
+            &skills(),
+            "default",
+            None,
+            &[
+                "redbox_editor".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_skill".to_string(),
+            ],
+        );
+        assert!(default_state.active_skills.is_empty());
     }
 }

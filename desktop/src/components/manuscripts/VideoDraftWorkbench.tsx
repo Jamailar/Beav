@@ -546,6 +546,8 @@ export function VideoDraftWorkbench({
   const [subtitleDraftText, setSubtitleDraftText] = useState('');
   const [subtitleDraftDurationMs, setSubtitleDraftDurationMs] = useState(2200);
   const [subtitlePresetId, setSubtitlePresetId] = useState('classic-bottom');
+  const [isTranscribingSubtitles, setIsTranscribingSubtitles] = useState(false);
+  const [subtitleTranscriptionNotice, setSubtitleTranscriptionNotice] = useState<string | null>(null);
   const [textDraftText, setTextDraftText] = useState('输入标题');
   const [textDraftDurationMs, setTextDraftDurationMs] = useState(2500);
   const [textPresetId, setTextPresetId] = useState('headline-hero');
@@ -1162,6 +1164,13 @@ export function VideoDraftWorkbench({
     if (!assetId) return null;
     return displayAssets.find((asset) => asset.id === assetId) || null;
   }, [displayAssets, selectedTimelineClip]);
+  const subtitleRecognitionClip = useMemo(() => {
+    const candidates = [selectedTimelineClip, activeAudioTimelineClip, activeVisualTimelineClip];
+    return candidates.find((clip) => {
+      const kind = String(clip?.assetKind || '').trim().toLowerCase();
+      return kind === 'audio' || kind === 'video';
+    }) || null;
+  }, [activeAudioTimelineClip, activeVisualTimelineClip, selectedTimelineClip]);
   const subtitleClips = useMemo(
     () => timelineClips.filter((clip) => {
       const kind = String(clip.assetKind || '').trim().toLowerCase();
@@ -1711,6 +1720,67 @@ export function VideoDraftWorkbench({
       setSubtitleDraftText('');
     }
   }, [activeTrackId, editorFile, editorStore, onPackageStateChange, subtitleDraftDurationMs, subtitlePresetId]);
+
+  const transcribeSubtitlesForClip = useCallback(async () => {
+    const clipId = String(subtitleRecognitionClip?.clipId || '').trim();
+    if (!editorFile || !clipId || isTranscribingSubtitles) return;
+    const preset = resolveSubtitlePreset(subtitlePresetId);
+    setIsTranscribingSubtitles(true);
+    setSubtitleTranscriptionNotice(null);
+    try {
+      const result = await window.ipcRenderer.invoke('manuscripts:transcribe-package-subtitles', {
+        filePath: editorFile,
+        clipId,
+        track: activeTrackId && activeTrackId.startsWith('S') ? activeTrackId : undefined,
+        subtitleStyle: {
+          position: preset.position,
+          fontSize: preset.fontSize,
+          color: preset.color,
+          backgroundColor: preset.backgroundColor,
+          emphasisColor: preset.emphasisColor,
+          align: preset.align,
+          presetId: preset.id,
+          animation: preset.animation,
+          fontWeight: preset.fontWeight,
+          textTransform: preset.textTransform,
+          letterSpacing: preset.letterSpacing,
+          borderRadius: preset.borderRadius,
+          paddingX: preset.paddingX,
+          paddingY: preset.paddingY,
+          segmentationMode: preset.type === 'word' ? 'singleWord' : 'punctuationOrPause',
+          linesPerCaption: 1,
+        },
+      }) as {
+        success?: boolean;
+        error?: string;
+        subtitleCount?: number;
+        subtitleFile?: string;
+        insertedClipId?: string;
+        state?: Record<string, unknown>;
+      };
+      if (!result?.success || !result.state) {
+        throw new Error(result?.error || '字幕识别失败');
+      }
+      onPackageStateChange(result.state as PackageStateLike);
+      const insertedClipId = String(result.insertedClipId || '').trim();
+      if (insertedClipId) {
+        editorStore.setState((state) => ({
+          timeline: {
+            ...state.timeline,
+            selectedClipId: insertedClipId,
+            activeTrackId: activeTrackId && activeTrackId.startsWith('S') ? activeTrackId : state.timeline.activeTrackId,
+          },
+        }));
+      }
+      setSubtitleTranscriptionNotice(
+        `已生成 ${Math.max(0, Number(result.subtitleCount || 0))} 段字幕，并保存到 ${String(result.subtitleFile || 'subtitles/')}`
+      );
+    } catch (error) {
+      setSubtitleTranscriptionNotice(error instanceof Error ? error.message : String(error || '字幕识别失败'));
+    } finally {
+      setIsTranscribingSubtitles(false);
+    }
+  }, [activeTrackId, editorFile, editorStore, isTranscribingSubtitles, onPackageStateChange, subtitlePresetId, subtitleRecognitionClip]);
 
   const updateSubtitleClipText = useCallback(async (clipId: string, nextText: string) => {
     if (!editorFile || !clipId) return;
@@ -4928,6 +4998,42 @@ export function VideoDraftWorkbench({
                         <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/65">
                           {subtitleClips.length} 段
                         </div>
+                      </div>
+                      <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/40">自动识别</div>
+                            <div className="mt-1 text-sm text-white/85">
+                              {subtitleRecognitionClip
+                                ? `从 ${clipPreviewText(String(subtitleRecognitionClip.name || subtitleRecognitionClip.clipId || '当前片段'))} 生成字幕段`
+                                : '先选中一个音频或视频片段，再识别字幕'}
+                            </div>
+                            {subtitleRecognitionClip ? (
+                              <div className="mt-2 text-[11px] text-white/45">
+                                {String(subtitleRecognitionClip.track || '-')} · {String(subtitleRecognitionClip.assetKind || 'media')} · {Math.round(Number(subtitleRecognitionClip.durationMs || 0))}ms
+                              </div>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void transcribeSubtitlesForClip()}
+                            disabled={!subtitleRecognitionClip || isTranscribingSubtitles}
+                            className={clsx(
+                              'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition',
+                              !subtitleRecognitionClip || isTranscribingSubtitles
+                                ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
+                                : 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+                            )}
+                          >
+                            <Sparkles className="h-3.5 w-3.5" />
+                            {isTranscribingSubtitles ? '识别中...' : '识别当前片段字幕'}
+                          </button>
+                        </div>
+                        {subtitleTranscriptionNotice ? (
+                          <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[12px] text-white/70">
+                            {subtitleTranscriptionNotice}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="mt-4 rounded-[20px] border border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.45),rgba(8,47,73,0.22))] p-4">
                         <div className="flex items-center justify-between gap-3">

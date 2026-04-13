@@ -21,8 +21,8 @@ use crate::subagents::{
     SubAgentSpawnResult,
 };
 use crate::{
-    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text,
-    payload_string, AppState, AppStore, ChatSessionRecord,
+    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
+    AppState, AppStore, ChatSessionRecord,
 };
 
 fn snippet(value: &str, limit: usize) -> String {
@@ -42,7 +42,10 @@ fn model_config_summary(config: Option<&Value>) -> String {
             format!(
                 "baseURL={} | modelName={} | protocol={} | apiKeyPresent={} | reasoningEffort={}",
                 object.get("baseURL").and_then(Value::as_str).unwrap_or(""),
-                object.get("modelName").and_then(Value::as_str).unwrap_or(""),
+                object
+                    .get("modelName")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
                 object.get("protocol").and_then(Value::as_str).unwrap_or(""),
                 object
                     .get("apiKey")
@@ -578,9 +581,7 @@ fn execute_subagent_config(
         &state,
         format!(
             "[subagent][finished] role={} | childTaskId={} | childSessionId={} | status=completed",
-            config.role_id,
-            spawn.child_task_id,
-            spawn.child_session_id
+            config.role_id, spawn.child_task_id, spawn.child_session_id
         ),
     );
     Ok(output)

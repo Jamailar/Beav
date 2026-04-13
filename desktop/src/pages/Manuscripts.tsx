@@ -2049,11 +2049,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     void handleRenderRemotionVideo();
                                 }}
                                 disabled={isRenderingRemotion || !isScriptConfirmed}
-                                title={isScriptConfirmed ? '导出当前视频' : '先确认脚本，再导出视频'}
+                                title={isScriptConfirmed ? '导出当前动画层' : '先确认脚本，再导出动画层'}
                                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white disabled:opacity-40"
                             >
                                 <ExternalLink className="h-4 w-4" />
-                                {isRenderingRemotion ? '导出中...' : '导出'}
+                                {isRenderingRemotion ? '导出中...' : '导出动画层'}
                             </button>
                         )}
                         {isAudioPackage && (

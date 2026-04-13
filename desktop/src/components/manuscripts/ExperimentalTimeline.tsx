@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
 import { AudioLines, Eye, EyeOff, Lock, Minus, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
 import {
     buildAssetMap,
+    deriveProjectedEditorItems,
     type EditorCommand,
     type EditorAsset,
     type EditorItem,
@@ -149,14 +150,16 @@ export function ExperimentalTimeline({
     onSelectionChange,
     onZoomPercentChange,
 }: ExperimentalTimelineProps) {
+    const rootRef = useRef<HTMLDivElement | null>(null);
     const bodyRef = useRef<HTMLDivElement | null>(null);
     const [dragState, setDragState] = useState<DragState | null>(null);
     const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemId: string } | null>(null);
     const tracks = useMemo(() => timelineTracks(project), [project]);
+    const projectedItems = useMemo(() => deriveProjectedEditorItems(project), [project]);
     const assetMap = useMemo(() => buildAssetMap(project), [project]);
     const pixelsPerSecond = 72 * (zoomPercent / 100);
-    const totalDurationMs = useMemo(() => project.items.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 6000), [project.items]);
+    const totalDurationMs = useMemo(() => projectedItems.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 6000), [projectedItems]);
     const contentWidth = RAIL_WIDTH + Math.max(12_000, totalDurationMs) / 1000 * pixelsPerSecond + 120;
     const playheadLeft = RAIL_WIDTH + (currentTimeMs / 1000) * pixelsPerSecond;
     const rowOffsets = useMemo(() => {
@@ -265,11 +268,11 @@ export function ExperimentalTimeline({
         };
     }, [clientXToTimelineMs, contentWidth, dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond]);
 
-    const selectedItems = project.items.filter((item) => selectedItemIds.includes(item.id));
-    const primaryItem = primaryItemId ? project.items.find((item) => item.id === primaryItemId) || null : null;
+    const selectedItems = projectedItems.filter((item) => selectedItemIds.includes(item.id));
+    const primaryItem = primaryItemId ? projectedItems.find((item) => item.id === primaryItemId) || null : null;
     const activeTrack = selectedTrackIds[0] ? project.tracks.find((track) => track.id === selectedTrackIds[0]) || null : null;
-    const contextMenuItem = contextMenu ? project.items.find((item) => item.id === contextMenu.itemId) || null : null;
-    const itemAtPlayhead = project.items.find((item) => (
+    const contextMenuItem = contextMenu ? projectedItems.find((item) => item.id === contextMenu.itemId) || null : null;
+    const itemAtPlayhead = projectedItems.find((item) => (
         item.type !== 'motion'
         && currentTimeMs >= item.fromMs
         && currentTimeMs <= item.fromMs + item.durationMs
@@ -286,7 +289,12 @@ export function ExperimentalTimeline({
 
     const deleteSelected = () => {
         if (selectedItemIds.length > 0) {
-            onApplyCommands([{ type: 'delete_items', itemIds: selectedItemIds }]);
+            const commands = selectedItems.map((item) => (
+                item.type === 'motion'
+                    ? ({ type: 'animation_layer_delete', layerId: item.id } as EditorCommand)
+                    : ({ type: 'delete_item', itemId: item.id } as EditorCommand)
+            ));
+            onApplyCommands(commands);
             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
             return;
         }
@@ -294,6 +302,25 @@ export function ExperimentalTimeline({
             onApplyCommands([{ type: 'delete_tracks', trackIds: selectedTrackIds }]);
             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
         }
+    };
+
+    const focusTimeline = () => {
+        rootRef.current?.focus();
+    };
+
+    const handleTimelineKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+        const isDeleteKey = event.key === 'Delete' || event.key === 'Backspace';
+        if (!isDeleteKey) return;
+        const target = event.target as HTMLElement | null;
+        if (target) {
+            const tagName = target.tagName;
+            const isEditable = target.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+            if (isEditable) return;
+        }
+        if (selectedItemIds.length === 0 && selectedTrackIds.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        deleteSelected();
     };
 
     const splitPrimary = () => {
@@ -365,7 +392,13 @@ export function ExperimentalTimeline({
     const toolbarIconButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-md text-white/60 transition hover:bg-white/[0.06] hover:text-white';
 
     return (
-        <div className="flex h-full min-h-0 flex-col">
+        <div
+            ref={rootRef}
+            className="flex h-full min-h-0 flex-col outline-none focus-visible:ring-1 focus-visible:ring-cyan-300/70"
+            tabIndex={0}
+            onKeyDown={handleTimelineKeyDown}
+            onPointerDownCapture={focusTimeline}
+        >
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
                 <button
                     type="button"
@@ -467,7 +500,7 @@ export function ExperimentalTimeline({
 
                     {rowOffsets.map(({ track, top, height }) => {
                         const TrackIcon = kindIcon(track.kind);
-                        const rowItems = project.items
+                        const rowItems = projectedItems
                             .filter((item) => item.trackId === track.id)
                             .slice()
                             .sort((left, right) => left.fromMs - right.fromMs);
@@ -547,7 +580,7 @@ export function ExperimentalTimeline({
                                                         itemId: item.id,
                                                         pointerId: event.pointerId,
                                                         startClientX: event.clientX,
-                                                        initialItems: project.items
+                                                        initialItems: projectedItems
                                                             .filter((candidate) => nextSelection.includes(candidate.id))
                                                             .map((candidate) => ({
                                                                 id: candidate.id,
@@ -686,7 +719,11 @@ export function ExperimentalTimeline({
                         type="button"
                         className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
                         onClick={() => {
-                            onApplyCommands([{ type: 'delete_item', itemId: contextMenuItem.id }]);
+                            onApplyCommands([
+                                contextMenuItem.type === 'motion'
+                                    ? ({ type: 'animation_layer_delete', layerId: contextMenuItem.id } as EditorCommand)
+                                    : ({ type: 'delete_item', itemId: contextMenuItem.id } as EditorCommand),
+                            ]);
                             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
                             setContextMenu(null);
                         }}

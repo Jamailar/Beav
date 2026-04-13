@@ -6,8 +6,7 @@ use crate::{
     decode_base64_bytes, generate_chat_response, invoke_structured_chat_by_protocol,
     load_redbox_prompt_or_embedded, markdown_to_html, now_ms, payload_field, payload_string,
     render_redbox_prompt, resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json,
-    url_encode_component,
-    AdvisorRecord, WechatOfficialBindingRecord,
+    url_encode_component, AdvisorRecord, WechatOfficialBindingRecord,
 };
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {

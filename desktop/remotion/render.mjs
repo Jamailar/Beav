@@ -33,22 +33,36 @@ async function main() {
     inputProps,
   });
 
+  const renderMode = compositionConfig.renderMode === 'full' ? 'full' : 'motion-layer';
+  const renderOptions = renderMode === 'motion-layer'
+    ? {
+        codec: 'prores',
+        proResProfile: '4444',
+        pixelFormat: 'yuva444p10le',
+        muted: true,
+        enforceAudioTrack: false,
+      }
+    : {
+        codec: 'h264',
+      };
+
   await renderMedia({
     serveUrl: bundled,
     composition,
-    codec: 'h264',
     outputLocation: outputPath,
     inputProps,
     chromiumOptions: {
       disableWebSecurity: true,
     },
     overwrite: true,
+    ...renderOptions,
   });
 
   process.stdout.write(JSON.stringify({
     success: true,
     outputLocation: outputPath,
     durationInFrames: composition.durationInFrames,
+    renderMode,
   }));
 }
 

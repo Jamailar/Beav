@@ -1,4 +1,10 @@
-import type { RemotionCompositionConfig, RemotionOverlay, RemotionScene } from './remotion/types';
+import type {
+    RemotionCompositionConfig,
+    RemotionOverlay,
+    RemotionRenderMode,
+    RemotionScene,
+    RemotionSceneEntity,
+} from './remotion/types';
 
 export type EditorTrackKind = 'video' | 'audio' | 'subtitle' | 'text' | 'motion';
 export type EditorItemType = 'media' | 'subtitle' | 'text' | 'motion';
@@ -78,6 +84,26 @@ export type EditorMotionItem = {
 
 export type EditorItem = EditorMediaItem | EditorSubtitleItem | EditorTextItem | EditorMotionItem;
 
+export type EditorAnimationLayerBinding = {
+    type: 'clip';
+    targetId: string;
+};
+
+export type EditorAnimationLayer = {
+    id: string;
+    name: string;
+    trackId: string;
+    enabled: boolean;
+    fromMs: number;
+    durationMs: number;
+    zIndex: number;
+    renderMode: RemotionRenderMode;
+    componentType: string;
+    props: Record<string, unknown>;
+    entities: RemotionSceneEntity[];
+    bindings: EditorAnimationLayerBinding[];
+};
+
 export type EditorProjectFile = {
     version: 1;
     project: {
@@ -95,6 +121,7 @@ export type EditorProjectFile = {
     assets: EditorAsset[];
     tracks: EditorTrack[];
     items: EditorItem[];
+    animationLayers: EditorAnimationLayer[];
     stage: {
         itemTransforms: Record<string, {
             x: number;
@@ -138,6 +165,9 @@ export type EditorCommand =
     | { type: 'set_track_ui'; trackId: string; patch: Partial<EditorTrackUi> }
     | { type: 'reorder_tracks'; trackId: string; direction: 'up' | 'down' }
     | { type: 'update_stage_item'; itemId: string; patch?: Record<string, unknown>; visible?: boolean; locked?: boolean; groupId?: string }
+    | { type: 'animation_layer_create'; layer: EditorAnimationLayer }
+    | { type: 'animation_layer_update'; layerId: string; patch: Partial<EditorAnimationLayer> }
+    | { type: 'animation_layer_delete'; layerId: string }
     | { type: 'generate_motion_items'; selectedItemIds?: string[]; instructions: string };
 
 export type LegacyTimelineClip = {
@@ -187,6 +217,76 @@ export function isMotionItem(item: EditorItem): item is EditorMotionItem {
     return item.type === 'motion';
 }
 
+export function isAnimationLayerBoundToClip(layer: EditorAnimationLayer) {
+    return layer.bindings.some((binding) => binding.type === 'clip' && binding.targetId.trim() !== '');
+}
+
+function animationLayerToProjectedMotionItem(layer: EditorAnimationLayer): EditorMotionItem {
+    const firstBinding = layer.bindings.find((binding) => binding.type === 'clip');
+    return {
+        id: layer.id,
+        type: 'motion',
+        trackId: layer.trackId,
+        bindItemId: firstBinding?.targetId,
+        fromMs: layer.fromMs,
+        durationMs: layer.durationMs,
+        templateId: String(layer.props.templateId || layer.componentType || 'static'),
+        props: {
+            ...layer.props,
+            entities: layer.entities,
+            overlayTitle: layer.props.overlayTitle ?? layer.name,
+        },
+        enabled: layer.enabled,
+    };
+}
+
+export function deriveAnimationLayers(project: EditorProjectFile): EditorAnimationLayer[] {
+    if (Array.isArray(project.animationLayers) && project.animationLayers.length > 0) {
+        return project.animationLayers
+            .map((layer, index) => ({
+                ...layer,
+                name: layer.name || `动画层 ${index + 1}`,
+                trackId: layer.trackId || 'M1',
+                enabled: layer.enabled !== false,
+                fromMs: Math.max(0, layer.fromMs || 0),
+                durationMs: Math.max(300, layer.durationMs || 2000),
+                zIndex: Number.isFinite(layer.zIndex) ? layer.zIndex : index,
+                renderMode: layer.renderMode || 'motion-layer',
+                componentType: layer.componentType || String(layer.props?.templateId || 'scene-sequence'),
+                props: layer.props || {},
+                entities: Array.isArray(layer.entities) ? layer.entities : [],
+                bindings: Array.isArray(layer.bindings) ? layer.bindings.filter((binding) => !!binding?.targetId) : [],
+            }))
+            .sort((left, right) => left.fromMs - right.fromMs || left.zIndex - right.zIndex);
+    }
+    return project.items
+        .filter(isMotionItem)
+        .map((item, index) => ({
+            id: item.id,
+            name: String(item.props.overlayTitle || item.templateId || `动画层 ${index + 1}`),
+            trackId: item.trackId || 'M1',
+            enabled: item.enabled,
+            fromMs: item.fromMs,
+            durationMs: item.durationMs,
+            zIndex: index,
+            renderMode: 'motion-layer' as RemotionRenderMode,
+            componentType: String(item.props.componentType || item.templateId || 'scene-sequence'),
+            props: { ...item.props, templateId: item.templateId },
+            entities: Array.isArray(item.props.entities) ? item.props.entities as RemotionSceneEntity[] : [],
+            bindings: item.bindItemId ? [{ type: 'clip' as const, targetId: item.bindItemId }] : [],
+        }));
+}
+
+export function deriveProjectedEditorItems(project: EditorProjectFile): EditorItem[] {
+    const nonMotionItems = project.items.filter((item) => item.type !== 'motion');
+    const motionItems = deriveAnimationLayers(project).map(animationLayerToProjectedMotionItem);
+    return [...nonMotionItems, ...motionItems];
+}
+
+function cloneEntity<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
+
 export function isTextualItem(item: EditorItem): item is EditorTextItem | EditorSubtitleItem {
     return item.type === 'text' || item.type === 'subtitle';
 }
@@ -218,10 +318,11 @@ export function buildAssetMap(project: EditorProjectFile): Record<string, Editor
 }
 
 export function deriveLegacyTimelineClips(project: EditorProjectFile): LegacyTimelineClip[] {
+    const projectedItems = deriveProjectedEditorItems(project);
     const assetMap = buildAssetMap(project);
     const orderedTrackIds = deriveTrackNames(project, false);
     const trackIndex = new Map(orderedTrackIds.map((trackId, index) => [trackId, index]));
-    return project.items
+    return projectedItems
         .filter((item) => item.type !== 'motion')
         .slice()
         .sort((left, right) => {
@@ -279,35 +380,61 @@ export function deriveLegacyTimelineClips(project: EditorProjectFile): LegacyTim
 
 export function buildRemotionCompositionFromEditorProject(project: EditorProjectFile): RemotionCompositionConfig {
     const assetMap = buildAssetMap(project);
-    const motionItems = project.items.filter(isMotionItem).filter((item) => item.enabled);
-    const scenes: RemotionScene[] = project.items
+    const projectedItems = deriveProjectedEditorItems(project);
+    const animationLayers = deriveAnimationLayers(project).filter((layer) => layer.enabled);
+    const standaloneScenes: RemotionScene[] = animationLayers
+        .filter((layer) => !isAnimationLayerBoundToClip(layer))
+        .map((layer) => {
+            const overlays = Array.isArray(layer.props?.overlays)
+                ? (layer.props.overlays as RemotionOverlay[])
+                : [];
+            return {
+                id: layer.id,
+                clipId: undefined,
+                assetId: undefined,
+                assetKind: 'unknown',
+                src: '',
+                startFrame: Math.round((layer.fromMs / 1000) * project.project.fps),
+                durationInFrames: Math.max(12, Math.round((layer.durationMs / 1000) * project.project.fps)),
+                trimInFrames: 0,
+                motionPreset: (layer.props.templateId as RemotionScene['motionPreset']) || 'static',
+                overlayTitle: typeof layer.props?.overlayTitle === 'string' ? String(layer.props.overlayTitle) : layer.name,
+                overlayBody: typeof layer.props?.overlayBody === 'string' ? String(layer.props.overlayBody) : undefined,
+                overlays,
+                entities: layer.entities,
+            };
+        });
+    const boundScenes: RemotionScene[] = projectedItems
         .filter(isMediaItem)
         .filter((item) => item.enabled)
         .filter((item) => {
             const track = project.tracks.find((candidate) => candidate.id === item.trackId);
             return track?.kind === 'video';
         })
-        .map((item) => {
+        .flatMap((item) => {
             const asset = assetMap[item.assetId];
-            const motion = motionItems.find((candidate) => candidate.bindItemId === item.id) || null;
-            const overlays = Array.isArray(motion?.props?.overlays)
-                ? (motion?.props?.overlays as RemotionOverlay[])
+            const layer = animationLayers.find((candidate) => candidate.bindings.some((binding) => binding.targetId === item.id)) || null;
+            if (!layer) return [];
+            const overlays = Array.isArray(layer.props?.overlays)
+                ? (layer.props.overlays as RemotionOverlay[])
                 : [];
-            return {
-                id: motion?.id || `scene-${item.id}`,
+            return [{
+                id: layer.id || `scene-${item.id}`,
                 clipId: item.id,
                 assetId: item.assetId,
                 assetKind: (asset?.kind === 'image' || asset?.kind === 'video' || asset?.kind === 'audio') ? asset.kind : 'unknown',
                 src: asset?.src || '',
                 startFrame: Math.round((item.fromMs / 1000) * project.project.fps),
-                durationInFrames: Math.max(12, Math.round(((motion?.durationMs || item.durationMs) / 1000) * project.project.fps)),
+                durationInFrames: Math.max(12, Math.round(((layer.durationMs || item.durationMs) / 1000) * project.project.fps)),
                 trimInFrames: Math.round((item.trimInMs / 1000) * project.project.fps),
-                motionPreset: (motion?.templateId as RemotionScene['motionPreset']) || 'static',
-                overlayTitle: typeof motion?.props?.overlayTitle === 'string' ? String(motion.props.overlayTitle) : undefined,
-                overlayBody: typeof motion?.props?.overlayBody === 'string' ? String(motion.props.overlayBody) : undefined,
+                motionPreset: (layer.props.templateId as RemotionScene['motionPreset']) || 'static',
+                overlayTitle: typeof layer.props?.overlayTitle === 'string' ? String(layer.props.overlayTitle) : layer.name,
+                overlayBody: typeof layer.props?.overlayBody === 'string' ? String(layer.props.overlayBody) : undefined,
                 overlays,
-            };
+                entities: layer.entities,
+            }];
         });
+    const scenes: RemotionScene[] = [...standaloneScenes, ...boundScenes].sort((left, right) => left.startFrame - right.startFrame);
     const durationInFrames = scenes.reduce((max, scene) => Math.max(max, scene.startFrame + scene.durationInFrames), 90);
     return {
         version: 1,
@@ -317,6 +444,7 @@ export function buildRemotionCompositionFromEditorProject(project: EditorProject
         fps: project.project.fps,
         durationInFrames,
         backgroundColor: project.project.backgroundColor,
+        renderMode: 'motion-layer',
         scenes,
         sceneItemTransforms: project.stage.itemTransforms,
     };
@@ -382,6 +510,56 @@ function normalizeTimelineItems(next: EditorProjectFile): EditorProjectFile {
     };
 }
 
+function normalizeAnimationLayers(next: EditorProjectFile): EditorProjectFile {
+    const motionTrackIds = trackOrder(next)
+        .filter((track) => track.kind === 'motion')
+        .map((track) => track.id);
+    const knownTrackIds = new Set(motionTrackIds);
+    const grouped = new Map<string, EditorAnimationLayer[]>();
+    next.animationLayers.forEach((layer) => {
+        const trackId = layer.trackId || 'M1';
+        const bucket = grouped.get(trackId) || [];
+        bucket.push(layer);
+        grouped.set(trackId, bucket);
+    });
+
+    const normalized: EditorAnimationLayer[] = [];
+    motionTrackIds.forEach((trackId) => {
+        const layers = (grouped.get(trackId) || [])
+            .slice()
+            .sort((left, right) => left.fromMs - right.fromMs || left.zIndex - right.zIndex);
+        let cursor = 0;
+        layers.forEach((layer, index) => {
+            const fromMs = Math.max(cursor, layer.fromMs || 0);
+            const durationMs = Math.max(300, layer.durationMs || 0);
+            normalized.push({
+                ...layer,
+                trackId,
+                fromMs,
+                durationMs,
+                zIndex: index,
+            });
+            cursor = fromMs + durationMs;
+        });
+    });
+
+    next.animationLayers
+        .filter((layer) => !knownTrackIds.has(layer.trackId))
+        .forEach((layer, index) => {
+            normalized.push({
+                ...layer,
+                trackId: layer.trackId || `M${motionTrackIds.length + index + 1}`,
+                fromMs: Math.max(0, layer.fromMs || 0),
+                durationMs: Math.max(300, layer.durationMs || 0),
+            });
+        });
+
+    return {
+        ...next,
+        animationLayers: normalized,
+    };
+}
+
 function cloneProject(project: EditorProjectFile): EditorProjectFile {
     return {
         ...project,
@@ -403,6 +581,12 @@ function cloneProject(project: EditorProjectFile): EditorProjectFile {
             itemGroups: { ...project.stage.itemGroups },
             focusedGroupId: project.stage.focusedGroupId,
         },
+        animationLayers: deriveAnimationLayers(project).map((layer) => ({
+            ...layer,
+            props: { ...layer.props },
+            entities: Array.isArray(layer.entities) ? layer.entities.map((entity) => cloneEntity(entity)) : [],
+            bindings: Array.isArray(layer.bindings) ? layer.bindings.map((binding) => ({ ...binding })) : [],
+        })),
         ai: { ...project.ai },
     };
 }
@@ -418,7 +602,7 @@ function normalizeTrackUiPatch(track: EditorTrack, patch: Partial<EditorTrackUi>
 }
 
 export function applyEditorCommandLocal(project: EditorProjectFile, command: EditorCommand): EditorProjectFile {
-    const next = cloneProject(project);
+    let next = cloneProject(project);
     switch (command.type) {
         case 'upsert_assets': {
             const assetMap = new Map(next.assets.map((asset) => [asset.id, asset]));
@@ -437,26 +621,64 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
                 order: next.tracks.length,
                 ui: defaultTrackUi(),
             });
-            return next;
+            return normalizeAnimationLayers(next);
         }
         case 'delete_tracks': {
             const trackIdSet = new Set(command.trackIds);
             next.tracks = next.tracks.filter((track) => !trackIdSet.has(track.id)).map((track, order) => ({ ...track, order }));
             next.items = next.items.filter((item) => !trackIdSet.has(item.trackId));
-            return normalizeTimelineItems(next);
+            next.animationLayers = next.animationLayers.filter((layer) => !trackIdSet.has(layer.trackId));
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         }
         case 'add_item':
+            if (command.item.type === 'motion') {
+                next.animationLayers.push({
+                    id: command.item.id,
+                    name: String(command.item.props.overlayTitle || command.item.templateId || '动画层'),
+                    trackId: command.item.trackId,
+                    enabled: command.item.enabled,
+                    fromMs: command.item.fromMs,
+                    durationMs: command.item.durationMs,
+                    zIndex: next.animationLayers.length,
+                    renderMode: 'motion-layer',
+                    componentType: String(command.item.props.componentType || command.item.templateId || 'scene-sequence'),
+                    props: { ...command.item.props, templateId: command.item.templateId },
+                    entities: Array.isArray(command.item.props.entities) ? command.item.props.entities as RemotionSceneEntity[] : [],
+                    bindings: command.item.bindItemId ? [{ type: 'clip', targetId: command.item.bindItemId }] : [],
+                });
+                return normalizeAnimationLayers(next);
+            }
             next.items.push(command.item);
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         case 'update_item':
+            if (next.animationLayers.some((layer) => layer.id === command.itemId)) {
+                next.animationLayers = next.animationLayers.map((layer) => layer.id === command.itemId ? ({
+                    ...layer,
+                    ...(command.patch as Partial<EditorAnimationLayer>),
+                    props: {
+                        ...layer.props,
+                        ...(command.patch as Partial<EditorMotionItem>).props,
+                        ...(command.patch as Partial<EditorMotionItem>).templateId ? { templateId: (command.patch as Partial<EditorMotionItem>).templateId } : {},
+                    },
+                    entities: Array.isArray((command.patch as Partial<EditorMotionItem>).props?.entities)
+                        ? (command.patch as Partial<EditorMotionItem>).props?.entities as RemotionSceneEntity[]
+                        : layer.entities,
+                }) : layer);
+                return normalizeAnimationLayers(next);
+            }
             next.items = next.items.map((item) => item.id === command.itemId ? ({ ...item, ...command.patch } as EditorItem) : item);
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         case 'delete_item':
+            if (next.animationLayers.some((layer) => layer.id === command.itemId)) {
+                next.animationLayers = next.animationLayers.filter((layer) => layer.id !== command.itemId);
+                return normalizeAnimationLayers(next);
+            }
             next.items = next.items.filter((item) => item.id !== command.itemId);
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         case 'delete_items':
+            next.animationLayers = next.animationLayers.filter((layer) => !command.itemIds.includes(layer.id));
             next.items = next.items.filter((item) => !command.itemIds.includes(item.id));
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         case 'split_item': {
             const target = next.items.find((item) => item.id === command.itemId);
             if (!target || target.type === 'motion') return next;
@@ -480,28 +702,62 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
                 if (item.id !== command.itemId) return [item];
                 return [{ ...item, durationMs: splitOffset } as EditorItem, duplicate];
             });
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         }
         case 'move_items':
+            next.animationLayers = next.animationLayers.map((layer) => {
+                if (!command.itemIds.includes(layer.id)) return layer;
+                return {
+                    ...layer,
+                    fromMs: Math.max(0, layer.fromMs + command.deltaMs),
+                    trackId: command.targetTrackId || layer.trackId,
+                };
+            });
             next.items = next.items.map((item) => {
-                if (!command.itemIds.includes(item.id)) return item;
+                if (!command.itemIds.includes(item.id) || item.type === 'motion') return item;
                 return {
                     ...item,
                     fromMs: Math.max(0, item.fromMs + command.deltaMs),
                     trackId: command.targetTrackId || item.trackId,
                 } as EditorItem;
             });
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         case 'retime_item':
+            if (next.animationLayers.some((layer) => layer.id === command.itemId)) {
+                next.animationLayers = next.animationLayers.map((layer) => layer.id === command.itemId ? ({
+                    ...layer,
+                    fromMs: command.fromMs ?? layer.fromMs,
+                    durationMs: command.durationMs ?? layer.durationMs,
+                }) : layer);
+                return normalizeAnimationLayers(next);
+            }
             next.items = next.items.map((item) => item.id === command.itemId ? ({
                 ...item,
                 fromMs: command.fromMs ?? item.fromMs,
                 durationMs: command.durationMs ?? item.durationMs,
             } as EditorItem) : item);
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
+        case 'animation_layer_create':
+            next.animationLayers.push(command.layer);
+            return normalizeAnimationLayers(next);
+        case 'animation_layer_update':
+            next.animationLayers = next.animationLayers.map((layer) => layer.id === command.layerId ? ({
+                ...layer,
+                ...command.patch,
+                props: {
+                    ...layer.props,
+                    ...(command.patch.props || {}),
+                },
+                entities: command.patch.entities ?? layer.entities,
+                bindings: command.patch.bindings ?? layer.bindings,
+            }) : layer);
+            return normalizeAnimationLayers(next);
+        case 'animation_layer_delete':
+            next.animationLayers = next.animationLayers.filter((layer) => layer.id !== command.layerId);
+            return normalizeAnimationLayers(next);
         case 'set_track_ui':
             next.tracks = next.tracks.map((track) => track.id === command.trackId ? normalizeTrackUiPatch(track, command.patch) : track);
-            return next;
+            return normalizeAnimationLayers(next);
         case 'reorder_tracks': {
             const index = next.tracks.findIndex((track) => track.id === command.trackId);
             if (index < 0) return next;
@@ -511,7 +767,7 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
             const [track] = next.tracks.splice(index, 1);
             next.tracks.splice(targetIndex, 0, track);
             next.tracks = next.tracks.map((item, order) => ({ ...item, order }));
-            return normalizeTimelineItems(next);
+            return normalizeAnimationLayers(normalizeTimelineItems(next));
         }
         case 'update_stage_item':
             if (command.patch) {

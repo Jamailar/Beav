@@ -279,6 +279,8 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "script_update",
                                 "script_confirm",
                                 "timeline_read",
+                                "remotion_read",
+                                "remotion-read",
                                 "clips",
                                 "selection_read",
                                 "selection_set",

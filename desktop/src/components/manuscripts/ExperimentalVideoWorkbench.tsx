@@ -8,12 +8,14 @@ import { VideoEditorTimelineShell } from './VideoEditorTimelineShell';
 import { TimelinePreviewComposition } from './TimelinePreviewComposition';
 import { RemotionTransportBar } from './remotion/RemotionTransportBar';
 import { RemotionVideoPreview } from './remotion/RemotionVideoPreview';
-import type { RemotionCompositionConfig } from './remotion/types';
+import type { RemotionCompositionConfig, RemotionScene } from './remotion/types';
 import { createVideoEditorStore, useVideoEditorStore, type VideoEditorRatioPreset } from '../../features/video-editor/store/useVideoEditorStore';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import { subscribeRuntimeEventStream } from '../../runtime/runtimeEventStream';
 import {
     applyEditorCommandLocal,
+    deriveAnimationLayers,
+    deriveProjectedEditorItems,
     buildRemotionCompositionFromEditorProject,
     buildAssetMap,
     type EditorCommand,
@@ -56,7 +58,19 @@ type ChatResizeState = {
     chatPaneWidth: number;
 };
 
-type SidebarTabId = 'assets' | 'video' | 'audio' | 'text' | 'selection';
+type SidebarTabId = 'assets' | 'video' | 'audio' | 'text' | 'elements' | 'selection';
+
+type SharedAnimationElement = {
+    id: string;
+    name: string;
+    storageKey?: string;
+    source?: 'builtin' | 'workspace';
+    componentType?: string;
+    durationMs?: number;
+    renderMode?: 'motion-layer' | 'full';
+    props?: Record<string, unknown>;
+    entities?: RemotionScene['entities'];
+};
 
 type ExperimentalVideoWorkbenchProps = {
     title: string;
@@ -175,6 +189,8 @@ export function ExperimentalVideoWorkbench({
     const [chatResizeState, setChatResizeState] = useState<ChatResizeState | null>(null);
     const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('assets');
     const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
+    const [sharedAnimationElements, setSharedAnimationElements] = useState<SharedAnimationElement[]>([]);
+    const [elementsContextMenu, setElementsContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
     const [stageSelection, setStageSelection] = useState<{
         ids: string[];
         primaryId: string | null;
@@ -199,6 +215,24 @@ export function ExperimentalVideoWorkbench({
             },
         }));
     }, [editorStore, packageState?.editorProject]);
+
+    useEffect(() => {
+        let cancelled = false;
+        void window.ipcRenderer.invoke('animation-elements:list')
+            .then((result) => {
+                if (cancelled) return;
+                const items = Array.isArray((result as { items?: SharedAnimationElement[] } | null)?.items)
+                    ? ((result as { items?: SharedAnimationElement[] }).items || [])
+                    : [];
+                setSharedAnimationElements(items);
+            })
+            .catch((error) => {
+                console.error('Failed to load animation elements:', error);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (!isActive || !editorChatSessionId) return;
@@ -232,6 +266,7 @@ export function ExperimentalVideoWorkbench({
 
     useEffect(() => {
         if (!localProject) return;
+        const projectedItems = deriveProjectedEditorItems(localProject);
         editorStore.setState((state) => ({
             editor: {
                 ...state.editor,
@@ -239,15 +274,15 @@ export function ExperimentalVideoWorkbench({
                 derived: {
                     ...state.editor.derived,
                     durationMs: projectDurationMs(localProject),
-                    visibleItems: localProject.items.filter((item) => {
+                    visibleItems: projectedItems.filter((item) => {
                         const track = localProject.tracks.find((candidate) => candidate.id === item.trackId);
                         return !track?.ui.hidden && item.enabled;
                     }),
-                    audibleItems: localProject.items.filter((item) => {
+                    audibleItems: projectedItems.filter((item) => {
                         const track = localProject.tracks.find((candidate) => candidate.id === item.trackId);
                         return (track?.kind === 'audio' || (item.type === 'media' && track?.kind === 'video')) && !track?.ui.muted && item.enabled;
                     }),
-                    activeMotionItems: localProject.items.filter(isMotionItem),
+                    activeMotionItems: projectedItems.filter(isMotionItem),
                 },
             },
         }));
@@ -317,6 +352,17 @@ export function ExperimentalVideoWorkbench({
         };
     }, [chatResizeState]);
 
+    useEffect(() => {
+        if (!elementsContextMenu) return;
+        const closeMenu = () => setElementsContextMenu(null);
+        window.addEventListener('pointerdown', closeMenu);
+        window.addEventListener('scroll', closeMenu, true);
+        return () => {
+            window.removeEventListener('pointerdown', closeMenu);
+            window.removeEventListener('scroll', closeMenu, true);
+        };
+    }, [elementsContextMenu]);
+
     const updateProject = (nextProject: EditorProjectFile) => {
         setLocalProject(nextProject);
         setSaveNonce((value) => value + 1);
@@ -362,14 +408,19 @@ export function ExperimentalVideoWorkbench({
     const trackUi = useMemo(() => localProject ? deriveTrackUiMap(localProject) : {}, [localProject]);
     const trackOrder = useMemo(() => localProject ? deriveTrackNames(localProject, false) : [], [localProject]);
     const assetsById = useMemo(() => localProject ? buildAssetMap(localProject) : {}, [localProject]);
-    const remotionComposition = useMemo(() => localProject ? buildRemotionCompositionFromEditorProject(localProject) : null, [localProject]);
-    const motionItems = useMemo(() => localProject ? localProject.items.filter(isMotionItem) : [], [localProject]);
+    const remotionComposition = useMemo(
+        () => _remotionComposition || (localProject ? buildRemotionCompositionFromEditorProject(localProject) : null),
+        [_remotionComposition, localProject]
+    );
+    const projectedItems = useMemo(() => localProject ? deriveProjectedEditorItems(localProject) : [], [localProject]);
+    const animationLayers = useMemo(() => localProject ? deriveAnimationLayers(localProject) : [], [localProject]);
+    const motionItems = useMemo(() => projectedItems.filter(isMotionItem), [projectedItems]);
     const selectedMotionItem = useMemo(() => {
         if (!localProject) return null;
-        return localProject.items.find((item) => item.id === selection.primaryItemId && item.type === 'motion') as EditorMotionItem | null
+        return projectedItems.find((item) => item.id === selection.primaryItemId && item.type === 'motion') as EditorMotionItem | null
             || (motionItems[0] as EditorMotionItem | undefined)
             || null;
-    }, [localProject, motionItems, selection.primaryItemId]);
+    }, [localProject, motionItems, projectedItems, selection.primaryItemId]);
     const selectedScene = useMemo(() => localProject ? inferSceneFromMotion(localProject, selectedMotionItem) : null, [localProject, selectedMotionItem]);
     const scriptConfirmed = localProject?.ai?.scriptApproval?.status === 'confirmed';
     const scriptStatusLabel = isSavingEditorBody
@@ -380,8 +431,8 @@ export function ExperimentalVideoWorkbench({
                 ? '脚本已确认'
                 : '脚本待确认';
     const selectedEditorItem = useMemo(
-        () => localProject?.items.find((item) => item.id === selection.primaryItemId) || null,
-        [localProject, selection.primaryItemId]
+        () => projectedItems.find((item) => item.id === selection.primaryItemId) || null,
+        [projectedItems, selection.primaryItemId]
     );
     const selectedEditorTrack = useMemo(
         () => selectedEditorItem ? localProject?.tracks.find((track) => track.id === selectedEditorItem.trackId) || null : null,
@@ -492,6 +543,105 @@ export function ExperimentalVideoWorkbench({
         seekTimeMs(appendAtMs);
     };
 
+    const insertSharedAnimationElement = async (element: SharedAnimationElement) => {
+        if (!localProject) return;
+        const selectedMotionTrackId = selection.trackIds.find((trackId) => {
+            const track = localProject.tracks.find((candidate) => candidate.id === trackId);
+            return track?.kind === 'motion';
+        }) || null;
+        const motionTrackId = selectedMotionTrackId
+            || localProject.tracks.filter((track) => track.kind === 'motion').sort((left, right) => left.order - right.order)[0]?.id
+            || 'M1';
+        const appendAtMs = animationLayers
+            .filter((layer) => layer.trackId === motionTrackId)
+            .reduce((max, layer) => Math.max(max, layer.fromMs + layer.durationMs), 0);
+        const commands: EditorCommand[] = [];
+        if (!localProject.tracks.some((track) => track.id === motionTrackId)) {
+            commands.push({ type: 'add_track', kind: 'motion', trackId: motionTrackId });
+        }
+        commands.push({
+            type: 'animation_layer_create',
+            layer: {
+                id: `anim-${Math.random().toString(36).slice(2, 10)}`,
+                name: element.name || '动画元素',
+                trackId: motionTrackId,
+                enabled: true,
+                fromMs: appendAtMs,
+                durationMs: Math.max(300, Number(element.durationMs || 2000)),
+                zIndex: animationLayers.length,
+                renderMode: element.renderMode || 'motion-layer',
+                componentType: element.componentType || 'scene-sequence',
+                props: {
+                    ...(element.props || {}),
+                    templateId: String(element.props?.templateId || 'static'),
+                },
+                entities: Array.isArray(element.entities) ? element.entities : [],
+                bindings: [],
+            },
+        });
+        await dispatchEditorCommands(commands);
+    };
+
+    const deleteSharedAnimationElement = async (element: SharedAnimationElement) => {
+        if (element.source === 'builtin') return;
+        try {
+            const result = await window.ipcRenderer.invoke('animation-elements:delete', {
+                storageKey: element.storageKey || element.id,
+            }) as { success?: boolean };
+            if (result?.success) {
+                setSharedAnimationElements((current) => current.filter((item) => item.id !== element.id));
+            }
+        } catch (error) {
+            console.error('Failed to delete animation element:', error);
+        }
+    };
+
+    const saveSelectedAnimationElement = async () => {
+        const selectedLayer = animationLayers.find((layer) => layer.id === selectedMotionItem?.id);
+        if (!selectedLayer) return;
+        try {
+            const result = await window.ipcRenderer.invoke('animation-elements:save', {
+                name: selectedLayer.name,
+                layer: selectedLayer,
+            }) as { success?: boolean; item?: SharedAnimationElement };
+            if (result?.success && result.item) {
+                setSharedAnimationElements((current) => {
+                    const next = current.filter((item) => item.id !== result.item?.id);
+                    next.push(result.item);
+                    return next;
+                });
+            }
+        } catch (error) {
+            console.error('Failed to save animation element:', error);
+        }
+    };
+
+    const elementPreviewComposition = (element: SharedAnimationElement): RemotionCompositionConfig => ({
+        version: 1,
+        title: element.name,
+        width: 360,
+        height: 640,
+        fps: 30,
+        durationInFrames: Math.max(12, Math.round((Math.max(300, Number(element.durationMs || 2000)) / 1000) * 30)),
+        backgroundColor: 'transparent',
+        renderMode: element.renderMode || 'motion-layer',
+        scenes: [{
+            id: `${element.id}-preview`,
+            startFrame: 0,
+            durationInFrames: Math.max(12, Math.round((Math.max(300, Number(element.durationMs || 2000)) / 1000) * 30)),
+            clipId: undefined,
+            assetId: undefined,
+            assetKind: 'unknown',
+            src: '',
+            trimInFrames: 0,
+            motionPreset: String(element.props?.templateId || 'static') as RemotionScene['motionPreset'],
+            overlayTitle: undefined,
+            overlayBody: undefined,
+            overlays: [],
+            entities: Array.isArray(element.entities) ? element.entities : [],
+        }],
+    });
+
     const seekTimeMs = (timeMs: number) => {
         const safeTime = Math.max(0, timeMs);
         editorStore.setState((state) => ({
@@ -524,7 +674,7 @@ export function ExperimentalVideoWorkbench({
 
     const stageTitle = previewTab === 'motion' ? 'Motion Inspector' : previewTab === 'script' ? 'Script Workspace' : 'Stage Preview';
     const stageSubtitle = previewTab === 'motion'
-        ? `${scriptStatusLabel} · 动画 item 是一等时间轴实体，预览和导出都从 editor.project.json 派生。`
+        ? `${scriptStatusLabel} · 动画层预览直接读取 remotion.scene.json，可先预览和调整，最后再统一导出合成。`
         : previewTab === 'script'
             ? (scriptConfirmed ? '脚本已确认，可以继续剪辑与生成 motion。' : '先让 AI 改脚本文字并确认，再继续剪辑与生成 motion。')
             : 'Preview 继续负责低延迟校对与舞台布局，读取统一工程状态。';
@@ -534,6 +684,7 @@ export function ExperimentalVideoWorkbench({
         { id: 'video', label: '视频', icon: Video },
         { id: 'audio', label: '音频', icon: AudioLines },
         { id: 'text', label: '文本', icon: Type },
+        { id: 'elements', label: '元素', icon: Sparkles },
         { id: 'selection', label: '属性', icon: SlidersHorizontal },
     ];
     const sidebarTitle = activeSidebarTab === 'selection'
@@ -542,6 +693,8 @@ export function ExperimentalVideoWorkbench({
             ? '视频素材'
             : activeSidebarTab === 'audio'
                 ? '音频素材'
+                : activeSidebarTab === 'elements'
+                    ? '动画元素库'
                 : activeSidebarTab === 'text'
                     ? '文本素材'
                     : '全部素材';
@@ -555,6 +708,8 @@ export function ExperimentalVideoWorkbench({
                         ? `当前选中舞台对象：${stageSelection.kind || 'asset'}`
                         : '点击素材或时间轴对象后可查看属性'
         )
+        : activeSidebarTab === 'elements'
+            ? '工作区级共享动画元素库，所有视频工程可复用'
         : primaryVideoAsset
             ? `主预览：${primaryVideoAsset.title || primaryVideoAsset.id}`
             : '拖动素材到时间轴以创建 item';
@@ -574,6 +729,7 @@ export function ExperimentalVideoWorkbench({
         assets: [],
         tracks: [],
         items: [],
+        animationLayers: [],
         stage: { itemTransforms: {}, itemVisibility: {}, itemLocks: {}, itemOrder: [], itemGroups: {}, focusedGroupId: null },
         ai: { motionPrompt: '' },
     } as EditorProjectFile) / 1000) * (localProject?.project.fps || 30)));
@@ -585,6 +741,10 @@ export function ExperimentalVideoWorkbench({
             </div>
         );
     }
+
+    const contextMenuElement = elementsContextMenu
+        ? sharedAnimationElements.find((item) => item.id === elementsContextMenu.elementId) || null
+        : null;
 
     return (
         <div
@@ -649,6 +809,95 @@ export function ExperimentalVideoWorkbench({
                                 点击素材卡片、时间轴对象或预览画布中的对象后，这里会显示属性。
                             </div>
                         )}
+                    </div>
+                ) : activeSidebarTab === 'elements' ? (
+                    <div className="space-y-3">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                void window.ipcRenderer.invoke('animation-elements:open-root');
+                            }}
+                            className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm text-white/80 transition hover:border-cyan-300/45 hover:text-white"
+                        >
+                            <Upload className="h-4 w-4" />
+                            打开元素库文件夹
+                        </button>
+                        <div className="grid grid-cols-2 gap-2.5">
+                            {sharedAnimationElements.map((element) => (
+                                <div
+                                    key={element.id}
+                                    className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] text-left transition hover:border-violet-300/40 hover:bg-white/[0.05]"
+                                    title={element.name}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        setElementsContextMenu({
+                                            x: event.clientX,
+                                            y: event.clientY,
+                                            elementId: element.id,
+                                        });
+                                    }}
+                                >
+                                    <div className="relative aspect-[9/16] overflow-hidden bg-[#0c0d10]">
+                                        <RemotionVideoPreview composition={elementPreviewComposition(element)} />
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1 border-t border-white/10 px-2 py-2">
+                                        <div className="flex items-center gap-1">
+                                            <div className="rounded-full border border-violet-300/25 bg-violet-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-violet-100">
+                                                {element.source === 'builtin' ? '内置' : '共享'}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    void insertSharedAnimationElement(element);
+                                                }}
+                                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-cyan-300/35 bg-cyan-400/12 text-cyan-100 transition hover:border-cyan-300/60"
+                                                title="追加到动画轨道末尾"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        {sharedAnimationElements.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-sm text-white/45">
+                                还没有共享动画元素。后续可以把当前动画层保存到工作区级元素库。
+                            </div>
+                        ) : null}
+                        {elementsContextMenu && contextMenuElement ? (
+                            <div
+                                className="fixed z-[120] min-w-[160px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                                style={{ left: elementsContextMenu.x, top: elementsContextMenu.y }}
+                            >
+                                <button
+                                    type="button"
+                                    className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                                    onClick={() => {
+                                        void insertSharedAnimationElement(contextMenuElement);
+                                        setElementsContextMenu(null);
+                                    }}
+                                >
+                                    追加到动画轨末尾
+                                </button>
+                                {contextMenuElement.source !== 'builtin' ? (
+                                    <button
+                                        type="button"
+                                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
+                                        onClick={() => {
+                                            void deleteSharedAnimationElement(contextMenuElement);
+                                            setElementsContextMenu(null);
+                                        }}
+                                    >
+                                        删除共享元素
+                                    </button>
+                                ) : (
+                                    <div className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/35">
+                                        内置元素不可删除
+                                    </div>
+                                )}
+                            </div>
+                        ) : null}
                     </div>
                 ) : (
                     <div className="space-y-3">
@@ -934,7 +1183,18 @@ export function ExperimentalVideoWorkbench({
                             </div>
                             {selectedMotionItem ? (
                                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                                    <div className="text-sm font-medium text-white">Motion Inspector</div>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="text-sm font-medium text-white">Motion Inspector</div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                void saveSelectedAnimationElement();
+                                            }}
+                                            className="inline-flex items-center rounded-full border border-violet-300/35 bg-violet-400/12 px-3 py-1 text-[11px] text-violet-100"
+                                        >
+                                            保存到元素库
+                                        </button>
+                                    </div>
                                     <div className="mt-3 space-y-3 text-sm text-white/80">
                                         <label className="block">
                                             <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-white/35">Template</div>
@@ -1051,7 +1311,7 @@ export function ExperimentalVideoWorkbench({
                                 emptyStateComposerPlacement="bottom"
                                 embeddedTheme="dark"
                                 welcomeTitle="视频剪辑助手"
-                                welcomeSubtitle="实验分支：先改脚本并确认，再围绕 editor.project.json 组织剪辑与动画。"
+                                welcomeSubtitle="先改脚本并确认，再生成独立动画层；最终由编辑器把多个图层合成为视频。"
                                 contentLayout="default"
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}

@@ -48,64 +48,40 @@ pub(crate) fn fallback_motion_preset(index: usize, asset_kind: &str) -> &'static
 
 pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Value {
     let fps = 30_i64;
-    let mut current_frame = 0_i64;
-    let mut scenes = Vec::new();
-    for (index, clip) in clips.iter().enumerate() {
-        if clip
-            .get("enabled")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(true)
-            == false
-        {
-            continue;
-        }
-        let asset_kind = clip
-            .get("assetKind")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
-        let src = clip
-            .get("mediaPath")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        if src.trim().is_empty() && asset_kind != "audio" {
-            continue;
-        }
-        let duration_in_frames = remotion_scene_duration_frames(clip, fps);
-        let overlay_title = clip
-            .get("name")
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string())
-            .filter(|value| !value.trim().is_empty());
-        scenes.push(json!({
-            "id": format!("scene-{}", index + 1),
-            "clipId": clip.get("clipId").cloned().unwrap_or(Value::Null),
-            "assetId": clip.get("assetId").cloned().unwrap_or(Value::Null),
-            "assetKind": asset_kind,
-            "src": src,
-            "startFrame": current_frame,
-            "durationInFrames": duration_in_frames,
-            "trimInFrames": 0,
-            "motionPreset": fallback_motion_preset(index, asset_kind),
-            "overlayTitle": overlay_title,
-            "overlayBody": if asset_kind == "audio" {
-                Value::Null
-            } else {
-                json!(format!("场景 {} · 让 AI 在这里做镜头运动、字幕和强调动画。", index + 1))
-            },
-            "overlays": []
-        }));
-        current_frame += duration_in_frames;
-    }
+    let duration_in_frames = clips
+        .iter()
+        .filter(|clip| {
+            clip.get("enabled")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true)
+        })
+        .map(|clip| remotion_scene_duration_frames(clip, fps))
+        .sum::<i64>()
+        .max(90);
     json!({
         "version": 1,
         "title": title,
         "width": 1080,
         "height": 1920,
         "fps": fps,
-        "durationInFrames": current_frame.max(90),
+        "durationInFrames": duration_in_frames,
         "backgroundColor": "#05070b",
-        "scenes": scenes
+        "renderMode": "motion-layer",
+        "scenes": [{
+            "id": "scene-1",
+            "clipId": Value::Null,
+            "assetId": Value::Null,
+            "assetKind": "unknown",
+            "src": "",
+            "startFrame": 0,
+            "durationInFrames": duration_in_frames,
+            "trimInFrames": 0,
+            "motionPreset": "static",
+            "overlayTitle": title,
+            "overlayBody": Value::Null,
+            "overlays": [],
+            "entities": []
+        }]
     })
 }
 
@@ -228,6 +204,7 @@ pub(crate) fn build_default_editor_project(
         "assets": [],
         "tracks": editor_default_tracks(),
         "items": [],
+        "animationLayers": [],
         "stage": editor_stage_default(),
         "ai": {
             "motionPrompt": "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。",
@@ -437,39 +414,16 @@ pub(crate) fn build_editor_project_from_legacy(
         items.push(item);
     }
 
-    let scenes = remotion
-        .get("scenes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for scene in scenes {
-        let scene_id = scene
-            .get("id")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        items.push(json!({
-            "id": if scene_id.is_empty() { make_id("motion-item") } else { format!("motion:{scene_id}") },
-            "type": "motion",
-            "trackId": "M1",
-            "bindItemId": scene.get("clipId").cloned().unwrap_or(Value::Null),
-            "fromMs": (((scene.get("startFrame").and_then(|value| value.as_i64()).unwrap_or(0) as f64) * 1000.0) / fps as f64).round() as i64,
-            "durationMs": (((scene.get("durationInFrames").and_then(|value| value.as_i64()).unwrap_or(90) as f64) * 1000.0) / fps as f64).round() as i64,
-            "templateId": scene.get("motionPreset").cloned().unwrap_or_else(|| json!("static")),
-            "props": {
-                "sceneId": scene.get("id").cloned().unwrap_or(Value::Null),
-                "assetId": scene.get("assetId").cloned().unwrap_or(Value::Null),
-                "overlayTitle": scene.get("overlayTitle").cloned().unwrap_or(Value::Null),
-                "overlayBody": scene.get("overlayBody").cloned().unwrap_or(Value::Null),
-                "overlays": scene.get("overlays").cloned().unwrap_or_else(|| json!([]))
-            },
-            "enabled": true
-        }));
-    }
+    let animation_layers = animation_layers_from_remotion_scene(&remotion, fps);
+    items.extend(projected_motion_items_from_animation_layers(&json!({
+        "animationLayers": animation_layers
+    })));
 
     if let Some(object) = project.as_object_mut() {
         object.insert("assets".to_string(), Value::Array(assets));
         object.insert("tracks".to_string(), Value::Array(tracks));
         object.insert("items".to_string(), Value::Array(items));
+        object.insert("animationLayers".to_string(), Value::Array(animation_layers));
         object.insert(
             "stage".to_string(),
             json!({
@@ -560,6 +514,87 @@ fn item_enabled(item: &Value) -> bool {
     item.get("enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(true)
+}
+
+pub(crate) fn animation_layers_from_remotion_scene(remotion: &Value, fps: i64) -> Vec<Value> {
+    remotion
+        .get("scenes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(index, scene)| {
+            let bind_target = scene
+                .get("clipId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    json!([{
+                        "type": "clip",
+                        "targetId": value
+                    }])
+                })
+                .unwrap_or_else(|| json!([]));
+            json!({
+                "id": scene.get("id").cloned().unwrap_or_else(|| json!(make_id("animation-layer"))),
+                "name": scene.get("overlayTitle").cloned().unwrap_or_else(|| json!(format!("动画层 {}", index + 1))),
+                "trackId": format!("M{}", index + 1),
+                "enabled": true,
+                "fromMs": (((scene.get("startFrame").and_then(|value| value.as_i64()).unwrap_or(0) as f64) * 1000.0) / fps as f64).round() as i64,
+                "durationMs": (((scene.get("durationInFrames").and_then(|value| value.as_i64()).unwrap_or(90) as f64) * 1000.0) / fps as f64).round() as i64,
+                "zIndex": index,
+                "renderMode": remotion.get("renderMode").cloned().unwrap_or_else(|| json!("motion-layer")),
+                "componentType": "scene-sequence",
+                "props": {
+                    "templateId": scene.get("motionPreset").cloned().unwrap_or_else(|| json!("static")),
+                    "overlayTitle": scene.get("overlayTitle").cloned().unwrap_or(Value::Null),
+                    "overlayBody": scene.get("overlayBody").cloned().unwrap_or(Value::Null),
+                    "overlays": scene.get("overlays").cloned().unwrap_or_else(|| json!([]))
+                },
+                "entities": scene.get("entities").cloned().unwrap_or_else(|| json!([])),
+                "bindings": bind_target
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn projected_motion_items_from_animation_layers(project: &Value) -> Vec<Value> {
+    project
+        .get("animationLayers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|layer| {
+            let bindings = layer
+                .get("bindings")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let bind_item_id = bindings
+                .iter()
+                .find(|binding| binding.get("type").and_then(Value::as_str) == Some("clip"))
+                .and_then(|binding| binding.get("targetId").and_then(Value::as_str))
+                .map(ToString::to_string);
+            json!({
+                "id": layer.get("id").cloned().unwrap_or_else(|| json!(make_id("motion-item"))),
+                "type": "motion",
+                "trackId": layer.get("trackId").cloned().unwrap_or_else(|| json!("M1")),
+                "bindItemId": bind_item_id,
+                "fromMs": layer.get("fromMs").cloned().unwrap_or_else(|| json!(0)),
+                "durationMs": layer.get("durationMs").cloned().unwrap_or_else(|| json!(2000)),
+                "templateId": layer.pointer("/props/templateId").cloned().unwrap_or_else(|| json!("static")),
+                "props": {
+                    "overlayTitle": layer.pointer("/props/overlayTitle").cloned().or_else(|| layer.get("name").cloned()).unwrap_or(Value::Null),
+                    "overlayBody": layer.pointer("/props/overlayBody").cloned().unwrap_or(Value::Null),
+                    "overlays": layer.pointer("/props/overlays").cloned().unwrap_or_else(|| json!([])),
+                    "entities": layer.get("entities").cloned().unwrap_or_else(|| json!([]))
+                },
+                "enabled": layer.get("enabled").cloned().unwrap_or_else(|| json!(true))
+            })
+        })
+        .collect()
 }
 
 fn editor_project_assets_map(project: &Value) -> BTreeMap<String, Value> {
@@ -804,6 +839,46 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         .collect::<Vec<_>>();
     let mut scenes = Vec::new();
     let mut duration_in_frames = 90_i64;
+    for motion_item in motion_items.iter().filter(|item| {
+        item.get("bindItemId")
+            .and_then(Value::as_str)
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    }) {
+        let from_ms = motion_item
+            .get("fromMs")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let scene_duration_ms = motion_item
+            .get("durationMs")
+            .and_then(Value::as_i64)
+            .unwrap_or(2000)
+            .max(300);
+        let start_frame = ((from_ms as f64 / 1000.0) * fps as f64).round() as i64;
+        let scene_duration_frames = ((scene_duration_ms as f64 / 1000.0) * fps as f64)
+            .round()
+            .max(12.0) as i64;
+        duration_in_frames = duration_in_frames.max(start_frame + scene_duration_frames);
+        let props = motion_item
+            .get("props")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        scenes.push(json!({
+            "id": motion_item.get("id").cloned().unwrap_or_else(|| json!(make_id("scene"))),
+            "clipId": Value::Null,
+            "assetId": Value::Null,
+            "assetKind": "unknown",
+            "src": "",
+            "startFrame": start_frame,
+            "durationInFrames": scene_duration_frames,
+            "trimInFrames": 0,
+            "motionPreset": motion_item.get("templateId").cloned().unwrap_or_else(|| json!("static")),
+            "overlayTitle": props.get("overlayTitle").cloned().unwrap_or(Value::Null),
+            "overlayBody": props.get("overlayBody").cloned().unwrap_or(Value::Null),
+            "overlays": props.get("overlays").cloned().unwrap_or_else(|| json!([])),
+            "entities": props.get("entities").cloned().unwrap_or_else(|| json!([]))
+        }));
+    }
     for media_item in media_items {
         let item_id = media_item
             .get("id")
@@ -876,9 +951,11 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
                 .unwrap_or_else(|| json!("static")),
             "overlayTitle": props.get("overlayTitle").cloned().unwrap_or(Value::Null),
             "overlayBody": props.get("overlayBody").cloned().unwrap_or(Value::Null),
-            "overlays": props.get("overlays").cloned().unwrap_or_else(|| json!([]))
+            "overlays": props.get("overlays").cloned().unwrap_or_else(|| json!([])),
+            "entities": props.get("entities").cloned().unwrap_or_else(|| json!([]))
         }));
     }
+    scenes.sort_by_key(|scene| scene.get("startFrame").and_then(Value::as_i64).unwrap_or(0));
     json!({
         "version": 1,
         "title": title,
@@ -887,10 +964,63 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         "fps": fps,
         "durationInFrames": duration_in_frames.max(90),
         "backgroundColor": background_color,
+        "renderMode": "motion-layer",
         "scenes": scenes,
         "sceneItemTransforms": project.pointer("/stage/itemTransforms").cloned().unwrap_or_else(|| json!({})),
         "render": Value::Null
     })
+}
+
+fn normalize_overlay_animation(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "fade-up" => "fade-up",
+        "fade" | "fade-in" => "fade-in",
+        "slide-left" | "slide-in-left" | "from-left" => "slide-left",
+        "pop" | "spring-pop" | "scale-in" => "pop",
+        _ => "fade-in",
+    }
+}
+
+fn normalize_entity_animation_kind(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "fade-in" | "fade" | "enter" => "fade-in",
+        "fade-out" | "exit" => "fade-out",
+        "slide-in-left" | "slide-left" | "from-left" => "slide-in-left",
+        "slide-in-right" | "slide-right" | "from-right" => "slide-in-right",
+        "slide-up" | "from-bottom" => "slide-up",
+        "slide-down" | "from-top" => "slide-down",
+        "pop" | "spring" | "spring-pop" | "scale-in" => "pop",
+        "fall-bounce" | "drop" | "fall" | "bounce" => "fall-bounce",
+        "float" => "float",
+        _ => "fade-in",
+    }
+}
+
+fn normalize_entity_animations(
+    entity: &Value,
+    duration_in_frames: i64,
+) -> Vec<Value> {
+    entity
+        .get("animations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|animation| {
+            let params = animation.get("params").cloned().unwrap_or_else(|| json!({}));
+            json!({
+                "id": animation.get("id").cloned().unwrap_or_else(|| json!(make_id("entity-animation"))),
+                "kind": normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str)),
+                "fromFrame": animation.get("fromFrame").cloned().unwrap_or_else(|| json!(0)),
+                "durationInFrames": animation
+                    .get("durationInFrames")
+                    .cloned()
+                    .or_else(|| animation.get("frames").cloned())
+                    .unwrap_or_else(|| json!(duration_in_frames.max(12))),
+                "params": params
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn normalize_ai_remotion_scene(
@@ -952,19 +1082,33 @@ pub(crate) fn normalize_ai_remotion_scene(
     let mut normalized_scenes = Vec::new();
     let mut current_frame = 0_i64;
     for (index, raw_scene) in source_scenes.iter().enumerate() {
+        let candidate_clip_id = raw_scene.get("clipId").and_then(|value| value.as_str());
         let fallback_scene = fallback_scenes.get(index).cloned().unwrap_or_else(|| {
-            let clip = clips.get(index).cloned().unwrap_or_else(|| json!({}));
+            let clip = candidate_clip_id
+                .and_then(|clip_id| {
+                    clips.iter().find(|item| {
+                        item.get("clipId")
+                            .and_then(Value::as_str)
+                            .map(|value| value == clip_id)
+                            .unwrap_or(false)
+                    })
+                })
+                .cloned()
+                .or_else(|| clips.get(index).cloned())
+                .unwrap_or_else(|| json!({}));
+            let standalone = candidate_clip_id.is_none()
+                && raw_scene.get("assetId").and_then(Value::as_str).is_none();
             json!({
                 "id": format!("scene-{}", index + 1),
-                "clipId": clip.get("clipId").cloned().unwrap_or(Value::Null),
-                "assetId": clip.get("assetId").cloned().unwrap_or(Value::Null),
-                "assetKind": clip.get("assetKind").cloned().unwrap_or(json!("unknown")),
-                "src": clip.get("mediaPath").cloned().unwrap_or(json!("")),
-                "startFrame": current_frame,
-                "durationInFrames": remotion_scene_duration_frames(&clip, fps),
+                "clipId": if standalone { Value::Null } else { clip.get("clipId").cloned().unwrap_or(Value::Null) },
+                "assetId": if standalone { Value::Null } else { clip.get("assetId").cloned().unwrap_or(Value::Null) },
+                "assetKind": if standalone { json!("unknown") } else { clip.get("assetKind").cloned().unwrap_or(json!("unknown")) },
+                "src": if standalone { json!("") } else { clip.get("mediaPath").cloned().unwrap_or(json!("")) },
+                "startFrame": raw_scene.get("startFrame").cloned().unwrap_or(json!(current_frame)),
+                "durationInFrames": if standalone { json!(90) } else { json!(remotion_scene_duration_frames(&clip, fps)) },
                 "trimInFrames": 0,
                 "motionPreset": fallback_motion_preset(index, clip.get("assetKind").and_then(|value| value.as_str()).unwrap_or("unknown")),
-                "overlayTitle": clip.get("name").cloned().unwrap_or(json!(format!("场景 {}", index + 1))),
+                "overlayTitle": raw_scene.get("overlayTitle").cloned().unwrap_or_else(|| clip.get("name").cloned().unwrap_or(json!(format!("场景 {}", index + 1)))),
                 "overlayBody": Value::Null,
                 "overlays": []
             })
@@ -979,6 +1123,11 @@ pub(crate) fn normalize_ai_remotion_scene(
             .filter(|value| *value > 0)
             .unwrap_or(default_duration)
             .max(12);
+        let start_frame = raw_scene
+            .get("startFrame")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(current_frame)
+            .max(0);
         let asset_kind = fallback_scene
             .get("assetKind")
             .and_then(|value| value.as_str())
@@ -990,25 +1139,85 @@ pub(crate) fn normalize_ai_remotion_scene(
             .unwrap_or_default();
         overlays.retain(|item| {
             item.get("text")
+                .or_else(|| item.get("content"))
                 .and_then(|value| value.as_str())
                 .map(|value| !value.trim().is_empty())
                 .unwrap_or(false)
         });
+        let normalized_overlays = overlays
+            .into_iter()
+            .map(|item| {
+                let style = item.get("style").cloned().unwrap_or_else(|| json!({}));
+                json!({
+                    "id": item.get("id").cloned().unwrap_or_else(|| json!(make_id("overlay"))),
+                    "text": item.get("text").cloned().or_else(|| item.get("content").cloned()).unwrap_or_else(|| json!("")),
+                    "startFrame": item.get("startFrame").cloned().unwrap_or_else(|| json!(0)),
+                    "durationInFrames": item.get("durationInFrames").cloned().unwrap_or_else(|| json!(duration_in_frames)),
+                    "position": item.get("position").cloned().unwrap_or_else(|| json!("center")),
+                    "animation": json!(normalize_overlay_animation(item.get("animation").and_then(Value::as_str))),
+                    "fontSize": item.get("fontSize").cloned().or_else(|| style.get("fontSize").cloned()).unwrap_or_else(|| json!(42)),
+                    "color": item.get("color").cloned().or_else(|| style.get("color").cloned()).unwrap_or_else(|| json!("#ffffff")),
+                    "backgroundColor": item.get("backgroundColor").cloned().or_else(|| style.get("backgroundColor").cloned()).unwrap_or(Value::Null),
+                    "align": item.get("align").cloned().or_else(|| style.get("align").cloned()).unwrap_or_else(|| json!("center"))
+                })
+            })
+            .collect::<Vec<_>>();
+        let entities = raw_scene
+            .get("entities")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entity| {
+                let style = entity.get("style").cloned().unwrap_or_else(|| json!({}));
+                json!({
+                    "id": entity.get("id").cloned().unwrap_or_else(|| json!(make_id("entity"))),
+                    "type": entity.get("type").cloned().unwrap_or_else(|| json!("text")),
+                    "startFrame": entity.get("startFrame").cloned().unwrap_or_else(|| json!(0)),
+                    "durationInFrames": entity.get("durationInFrames").cloned().unwrap_or_else(|| json!(duration_in_frames)),
+                    "x": entity.get("x").cloned().or_else(|| style.get("x").cloned()).unwrap_or_else(|| json!(0)),
+                    "y": entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0)),
+                    "width": entity.get("width").cloned().or_else(|| style.get("width").cloned()).unwrap_or_else(|| json!(320)),
+                    "height": entity.get("height").cloned().or_else(|| style.get("height").cloned()).unwrap_or_else(|| json!(180)),
+                    "rotation": entity.get("rotation").cloned().or_else(|| style.get("rotation").cloned()).unwrap_or_else(|| json!(0)),
+                    "scale": entity.get("scale").cloned().or_else(|| style.get("scale").cloned()).unwrap_or_else(|| json!(1)),
+                    "opacity": entity.get("opacity").cloned().or_else(|| style.get("opacity").cloned()).unwrap_or_else(|| json!(1)),
+                    "visible": entity.get("visible").cloned().unwrap_or_else(|| json!(true)),
+                    "text": entity.get("text").cloned().or_else(|| entity.get("content").cloned()).unwrap_or(Value::Null),
+                    "fontSize": entity.get("fontSize").cloned().or_else(|| style.get("fontSize").cloned()).unwrap_or(Value::Null),
+                    "fontWeight": entity.get("fontWeight").cloned().or_else(|| style.get("fontWeight").cloned()).unwrap_or(Value::Null),
+                    "color": entity.get("color").cloned().or_else(|| style.get("color").cloned()).unwrap_or(Value::Null),
+                    "align": entity.get("align").cloned().or_else(|| style.get("align").cloned()).unwrap_or(Value::Null),
+                    "lineHeight": entity.get("lineHeight").cloned().or_else(|| style.get("lineHeight").cloned()).unwrap_or(Value::Null),
+                    "fill": entity.get("fill").cloned().or_else(|| style.get("fill").cloned()).unwrap_or(Value::Null),
+                    "stroke": entity.get("stroke").cloned().or_else(|| style.get("stroke").cloned()).unwrap_or(Value::Null),
+                    "strokeWidth": entity.get("strokeWidth").cloned().or_else(|| style.get("strokeWidth").cloned()).unwrap_or(Value::Null),
+                    "radius": entity.get("radius").cloned().or_else(|| style.get("radius").cloned()).unwrap_or(Value::Null),
+                    "shape": entity.get("shape").cloned().unwrap_or_else(|| json!("rect")),
+                    "src": entity.get("src").cloned().unwrap_or(Value::Null),
+                    "svgMarkup": entity.get("svgMarkup").cloned().or_else(|| entity.get("svg").cloned()).unwrap_or(Value::Null),
+                    "borderRadius": entity.get("borderRadius").cloned().or_else(|| style.get("borderRadius").cloned()).unwrap_or(Value::Null),
+                    "animations": normalize_entity_animations(&entity, duration_in_frames),
+                    "children": entity.get("children").cloned().unwrap_or_else(|| json!([]))
+                })
+            })
+            .collect::<Vec<_>>();
         normalized_scenes.push(json!({
             "id": raw_scene.get("id").cloned().unwrap_or_else(|| fallback_scene.get("id").cloned().unwrap_or(json!(format!("scene-{}", index + 1)))),
             "clipId": raw_scene.get("clipId").cloned().or_else(|| fallback_scene.get("clipId").cloned()).unwrap_or(Value::Null),
             "assetId": raw_scene.get("assetId").cloned().or_else(|| fallback_scene.get("assetId").cloned()).unwrap_or(Value::Null),
             "assetKind": asset_kind,
             "src": raw_scene.get("src").cloned().or_else(|| fallback_scene.get("src").cloned()).unwrap_or(json!("")),
-            "startFrame": current_frame,
+            "startFrame": start_frame,
             "durationInFrames": duration_in_frames,
             "trimInFrames": raw_scene.get("trimInFrames").cloned().or_else(|| fallback_scene.get("trimInFrames").cloned()).unwrap_or(json!(0)),
             "motionPreset": normalize_motion_preset(raw_scene.get("motionPreset").and_then(|value| value.as_str()), fallback_scene.get("motionPreset").and_then(|value| value.as_str()).unwrap_or("static")),
             "overlayTitle": raw_scene.get("overlayTitle").cloned().or_else(|| fallback_scene.get("overlayTitle").cloned()).unwrap_or(Value::Null),
             "overlayBody": raw_scene.get("overlayBody").cloned().or_else(|| fallback_scene.get("overlayBody").cloned()).unwrap_or(Value::Null),
-            "overlays": overlays
+            "overlays": normalized_overlays,
+            "entities": entities
         }));
-        current_frame += duration_in_frames;
+        current_frame = (start_frame + duration_in_frames).max(current_frame + duration_in_frames);
     }
 
     json!({
@@ -1019,6 +1228,11 @@ pub(crate) fn normalize_ai_remotion_scene(
         "fps": fps,
         "durationInFrames": current_frame.max(90),
         "backgroundColor": background_color,
+        "renderMode": candidate
+            .get("renderMode")
+            .cloned()
+            .or_else(|| fallback.get("renderMode").cloned())
+            .unwrap_or_else(|| json!("motion-layer")),
         "scenes": normalized_scenes,
         "sceneItemTransforms": candidate
             .get("sceneItemTransforms")
@@ -1516,4 +1730,116 @@ pub(crate) fn upgrade_markdown_manuscript_to_package(
     create_manuscript_package(&target, &content, &target_relative, &title)?;
     fs::remove_file(&source).map_err(|error| error.to_string())?;
     Ok(target_relative)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_default_remotion_scene_creates_single_default_scene() {
+        let scene = build_default_remotion_scene(
+            "苹果动画",
+            &[json!({
+                "clipId": "clip-1",
+                "durationMs": 1500,
+                "enabled": true
+            }), json!({
+                "clipId": "clip-2",
+                "durationMs": 2500,
+                "enabled": true
+            })],
+        );
+
+        let scenes = scene
+            .get("scenes")
+            .and_then(Value::as_array)
+            .expect("scenes should exist");
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].get("id").and_then(Value::as_str), Some("scene-1"));
+        assert!(scenes[0].get("clipId").map(Value::is_null).unwrap_or(false));
+        assert_eq!(scene.get("renderMode").and_then(Value::as_str), Some("motion-layer"));
+        assert_eq!(
+            scenes[0]
+                .get("durationInFrames")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+            120
+        );
+    }
+
+    #[test]
+    fn normalize_ai_remotion_scene_maps_official_timing_style_aliases_to_host_animation_kinds() {
+        let fallback = build_default_remotion_scene("测试", &[]);
+        let candidate = json!({
+            "title": "测试",
+            "fps": 30,
+            "scenes": [{
+                "id": "scene-1",
+                "startFrame": 0,
+                "durationInFrames": 60,
+                "entities": [{
+                    "id": "title-1",
+                    "type": "text",
+                    "text": "Hello",
+                    "x": 0,
+                    "y": 0,
+                    "width": 320,
+                    "height": 120,
+                    "animations": [{
+                        "id": "anim-1",
+                        "kind": "spring-pop",
+                        "fromFrame": 0,
+                        "durationInFrames": 24
+                    }]
+                }]
+            }]
+        });
+
+        let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &[], "测试");
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/animations/0/kind")
+                .and_then(Value::as_str),
+            Some("pop")
+        );
+    }
+
+    #[test]
+    fn normalize_ai_remotion_scene_keeps_shape_entities_when_transition_hints_are_present() {
+        let fallback = build_default_remotion_scene("测试", &[]);
+        let candidate = json!({
+            "title": "测试",
+            "fps": 30,
+            "scenes": [{
+                "id": "scene-1",
+                "startFrame": 0,
+                "durationInFrames": 60,
+                "transition": { "type": "fade" },
+                "entities": [{
+                    "id": "apple-1",
+                    "type": "shape",
+                    "shape": "apple",
+                    "x": 0,
+                    "y": 0,
+                    "width": 120,
+                    "height": 120
+                }]
+            }]
+        });
+
+        let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &[], "测试");
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/type")
+                .and_then(Value::as_str),
+            Some("shape")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/shape")
+                .and_then(Value::as_str),
+            Some("apple")
+        );
+    }
 }

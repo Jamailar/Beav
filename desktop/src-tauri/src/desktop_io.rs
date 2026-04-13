@@ -49,6 +49,19 @@ pub(crate) fn run_curl_transcription(
     file_path: &Path,
     mime_type: &str,
 ) -> Result<String, String> {
+    run_curl_transcription_with_response_format(
+        endpoint, api_key, model_name, file_path, mime_type, None,
+    )
+}
+
+pub(crate) fn run_curl_transcription_with_response_format(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    file_path: &Path,
+    mime_type: &str,
+    response_format: Option<&str>,
+) -> Result<String, String> {
     let mut command = std::process::Command::new("curl");
     command
         .arg("-sS")
@@ -59,6 +72,12 @@ pub(crate) fn run_curl_transcription(
         .arg(format!("model={model_name}"))
         .arg("-F")
         .arg(format!("file=@{};type={mime_type}", file_path.display()));
+    if let Some(format) = response_format
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.arg("-F").arg(format!("response_format={format}"));
+    }
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
         command
             .arg("-H")
@@ -74,10 +93,24 @@ pub(crate) fn run_curl_transcription(
         });
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Err("转写接口返回了空结果".to_string());
+    }
+
+    let preferred_format = response_format
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("json");
+    if preferred_format != "json" && !stdout.starts_with('{') && !stdout.starts_with('[') {
+        return Ok(stdout);
+    }
+
     let value: Value =
         serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))?;
     let text = value
         .get("text")
+        .or_else(|| value.get("transcript"))
+        .or_else(|| value.get("srt"))
         .and_then(|item| item.as_str())
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())

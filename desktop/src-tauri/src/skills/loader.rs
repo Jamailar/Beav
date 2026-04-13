@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -5,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::lexbox_project_root;
 use crate::runtime::SkillRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -42,6 +44,7 @@ pub struct SkillBundleSections {
     pub body: String,
     pub references: String,
     pub scripts: String,
+    pub rules: BTreeMap<String, String>,
 }
 
 fn normalize_string(value: &str) -> String {
@@ -222,10 +225,54 @@ fn load_section_folder(folder: &Path) -> String {
     parts.join("\n\n")
 }
 
+fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
+    let mut parts = BTreeMap::<String, String>::new();
+    if !folder.exists() || !folder.is_dir() {
+        return parts;
+    }
+    let Ok(entries) = fs::read_dir(folder) else {
+        return parts;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        if content.trim().is_empty() {
+            continue;
+        }
+        parts.insert(name.to_string(), content);
+    }
+    parts
+}
+
+fn builtin_skill_root(skill_name: &str) -> PathBuf {
+    lexbox_project_root().join("builtin-skills").join(skill_name)
+}
+
 pub fn load_skill_bundle_sections_from_sources(
     skill_name: &str,
     workspace_root: Option<&Path>,
 ) -> SkillBundleSections {
+    let builtin_root = builtin_skill_root(skill_name);
+    let builtin_skill_file = builtin_root.join("SKILL.md");
+    if builtin_skill_file.exists() && builtin_skill_file.is_file() {
+        let body = fs::read_to_string(&builtin_skill_file).unwrap_or_default();
+        let references = load_section_folder(&builtin_root.join("references"));
+        let scripts = load_section_folder(&builtin_root.join("scripts"));
+        let rules = load_named_markdown_folder(&builtin_root.join("rules"));
+        return SkillBundleSections {
+            skill_name: skill_name.to_string(),
+            body,
+            references,
+            scripts,
+            rules,
+        };
+    }
     for root in skill_source_roots(workspace_root) {
         let skill_root = root.join(skill_name);
         let skill_file = skill_root.join("SKILL.md");
@@ -235,11 +282,13 @@ pub fn load_skill_bundle_sections_from_sources(
         let body = fs::read_to_string(&skill_file).unwrap_or_default();
         let references = load_section_folder(&skill_root.join("references"));
         let scripts = load_section_folder(&skill_root.join("scripts"));
+        let rules = load_named_markdown_folder(&skill_root.join("rules"));
         return SkillBundleSections {
             skill_name: skill_name.to_string(),
             body,
             references,
             scripts,
+            rules,
         };
     }
     SkillBundleSections {
@@ -247,6 +296,7 @@ pub fn load_skill_bundle_sections_from_sources(
         body: String::new(),
         references: String::new(),
         scripts: String::new(),
+        rules: BTreeMap::new(),
     }
 }
 
@@ -281,5 +331,13 @@ mod tests {
         assert_eq!(loaded.body, "# Legacy\n\nBody");
         assert!(loaded.metadata.allowed_runtime_modes.is_empty());
         assert!(!loaded.fingerprint.is_empty());
+    }
+
+    #[test]
+    fn load_skill_bundle_sections_prefers_builtin_skill_root() {
+        let loaded = load_skill_bundle_sections_from_sources("remotion-best-practices", None);
+        assert!(!loaded.body.trim().is_empty());
+        assert!(loaded.rules.contains_key("compositions.md"));
+        assert!(loaded.rules.contains_key("timing.md"));
     }
 }

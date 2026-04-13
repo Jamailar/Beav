@@ -7,6 +7,69 @@ use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
+fn builtin_animation_elements() -> Vec<Value> {
+    vec![
+        json!({
+            "id": "builtin:apple-drop",
+            "name": "苹果落地",
+            "storageKey": "builtin:apple-drop",
+            "source": "builtin",
+            "componentType": "apple-drop",
+            "durationMs": 1000,
+            "renderMode": "motion-layer",
+            "props": {
+                "templateId": "static",
+                "overlayTitle": "苹果落地",
+                "overlayBody": Value::Null,
+                "overlays": []
+            },
+            "entities": [{
+                "id": "apple",
+                "type": "shape",
+                "shape": "apple",
+                "x": 430,
+                "y": 220,
+                "width": 220,
+                "height": 260,
+                "fill": "#d91f26",
+                "animations": [{
+                    "id": "apple-fall",
+                    "kind": "fall-bounce",
+                    "fromFrame": 0,
+                    "durationInFrames": 30,
+                    "params": {
+                        "fromY": -420,
+                        "floorY": 760,
+                        "bounces": 3,
+                        "decay": 0.35
+                    }
+                }]
+            }]
+        }),
+    ]
+}
+
+fn animation_element_public_value(value: &Value) -> Value {
+    json!({
+        "id": value.get("id").cloned().unwrap_or(Value::Null),
+        "name": value.get("name").cloned().unwrap_or_else(|| json!("未命名元素")),
+        "storageKey": value.get("storageKey").cloned().unwrap_or_else(|| value.get("id").cloned().unwrap_or(Value::Null)),
+        "source": value.get("source").cloned().unwrap_or_else(|| json!("workspace")),
+        "componentType": value.get("componentType").cloned().unwrap_or_else(|| json!("scene-sequence")),
+        "durationMs": value.get("durationMs").cloned().unwrap_or_else(|| json!(2000)),
+        "renderMode": value.get("renderMode").cloned().unwrap_or_else(|| json!("motion-layer")),
+        "props": value.get("props").cloned().unwrap_or_else(|| json!({})),
+        "entities": value.get("entities").cloned().unwrap_or_else(|| json!([]))
+    })
+}
+
+fn path_file_stem_string(path: &std::path::Path) -> String {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 pub(crate) fn persist_media_workspace_catalog(state: &State<'_, AppState>) -> Result<(), String> {
     let assets = with_store(state, |store| Ok(store.media_assets.clone()))?;
     write_json_value(
@@ -57,6 +120,10 @@ pub fn handle_library_channel(
             | "media:bind"
             | "media:delete"
             | "media:import-files"
+            | "animation-elements:list"
+            | "animation-elements:open-root"
+            | "animation-elements:save"
+            | "animation-elements:delete"
             | "cover:list"
             | "cover:open-root"
             | "cover:open"
@@ -530,6 +597,76 @@ pub fn handle_library_channel(
                 })?;
                 persist_media_workspace_catalog(state)?;
                 Ok(json!({ "success": true, "assets": imported, "imported": imported.len() }))
+            }
+            "animation-elements:list" => {
+                let root = remotion_elements_root(state)?;
+                let mut items = builtin_animation_elements();
+                if let Ok(entries) = fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+                            continue;
+                        }
+                        if let Ok(raw) = fs::read_to_string(&path) {
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+                                items.push(animation_element_public_value(&parsed));
+                            }
+                        }
+                    }
+                }
+                Ok(json!({ "success": true, "items": items }))
+            }
+            "animation-elements:open-root" => {
+                let root = remotion_elements_root(state)?;
+                open::that(&root).map_err(|error| error.to_string())?;
+                Ok(json!({ "success": true, "path": root.display().to_string() }))
+            }
+            "animation-elements:save" => {
+                let root = remotion_elements_root(state)?;
+                let name = payload_string(payload, "name").unwrap_or_else(|| "未命名动画元素".to_string());
+                let layer = payload.get("layer").cloned().unwrap_or_else(|| json!({}));
+                let entities = layer.get("entities").and_then(Value::as_array).cloned().unwrap_or_default();
+                let has_non_text_entity = entities.iter().any(|entity| {
+                    entity
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(|value| value != "text")
+                        .unwrap_or(false)
+                });
+                if !has_non_text_entity {
+                    return Ok(json!({ "success": false, "error": "纯文字动画不应保存到共享动画元素库" }));
+                }
+                let file_name = format!("{}.json", slug_from_relative_path(&name));
+                let file_path = root.join(file_name);
+                let saved = json!({
+                    "id": payload_string(&layer, "id").unwrap_or_else(|| make_id("animation-element")),
+                    "name": name,
+                    "storageKey": path_file_stem_string(&file_path),
+                    "source": "workspace",
+                    "componentType": layer.get("componentType").cloned().unwrap_or_else(|| json!("scene-sequence")),
+                    "durationMs": layer.get("durationMs").cloned().unwrap_or_else(|| json!(2000)),
+                    "renderMode": layer.get("renderMode").cloned().unwrap_or_else(|| json!("motion-layer")),
+                    "props": layer.get("props").cloned().unwrap_or_else(|| json!({})),
+                    "entities": layer.get("entities").cloned().unwrap_or_else(|| json!([]))
+                });
+                write_json_value(&file_path, &saved)?;
+                Ok(json!({ "success": true, "item": animation_element_public_value(&saved), "path": file_path.display().to_string() }))
+            }
+            "animation-elements:delete" => {
+                let root = remotion_elements_root(state)?;
+                let storage_key = payload_string(payload, "storageKey")
+                    .or_else(|| payload_value_as_string(payload))
+                    .unwrap_or_default();
+                if storage_key.starts_with("builtin:") {
+                    return Ok(json!({ "success": false, "error": "内置元素不能删除" }));
+                }
+                let file_name = format!("{}.json", slug_from_relative_path(&storage_key));
+                let file_path = root.join(file_name);
+                if !file_path.exists() {
+                    return Ok(json!({ "success": false, "error": "元素不存在" }));
+                }
+                fs::remove_file(&file_path).map_err(|error| error.to_string())?;
+                Ok(json!({ "success": true }))
             }
             "cover:list" => {
                 let _ = ensure_store_hydrated_for_cover(state);

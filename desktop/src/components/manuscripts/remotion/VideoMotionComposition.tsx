@@ -16,10 +16,12 @@ import {
     isLocalAssetSource,
 } from '../../../../shared/localAsset';
 import type {
+    RemotionEntityAnimation,
     MotionPreset,
     OverlayAnimation,
     OverlayPosition,
     RemotionCompositionConfig,
+    RemotionSceneEntity,
     RemotionOverlay,
     RemotionScene,
 } from './types';
@@ -176,6 +178,213 @@ function overlayAnimationStyles(
     }
 }
 
+function normalizeEntityFrame(frame: number, startFrame: number | undefined, durationInFrames: number | undefined) {
+    const localFrame = Math.max(0, frame - (startFrame || 0));
+    return clampFrame(localFrame, durationInFrames || Number.MAX_SAFE_INTEGER);
+}
+
+function mergeAnimationStyles(
+    frame: number,
+    fps: number,
+    animations: RemotionEntityAnimation[] | undefined
+): React.CSSProperties {
+    if (!animations?.length) return {};
+    return animations.reduce<React.CSSProperties>((style, animation) => {
+        const duration = Math.max(1, animation.durationInFrames || 1);
+        const localFrame = normalizeEntityFrame(frame, animation.fromFrame, duration);
+        const progress = interpolate(localFrame, [0, duration], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+        });
+        const currentOpacity = typeof style.opacity === 'number' ? style.opacity : 1;
+        const params = animation.params || {};
+        const baseTransform = typeof style.transform === 'string' ? style.transform : '';
+        switch (animation.kind) {
+            case 'fade-in':
+                return { ...style, opacity: currentOpacity * progress };
+            case 'fade-out':
+                return { ...style, opacity: currentOpacity * (1 - progress) };
+            case 'slide-in-left':
+                return {
+                    ...style,
+                    opacity: currentOpacity * progress,
+                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? -120), 0])}px, 0, 0)`,
+                };
+            case 'slide-in-right':
+                return {
+                    ...style,
+                    opacity: currentOpacity * progress,
+                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? 120), 0])}px, 0, 0)`,
+                };
+            case 'slide-up':
+                return {
+                    ...style,
+                    opacity: currentOpacity * progress,
+                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? 120), 0])}px, 0)`,
+                };
+            case 'slide-down':
+                return {
+                    ...style,
+                    opacity: currentOpacity * progress,
+                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? -120), 0])}px, 0)`,
+                };
+            case 'pop': {
+                const popSpring = spring({
+                    fps,
+                    frame: localFrame,
+                    config: { damping: 200, stiffness: 140, mass: 0.9 },
+                });
+                return {
+                    ...style,
+                    opacity: currentOpacity * Math.min(1, popSpring),
+                    transform: `${baseTransform} scale(${interpolate(popSpring, [0, 1], [Number(params.fromScale ?? 0.82), 1])})`,
+                };
+            }
+            case 'fall-bounce': {
+                const bounceCount = Math.max(1, Number(params.bounces ?? 3));
+                const floorY = Number(params.floorY ?? 0);
+                const startY = Number(params.fromY ?? -320);
+                const bounceDecay = Number(params.decay ?? 0.38);
+                let translateY = 0;
+                if (progress < 0.65) {
+                    const fallProgress = progress / 0.65;
+                    translateY = interpolate(fallProgress, [0, 1], [startY, floorY], {
+                        extrapolateLeft: 'clamp',
+                        extrapolateRight: 'clamp',
+                    });
+                } else {
+                    const bounceProgress = (progress - 0.65) / 0.35;
+                    const wave = Math.sin(bounceProgress * Math.PI * bounceCount);
+                    const amplitude = (1 - bounceProgress) * Math.abs(startY - floorY) * bounceDecay;
+                    translateY = floorY - Math.max(0, wave) * amplitude;
+                }
+                return {
+                    ...style,
+                    transform: `${baseTransform} translate3d(0, ${translateY}px, 0)`,
+                };
+            }
+            case 'float':
+                return {
+                    ...style,
+                    transform: `${baseTransform} translate3d(0, ${Math.sin(progress * Math.PI * 2) * Number(params.amplitude ?? 14)}px, 0)`,
+                };
+            default:
+                return style;
+        }
+    }, {});
+}
+
+function renderAppleShape(fill: string, stroke: string | undefined, strokeWidth: number) {
+    return (
+        <svg viewBox="0 0 100 120" width="100%" height="100%" aria-hidden>
+            <path
+                d="M49 25c-8-8-7-19 2-25 4 9-2 18-2 25Zm-6 8c13 0 20 8 20 8s8-8 20-8c13 0 17 11 17 20 0 25-20 52-37 52-7 0-10-4-17-4s-10 4-17 4C12 105-8 78-8 53-8 44-4 33 7 33c12 0 20 8 20 8s7-8 16-8Z"
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={strokeWidth}
+            />
+            <path d="M62 18c8-9 18-8 26-2-10 3-18 9-22 17-3-5-4-10-4-15Z" fill="#2d8f3b" />
+        </svg>
+    );
+}
+
+function SceneEntity({
+    entity,
+    sceneFrame,
+}: {
+    entity: RemotionSceneEntity;
+    sceneFrame: number;
+}) {
+    const { fps } = useVideoConfig();
+    const entityFrame = normalizeEntityFrame(sceneFrame, entity.startFrame, entity.durationInFrames);
+    const animationStyle = mergeAnimationStyles(entityFrame, fps, entity.animations);
+    const opacity = typeof entity.opacity === 'number' ? entity.opacity : 1;
+    const scale = typeof entity.scale === 'number' ? entity.scale : 1;
+    const rotation = typeof entity.rotation === 'number' ? entity.rotation : 0;
+    const visible = entity.visible !== false;
+    if (!visible) return null;
+    const baseStyle: React.CSSProperties = {
+        position: 'absolute',
+        left: entity.x,
+        top: entity.y,
+        width: entity.width,
+        height: entity.height,
+        opacity,
+        transform: `rotate(${rotation}deg) scale(${scale})`,
+        transformOrigin: 'center center',
+        ...animationStyle,
+    };
+
+    if (entity.type === 'group') {
+        return (
+            <div style={baseStyle}>
+                {(entity.children || []).map((child) => (
+                    <SceneEntity key={child.id} entity={child} sceneFrame={sceneFrame} />
+                ))}
+            </div>
+        );
+    }
+
+    if (entity.type === 'text') {
+        return (
+            <div
+                style={{
+                    ...baseStyle,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: entity.align === 'left' ? 'flex-start' : entity.align === 'right' ? 'flex-end' : 'center',
+                    color: entity.color || '#ffffff',
+                    fontSize: entity.fontSize || 48,
+                    fontWeight: entity.fontWeight || 700,
+                    lineHeight: entity.lineHeight || 1.2,
+                    textAlign: entity.align || 'center',
+                    whiteSpace: 'pre-wrap',
+                }}
+            >
+                {entity.text || ''}
+            </div>
+        );
+    }
+
+    if (entity.type === 'shape') {
+        const fill = entity.fill || '#ffffff';
+        const strokeWidth = entity.strokeWidth || 0;
+        if (entity.shape === 'apple') {
+            return <div style={baseStyle}>{renderAppleShape(fill, entity.stroke, strokeWidth)}</div>;
+        }
+        return (
+            <div
+                style={{
+                    ...baseStyle,
+                    background: fill,
+                    border: entity.stroke ? `${strokeWidth}px solid ${entity.stroke}` : undefined,
+                    borderRadius: entity.shape === 'circle'
+                        ? '999px'
+                        : entity.borderRadius !== undefined
+                            ? entity.borderRadius
+                            : entity.radius !== undefined
+                                ? entity.radius
+                                : 12,
+                }}
+            />
+        );
+    }
+
+    if (entity.type === 'image' && entity.src) {
+        return <Img src={entity.src} style={{ ...baseStyle, objectFit: 'contain' }} />;
+    }
+
+    if (entity.type === 'video' && entity.src) {
+        return <OffthreadVideo src={entity.src} style={{ ...baseStyle, objectFit: 'contain' }} muted />;
+    }
+
+    if (entity.type === 'svg' && entity.svgMarkup) {
+        return <div style={baseStyle} dangerouslySetInnerHTML={{ __html: entity.svgMarkup }} />;
+    }
+
+    return null;
+}
+
 function SceneOverlay({
     overlay,
 }: {
@@ -225,13 +434,16 @@ function SceneOverlay({
 function MotionSceneLayer({
     scene,
     runtime,
+    renderMode,
 }: {
     scene: RemotionScene;
     runtime: RuntimeMode;
+    renderMode: 'full' | 'motion-layer';
 }) {
     const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
     const source = resolveSceneSource(scene.src, runtime);
+    const showBaseMedia = renderMode !== 'motion-layer';
     const localFrame = clampFrame(frame, scene.durationInFrames);
     const motion = getMotionValues(
         localFrame,
@@ -257,6 +469,7 @@ function MotionSceneLayer({
     };
 
     const overlayItems: RemotionOverlay[] = [...(scene.overlays || [])];
+    const entities = Array.isArray(scene.entities) ? scene.entities : [];
     if (scene.overlayTitle) {
         overlayItems.push({
             id: `${scene.id}-title`,
@@ -288,12 +501,12 @@ function MotionSceneLayer({
                 overflow: 'hidden',
             }}
         >
-            {scene.assetKind === 'audio' ? (
+            {showBaseMedia && scene.assetKind === 'audio' ? (
                 <Audio src={source} />
             ) : null}
-            {scene.assetKind === 'image' ? (
+            {showBaseMedia && scene.assetKind === 'image' ? (
                 <Img src={source} style={contentStyle} />
-            ) : scene.assetKind === 'video' ? (
+            ) : showBaseMedia && scene.assetKind === 'video' ? (
                 <OffthreadVideo
                     src={source}
                     style={contentStyle}
@@ -301,7 +514,7 @@ function MotionSceneLayer({
                     startFrom={scene.trimInFrames || 0}
                     endAt={(scene.trimInFrames || 0) + scene.durationInFrames}
                 />
-            ) : (
+            ) : showBaseMedia ? (
                 <AbsoluteFill
                     style={{
                         alignItems: 'center',
@@ -315,7 +528,10 @@ function MotionSceneLayer({
                 >
                     {scene.overlayTitle || 'RedBox Motion Scene'}
                 </AbsoluteFill>
-            )}
+            ) : null}
+            {entities.map((entity) => (
+                <SceneEntity key={entity.id} entity={entity} sceneFrame={localFrame} />
+            ))}
             {overlayItems.map((overlay) => (
                 <Sequence
                     key={overlay.id}
@@ -333,12 +549,12 @@ export function VideoMotionComposition({
     composition,
     runtime = 'preview',
 }: VideoMotionCompositionProps) {
-    const { width, height, backgroundColor, scenes } = composition;
+    const { width, height, backgroundColor, scenes, renderMode = 'full' } = composition;
 
     return (
         <AbsoluteFill
             style={{
-                background: backgroundColor || '#05070b',
+                background: renderMode === 'motion-layer' ? 'transparent' : (backgroundColor || '#05070b'),
                 width,
                 height,
                 overflow: 'hidden',
@@ -350,7 +566,7 @@ export function VideoMotionComposition({
                     from={scene.startFrame}
                     durationInFrames={scene.durationInFrames}
                 >
-                    <MotionSceneLayer scene={scene} runtime={runtime} />
+                    <MotionSceneLayer scene={scene} runtime={runtime} renderMode={renderMode} />
                 </Sequence>
             ))}
         </AbsoluteFill>
