@@ -31,6 +31,7 @@ import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
+import type { EditorProjectFile } from '../components/manuscripts/editorProject';
 import {
     ARTICLE_DRAFT_EXTENSION,
     AUDIO_DRAFT_EXTENSION,
@@ -44,7 +45,7 @@ const LegacyManuscriptsWorkspace = lazy(async () => ({
     default: (await import('./LegacyManuscriptsWorkspace')).Manuscripts,
 }));
 const VideoDraftWorkbench = lazy(async () => ({
-    default: (await import('../components/manuscripts/VideoDraftWorkbench')).VideoDraftWorkbench,
+    default: (await import('../components/manuscripts/ExperimentalVideoWorkbench')).ExperimentalVideoWorkbench,
 }));
 const AudioDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/AudioDraftWorkbench')).AudioDraftWorkbench,
@@ -188,7 +189,9 @@ type PackageState = {
         sourceRefs?: Array<Record<string, unknown>>;
         clips?: Array<Record<string, unknown>>;
         trackNames?: string[];
+        trackUi?: Record<string, unknown>;
     };
+    editorProject?: EditorProjectFile | null;
     hasLayoutHtml?: boolean;
     hasWechatHtml?: boolean;
     layoutHtml?: string;

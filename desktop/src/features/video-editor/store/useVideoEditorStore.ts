@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { RemotionCompositionConfig } from '../../../components/manuscripts/remotion/types';
+import type { EditorItem, EditorProjectFile } from '../../../components/manuscripts/editorProject';
 
 export type VideoEditorViewportMetrics = {
     scrollLeft: number;
@@ -108,6 +109,24 @@ export type VideoEditorState = {
     script: {
         dirty: boolean;
     };
+    editor: {
+        projectFile: EditorProjectFile | null;
+        selection: {
+            itemIds: string[];
+            primaryItemId: string | null;
+            trackIds: string[];
+        };
+        history: {
+            undoStack: EditorProjectFile[];
+            redoStack: EditorProjectFile[];
+        };
+        derived: {
+            durationMs: number;
+            visibleItems: EditorItem[];
+            audibleItems: EditorItem[];
+            activeMotionItems: EditorItem[];
+        };
+    };
 };
 
 type PartialUpdater =
@@ -206,6 +225,24 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
         },
         script: {
             dirty: false,
+        },
+        editor: {
+            projectFile: null,
+            selection: {
+                itemIds: [],
+                primaryItemId: null,
+                trackIds: [],
+            },
+            history: {
+                undoStack: [],
+                redoStack: [],
+            },
+            derived: {
+                durationMs: 0,
+                visibleItems: [],
+                audibleItems: [],
+                activeMotionItems: [],
+            },
         },
         ...initialState,
     };
