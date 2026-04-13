@@ -109,6 +109,15 @@ export interface AgentTaskTrace {
 }
 
 export type RuntimeUnifiedEventType =
+  | 'runtime:stream-start'
+  | 'runtime:text-delta'
+  | 'runtime:tool-start'
+  | 'runtime:tool-update'
+  | 'runtime:tool-end'
+  | 'runtime:task-node-changed'
+  | 'runtime:subagent-started'
+  | 'runtime:subagent-finished'
+  | 'runtime:checkpoint'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -372,6 +381,9 @@ declare global {
       backgroundTasks: {
         list: () => Promise<Array<{
           id: string;
+          definitionId?: string;
+          executionId?: string;
+          sourceTaskId?: string;
           kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime';
           title: string;
           status: string;
@@ -388,6 +400,8 @@ declare global {
           workerLabel?: string;
           workerLastHeartbeatAt?: string;
           cancelReason?: string;
+          deadLetteredAt?: string;
+          archivedAt?: string;
           rollbackState: 'idle' | 'running' | 'completed' | 'failed' | 'not_required';
           rollbackError?: string;
           createdAt: string;
@@ -402,6 +416,9 @@ declare global {
         }>>;
         get: (taskId: string) => Promise<{
           id: string;
+          definitionId?: string;
+          executionId?: string;
+          sourceTaskId?: string;
           kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime';
           title: string;
           status: string;
@@ -418,6 +435,8 @@ declare global {
           workerLabel?: string;
           workerLastHeartbeatAt?: string;
           cancelReason?: string;
+          deadLetteredAt?: string;
+          archivedAt?: string;
           rollbackState: 'idle' | 'running' | 'completed' | 'failed' | 'not_required';
           rollbackError?: string;
           createdAt: string;
@@ -432,6 +451,9 @@ declare global {
         } | null>;
         cancel: (taskId: string) => Promise<{
           id: string;
+          definitionId?: string;
+          executionId?: string;
+          sourceTaskId?: string;
           kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime';
           title: string;
           status: string;
@@ -448,6 +470,8 @@ declare global {
           workerLabel?: string;
           workerLastHeartbeatAt?: string;
           cancelReason?: string;
+          deadLetteredAt?: string;
+          archivedAt?: string;
           rollbackState: 'idle' | 'running' | 'completed' | 'failed' | 'not_required';
           rollbackError?: string;
           createdAt: string;
@@ -460,6 +484,8 @@ declare global {
             source: 'thought' | 'tool' | 'response' | 'system';
           }>;
         } | null>;
+        retry: (taskId: string) => Promise<{ success: boolean; executionId: string; definitionId: string }>;
+        archive: (taskId: string) => Promise<{ success: boolean; executionId: string }>;
       };
       backgroundWorkers: {
         getPoolState: () => Promise<{

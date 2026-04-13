@@ -542,6 +542,15 @@ pub fn handle_chat_sessions_wander_channel(
                     "detail": "已从知识库中选出本轮用于漫步的 3 条随机素材。",
                 }),
             );
+                emit_runtime_task_node_changed(
+                    app,
+                    &task_id,
+                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    "collect",
+                    "completed",
+                    Some("已从知识库中选出本轮用于漫步的 3 条随机素材。"),
+                    None,
+                );
                 let _ = with_store_mut(state, |store| {
                     if let Some(task) = store
                         .runtime_tasks
@@ -585,6 +594,18 @@ pub fn handle_chat_sessions_wander_channel(
                     "detail": format!("已装载 {} 条随机素材，正在整理素材摘要、长期上下文与已读取文件内容...", items.len()),
                 }),
             );
+                emit_runtime_task_node_changed(
+                    app,
+                    &task_id,
+                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    "analyze",
+                    "running",
+                    Some(&format!(
+                        "已装载 {} 条随机素材，正在整理素材摘要、长期上下文与已读取文件内容...",
+                        items.len()
+                    )),
+                    None,
+                );
                 let context_started_at = now_ms();
                 let long_term_context = warm_wander
                     .long_term_context
@@ -631,6 +652,15 @@ pub fn handle_chat_sessions_wander_channel(
                     "detail": "随机素材摘要与长期上下文已准备完成��Agent 将继续自行读取关键文件。",
                 }),
             );
+                emit_runtime_task_node_changed(
+                    app,
+                    &task_id,
+                    Some(&format!("session_wander_{}", slug_from_relative_path(&request_id))),
+                    "analyze",
+                    "completed",
+                    Some("随机素材摘要与长期上下文已准备完成，Agent 将继续自行读取关键文件。"),
+                    None,
+                );
                 let items_text = build_wander_items_text(&items);
                 let long_term_context_section = if long_term_context.trim().is_empty() {
                     String::new()
@@ -691,6 +721,15 @@ pub fn handle_chat_sessions_wander_channel(
                         "status": "running",
                         "detail": "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。",
                     }),
+                );
+                emit_runtime_task_node_changed(
+                    app,
+                    &task_id,
+                    Some(&wander_session_id),
+                    "generate",
+                    "running",
+                    Some("正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。"),
+                    None,
                 );
                 emit_runtime_stream_start(app, &wander_session_id, "responding", Some("wander"));
                 emit_runtime_text_delta(
@@ -896,6 +935,15 @@ pub fn handle_chat_sessions_wander_channel(
                         "status": "completed",
                         "detail": "漫步完成，结果已写入历史记录。",
                     }),
+                );
+                emit_runtime_task_node_changed(
+                    app,
+                    &task_id,
+                    Some(&wander_session_id),
+                    "complete",
+                    "completed",
+                    Some("漫步完成，结果已写入历史记录。"),
+                    None,
                 );
                 log_timing_event(
                     state,

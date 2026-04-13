@@ -1,4 +1,4 @@
-import { AudioLines, Lock, Minus, Pause, Play, Plus, Scissors, Search, SkipBack, SkipForward, Trash2, Type, Unlock, Video } from 'lucide-react';
+import { AudioLines, Eye, EyeOff, Lock, Minus, Pause, Play, Plus, Scissors, Search, SkipBack, SkipForward, Trash2, Type, Unlock, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 type TimelineToolbarProps = {
@@ -36,6 +36,7 @@ type TimelineToolbarProps = {
     onMoveTrackUp: () => void;
     onMoveTrackDown: () => void;
     onDeleteTrack: () => void;
+    onToggleTrackVisibility: () => void;
     onToggleTrackLock: () => void;
     onToggleTrackMute: () => void;
     onToggleLayerVisibility?: () => void;
@@ -59,6 +60,8 @@ type TimelineToolbarProps = {
     moveSelectionTrackDisabled: boolean;
     moveTrackDisabled: boolean;
     deleteTrackDisabled: boolean;
+    trackVisibilityDisabled: boolean;
+    trackVisibilityLabel: string;
     trackLockDisabled: boolean;
     trackLockLabel: string;
     trackMuteDisabled: boolean;
@@ -140,6 +143,7 @@ export function TimelineToolbar({
     onMoveTrackUp,
     onMoveTrackDown,
     onDeleteTrack,
+    onToggleTrackVisibility,
     onToggleTrackLock,
     onToggleTrackMute,
     onToggleLayerVisibility,
@@ -163,6 +167,8 @@ export function TimelineToolbar({
     moveSelectionTrackDisabled,
     moveTrackDisabled,
     deleteTrackDisabled,
+    trackVisibilityDisabled,
+    trackVisibilityLabel,
     trackLockDisabled,
     trackLockLabel,
     trackMuteDisabled,
@@ -200,8 +206,10 @@ export function TimelineToolbar({
                             <div className="redbox-editable-timeline__toolbar-divider" />
                         </>
                     ) : null}
+                    <ToolbarActionButton icon={trackVisibilityLabel.includes('显示') ? Eye : EyeOff} label={trackVisibilityLabel} title={trackVisibilityLabel} onClick={onToggleTrackVisibility} disabled={trackVisibilityDisabled} iconOnly />
                     <ToolbarActionButton icon={trackLockLabel.includes('解锁') ? Unlock : Lock} label={trackLockLabel} title={trackLockLabel} onClick={onToggleTrackLock} disabled={trackLockDisabled} iconOnly />
                     <ToolbarActionButton label={trackMuteLabel.includes('取消') ? '静音开' : '静音关'} title={trackMuteLabel} onClick={onToggleTrackMute} disabled={trackMuteDisabled} compactLabel={false} />
+                    <ToolbarActionButton icon={Trash2} label="删除轨道" title="删除当前轨道" onClick={onDeleteTrack} disabled={deleteTrackDisabled} iconOnly />
                     <div className="redbox-editable-timeline__toolbar-meta redbox-editable-timeline__toolbar-meta--inline">
                         <span>{clipCount} 段</span>
                         <span>{trackCount} 轨</span>

@@ -131,9 +131,43 @@ function shouldSkipBySession(handlers: RuntimeEventStreamHandlers, sessionId: st
   return activeSessionId !== sessionId;
 }
 
+function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventType'] | null {
+  const eventType = toText(value);
+  switch (eventType) {
+    case 'stream_start':
+      return 'runtime:stream-start';
+    case 'text_delta':
+      return 'runtime:text-delta';
+    case 'tool_request':
+      return 'runtime:tool-start';
+    case 'tool_result':
+      return 'runtime:tool-end';
+    case 'task_node_changed':
+      return 'runtime:task-node-changed';
+    case 'subagent_spawned':
+      return 'runtime:subagent-started';
+    case 'subagent_finished':
+      return 'runtime:subagent-finished';
+    case 'task_checkpoint_saved':
+      return 'runtime:checkpoint';
+    case 'runtime:stream-start':
+    case 'runtime:text-delta':
+    case 'runtime:tool-start':
+    case 'runtime:tool-update':
+    case 'runtime:tool-end':
+    case 'runtime:task-node-changed':
+    case 'runtime:subagent-started':
+    case 'runtime:subagent-finished':
+    case 'runtime:checkpoint':
+      return eventType;
+    default:
+      return null;
+  }
+}
+
 function parseRuntimeEnvelope(envelope: unknown): RuntimeUnifiedEvent | null {
   const record = toRecord(envelope);
-  const eventType = toText(record.eventType) as RuntimeUnifiedEvent['eventType'];
+  const eventType = normalizeRuntimeEventType(record.eventType);
   if (!eventType) return null;
   return {
     eventType,
@@ -156,7 +190,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     parentRuntimeId: toOptionalText(envelope.parentRuntimeId),
   };
 
-  if (envelope.eventType === 'stream_start') {
+  if (envelope.eventType === 'runtime:stream-start') {
     const phase = toText(payload.phase);
     if (!phase) return;
     handlers.onPhaseStart?.({
@@ -171,7 +205,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'text_delta') {
+  if (envelope.eventType === 'runtime:text-delta') {
     const content = String(payload.content || '');
     if (!content) return;
     const stream = toText(payload.stream || 'response');
@@ -183,7 +217,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'tool_request') {
+  if (envelope.eventType === 'runtime:tool-start') {
     handlers.onToolRequest?.({
       sessionId,
       ...runtimeMeta,
@@ -195,7 +229,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'tool_result') {
+  if (envelope.eventType === 'runtime:tool-update' || envelope.eventType === 'runtime:tool-end') {
     handlers.onToolResult?.({
       sessionId,
       ...runtimeMeta,
@@ -206,7 +240,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'task_node_changed') {
+  if (envelope.eventType === 'runtime:task-node-changed') {
     handlers.onTaskNodeChanged?.({
       sessionId,
       ...runtimeMeta,
@@ -221,7 +255,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'subagent_spawned') {
+  if (envelope.eventType === 'runtime:subagent-started') {
     handlers.onSubagentSpawned?.({
       sessionId,
       ...runtimeMeta,
@@ -236,7 +270,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'subagent_finished') {
+  if (envelope.eventType === 'runtime:subagent-finished') {
     handlers.onSubagentFinished?.({
       sessionId,
       ...runtimeMeta,
@@ -254,7 +288,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
     return;
   }
 
-  if (envelope.eventType === 'task_checkpoint_saved') {
+  if (envelope.eventType === 'runtime:checkpoint') {
     const checkpointType = toText(payload.checkpointType);
     const checkpointPayload = toRecord(payload.payload);
     const summary = toText(payload.summary);

@@ -12,7 +12,7 @@ use crate::runtime::{
 };
 use crate::scheduler::{
     emit_scheduler_snapshot, enqueue_manual_job_execution_for_source, run_job_queue_once,
-    run_redclaw_scheduler, sync_redclaw_job_definitions,
+    run_redclaw_job_runner, run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
     handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
@@ -20,6 +20,42 @@ use crate::{
     payload_field, payload_string, redclaw_state_value, render_redbox_prompt,
     update_redclaw_profile_doc, AppState,
 };
+
+fn stop_redclaw_runtime(runtime: &mut RedclawRuntime) {
+    runtime.stop.store(true, Ordering::Relaxed);
+    if let Some(join) = runtime.scheduler_join.take() {
+        let _ = join.join();
+    }
+    if let Some(join) = runtime.runner_join.take() {
+        let _ = join.join();
+    }
+}
+
+pub fn ensure_redclaw_runtime_running(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<bool, String> {
+    let should_run = with_store(state, |store| {
+        Ok(store.redclaw_state.enabled && store.redclaw_state.is_ticking)
+    })?;
+    if !should_run {
+        return Ok(false);
+    }
+    if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
+        if runtime_guard.is_none() {
+            let stop = Arc::new(AtomicBool::new(false));
+            let scheduler_join = run_redclaw_scheduler(app.clone(), stop.clone());
+            let runner_join = run_redclaw_job_runner(app.clone(), stop.clone());
+            *runtime_guard = Some(RedclawRuntime {
+                stop,
+                scheduler_join: Some(scheduler_join),
+                runner_join: Some(runner_join),
+            });
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 pub fn handle_redclaw_channel(
     app: &AppHandle,
@@ -119,26 +155,14 @@ pub fn handle_redclaw_channel(
                 }
                 Ok(redclaw_state_value(&store.redclaw_state))
             })?;
-            if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
-                if runtime_guard.is_none() {
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let join = run_redclaw_scheduler(app.clone(), stop.clone());
-                    *runtime_guard = Some(RedclawRuntime {
-                        stop,
-                        join: Some(join),
-                    });
-                }
-            }
+            let _ = ensure_redclaw_runtime_running(app, state)?;
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(status)
         })(),
         "redclaw:runner-stop" => (|| {
             if let Ok(mut runtime_guard) = state.redclaw_runtime.lock() {
                 if let Some(mut runtime) = runtime_guard.take() {
-                    runtime.stop.store(true, Ordering::Relaxed);
-                    if let Some(join) = runtime.join.take() {
-                        let _ = join.join();
-                    }
+                    stop_redclaw_runtime(&mut runtime);
                 }
             }
             let status = with_store_mut(state, |store| {

@@ -19,9 +19,10 @@ use crate::runtime::{
 use crate::{run_memory_maintenance_with_reason, AppState, AppStore};
 
 pub use job_runtime::{
-    background_status, cancel_job_execution, emit_scheduler_snapshot, enqueue_due_job_executions,
-    enqueue_manual_job_execution_for_source, recover_stale_job_executions,
-    requeue_retrying_job_executions, run_due_job_executions, run_job_queue_once,
+    archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,
+    enqueue_due_job_executions, enqueue_manual_job_execution_for_source,
+    recover_stale_job_executions, requeue_retrying_job_executions, retry_job_execution,
+    run_due_job_executions, run_job_queue_once,
 };
 
 pub fn parse_millis_string(value: Option<&str>) -> Option<i64> {
@@ -171,6 +172,9 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
     > = store.redclaw_job_executions.iter().fold(
         std::collections::HashMap::new(),
         |mut acc, execution| {
+            if execution.archived_at.is_some() {
+                return acc;
+            }
             let replace = acc
                 .get(&execution.definition_id)
                 .map(|current| execution.updated_at > current.updated_at)
@@ -215,9 +219,11 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             "id": definition
                 .source_task_id
                 .clone()
+                .map(|value| execution.map(|item| item.id.clone()).unwrap_or(value))
                 .unwrap_or_else(|| execution.map(|item| item.id.clone()).unwrap_or_else(|| definition.id.clone())),
             "definitionId": definition.id,
             "executionId": execution.map(|item| item.id.clone()),
+            "sourceTaskId": definition.source_task_id,
             "kind": definition_kind_for_background(&definition.kind),
             "title": definition.title,
             "status": status,
@@ -236,6 +242,8 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
                 .unwrap_or_else(|| "main-process".to_string()),
             "workerLastHeartbeatAt": execution.and_then(|item| item.last_heartbeat_at.clone()),
             "cancelReason": execution.and_then(|item| item.cancel_reason.clone()),
+            "deadLetteredAt": execution.and_then(|item| item.dead_lettered_at.clone()),
+            "archivedAt": execution.and_then(|item| item.archived_at.clone()),
             "rollbackState": "not_required",
             "createdAt": execution
                 .map(|item| item.created_at.clone())
@@ -249,6 +257,9 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
     }
 
     for execution in &store.redclaw_job_executions {
+        if execution.archived_at.is_some() {
+            continue;
+        }
         if latest_execution_by_definition
             .get(&execution.definition_id)
             .map(|item| item.id != execution.id)
@@ -268,6 +279,11 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             "id": execution.id,
             "definitionId": execution.definition_id,
             "executionId": execution.id,
+            "sourceTaskId": execution
+                .input_snapshot
+                .as_ref()
+                .and_then(|value| value.get("sourceTaskId"))
+                .and_then(Value::as_str),
             "kind": "headless-runtime",
             "title": execution.output_summary.clone().unwrap_or_else(|| "Orphaned execution".to_string()),
             "status": background_status(&worker_state),
@@ -286,6 +302,8 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             "workerMode": execution.worker_mode,
             "workerLastHeartbeatAt": execution.last_heartbeat_at,
             "cancelReason": execution.cancel_reason,
+            "deadLetteredAt": execution.dead_lettered_at,
+            "archivedAt": execution.archived_at,
             "rollbackState": "not_required",
             "createdAt": execution.created_at,
             "updatedAt": execution.updated_at,
@@ -307,9 +325,8 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
             let state = app.state::<AppState>();
             let now = crate::now_i64();
             let mut should_run_maintenance = false;
-            let mut execution_limit = 0usize;
 
-            if let Ok(limit) = crate::persistence::with_store_mut(&state, |store| {
+            if crate::persistence::with_store_mut(&state, |store| {
                 sync_redclaw_job_definitions(store);
                 if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
                     recover_stale_job_executions(store, now);
@@ -322,15 +339,11 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
                     store.redclaw_state.last_tick_at = Some(now.to_string());
                     store.redclaw_state.next_tick_at =
                         Some((now + store.redclaw_state.interval_minutes * 60_000).to_string());
-                    return Ok(store.redclaw_state.max_automation_per_tick.max(1) as usize);
                 }
-                Ok(0)
-            }) {
-                execution_limit = limit;
-            }
-
-            if execution_limit > 0 {
-                let _ = run_due_job_executions(&app, &state, execution_limit);
+                Ok(())
+            })
+            .is_ok()
+            {
                 emit_scheduler_snapshot(&app, &state);
             }
 
@@ -345,6 +358,27 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
             }
 
             thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    })
+}
+
+pub fn run_redclaw_job_runner(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let state = app.state::<AppState>();
+            let execution_limit = crate::persistence::with_store_mut(&state, |store| {
+                if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
+                    return Ok(store.redclaw_state.max_automation_per_tick.max(1) as usize);
+                }
+                Ok(0usize)
+            })
+            .unwrap_or(0);
+
+            if execution_limit > 0 {
+                let _ = run_due_job_executions(&app, &state, execution_limit);
+            }
+
+            thread::sleep(std::time::Duration::from_millis(500));
         }
     })
 }

@@ -50,9 +50,8 @@ pub fn handle_wechat_official_channel(
                     let set_active = payload_field(payload, "setActive")
                         .and_then(|value| value.as_bool())
                         .unwrap_or(true);
-                    let verified_at = fetch_wechat_access_token(&app_id, &secret)
-                        .map(|_| now_iso())
-                        .ok();
+                    fetch_wechat_access_token(&app_id, &secret)?;
+                    let verified_at = now_iso();
                     let binding = with_store_mut(state, |store| {
                         if set_active {
                             for item in &mut store.wechat_official_bindings {
@@ -67,7 +66,7 @@ pub fn handle_wechat_official_channel(
                             existing.name = name.clone();
                             existing.secret = Some(secret.clone());
                             existing.updated_at = now_iso();
-                            existing.verified_at = verified_at.clone();
+                            existing.verified_at = Some(verified_at.clone());
                             existing.is_active = set_active || existing.is_active;
                             return Ok(existing.clone());
                         }
@@ -79,7 +78,7 @@ pub fn handle_wechat_official_channel(
                             secret: Some(secret),
                             created_at: timestamp.clone(),
                             updated_at: timestamp.clone(),
-                            verified_at: verified_at.or(Some(timestamp)),
+                            verified_at: Some(verified_at.clone()),
                             is_active: set_active || store.wechat_official_bindings.is_empty(),
                         };
                         store.wechat_official_bindings.push(binding.clone());
@@ -171,6 +170,7 @@ pub fn handle_wechat_official_channel(
                             create_wechat_remote_draft(token, &title, &content, &digest, thumb).ok()
                         })
                     });
+                    let remote_created = remote_media_id.is_some();
                     let media_id = remote_media_id.unwrap_or_else(|| make_id("wechat-draft"));
                     let draft_path = wechat_drafts_dir(state)?.join(format!(
                         "{}-{}.md",
@@ -193,7 +193,7 @@ pub fn handle_wechat_official_channel(
                         "digest": digest,
                         "mediaId": media_id,
                         "path": draft_path.display().to_string(),
-                        "remote": resolved_thumb_media_id.is_some()
+                        "remote": remote_created
                     }))
                 }
                 _ => unreachable!("channel prefiltered"),

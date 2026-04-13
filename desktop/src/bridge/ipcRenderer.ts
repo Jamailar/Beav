@@ -222,7 +222,9 @@ function createIpcRenderer() {
     backgroundTasks: {
       list: () => invokeChannel('background-tasks:list'),
       get: (taskId: string) => invokeChannel('background-tasks:get', { taskId }),
-      cancel: (taskId: string) => invokeChannel('background-tasks:cancel', { taskId })
+      cancel: (taskId: string) => invokeChannel('background-tasks:cancel', { taskId }),
+      retry: (taskId: string) => invokeChannel('background-tasks:retry', { taskId }),
+      archive: (taskId: string) => invokeChannel('background-tasks:archive', { taskId })
     },
     backgroundWorkers: {
       getPoolState: () => invokeChannel('background-workers:get-pool-state')

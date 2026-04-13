@@ -14,6 +14,7 @@ import {
     Image as ImageIcon,
     ImagePlus,
     Plus,
+    Play,
     RefreshCw,
     Search,
     Sparkles,
@@ -145,6 +146,30 @@ type EditorDescriptor = {
     draftType: CreateKind | 'unknown';
 };
 
+type FolderContextMenuState = {
+    visible: boolean;
+    x: number;
+    y: number;
+    folderPath: string;
+    folderName: string;
+};
+
+type AssetContextMenuState = {
+    visible: boolean;
+    x: number;
+    y: number;
+    assetId: string;
+    assetTitle: string;
+};
+
+type DraftContextMenuState = {
+    visible: boolean;
+    x: number;
+    y: number;
+    filePath: string;
+    title: string;
+};
+
 type PackageState = {
     manifest?: Record<string, unknown>;
     assets?: { items?: Array<Record<string, unknown>> };
@@ -200,11 +225,9 @@ const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; description: s
     { id: 'richpost', label: '图文', description: '适合小红书、图文笔记、卡片式内容。', icon: FileImage },
     { id: 'video', label: '视频', description: '用于脚本、分镜、镜头资产和成片整理。', icon: Clapperboard },
     { id: 'audio', label: '音频', description: '用于播客、口播、配音和音频剪辑。', icon: AudioLines },
-    { id: 'folder', label: '文件夹', description: '整理稿件和资产，像在线 Office 一样管理内容。', icon: FolderPlus },
 ];
 
 const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
-    { id: 'all', label: '全部' },
     { id: 'drafts', label: '稿件' },
     { id: 'media', label: '素材' },
     { id: 'image', label: '图片' },
@@ -260,6 +283,32 @@ function getCurrentFolderChildren(tree: FileNode[], folderPath: string): FileNod
     return walk(tree) || [];
 }
 
+function collectNestedFiles(items: FileNode[]): FileNode[] {
+    const result: FileNode[] = [];
+    const walk = (nodes: FileNode[]) => {
+        for (const node of nodes) {
+            if (node.isDirectory) {
+                walk(node.children || []);
+            } else {
+                result.push(node);
+            }
+        }
+    };
+    walk(items);
+    return result;
+}
+
+function isInternalPackageFile(filePath: string): boolean {
+    const parts = String(filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length <= 1) return false;
+    return parts.slice(0, -1).some((part) => (
+        part.endsWith(ARTICLE_DRAFT_EXTENSION)
+        || part.endsWith(POST_DRAFT_EXTENSION)
+        || part.endsWith(VIDEO_DRAFT_EXTENSION)
+        || part.endsWith(AUDIO_DRAFT_EXTENSION)
+    ));
+}
+
 function getFolderTrail(folderPath: string): Array<{ label: string; path: string }> {
     if (!folderPath) return [{ label: '全部草稿', path: '' }];
     const parts = folderPath.split('/').filter(Boolean);
@@ -276,6 +325,58 @@ function getParentFolderPath(folderPath: string): string {
     const parts = folderPath.split('/').filter(Boolean);
     if (parts.length <= 1) return '';
     return parts.slice(0, -1).join('/');
+}
+
+function getRelativeFolderPath(filePath: string): string {
+    const normalized = String(filePath || '').replace(/\\/g, '/').trim();
+    if (!normalized) return '';
+    const parts = normalized.split('/').filter(Boolean);
+    if (parts.length <= 1) return '';
+    return parts.slice(0, -1).join('/');
+}
+
+function buildMediaFolderTree(assets: MediaAsset[]): FileNode[] {
+    const root: FileNode[] = [];
+
+    const ensureChildFolder = (items: FileNode[], name: string, fullPath: string): FileNode => {
+        let existing = items.find((item) => item.isDirectory && item.path === fullPath);
+        if (!existing) {
+            existing = {
+                name,
+                path: fullPath,
+                isDirectory: true,
+                children: [],
+            };
+            items.push(existing);
+        }
+        return existing;
+    };
+
+    for (const asset of assets) {
+        const folderPath = getRelativeFolderPath(asset.relativePath || '');
+        if (!folderPath) continue;
+        const parts = folderPath.split('/').filter(Boolean);
+        let currentItems = root;
+        let currentPath = '';
+        for (const part of parts) {
+            currentPath = currentPath ? `${currentPath}/${part}` : part;
+            const folder = ensureChildFolder(currentItems, part, currentPath);
+            currentItems = folder.children || [];
+            folder.children = currentItems;
+        }
+    }
+
+    const sortNodes = (items: FileNode[]) => {
+        items.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'));
+        for (const item of items) {
+            if (item.children?.length) {
+                sortNodes(item.children);
+            }
+        }
+    };
+
+    sortNodes(root);
+    return root;
 }
 
 function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>): string {
@@ -451,14 +552,46 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [error, setError] = useState('');
     const [activeFolder, setActiveFolder] = useState('');
+    const [mediaFolder, setMediaFolder] = useState('');
     const [query, setQuery] = useState('');
     const [isSearchOpen, setIsSearchOpen] = useState(false);
-    const [filter, setFilter] = useState<DraftFilter>('all');
+    const [filter, setFilter] = useState<DraftFilter>('drafts');
     const [layout, setLayout] = useState<DraftLayout>('gallery');
     const [createOpen, setCreateOpen] = useState(false);
+    const [folderCreateOpen, setFolderCreateOpen] = useState(false);
     const [createKind, setCreateKind] = useState<CreateKind>('longform');
-    const [createTitle, setCreateTitle] = useState('');
+    const [folderCreateTitle, setFolderCreateTitle] = useState('');
+    const [folderRenameOpen, setFolderRenameOpen] = useState(false);
+    const [folderRenamePath, setFolderRenamePath] = useState('');
+    const [folderRenameTitle, setFolderRenameTitle] = useState('');
+    const [assetRenameOpen, setAssetRenameOpen] = useState(false);
+    const [assetRenameId, setAssetRenameId] = useState('');
+    const [assetRenameTitle, setAssetRenameTitle] = useState('');
+    const [draftRenameOpen, setDraftRenameOpen] = useState(false);
+    const [draftRenamePath, setDraftRenamePath] = useState('');
+    const [draftRenameTitle, setDraftRenameTitle] = useState('');
     const [isCreating, setIsCreating] = useState(false);
+    const [folderContextMenu, setFolderContextMenu] = useState<FolderContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        folderPath: '',
+        folderName: '',
+    });
+    const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        assetId: '',
+        assetTitle: '',
+    });
+    const [draftContextMenu, setDraftContextMenu] = useState<DraftContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        filePath: '',
+        title: '',
+    });
     const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
     const [workingId, setWorkingId] = useState<string | null>(null);
     const [pendingDeleteDraftPath, setPendingDeleteDraftPath] = useState<string | null>(null);
@@ -510,7 +643,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const deferredAssetsTimerRef = useRef<number | null>(null);
     const searchPopoverRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const folderContextMenuRef = useRef<HTMLDivElement | null>(null);
+    const assetContextMenuRef = useRef<HTMLDivElement | null>(null);
+    const draftContextMenuRef = useRef<HTMLDivElement | null>(null);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
+    const isMediaScope = filter !== 'drafts';
+    const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
@@ -680,7 +818,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (!isActive) return;
         if (mode === 'editor') return;
-        if (!['all', 'media', 'image', 'video', 'audio'].includes(filter)) return;
+        if (!['media', 'image', 'video', 'audio'].includes(filter)) return;
         if (assets.length > 0) return;
         uiDebug('manuscripts', 'load_assets:on_demand');
         void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
@@ -726,6 +864,66 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [isSearchOpen]);
 
     useEffect(() => {
+        if (!folderContextMenu.visible) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!folderContextMenuRef.current?.contains(event.target as Node)) {
+                setFolderContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setFolderContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [folderContextMenu.visible]);
+
+    useEffect(() => {
+        if (!assetContextMenu.visible) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!assetContextMenuRef.current?.contains(event.target as Node)) {
+                setAssetContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setAssetContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [assetContextMenu.visible]);
+
+    useEffect(() => {
+        if (!draftContextMenu.visible) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!draftContextMenuRef.current?.contains(event.target as Node)) {
+                setDraftContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setDraftContextMenu((prev) => ({ ...prev, visible: false }));
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [draftContextMenu.visible]);
+
+    useEffect(() => {
         return () => {
             if (deferredAssetsTimerRef.current != null) {
                 window.clearTimeout(deferredAssetsTimerRef.current);
@@ -765,25 +963,42 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         })();
     }, [onFileConsumed, pendingFile]);
 
-    const currentFolderChildren = useMemo(() => getCurrentFolderChildren(tree, activeFolder), [tree, activeFolder]);
+    const currentFolderChildren = useMemo(
+        () => getCurrentFolderChildren(isMediaScope ? mediaFolderTree : tree, isMediaScope ? mediaFolder : activeFolder),
+        [activeFolder, isMediaScope, mediaFolder, mediaFolderTree, tree],
+    );
     const currentFolders = useMemo(() => currentFolderChildren.filter((item) => item.isDirectory), [currentFolderChildren]);
-    const currentFiles = useMemo(() => currentFolderChildren.filter((item) => !item.isDirectory), [currentFolderChildren]);
+    const currentFiles = useMemo(
+        () => (isMediaScope ? [] : currentFolderChildren.filter((item) => !item.isDirectory)),
+        [currentFolderChildren, isMediaScope],
+    );
+    const currentNestedDraftFiles = useMemo(
+        () => (isMediaScope ? [] : collectNestedFiles(currentFolderChildren)),
+        [currentFolderChildren, isMediaScope],
+    );
 
     const normalizedQuery = query.trim().toLowerCase();
 
     const visibleFolders = useMemo(() => {
-        if (filter !== 'all' && filter !== 'folders') return [] as FileNode[];
         return currentFolders.filter((item) => !normalizedQuery || item.name.toLowerCase().includes(normalizedQuery));
-    }, [currentFolders, filter, normalizedQuery]);
+    }, [currentFolders, normalizedQuery]);
 
     const visibleDrafts = useMemo(() => {
-        if (filter !== 'all' && filter !== 'drafts') return [] as FileNode[];
-        return currentFiles.filter((item) => {
+        if (filter !== 'drafts') return [] as FileNode[];
+        return currentNestedDraftFiles.filter((item) => {
+            if (isInternalPackageFile(item.path)) return false;
             const meta = fileMetaMap[item.path];
             const haystack = `${item.name} ${meta?.title || ''} ${meta?.summary || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
+        }).sort((left, right) => {
+            const leftMeta = fileMetaMap[left.path];
+            const rightMeta = fileMetaMap[right.path];
+            const leftUpdatedAt = Number(leftMeta?.updatedAt || left.updatedAt || 0) || 0;
+            const rightUpdatedAt = Number(rightMeta?.updatedAt || right.updatedAt || 0) || 0;
+            if (rightUpdatedAt !== leftUpdatedAt) return rightUpdatedAt - leftUpdatedAt;
+            return right.path.localeCompare(left.path, 'zh-Hans-CN');
         });
-    }, [currentFiles, fileMetaMap, filter, normalizedQuery]);
+    }, [currentNestedDraftFiles, fileMetaMap, filter, normalizedQuery]);
 
     const visibleAssets = useMemo(() => {
         return assets.filter((asset) => {
@@ -792,13 +1007,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (filter === 'image' && assetKind !== 'image') return false;
             if (filter === 'video' && assetKind !== 'video') return false;
             if (filter === 'audio' && assetKind !== 'audio') return false;
-            if (filter === 'drafts' || filter === 'folders') return false;
+            if (filter === 'drafts') return false;
+            if (getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
             const haystack = `${asset.title || ''} ${asset.prompt || ''} ${asset.relativePath || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         });
-    }, [assets, filter, normalizedQuery]);
+    }, [assets, filter, mediaFolder, normalizedQuery]);
 
-    const activeTrail = useMemo(() => getFolderTrail(activeFolder), [activeFolder]);
+    const activeTrail = useMemo(() => getFolderTrail(isMediaScope ? mediaFolder : activeFolder), [activeFolder, isMediaScope, mediaFolder]);
+    const currentFolderPath = isMediaScope ? mediaFolder : activeFolder;
 
     const isSameOrNestedPath = useCallback((targetPath: string, currentPath: string | null | undefined) => {
         const target = String(targetPath || '').trim().replace(/\/+$/, '');
@@ -807,46 +1024,183 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return current === target || current.startsWith(`${target}/`);
     }, []);
 
-    const handleCreate = useCallback(async () => {
-        const normalizedName = normalizeDraftFileName(createTitle);
-        if (createKind === 'folder' && !normalizedName) return;
+    const handleCreateDraft = useCallback(async () => {
+        if (createKind === 'folder') return;
         setIsCreating(true);
         try {
-            if (createKind === 'folder') {
-                const result = await window.ipcRenderer.invoke('manuscripts:create-folder', {
-                    parentPath: activeFolder,
-                    name: normalizedName,
-                }) as { success?: boolean; error?: string };
-                if (!result?.success) throw new Error(result?.error || '创建文件夹失败');
-                await loadData();
-                setActiveFolder(activeFolder ? `${activeFolder}/${normalizedName}` : normalizedName);
-            } else {
-                const storageName = buildDraftStorageName();
-                const draftTitle = DEFAULT_UNTITLED_DRAFT_TITLE;
-                const result = await window.ipcRenderer.invoke('manuscripts:create-file', {
-                    parentPath: activeFolder,
-                    name: ensureDraftFileName(storageName, createKind),
-                    title: draftTitle,
-                    content: buildDraftTemplate(draftTitle, createKind),
-                }) as { success?: boolean; error?: string; path?: string };
-                if (!result?.success || !result.path) throw new Error(result?.error || '创建草稿失败');
-                await loadData();
-                setEditorFile(result.path);
-                setEditorDescriptor({
-                    title: draftTitle,
-                    draftType: createKind,
-                });
-                setMode('editor');
-            }
+            const storageName = buildDraftStorageName();
+            const draftTitle = DEFAULT_UNTITLED_DRAFT_TITLE;
+            const result = await window.ipcRenderer.invoke('manuscripts:create-file', {
+                parentPath: activeFolder,
+                name: ensureDraftFileName(storageName, createKind),
+                title: draftTitle,
+                content: buildDraftTemplate(draftTitle, createKind),
+            }) as { success?: boolean; error?: string; path?: string };
+            if (!result?.success || !result.path) throw new Error(result?.error || '创建草稿失败');
+            await loadData();
+            setEditorFile(result.path);
+            setEditorDescriptor({
+                title: draftTitle,
+                draftType: createKind,
+            });
+            setMode('editor');
             setCreateOpen(false);
-            setCreateTitle('');
         } catch (createError) {
             const message = createError instanceof Error ? createError.message : '创建失败';
             void appAlert(message);
         } finally {
             setIsCreating(false);
         }
-    }, [activeFolder, createKind, createTitle, loadData]);
+    }, [activeFolder, createKind, loadData]);
+
+    const handleCreateFolder = useCallback(async () => {
+        const normalizedName = normalizeDraftFileName(folderCreateTitle);
+        if (!normalizedName) return;
+        setIsCreating(true);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:create-folder', {
+                parentPath: activeFolder,
+                name: normalizedName,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) throw new Error(result?.error || '创建文件夹失败');
+            await loadData();
+            setActiveFolder(activeFolder ? `${activeFolder}/${normalizedName}` : normalizedName);
+            setFolderCreateOpen(false);
+            setFolderCreateTitle('');
+        } catch (createError) {
+            const message = createError instanceof Error ? createError.message : '创建失败';
+            void appAlert(message);
+        } finally {
+            setIsCreating(false);
+        }
+    }, [activeFolder, folderCreateTitle, loadData]);
+
+    const openFolderContextMenu = useCallback((event: React.MouseEvent, folder: FileNode) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setFolderContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            folderPath: folder.path,
+            folderName: folder.name,
+        });
+    }, []);
+
+    const handleDeleteFolder = useCallback(async (folderPath: string) => {
+        if (!(await appConfirm('确认删除这个文件夹吗？文件夹内内容也会一起删除。', {
+            title: '删除文件夹',
+            confirmLabel: '删除',
+            tone: 'danger',
+        }))) return;
+        setFolderContextMenu((prev) => ({ ...prev, visible: false }));
+        setWorkingId(folderPath);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:delete', folderPath) as { success?: boolean; error?: string };
+            if (!result?.success) throw new Error(result?.error || '删除文件夹失败');
+            if (isSameOrNestedPath(folderPath, activeFolder)) {
+                setActiveFolder(getParentFolderPath(folderPath));
+            }
+            await loadData();
+        } catch (deleteError) {
+            void appAlert(deleteError instanceof Error ? deleteError.message : '删除文件夹失败');
+        } finally {
+            setWorkingId(null);
+        }
+    }, [activeFolder, isSameOrNestedPath, loadData]);
+
+    const handleRenameFolder = useCallback(async () => {
+        const newName = normalizeDraftFileName(folderRenameTitle);
+        if (!newName || !folderRenamePath) return;
+        setIsCreating(true);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+                oldPath: folderRenamePath,
+                newName,
+            }) as { success?: boolean; error?: string; newPath?: string };
+            if (!result?.success) throw new Error(result?.error || '重命名文件夹失败');
+            if (isSameOrNestedPath(folderRenamePath, activeFolder)) {
+                setActiveFolder(String(result?.newPath || getParentFolderPath(folderRenamePath)));
+            }
+            setFolderRenameOpen(false);
+            setFolderRenamePath('');
+            setFolderRenameTitle('');
+            await loadData();
+        } catch (renameError) {
+            void appAlert(renameError instanceof Error ? renameError.message : '重命名文件夹失败');
+        } finally {
+            setIsCreating(false);
+        }
+    }, [activeFolder, folderRenamePath, folderRenameTitle, isSameOrNestedPath, loadData]);
+
+    const openAssetContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setAssetContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            assetId: asset.id,
+            assetTitle: asset.title || asset.relativePath || asset.id,
+        });
+    }, []);
+
+    const handleRenameAsset = useCallback(async () => {
+        const nextTitle = assetRenameTitle.trim();
+        if (!assetRenameId || !nextTitle) return;
+        setIsCreating(true);
+        try {
+            const result = await window.ipcRenderer.invoke('media:update', {
+                assetId: assetRenameId,
+                title: nextTitle,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) throw new Error(result?.error || '重命名素材失败');
+            setAssetRenameOpen(false);
+            setAssetRenameId('');
+            setAssetRenameTitle('');
+            await loadData();
+        } catch (renameError) {
+            void appAlert(renameError instanceof Error ? renameError.message : '重命名素材失败');
+        } finally {
+            setIsCreating(false);
+        }
+    }, [assetRenameId, assetRenameTitle, loadData]);
+
+    const openDraftContextMenu = useCallback((event: React.MouseEvent, file: FileNode, title: string) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setDraftContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            filePath: file.path,
+            title,
+        });
+    }, []);
+
+    const handleRenameDraft = useCallback(async () => {
+        const nextName = normalizeDraftFileName(draftRenameTitle);
+        if (!draftRenamePath || !nextName) return;
+        setIsCreating(true);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+                oldPath: draftRenamePath,
+                newName: nextName,
+            }) as { success?: boolean; error?: string; newPath?: string };
+            if (!result?.success) throw new Error(result?.error || '重命名稿件失败');
+            if (editorFile === draftRenamePath) {
+                setEditorFile(String(result?.newPath || ''));
+            }
+            setDraftRenameOpen(false);
+            setDraftRenamePath('');
+            setDraftRenameTitle('');
+            await loadData();
+        } catch (renameError) {
+            void appAlert(renameError instanceof Error ? renameError.message : '重命名稿件失败');
+        } finally {
+            setIsCreating(false);
+        }
+    }, [draftRenamePath, draftRenameTitle, editorFile, loadData]);
 
     const handleDeleteDraft = useCallback(async (targetPath: string) => {
         setWorkingId(targetPath);
@@ -1198,13 +1552,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, [bindAssetRole, editorFile, loadData, refreshPackageState]);
 
-    const openAssetExternally = useCallback(async (assetId: string) => {
-        const result = await window.ipcRenderer.invoke('media:open', { assetId }) as { success?: boolean; error?: string };
-        if (!result?.success) {
-            void appAlert(result?.error || '打开资产失败');
-        }
-    }, []);
-
     const pushToRedClaw = useCallback((filePath: string) => {
         const meta = fileMetaMap[filePath];
         onNavigateToRedClaw?.({
@@ -1424,15 +1771,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             return a.title.localeCompare(b.title, 'zh-Hans-CN');
         };
 
-        if (filter === 'all') {
-            const primaryCards = [...draftCards].sort(compareCards);
-            const remainingSlots = Math.max(MANUSCRIPTS_CARD_RENDER_LIMIT - primaryCards.length, 0);
-            const secondaryCards = assetCards
-                .sort(compareCards)
-                .slice(0, remainingSlots);
-            return [...primaryCards, ...secondaryCards];
-        }
-
         return [...draftCards, ...assetCards]
             .sort(compareCards)
             .slice(0, MANUSCRIPTS_CARD_RENDER_LIMIT);
@@ -1534,10 +1872,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const primaryAudioAsset = packagePreviewAssets.find((asset) => inferAssetKind(asset) === 'audio')
             || packagePreviewAssets.find((asset) => inferAssetKind(asset) === 'video')
             || null;
-        const timelineTrackNames = Array.from(new Set((timelineClips.length > 0 ? timelineClips : [
-            { track: isAudioDraft ? 'A1' : 'V1' },
-            { track: isVideoDraft ? 'A1' : 'T1' },
-        ]).map((item) => String(item.track || '').trim()).filter(Boolean)));
+        const timelineSummary = packageState?.timelineSummary as ({ trackNames?: unknown } & Record<string, unknown>) | undefined;
+        const packageTrackNames = Array.isArray(timelineSummary?.trackNames)
+            ? timelineSummary.trackNames.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+        const fallbackTrackNames = isAudioDraft
+            ? ['A1']
+            : isVideoDraft
+                ? ['V1', 'A1']
+                : ['V1', 'T1'];
+        const timelineTrackNames = Array.from(new Set([
+            ...packageTrackNames,
+            ...timelineClips.map((item) => String(item.track || '').trim()).filter(Boolean),
+            ...(packageTrackNames.length === 0 && timelineClips.length === 0 ? fallbackTrackNames : []),
+        ]));
 
         return (
             <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'bg-[#0f0f0f] text-white' : 'bg-background')}>
@@ -1824,10 +2172,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         <div className="flex flex-wrap items-center justify-between gap-4">
                             <div className="flex min-w-0 flex-wrap items-center gap-5 text-sm">
                                 {[
-                                    { id: 'all', label: '我的空间' },
                                     { id: 'drafts', label: '我的稿件' },
                                     { id: 'media', label: '素材画廊' },
-                                    { id: 'folders', label: '文件夹' },
                                 ].map((item) => (
                                     <button
                                         key={item.id}
@@ -1847,7 +2193,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 <button
                                     type="button"
                                     onClick={() => setFilter('folders')}
-                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
                                 >
                                     <FolderOpen className="h-4 w-4" />
                                     空间目录
@@ -1858,7 +2204,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         setIsImageModalOpen(true);
                                         void loadSettings();
                                     }}
-                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
                                 >
                                     <ImageIcon className="h-4 w-4" />
                                     生图
@@ -1869,7 +2215,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         setIsVideoModalOpen(true);
                                         void loadSettings();
                                     }}
-                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
                                 >
                                     <Clapperboard className="h-4 w-4" />
                                     生视频
@@ -1877,7 +2223,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 <button
                                     type="button"
                                     onClick={() => void loadData()}
-                                    className="inline-flex items-center gap-2 rounded-2xl border border-border bg-white/70 px-4 py-2.5 text-sm text-text-secondary hover:text-text-primary"
+                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
                                 >
                                     <RefreshCw className={clsx('h-4 w-4', isRefreshing && 'animate-spin')} />
                                     {isRefreshing ? '刷新中' : '刷新'}
@@ -1886,17 +2232,24 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     type="button"
                                     onClick={() => setIsSearchOpen((prev) => !prev)}
                                     className={clsx(
-                                        'inline-flex items-center justify-center rounded-2xl border px-3.5 py-2.5 text-sm transition-all',
+                                        'inline-flex items-center justify-center px-0.5 py-2 text-sm transition-colors',
                                         isSearchOpen
-                                            ? 'border-accent-primary bg-accent-primary/8 text-accent-primary shadow-[0_12px_24px_rgba(37,99,235,0.14)]'
-                                            : 'border-border bg-white/70 text-text-secondary hover:text-text-primary'
+                                            ? 'text-accent-primary'
+                                            : 'text-text-secondary hover:text-text-primary'
                                     )}
                                     aria-label="搜索稿件"
                                 >
                                     <Search className="h-4 w-4" />
                                 </button>
                                 <div className="flex items-center gap-2 rounded-2xl bg-accent-primary px-2 py-2 text-white shadow-[0_16px_36px_rgba(37,99,235,0.24)]">
-                                    <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setCreateKind('longform');
+                                            setCreateOpen(true);
+                                        }}
+                                        className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium"
+                                    >
                                         <Plus className="h-4 w-4" />
                                         新建
                                     </button>
@@ -1955,10 +2308,16 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 <div className="text-sm font-semibold text-text-primary">文件夹 ({visibleFolders.length})</div>
                             </div>
                             <div className="flex gap-3 overflow-x-auto pb-1">
-                                {activeFolder ? (
+                                {currentFolderPath ? (
                                     <button
                                         type="button"
-                                        onClick={() => setActiveFolder(getParentFolderPath(activeFolder))}
+                                        onClick={() => {
+                                            if (isMediaScope) {
+                                                setMediaFolder(getParentFolderPath(mediaFolder));
+                                            } else {
+                                                setActiveFolder(getParentFolderPath(activeFolder));
+                                            }
+                                        }}
                                         className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
                                         aria-label="返回上一级"
                                     >
@@ -1970,9 +2329,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 <button
                                     type="button"
                                     onClick={() => {
-                                        setCreateKind('folder');
-                                        setCreateTitle('');
-                                        setCreateOpen(true);
+                                        setFolderCreateTitle('');
+                                        setFolderCreateOpen(true);
                                     }}
                                     className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
                                     aria-label="新建文件夹"
@@ -1985,13 +2343,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     <button
                                         key={folder.path}
                                         type="button"
-                                        onClick={() => setActiveFolder(folder.path)}
+                                        onClick={() => {
+                                            if (isMediaScope) {
+                                                setMediaFolder(folder.path);
+                                            } else {
+                                                setActiveFolder(folder.path);
+                                            }
+                                        }}
+                                        onContextMenu={isMediaScope ? undefined : (event) => openFolderContextMenu(event, folder)}
                                         className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-start px-2 py-2 text-center"
                                     >
                                         <div className="flex h-16 w-16 items-center justify-center text-[#5d7fb8] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-[#3d67ab]">
-                                            <Folder className="h-10 w-10" strokeWidth={1.8} />
+                                            <Folder className="h-11 w-11" strokeWidth={1.75} />
                                         </div>
-                                        <div className="mt-2 line-clamp-2 text-[11px] leading-4 text-text-secondary group-hover:text-text-primary">
+                                        <div className="-mt-0.5 line-clamp-2 text-[11px] leading-4 text-text-secondary group-hover:text-text-primary">
                                             {folder.name}
                                         </div>
                                     </button>
@@ -2048,7 +2413,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         <button
                                             key={folder.path}
                                             type="button"
-                                            onClick={() => setActiveFolder(folder.path)}
+                                            onClick={() => {
+                                                if (isMediaScope) {
+                                                    setMediaFolder(folder.path);
+                                                } else {
+                                                    setActiveFolder(folder.path);
+                                                }
+                                            }}
+                                            onContextMenu={isMediaScope ? undefined : (event) => openFolderContextMenu(event, folder)}
                                             className={clsx(
                                                 'rounded-2xl border border-border bg-white/70 text-left hover:bg-white',
                                                 layout === 'gallery' ? 'p-4' : 'w-full px-4 py-3'
@@ -2070,7 +2442,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 {contentCards.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-border px-4 py-12 text-sm text-text-tertiary">当前没有符合筛选条件的内容。</div>
                                 ) : (
-                                    <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-x-3.5 gap-y-5' : 'space-y-2')}>
+                                    <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-x-3 gap-y-4' : 'space-y-2')}>
                                         {contentCards.map((card) => {
                                             if (card.kind === 'draft') {
                                                 const typeTheme = resolveDraftTypeTheme(card.draftType);
@@ -2081,29 +2453,30 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                         : card.draftType === 'richpost'
                                                             ? FileImage
                                                             : FileText;
-                                                const isBusy = workingId === card.file.path;
                                                 return (
-                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-2xl border border-border bg-white/75 px-4 py-3')}>
-                                                        <button type="button" onClick={() => void openDraftEditor(card.file.path)} className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}>
-                                                            <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[20px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
+                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-[14px] border border-border bg-white/75 px-4 py-3')}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void openDraftEditor(card.file.path)}
+                                                            onContextMenu={(event) => openDraftContextMenu(event, card.file, card.title)}
+                                                            className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
+                                                        >
+                                                            <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[12px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
                                                                 {layout === 'gallery' ? (
                                                                     <>
-                                                                        <div className={clsx('relative aspect-[5/6] px-4 py-4', typeTheme.tile)}>
-                                                                            <div className={clsx('inline-flex h-9 w-9 items-center justify-center rounded-xl', typeTheme.iconWrap)}>
-                                                                                <Icon className="h-4.5 w-4.5" />
+                                                                        <div className={clsx('relative aspect-[5/6] px-3.5 py-3.5', typeTheme.tile)}>
+                                                                            <div className={clsx('inline-flex h-8 w-8 items-center justify-center rounded-[10px]', typeTheme.iconWrap)}>
+                                                                                <Icon className="h-4 w-4" />
                                                                             </div>
                                                                             <div className="mt-4 text-[10px] uppercase tracking-[0.22em] text-white/60">{resolveDraftTypeLabel(card.draftType)}</div>
-                                                                            <div className="mt-2 line-clamp-2 text-lg font-semibold leading-tight">{card.title}</div>
-                                                                            <div className="absolute inset-x-4 bottom-4 rounded-xl border border-white/15 bg-white/10 px-2.5 py-2 text-[11px] text-white/80 backdrop-blur-sm">
-                                                                                {card.summary || '打开后继续编辑、排版或交给 AI 处理。'}
+                                                                            <div className="mt-1.5 line-clamp-2 text-[16px] font-semibold leading-tight">{card.title}</div>
+                                                                            <div className="absolute inset-x-3.5 bottom-3.5 rounded-[10px] border border-white/15 bg-white/10 px-2.5 py-1.5 text-[10px] text-white/80 backdrop-blur-sm">
+                                                                                <div className="line-clamp-2">{card.summary || '打开后继续编辑、排版或交给 AI 处理。'}</div>
                                                                             </div>
                                                                         </div>
-                                                                        <div className="space-y-1.5 px-2 pb-1 pt-2.5">
-                                                                            <div className="truncate text-[13px] font-medium text-text-primary">{card.title}</div>
-                                                                            <div className="flex items-center gap-2 text-[11px]">
-                                                                                <span className={clsx('rounded-full px-2.5 py-1 font-medium', typeTheme.chip)}>{resolveDraftTypeLabel(card.draftType)}</span>
-                                                                                <span className="text-text-tertiary">{formatDateLabel(card.updatedAt)}</span>
-                                                                            </div>
+                                                                        <div className="px-1.5 pb-1 pt-2">
+                                                                            <div className="truncate text-[12px] font-medium text-text-primary">{card.title}</div>
+                                                                            <div className="mt-0.5 text-[10px] text-text-tertiary/75">{formatDateLabel(card.updatedAt)}</div>
                                                                         </div>
                                                                     </>
                                                                 ) : (
@@ -2119,22 +2492,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                 )}
                                                             </div>
                                                         </button>
-                                                        <div className={clsx('mt-3 flex items-center justify-between gap-2', layout === 'gallery' ? 'px-1' : '')}>
-                                                            <div className="text-xs text-text-tertiary">{card.file.path}</div>
-                                                            <div className="flex items-center gap-2">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={(event) => {
-                                                                        event.stopPropagation();
-                                                                        setPendingDeleteDraftPath(card.file.path);
-                                                                    }}
-                                                                    disabled={isBusy}
-                                                                    className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-secondary hover:text-red-600 disabled:opacity-50"
-                                                                >
-                                                                    删除
-                                                                </button>
-                                                            </div>
-                                                        </div>
                                                     </div>
                                                 );
                                             }
@@ -2142,38 +2499,60 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                             const asset = card.asset;
                                             const previewSrc = resolveAssetUrl(asset.previewUrl || asset.relativePath || asset.absolutePath || '');
                                             const assetKind = card.assetKind;
-                                            const isBusy = workingId === asset.id;
                                             return (
-                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-2xl border border-border bg-white/75 px-4 py-3')}>
+                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-[14px] border border-border bg-white/75 px-4 py-3')}>
                                                     <button
                                                         type="button"
                                                         onClick={() => setPreviewAsset(asset)}
+                                                        onContextMenu={(event) => openAssetContextMenu(event, asset)}
                                                         className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
                                                     >
-                                                        <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[20px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
+                                                        <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[12px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
                                                             {layout === 'gallery' ? (
                                                                 <>
-                                                                    <div className="aspect-[5/6] overflow-hidden bg-surface-secondary/60">
+                                                                    <div className="relative aspect-[5/6] overflow-hidden bg-surface-secondary/60">
+                                                                        {asset.source === 'generated' ? (
+                                                                            <div className="absolute left-2.5 top-2.5 z-10 rounded-full bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm">
+                                                                                AI生成
+                                                                            </div>
+                                                                        ) : null}
                                                                         {assetKind === 'image' ? (
                                                                             <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
                                                                         ) : assetKind === 'video' ? (
-                                                                            <video src={previewSrc} className="h-full w-full object-cover" muted playsInline />
+                                                                            <>
+                                                                                <video
+                                                                                    src={previewSrc}
+                                                                                    className="h-full w-full object-cover bg-black"
+                                                                                    muted
+                                                                                    playsInline
+                                                                                    preload="metadata"
+                                                                                    onLoadedData={(event) => {
+                                                                                        try {
+                                                                                            if (event.currentTarget.currentTime < 0.05) {
+                                                                                                event.currentTarget.currentTime = 0.05;
+                                                                                            }
+                                                                                        } catch {
+                                                                                            // ignore preview seek failures
+                                                                                        }
+                                                                                    }}
+                                                                                />
+                                                                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/65 to-transparent" />
+                                                                                <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center">
+                                                                                    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+                                                                                        <Play className="ml-0.5 h-5 w-5 fill-current" />
+                                                                                    </div>
+                                                                                </div>
+                                                                            </>
                                                                         ) : (
                                                                             <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#10253f,#315e8f)] text-white">
                                                                                 <AudioLines className="h-10 w-10" />
                                                                             </div>
                                                                         )}
+                                                                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
                                                                     </div>
-                                                                    <div className="space-y-1.5 px-2 pb-1 pt-2.5">
-                                                                        <div className="truncate text-[13px] font-medium text-text-primary">{card.title}</div>
-                                                                        <div className="flex items-center gap-2 text-[11px]">
-                                                                            <span className="rounded-full border border-border bg-white px-2.5 py-1 text-text-secondary">
-                                                                                {assetKind === 'image' ? '图片' : assetKind === 'video' ? '视频' : assetKind === 'audio' ? '音频' : '资产'}
-                                                                            </span>
-                                                                            <span className="rounded-full border border-border bg-white px-2.5 py-1 text-text-tertiary">
-                                                                                {asset.source === 'imported' ? '导入' : asset.source === 'generated' ? 'AI生成' : '计划项'}
-                                                                            </span>
-                                                                        </div>
+                                                                    <div className="px-1.5 pb-1 pt-2">
+                                                                        <div className="truncate text-[12px] font-medium text-text-primary">{card.title}</div>
+                                                                        <div className="mt-0.5 text-[10px] text-text-tertiary/75">{formatDateLabel(asset.updatedAt)}</div>
                                                                     </div>
                                                                 </>
                                                             ) : (
@@ -2182,7 +2561,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                         {assetKind === 'image' ? (
                                                                             <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
                                                                         ) : assetKind === 'video' ? (
-                                                                            <video src={previewSrc} className="h-full w-full object-cover" muted playsInline />
+                                                                            <video
+                                                                                src={previewSrc}
+                                                                                className="h-full w-full object-cover bg-black"
+                                                                                muted
+                                                                                playsInline
+                                                                                preload="metadata"
+                                                                                onLoadedData={(event) => {
+                                                                                    try {
+                                                                                        if (event.currentTarget.currentTime < 0.05) {
+                                                                                            event.currentTarget.currentTime = 0.05;
+                                                                                        }
+                                                                                    } catch {
+                                                                                        // ignore preview seek failures
+                                                                                    }
+                                                                                }}
+                                                                            />
                                                                         ) : (
                                                                             <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#10253f,#315e8f)] text-white">
                                                                                 <AudioLines className="h-5 w-5" />
@@ -2191,19 +2585,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                     </div>
                                                                     <div className="min-w-0 flex-1">
                                                                         <div className="truncate text-sm font-medium text-text-primary">{card.title}</div>
-                                                                        <div className="mt-1 truncate text-xs text-text-tertiary">{card.summary || asset.relativePath || ''}</div>
+                                                                        <div className="mt-1 truncate text-[11px] text-text-tertiary">{formatDateLabel(asset.updatedAt)}</div>
                                                                     </div>
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </button>
-                                                    <div className={clsx('mt-3 flex items-center justify-between gap-2', layout === 'gallery' ? 'px-1' : '')}>
-                                                        <div className="text-xs text-text-tertiary">{formatDateLabel(asset.updatedAt)}</div>
-                                                        <div className="flex items-center gap-2">
-                                                            <button type="button" onClick={() => void openAssetExternally(asset.id)} className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-secondary hover:text-text-primary">打开</button>
-                                                            <button type="button" onClick={() => void handleDeleteAsset(asset.id)} disabled={isBusy} className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-secondary hover:text-red-600 disabled:opacity-50">删除</button>
-                                                        </div>
-                                                    </div>
                                                 </div>
                                             );
                                         })}
@@ -2711,18 +3098,18 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
             {createOpen && (
                 <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setCreateOpen(false)}>
-                    <div className="w-full max-w-3xl rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                    <div className="w-full max-w-[980px] rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
                         <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
                             <div>
                                 <h2 className="text-lg font-semibold text-text-primary">新建内容</h2>
-                                <p className="mt-1 text-sm text-text-secondary">像在线 Office 一样，先选择要创建的内容类型。</p>
+                                <p className="mt-1 text-sm text-text-secondary">选择要创建的稿件类型。</p>
                             </div>
                             <button type="button" onClick={() => !isCreating && setCreateOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
                         <div className="px-6 py-6 space-y-6">
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                                 {CREATE_KIND_OPTIONS.map((option) => {
                                     const Icon = option.icon;
                                     const isActiveOption = createKind === option.id;
@@ -2747,40 +3134,268 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     );
                                 })}
                             </div>
-
-                            {createKind === 'folder' ? (
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-text-primary">名称</label>
-                                    <input
-                                        autoFocus
-                                        value={createTitle}
-                                        onChange={(event) => setCreateTitle(event.target.value)}
-                                        onKeyDown={(event) => {
-                                            if (event.key === 'Enter' && !isCreating) {
-                                                event.preventDefault();
-                                                void handleCreate();
-                                            }
-                                        }}
-                                        placeholder="输入文件夹名称"
-                                        className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                    <p className="text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</p>
-                                </div>
-                            ) : (
-                                <div className="rounded-2xl border border-border bg-surface-secondary/20 px-4 py-4">
-                                    <div className="text-sm font-medium text-text-primary">草稿标题</div>
-                                    <div className="mt-1 text-sm text-text-secondary">创建后默认标题为“未命名”，后续在稿件内部随时修改。</div>
-                                    <div className="mt-2 text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</div>
-                                </div>
-                            )}
+                            <div className="rounded-2xl border border-border bg-surface-secondary/20 px-4 py-4">
+                                <div className="text-sm font-medium text-text-primary">草稿标题</div>
+                                <div className="mt-1 text-sm text-text-secondary">创建后默认标题为“未命名”，后续在稿件内部随时修改。</div>
+                                <div className="mt-2 text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</div>
+                            </div>
                         </div>
                         <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
                             <button type="button" onClick={() => setCreateOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
-                            <button type="button" onClick={() => void handleCreate()} disabled={isCreating || (createKind === 'folder' && !createTitle.trim())} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
-                                {isCreating ? '创建中...' : createKind === 'folder' ? '创建文件夹' : '创建草稿'}
+                            <button type="button" onClick={() => void handleCreateDraft()} disabled={isCreating} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
+                                {isCreating ? '创建中...' : '创建草稿'}
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {folderCreateOpen && (
+                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setFolderCreateOpen(false)}>
+                    <div className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">新建文件夹</h2>
+                                <p className="mt-1 text-sm text-text-secondary">输入文件夹名称即可。</p>
+                            </div>
+                            <button type="button" onClick={() => !isCreating && setFolderCreateOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-6 space-y-3">
+                            <label className="text-sm font-medium text-text-primary">名称</label>
+                            <input
+                                autoFocus
+                                value={folderCreateTitle}
+                                onChange={(event) => setFolderCreateTitle(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter' && !isCreating) {
+                                        event.preventDefault();
+                                        void handleCreateFolder();
+                                    }
+                                }}
+                                placeholder="输入文件夹名称"
+                                className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
+                            />
+                            <p className="text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</p>
+                        </div>
+                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
+                            <button type="button" onClick={() => setFolderCreateOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
+                            <button type="button" onClick={() => void handleCreateFolder()} disabled={isCreating || !folderCreateTitle.trim()} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
+                                {isCreating ? '创建中...' : '创建文件夹'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {folderRenameOpen && (
+                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setFolderRenameOpen(false)}>
+                    <div className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">重命名文件夹</h2>
+                                <p className="mt-1 text-sm text-text-secondary">输入新的文件夹名称。</p>
+                            </div>
+                            <button type="button" onClick={() => !isCreating && setFolderRenameOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-6 space-y-3">
+                            <label className="text-sm font-medium text-text-primary">名称</label>
+                            <input
+                                autoFocus
+                                value={folderRenameTitle}
+                                onChange={(event) => setFolderRenameTitle(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter' && !isCreating) {
+                                        event.preventDefault();
+                                        void handleRenameFolder();
+                                    }
+                                }}
+                                placeholder="输入新的文件夹名称"
+                                className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
+                            />
+                        </div>
+                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
+                            <button type="button" onClick={() => setFolderRenameOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
+                            <button type="button" onClick={() => void handleRenameFolder()} disabled={isCreating || !folderRenameTitle.trim()} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
+                                {isCreating ? '处理中...' : '重命名'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {assetRenameOpen && (
+                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setAssetRenameOpen(false)}>
+                    <div className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">重命名素材</h2>
+                                <p className="mt-1 text-sm text-text-secondary">输入新的素材名称。</p>
+                            </div>
+                            <button type="button" onClick={() => !isCreating && setAssetRenameOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-6 space-y-3">
+                            <label className="text-sm font-medium text-text-primary">名称</label>
+                            <input
+                                autoFocus
+                                value={assetRenameTitle}
+                                onChange={(event) => setAssetRenameTitle(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter' && !isCreating) {
+                                        event.preventDefault();
+                                        void handleRenameAsset();
+                                    }
+                                }}
+                                placeholder="输入新的素材名称"
+                                className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
+                            />
+                        </div>
+                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
+                            <button type="button" onClick={() => setAssetRenameOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
+                            <button type="button" onClick={() => void handleRenameAsset()} disabled={isCreating || !assetRenameTitle.trim()} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
+                                {isCreating ? '处理中...' : '重命名'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {draftRenameOpen && (
+                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setDraftRenameOpen(false)}>
+                    <div className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">重命名稿件</h2>
+                                <p className="mt-1 text-sm text-text-secondary">输入新的稿件或工程名称。</p>
+                            </div>
+                            <button type="button" onClick={() => !isCreating && setDraftRenameOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-6 space-y-3">
+                            <label className="text-sm font-medium text-text-primary">名称</label>
+                            <input
+                                autoFocus
+                                value={draftRenameTitle}
+                                onChange={(event) => setDraftRenameTitle(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter' && !isCreating) {
+                                        event.preventDefault();
+                                        void handleRenameDraft();
+                                    }
+                                }}
+                                placeholder="输入新的名称"
+                                className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
+                            />
+                        </div>
+                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
+                            <button type="button" onClick={() => setDraftRenameOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
+                            <button type="button" onClick={() => void handleRenameDraft()} disabled={isCreating || !draftRenameTitle.trim()} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
+                                {isCreating ? '处理中...' : '重命名'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {folderContextMenu.visible && (
+                <div
+                    ref={folderContextMenuRef}
+                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    style={{
+                        left: Math.min(folderContextMenu.x, window.innerWidth - 176),
+                        top: Math.min(folderContextMenu.y, window.innerHeight - 132),
+                    }}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setFolderContextMenu((prev) => ({ ...prev, visible: false }));
+                            setFolderRenamePath(folderContextMenu.folderPath);
+                            setFolderRenameTitle(folderContextMenu.folderName);
+                            setFolderRenameOpen(true);
+                        }}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                    >
+                        重命名
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleDeleteFolder(folderContextMenu.folderPath)}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                    >
+                        删除
+                    </button>
+                </div>
+            )}
+
+            {assetContextMenu.visible && (
+                <div
+                    ref={assetContextMenuRef}
+                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    style={{
+                        left: Math.min(assetContextMenu.x, window.innerWidth - 176),
+                        top: Math.min(assetContextMenu.y, window.innerHeight - 132),
+                    }}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setAssetContextMenu((prev) => ({ ...prev, visible: false }));
+                            setAssetRenameId(assetContextMenu.assetId);
+                            setAssetRenameTitle(assetContextMenu.assetTitle);
+                            setAssetRenameOpen(true);
+                        }}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                    >
+                        重命名
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleDeleteAsset(assetContextMenu.assetId)}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                    >
+                        删除
+                    </button>
+                </div>
+            )}
+
+            {draftContextMenu.visible && (
+                <div
+                    ref={draftContextMenuRef}
+                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    style={{
+                        left: Math.min(draftContextMenu.x, window.innerWidth - 176),
+                        top: Math.min(draftContextMenu.y, window.innerHeight - 132),
+                    }}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setDraftContextMenu((prev) => ({ ...prev, visible: false }));
+                            setDraftRenamePath(draftContextMenu.filePath);
+                            setDraftRenameTitle(draftContextMenu.title);
+                            setDraftRenameOpen(true);
+                        }}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                    >
+                        重命名
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setDraftContextMenu((prev) => ({ ...prev, visible: false }));
+                            setPendingDeleteDraftPath(draftContextMenu.filePath);
+                        }}
+                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                    >
+                        删除
+                    </button>
                 </div>
             )}
 

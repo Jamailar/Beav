@@ -32,8 +32,8 @@ use commands::chat_state::{
 };
 use events::{
     emit_creative_chat_checkpoint, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
-    emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
-    emit_runtime_tool_result, split_stream_chunks,
+    emit_runtime_task_node_changed, emit_runtime_text_delta, emit_runtime_tool_partial,
+    emit_runtime_tool_request, emit_runtime_tool_result, split_stream_chunks,
 };
 use persistence::{
     build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_knowledge,
@@ -594,6 +594,7 @@ struct EditorRuntimeStateRecord {
     session_id: Option<String>,
     playhead_seconds: f64,
     selected_clip_id: Option<String>,
+    active_track_id: Option<String>,
     selected_scene_id: Option<String>,
     preview_tab: Option<String>,
     canvas_ratio_preset: Option<String>,
@@ -608,6 +609,8 @@ struct EditorRuntimeStateRecord {
     track_ui: Option<Value>,
     viewport_scroll_left: f64,
     viewport_max_scroll_left: f64,
+    viewport_scroll_top: f64,
+    viewport_max_scroll_top: f64,
     timeline_zoom_percent: f64,
     updated_at: u128,
 }
@@ -5549,6 +5552,10 @@ fn main() {
             let state = app.state::<AppState>();
             if let Err(error) = ensure_redclaw_profile_files(&state) {
                 eprintln!("[RedBox redclaw profile init] {error}");
+            }
+            if let Err(error) = commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state)
+            {
+                eprintln!("[RedBox redclaw runtime restore] {error}");
             }
             if let Err(error) =
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])

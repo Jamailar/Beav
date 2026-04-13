@@ -152,6 +152,7 @@ pub struct RedclawJobExecutionRecord {
     pub cancel_requested_at: Option<String>,
     pub cancel_reason: Option<String>,
     pub dead_lettered_at: Option<String>,
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -482,7 +483,8 @@ pub struct RuntimeWarmState {
 
 pub struct RedclawRuntime {
     pub stop: Arc<AtomicBool>,
-    pub join: Option<JoinHandle<()>>,
+    pub scheduler_join: Option<JoinHandle<()>>,
+    pub runner_join: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]

@@ -234,11 +234,22 @@ fn create_execution_record(
         cancel_requested_at: None,
         cancel_reason: None,
         dead_lettered_at: None,
+        archived_at: None,
         created_at: now.to_string(),
         updated_at: now.to_string(),
     };
     append_execution_turn(&mut execution, now, "system", "Execution queued");
     execution
+}
+
+fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecutionRecord) {
+    if store
+        .redclaw_job_executions
+        .iter()
+        .any(|item| item.id == execution.id)
+    {
+        execution.id = format!("{}-{}", execution.id, store.redclaw_job_executions.len() + 1);
+    }
 }
 
 pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String> {
@@ -267,6 +278,8 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
                 "sourceTaskId": definition.source_task_id,
             })),
         );
+        let mut execution = execution;
+        ensure_unique_execution_id(store, &mut execution);
         let execution_id = execution.id.clone();
         if let Some(current_definition) = store
             .redclaw_job_definitions
@@ -361,6 +374,8 @@ pub fn enqueue_manual_job_execution_for_source(
             "sourceTaskId": definition.source_task_id,
         })),
     );
+    let mut execution = execution;
+    ensure_unique_execution_id(store, &mut execution);
     let execution_id = execution.id.clone();
     store.redclaw_job_executions.push(execution);
     if let Some(current_definition) = store
@@ -766,9 +781,113 @@ pub fn cancel_job_execution(
     None
 }
 
+fn find_execution_definition_id(store: &AppStore, task_id: &str) -> Option<String> {
+    if let Some(execution) = store.redclaw_job_executions.iter().find(|item| {
+        item.id == task_id || item.definition_id == task_id
+    }) {
+        return Some(execution.definition_id.clone());
+    }
+    store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| {
+            item.id == task_id || item.source_task_id.as_deref() == Some(task_id)
+        })
+        .map(|item| item.id.clone())
+}
+
+pub fn retry_job_execution(store: &mut AppStore, task_id: &str) -> Result<(String, String), String> {
+    let definition_id = find_execution_definition_id(store, task_id)
+        .ok_or_else(|| "任务执行实例不存在".to_string())?;
+    if active_execution_exists(store, &definition_id) {
+        return Err("任务已有执行实例".to_string());
+    }
+    let definition = store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| item.id == definition_id)
+        .cloned()
+        .ok_or_else(|| "任务定义不存在".to_string())?;
+    let now_iso = now_iso();
+    let execution = create_execution_record(
+        &definition,
+        &now_iso,
+        Some(json!({
+            "trigger": "retry",
+            "definitionId": definition.id,
+            "prompt": definition_prompt(&definition),
+            "sourceKind": definition.source_kind,
+            "sourceTaskId": definition.source_task_id,
+            "retryOf": task_id,
+        })),
+    );
+    let mut execution = execution;
+    ensure_unique_execution_id(store, &mut execution);
+    let execution_id = execution.id.clone();
+    store.redclaw_job_executions.push(execution);
+    if let Some(current_definition) = store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| item.id == definition.id)
+    {
+        current_definition.last_enqueued_at = Some(now_iso.clone());
+        current_definition.updated_at = now_iso;
+    }
+    Ok((execution_id, definition.id))
+}
+
+pub fn archive_job_execution(store: &mut AppStore, task_id: &str) -> Result<String, String> {
+    let now_iso = now_iso();
+    let execution = store
+        .redclaw_job_executions
+        .iter_mut()
+        .find(|item| {
+            item.id == task_id
+                || item.definition_id == task_id
+                || item
+                    .input_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.get("sourceTaskId"))
+                    .and_then(Value::as_str)
+                    == Some(task_id)
+        })
+        .ok_or_else(|| "任务执行实例不存在".to_string())?;
+    if is_active_execution_status(&execution.status) {
+        return Err("运行中的执行实例不能归档".to_string());
+    }
+    execution.archived_at = Some(now_iso.clone());
+    execution.updated_at = now_iso;
+    Ok(execution.id.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::default_store;
+    use crate::runtime::RedclawScheduledTaskRecord;
+    use crate::scheduler::{derived_background_tasks, sync_redclaw_job_definitions};
+
+    fn seed_scheduled_definition(store: &mut AppStore) {
+        store.redclaw_state.scheduled_tasks.push(RedclawScheduledTaskRecord {
+            id: "scheduled-1".to_string(),
+            name: "Retry me".to_string(),
+            enabled: true,
+            mode: "interval".to_string(),
+            prompt: "hello".to_string(),
+            project_id: Some("project-1".to_string()),
+            interval_minutes: Some(15),
+            time: None,
+            weekdays: None,
+            run_at: None,
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            last_run_at: None,
+            last_result: None,
+            last_error: None,
+            next_run_at: Some("1".to_string()),
+        });
+        sync_redclaw_job_definitions(store);
+    }
 
     #[test]
     fn execution_transition_matrix_rejects_invalid_edges() {
@@ -783,5 +902,86 @@ mod tests {
         assert_eq!(background_status("queued"), "running");
         assert_eq!(background_status("succeeded"), "completed");
         assert_eq!(background_status("dead_lettered"), "failed");
+    }
+
+    #[test]
+    fn retry_job_execution_enqueues_new_execution() {
+        let mut store = default_store();
+        seed_scheduled_definition(&mut store);
+        let original_execution_id = enqueue_manual_job_execution_for_source(
+            &mut store,
+            "scheduled",
+            "scheduled-1",
+            "manual",
+        )
+        .expect("seed execution");
+        let original_execution = store
+            .redclaw_job_executions
+            .iter_mut()
+            .find(|item| item.id == original_execution_id)
+            .expect("original execution exists");
+        original_execution.status = "failed".to_string();
+        original_execution.completed_at = Some("2".to_string());
+
+        let (retry_execution_id, definition_id) =
+            retry_job_execution(&mut store, &original_execution_id).expect("retry execution");
+
+        assert_ne!(retry_execution_id, original_execution_id);
+        assert_eq!(store.redclaw_job_executions.len(), 2);
+        assert_eq!(
+            store
+                .redclaw_job_executions
+                .iter()
+                .find(|item| item.id == retry_execution_id)
+                .map(|item| item.status.as_str()),
+            Some("queued")
+        );
+        assert_eq!(
+            store
+                .redclaw_job_executions
+                .iter()
+                .find(|item| item.id == retry_execution_id)
+                .map(|item| item.definition_id.as_str()),
+            Some(definition_id.as_str())
+        );
+    }
+
+    #[test]
+    fn archive_job_execution_hides_terminal_execution_from_background_snapshot() {
+        let mut store = default_store();
+        seed_scheduled_definition(&mut store);
+        let execution_id = enqueue_manual_job_execution_for_source(
+            &mut store,
+            "scheduled",
+            "scheduled-1",
+            "manual",
+        )
+        .expect("seed execution");
+        let execution = store
+            .redclaw_job_executions
+            .iter_mut()
+            .find(|item| item.id == execution_id)
+            .expect("execution exists");
+        execution.status = "dead_lettered".to_string();
+        execution.completed_at = Some("2".to_string());
+        execution.dead_lettered_at = Some("2".to_string());
+
+        let archived_execution_id =
+            archive_job_execution(&mut store, &execution_id).expect("archive execution");
+        let tasks = derived_background_tasks(&store);
+
+        assert_eq!(archived_execution_id, execution_id);
+        assert_eq!(
+            store
+                .redclaw_job_executions
+                .iter()
+                .find(|item| item.id == execution_id)
+                .and_then(|item| item.archived_at.as_deref())
+                .is_some(),
+            true
+        );
+        assert!(tasks
+            .iter()
+            .all(|item| item.get("executionId").and_then(|value| value.as_str()) != Some(execution_id.as_str())));
     }
 }

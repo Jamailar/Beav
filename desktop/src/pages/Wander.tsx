@@ -466,42 +466,6 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
   }, [isActive, syncWanderModeSetting]);
 
   useEffect(() => {
-    const handleWanderProgress = (_event: unknown, payload?: unknown) => {
-      const data = (payload || {}) as Record<string, unknown>;
-      const requestId = String(data.requestId || '').trim();
-      if (activeRequestIdRef.current && requestId && requestId !== activeRequestIdRef.current) {
-        return;
-      }
-      const status = String(data.status || '').trim();
-      if (status) {
-        setLiveStatus(toStableTwoLineText(status));
-      }
-      const phase = String(data.phase || '').trim();
-      const title = String(data.title || '').trim();
-      const detail = String(data.detail || status || '').trim();
-      const cardStatus = String(data.status || '').trim();
-      const sessionId = String(data.sessionId || '').trim();
-      if (sessionId) {
-        activeSessionIdRef.current = sessionId;
-      }
-      if (phase && title) {
-        upsertProgressCard({
-          phase,
-          title,
-          detail,
-          status: cardStatus === 'completed' ? 'completed' : cardStatus === 'error' ? 'error' : 'running',
-          stepIndex: Number.isFinite(Number(data.stepIndex)) ? Number(data.stepIndex) : undefined,
-          totalSteps: Number.isFinite(Number(data.totalSteps)) ? Number(data.totalSteps) : undefined,
-        });
-      }
-    };
-    window.ipcRenderer.on('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
-    return () => {
-      window.ipcRenderer.off('wander:progress', handleWanderProgress as (...args: unknown[]) => void);
-    };
-  }, [upsertProgressCard]);
-
-  useEffect(() => {
     const handleWanderResult = (_event: unknown, payload?: unknown) => {
       const data = (payload || {}) as Record<string, unknown>;
       const requestId = String(data.requestId || '').trim();
@@ -640,10 +604,12 @@ export function Wander({ isActive = true, onNavigateToManuscript, onNavigateToRe
         handleToolEnd({ sessionId, output });
       },
       onTaskNodeChanged: ({ nodeId, status, summary, error }) => {
+        const detail = error || summary || `节点状态：${status || 'unknown'}`;
+        setLiveStatus(toStableTwoLineText(detail));
         upsertProgressCard({
           phase: `task-node-${nodeId}`,
           title: `任务节点 · ${nodeId}`,
-          detail: error || summary || `节点状态：${status || 'unknown'}`,
+          detail,
           status: status === 'failed' ? 'error' : status === 'completed' ? 'completed' : 'running',
           stepIndex: undefined,
           totalSteps: undefined,

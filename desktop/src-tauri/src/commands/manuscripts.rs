@@ -61,6 +61,7 @@ fn editor_runtime_state_value(
             "sessionId": record.session_id,
             "playheadSeconds": record.playhead_seconds,
             "selectedClipId": record.selected_clip_id,
+            "activeTrackId": record.active_track_id,
             "selectedSceneId": record.selected_scene_id,
             "previewTab": record.preview_tab,
             "canvasRatioPreset": record.canvas_ratio_preset,
@@ -75,6 +76,8 @@ fn editor_runtime_state_value(
             "trackUi": record.track_ui,
             "viewportScrollLeft": record.viewport_scroll_left,
             "viewportMaxScrollLeft": record.viewport_max_scroll_left,
+            "viewportScrollTop": record.viewport_scroll_top,
+            "viewportMaxScrollTop": record.viewport_max_scroll_top,
             "timelineZoomPercent": record.timeline_zoom_percent,
             "updatedAt": record.updated_at,
         }),
@@ -83,6 +86,7 @@ fn editor_runtime_state_value(
             "sessionId": Value::Null,
             "playheadSeconds": 0.0,
             "selectedClipId": Value::Null,
+            "activeTrackId": Value::Null,
             "selectedSceneId": Value::Null,
             "previewTab": Value::Null,
             "canvasRatioPreset": Value::Null,
@@ -97,6 +101,8 @@ fn editor_runtime_state_value(
             "trackUi": Value::Null,
             "viewportScrollLeft": 0.0,
             "viewportMaxScrollLeft": 0.0,
+            "viewportScrollTop": 0.0,
+            "viewportMaxScrollTop": 0.0,
             "timelineZoomPercent": 100.0,
             "updatedAt": now_ms(),
         }),
@@ -548,6 +554,10 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "缺少新名称" }));
                 }
                 let source = resolve_manuscript_path(state, &old_path)?;
+                let source_name = source
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
                 let parent_rel = normalize_relative_path(
                     old_path
                         .rsplit_once('/')
@@ -555,7 +565,21 @@ pub fn handle_manuscripts_channel(
                         .unwrap_or(""),
                 );
                 let mut target_relative = join_relative(&parent_rel, &new_name);
-                if source.is_file() && !target_relative.contains('.') {
+                if !target_relative.contains('.') {
+                    if source_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
+                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), ARTICLE_DRAFT_EXTENSION);
+                    } else if source_name.ends_with(POST_DRAFT_EXTENSION) {
+                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), POST_DRAFT_EXTENSION);
+                    } else if source_name.ends_with(VIDEO_DRAFT_EXTENSION) {
+                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), VIDEO_DRAFT_EXTENSION);
+                    } else if source_name.ends_with(AUDIO_DRAFT_EXTENSION) {
+                        target_relative = format!("{}{}", normalize_relative_path(&target_relative), AUDIO_DRAFT_EXTENSION);
+                    } else if source.is_file() {
+                        target_relative = ensure_markdown_extension(&target_relative);
+                    } else {
+                        target_relative = normalize_relative_path(&target_relative);
+                    }
+                } else if source.is_file() && !source_name.contains('.') {
                     target_relative = ensure_markdown_extension(&target_relative);
                 } else {
                     target_relative = normalize_relative_path(&target_relative);
@@ -633,6 +657,7 @@ pub fn handle_manuscripts_channel(
                             .and_then(|value| value.as_f64())
                             .unwrap_or(0.0),
                         selected_clip_id: payload_string(&payload, "selectedClipId"),
+                        active_track_id: payload_string(&payload, "activeTrackId"),
                         selected_scene_id: payload_string(&payload, "selectedSceneId"),
                         preview_tab: payload_string(&payload, "previewTab"),
                         canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
@@ -651,6 +676,12 @@ pub fn handle_manuscripts_channel(
                             .and_then(|value| value.as_f64())
                             .unwrap_or(0.0),
                         viewport_max_scroll_left: payload_field(&payload, "viewportMaxScrollLeft")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        viewport_scroll_top: payload_field(&payload, "viewportScrollTop")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0),
+                        viewport_max_scroll_top: payload_field(&payload, "viewportMaxScrollTop")
                             .and_then(|value| value.as_f64())
                             .unwrap_or(0.0),
                         timeline_zoom_percent: payload_field(&payload, "timelineZoomPercent")

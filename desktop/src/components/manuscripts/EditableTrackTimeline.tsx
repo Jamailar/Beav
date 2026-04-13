@@ -72,10 +72,11 @@ type EditableTrackTimelineProps = {
     onPackageStateChange?: (state: Record<string, unknown>) => void;
     controlledCursorTime?: number | null;
     controlledSelectedClipId?: string | null;
+    controlledActiveTrackId?: string | null;
     onCursorTimeChange?: (time: number) => void;
     onSelectedClipChange?: (clipId: string | null) => void;
     onActiveTrackChange?: (trackId: string | null) => void;
-    onViewportMetricsChange?: (metrics: { scrollLeft: number; maxScrollLeft: number }) => void;
+    onViewportMetricsChange?: (metrics: VideoEditorViewportMetrics) => void;
     controlledViewport?: VideoEditorViewportMetrics | null;
     controlledZoomPercent?: number | null;
     onZoomPercentChange?: (zoomPercent: number) => void;
@@ -184,11 +185,12 @@ const MIN_IMAGE_CLIP_MS = 500;
 const SCALE_WIDTH = 72;
 const MIN_SCALE_WIDTH = 36;
 const MAX_SCALE_WIDTH = 160;
-const START_LEFT = 188;
-const TIMELINE_HEADER_HEIGHT = 40;
+const TRACK_RAIL_WIDTH = 156;
+const START_LEFT = TRACK_RAIL_WIDTH;
 const TIMELINE_ROW_HEIGHT = 40;
 const CURSOR_TIME_EPSILON = 0.01;
 const SCROLL_LEFT_EPSILON = 0.5;
+const SCROLL_TOP_EPSILON = 0.5;
 const TIMELINE_SNAP_SECONDS = 0.25;
 const TIMELINE_WHEEL_SCROLL_STEP = 1;
 const TIMELINE_WHEEL_ZOOM_STEP = 12;
@@ -235,6 +237,17 @@ const TRACK_DEFINITIONS: Record<TrackKind, {
         accepts: ['default'],
     },
 };
+
+function createDefaultTrackUiState(): VideoEditorTrackUiState {
+    return {
+        locked: false,
+        hidden: false,
+        collapsed: false,
+        muted: false,
+        solo: false,
+        volume: 1,
+    };
+}
 
 function normalizeNumber(input: unknown, fallback = 0): number {
     const value = typeof input === 'number' ? input : Number(input);
@@ -499,9 +512,13 @@ function trackDisplayLabel(trackId: string): string {
     return TRACK_DEFINITIONS[kind].kindLabel;
 }
 
-function trackRowHeight(trackId: string, collapsed = false): number {
+function trackKindRowHeight(kind: TrackKind, collapsed = false): number {
     if (collapsed) return COLLAPSED_TRACK_ROW_HEIGHT;
-    return TRACK_ROW_HEIGHTS[trackIdToKind(trackId)] || TIMELINE_ROW_HEIGHT;
+    return TRACK_ROW_HEIGHTS[kind] || TIMELINE_ROW_HEIGHT;
+}
+
+function trackRowHeight(trackId: string, collapsed = false): number {
+    return trackKindRowHeight(trackIdToKind(trackId), collapsed);
 }
 
 function summarizeClipText(value: unknown, maxLength = 54): string {
@@ -657,6 +674,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     onPackageStateChange,
     controlledCursorTime = null,
     controlledSelectedClipId = null,
+    controlledActiveTrackId = null,
     onCursorTimeChange,
     onSelectedClipChange,
     onActiveTrackChange,
@@ -709,6 +727,8 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     });
     const [viewportWidth, setViewportWidth] = useState(0);
     const [scrollLeft, setScrollLeft] = useState(0);
+    const [scrollTop, setScrollTop] = useState(0);
+    const [maxScrollTop, setMaxScrollTop] = useState(0);
     const [isDraggingAsset, setIsDraggingAsset] = useState(false);
     const [draggingAssetKind, setDraggingAssetKind] = useState<'video' | 'audio' | 'image' | 'default' | null>(null);
     const [dropIndicator, setDropIndicator] = useState<DropIndicatorState | null>(null);
@@ -836,6 +856,13 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     }, [controlledTrackUi]);
 
     useEffect(() => {
+        const nextTrackId = String(controlledActiveTrackId || '').trim();
+        if (!nextTrackId) return;
+        if (!editorRows.some((row) => row.id === nextTrackId)) return;
+        setFocusedTrackId((current) => current === nextTrackId ? current : nextTrackId);
+    }, [controlledActiveTrackId, editorRows]);
+
+    useEffect(() => {
         if (!focusedTrackId) return;
         if (editorRows.some((row) => row.id === focusedTrackId)) return;
         setFocusedTrackId(null);
@@ -945,16 +972,31 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         },
     }), [commitCursorTime]);
 
-    const focusTrack = useCallback((trackId: string | null, options?: { clearClipSelection?: boolean }) => {
+    const focusTrack = useCallback((
+        trackId: string | null,
+        options?: { clearClipSelection?: boolean; selectTrack?: boolean; additive?: boolean }
+    ) => {
         const nextTrackId = String(trackId || '').trim();
         if (!nextTrackId) return;
         if (!editorRows.some((row) => row.id === nextTrackId)) return;
-        setFocusedTrackId(nextTrackId);
+        if (options?.selectTrack) {
+            const nextTrackIds = options.additive
+                ? (
+                    selectedTrackIdSet.has(nextTrackId)
+                        ? effectiveSelectedTrackIds.filter((id) => id !== nextTrackId)
+                        : [...effectiveSelectedTrackIds, nextTrackId]
+                )
+                : [nextTrackId];
+            applyTrackSelectionState(nextTrackIds, nextTrackId);
+        } else {
+            setFocusedTrackId(nextTrackId);
+        }
         if (options?.clearClipSelection) {
             clearSelectionState();
         }
         setContextMenu(null);
-    }, [clearSelectionState, editorRows]);
+        setTrackContextMenu(null);
+    }, [applyTrackSelectionState, clearSelectionState, editorRows, effectiveSelectedTrackIds, selectedTrackIdSet]);
 
     const findCompatibleTrackId = useCallback((
         kind: TrackKind,
@@ -978,34 +1020,81 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         return compatibleTrackIds[compatibleTrackIds.length - 1] || null;
     }, [activeTrackId, editorRows, lockedTrackIds]);
 
+    const canDeleteTrack = useCallback((trackId: string | null) => {
+        const normalizedTrackId = String(trackId || '').trim();
+        if (!normalizedTrackId) return false;
+        const row = editorRows.find((item) => item.id === normalizedTrackId);
+        if (!row) return false;
+        const trackKind = trackIdToKind(normalizedTrackId);
+        return editorRows.filter((item) => trackIdToKind(item.id) === trackKind).length > 1;
+    }, [editorRows]);
+
+    const createTrackOfKind = useCallback(async (
+        kind: TrackKind,
+        options?: { adjacentToTrackId?: string | null; direction?: 'up' | 'down'; focus?: boolean }
+    ) => {
+        if (!filePath) return null;
+        const adjacentToTrackId = String(options?.adjacentToTrackId || '').trim();
+        const direction = options?.direction || 'down';
+        const shouldFocus = options?.focus !== false;
+        const addResult = await window.ipcRenderer.invoke('manuscripts:add-package-track', {
+            filePath,
+            kind,
+        }) as { success?: boolean; state?: Record<string, unknown> };
+        if (!addResult?.success || !addResult.state) {
+            return null;
+        }
+
+        let latestState = addResult.state;
+        const nextTrackNames = (
+            (addResult.state as { timelineSummary?: { trackNames?: string[] } })?.timelineSummary?.trackNames || []
+        )
+            .map((item) => String(item || '').trim())
+            .filter(Boolean);
+
+        const createdTrackId = [...nextTrackNames]
+            .reverse()
+            .find((trackId) => trackIdToKind(trackId) === kind) || null;
+        if (!createdTrackId) {
+            onPackageStateChange?.(latestState);
+            return null;
+        }
+
+        if (adjacentToTrackId) {
+            const anchorIndex = nextTrackNames.indexOf(adjacentToTrackId);
+            const createdIndex = nextTrackNames.indexOf(createdTrackId);
+            if (anchorIndex >= 0 && createdIndex >= 0) {
+                const desiredIndex = direction === 'up' ? anchorIndex : anchorIndex + 1;
+                let remainingSteps = Math.max(0, createdIndex - desiredIndex);
+                while (remainingSteps > 0) {
+                    const moveResult = await window.ipcRenderer.invoke('manuscripts:move-package-track', {
+                        filePath,
+                        trackId: createdTrackId,
+                        direction: 'up',
+                    }) as { success?: boolean; state?: Record<string, unknown> };
+                    if (moveResult?.success && moveResult.state) {
+                        latestState = moveResult.state;
+                    }
+                    remainingSteps -= 1;
+                }
+            }
+        }
+
+        if (shouldFocus) {
+            setFocusedTrackId(createdTrackId);
+        }
+        onPackageStateChange?.(latestState);
+        return createdTrackId;
+    }, [filePath, onPackageStateChange]);
+
     const ensureTrackIdForKind = useCallback(async (
         kind: TrackKind,
         options?: { preferredTrackId?: string | null; fallbackTrackId?: string | null }
     ) => {
         const existingTrackId = findCompatibleTrackId(kind, options);
         if (existingTrackId) return existingTrackId;
-        if (!filePath) return null;
-        const result = await window.ipcRenderer.invoke('manuscripts:add-package-track', {
-            filePath,
-            kind,
-        }) as { success?: boolean; state?: Record<string, unknown> };
-        if (result?.success && result.state) {
-            onPackageStateChange?.(result.state);
-            const nextTrackNames = (
-                (result.state as { timelineSummary?: { trackNames?: string[] } })?.timelineSummary?.trackNames || []
-            )
-                .map((item) => String(item || '').trim())
-                .filter(Boolean);
-            const createdTrackId = [...nextTrackNames]
-                .reverse()
-                .find((trackId) => trackIdToKind(trackId) === kind) || null;
-            if (createdTrackId) {
-                setFocusedTrackId(createdTrackId);
-            }
-            return createdTrackId;
-        }
-        return null;
-    }, [filePath, findCompatibleTrackId, onPackageStateChange]);
+        return createTrackOfKind(kind);
+    }, [createTrackOfKind, findCompatibleTrackId]);
 
     const persistRows = useCallback(async (rowsToPersist: TimelineRowShape[]) => {
         if (!filePath) return;
@@ -1064,30 +1153,13 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         captureUndoSnapshot();
         setIsPersisting(true);
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:add-package-track', {
-                filePath,
-                kind,
-            }) as { success?: boolean; state?: Record<string, unknown> };
-            if (result?.success && result.state) {
-                const nextTrackNames = (
-                    (result.state as { timelineSummary?: { trackNames?: string[] } })?.timelineSummary?.trackNames || []
-                )
-                    .map((item) => String(item || '').trim())
-                    .filter(Boolean);
-                const createdTrackId = [...nextTrackNames]
-                    .reverse()
-                    .find((trackId) => trackIdToKind(trackId) === kind) || null;
-                if (createdTrackId) {
-                    setFocusedTrackId(createdTrackId);
-                }
-                onPackageStateChange?.(result.state);
-            }
+            await createTrackOfKind(kind);
         } catch (error) {
             console.error('Failed to add package track:', error);
         } finally {
             setIsPersisting(false);
         }
-    }, [captureUndoSnapshot, filePath, onPackageStateChange]);
+    }, [captureUndoSnapshot, createTrackOfKind, filePath]);
 
     const handleMoveTrack = useCallback(async (trackId: string, direction: 'up' | 'down') => {
         if (!filePath || !trackId) return;
@@ -1108,31 +1180,6 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             setIsPersisting(false);
         }
     }, [filePath, onPackageStateChange]);
-
-    const handleDeleteTrack = useCallback(async (trackId: string) => {
-        if (!filePath || !trackId) return;
-        setIsPersisting(true);
-        try {
-            const result = await window.ipcRenderer.invoke('manuscripts:delete-package-track', {
-                filePath,
-                trackId,
-            }) as { success?: boolean; state?: Record<string, unknown>; error?: string };
-            if (result?.success && result.state) {
-                if (focusedTrackId === trackId) {
-                    setFocusedTrackId(null);
-                }
-                onPackageStateChange?.(result.state);
-                return;
-            }
-            if (result?.error) {
-                console.warn('Failed to delete package track:', result.error);
-            }
-        } catch (error) {
-            console.error('Failed to delete package track:', error);
-        } finally {
-            setIsPersisting(false);
-        }
-    }, [filePath, focusedTrackId, onPackageStateChange]);
 
     const handleClearTrack = useCallback(async (trackId: string) => {
         const normalizedTrackId = String(trackId || '').trim();
@@ -1175,12 +1222,27 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         updateTrackUiMap((current) => {
             const next = { ...current };
             validTrackIds.forEach((trackId) => {
-                const previous = next[trackId] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+                const previous = next[trackId] || createDefaultTrackUiState();
                 next[trackId] = updater(previous);
             });
             return next;
         });
     }, [editorRows, updateTrackUiMap]);
+
+    const removeTrackUiEntries = useCallback((trackIds: string[]) => {
+        const normalizedTrackIds = Array.from(new Set(trackIds.map((trackId) => String(trackId || '').trim()).filter(Boolean)));
+        if (normalizedTrackIds.length === 0) return;
+        updateTrackUiMap((current) => {
+            let changed = false;
+            const next = { ...current };
+            normalizedTrackIds.forEach((trackId) => {
+                if (!Object.prototype.hasOwnProperty.call(next, trackId)) return;
+                delete next[trackId];
+                changed = true;
+            });
+            return changed ? next : current;
+        });
+    }, [updateTrackUiMap]);
 
     const handleClearTracks = useCallback(async (trackIds: string[]) => {
         const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
@@ -1214,34 +1276,77 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         }
     }, [applyTrackSelectionState, captureUndoSnapshot, clearSelectionState, editorRows, filePath, onPackageStateChange]);
 
+    const canDeleteTrackSet = useCallback((trackIds: string[]) => {
+        const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
+        if (validTrackIds.length === 0) return false;
+        const totalByKind = editorRows.reduce<Record<TrackKind, number>>((accumulator, row) => {
+            const kind = trackIdToKind(row.id);
+            accumulator[kind] = (accumulator[kind] || 0) + 1;
+            return accumulator;
+        }, { video: 0, audio: 0, subtitle: 0 });
+        const selectedByKind = validTrackIds.reduce<Record<TrackKind, number>>((accumulator, trackId) => {
+            const kind = trackIdToKind(trackId);
+            accumulator[kind] = (accumulator[kind] || 0) + 1;
+            return accumulator;
+        }, { video: 0, audio: 0, subtitle: 0 });
+        return (Object.keys(selectedByKind) as TrackKind[]).every((kind) => {
+            if (!selectedByKind[kind]) return true;
+            return totalByKind[kind] - selectedByKind[kind] >= 1;
+        });
+    }, [editorRows]);
+
     const handleDeleteTracks = useCallback(async (trackIds: string[]) => {
         const validTrackIds = Array.from(new Set(trackIds)).filter((trackId) => editorRows.some((row) => row.id === trackId));
-        if (!filePath || validTrackIds.length === 0) return;
+        if (!filePath || validTrackIds.length === 0 || !canDeleteTrackSet(validTrackIds)) return;
+        const rowsById = new Map(editorRows.map((row) => [row.id, row]));
+        captureUndoSnapshot();
         setIsPersisting(true);
         try {
             let latestState: Record<string, unknown> | null = null;
             for (const trackId of validTrackIds) {
-                const row = editorRows.find((item) => item.id === trackId);
-                if (!row || row.actions.length > 0) continue;
+                const targetRow = rowsById.get(trackId);
+                if (!targetRow) continue;
+                for (const action of targetRow.actions) {
+                    // eslint-disable-next-line no-await-in-loop
+                    const clipDeleteResult = await window.ipcRenderer.invoke('manuscripts:delete-package-clip', {
+                        filePath,
+                        clipId: action.id,
+                    }) as { success?: boolean; state?: Record<string, unknown> };
+                    if (clipDeleteResult?.success && clipDeleteResult.state) {
+                        latestState = clipDeleteResult.state;
+                    }
+                }
                 // eslint-disable-next-line no-await-in-loop
                 const result = await window.ipcRenderer.invoke('manuscripts:delete-package-track', {
                     filePath,
                     trackId,
-                }) as { success?: boolean; state?: Record<string, unknown> };
+                }) as { success?: boolean; state?: Record<string, unknown>; error?: string };
                 if (result?.success && result.state) {
                     latestState = result.state;
+                    continue;
+                }
+                if (result?.error) {
+                    console.warn('Failed to delete selected track:', result.error);
                 }
             }
             if (latestState) {
+                removeTrackUiEntries(validTrackIds);
                 onPackageStateChange?.(latestState);
                 applyTrackSelectionState([], null);
+                clearSelectionState();
+                setFocusedTrackId(null);
             }
         } catch (error) {
             console.error('Failed to delete selected tracks:', error);
         } finally {
             setIsPersisting(false);
         }
-    }, [applyTrackSelectionState, editorRows, filePath, onPackageStateChange]);
+    }, [applyTrackSelectionState, canDeleteTrackSet, captureUndoSnapshot, clearSelectionState, editorRows, filePath, onPackageStateChange, removeTrackUiEntries]);
+
+    const handleDeleteTrack = useCallback(async (trackId: string) => {
+        if (!trackId || !canDeleteTrack(trackId)) return;
+        await handleDeleteTracks([trackId]);
+    }, [canDeleteTrack, handleDeleteTracks]);
 
     const updateTrackUi = useCallback((
         trackId: string | null,
@@ -1250,7 +1355,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         const normalizedTrackId = String(trackId || '').trim();
         if (!normalizedTrackId) return;
         updateTrackUiMap((current) => {
-            const previous = current[normalizedTrackId] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+            const previous = current[normalizedTrackId] || createDefaultTrackUiState();
             return {
                 ...current,
                 [normalizedTrackId]: updater(previous),
@@ -1288,58 +1393,19 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
     const handleInsertTrackAdjacent = useCallback(async (baseTrackId: string, direction: 'up' | 'down' = 'down') => {
         const normalizedTrackId = String(baseTrackId || '').trim();
         if (!filePath || !normalizedTrackId) return null;
-        const kind = trackIdToKind(normalizedTrackId);
         setIsPersisting(true);
         try {
-            const addResult = await window.ipcRenderer.invoke('manuscripts:add-package-track', {
-                filePath,
-                kind,
-            }) as { success?: boolean; state?: Record<string, unknown> };
-            if (!addResult?.success || !addResult.state) return null;
-
-            let latestState = addResult.state;
-            const nextTrackNames = (
-                (addResult.state as { timelineSummary?: { trackNames?: string[] } })?.timelineSummary?.trackNames || []
-            )
-                .map((item) => String(item || '').trim())
-                .filter(Boolean);
-
-            const createdTrackId = [...nextTrackNames]
-                .reverse()
-                .find((trackId) => trackIdToKind(trackId) === kind) || null;
-            if (!createdTrackId) {
-                onPackageStateChange?.(addResult.state);
-                return null;
-            }
-
-            const currentIndex = nextTrackNames.indexOf(normalizedTrackId);
-            const createdIndex = nextTrackNames.indexOf(createdTrackId);
-            if (currentIndex >= 0 && createdIndex >= 0) {
-                const desiredIndex = direction === 'up' ? currentIndex : currentIndex + 1;
-                let remainingSteps = Math.max(0, createdIndex - desiredIndex);
-                while (remainingSteps > 0) {
-                    const moveResult = await window.ipcRenderer.invoke('manuscripts:move-package-track', {
-                        filePath,
-                        trackId: createdTrackId,
-                        direction: 'up',
-                    }) as { success?: boolean; state?: Record<string, unknown> };
-                    if (moveResult?.success && moveResult.state) {
-                        latestState = moveResult.state;
-                    }
-                    remainingSteps -= 1;
-                }
-            }
-
-            setFocusedTrackId(createdTrackId);
-            onPackageStateChange?.(latestState);
-            return createdTrackId;
+            return await createTrackOfKind(trackIdToKind(normalizedTrackId), {
+                adjacentToTrackId: normalizedTrackId,
+                direction,
+            });
         } catch (error) {
             console.error('Failed to insert adjacent track:', error);
             return null;
         } finally {
             setIsPersisting(false);
         }
-    }, [filePath, onPackageStateChange]);
+    }, [createTrackOfKind, filePath]);
 
     const handleDuplicateTrack = useCallback(async (trackId: string) => {
         const normalizedTrackId = String(trackId || '').trim();
@@ -1861,12 +1927,18 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         const rect = bodyRef.current.getBoundingClientRect();
         const assetPayload = parseAssetPayloadFromDataTransfer(event.dataTransfer);
         const assetTrackKind = assetKindToTrackKind(assetPayload?.kind);
-        const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
-        const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
-        const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || editorRows[0] : editorRows[0];
-        const ensuredTrackId = await ensureTrackIdForKind(assetTrackKind, {
-            preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
-        });
+        const relativeY = event.clientY - rect.top + scrollTop;
+        const hoveredTrack = findTrackSummaryAtRelativeY(relativeY, false);
+        const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || null : null;
+        const virtualPlacement = resolveVirtualTrackPlacement(relativeY, assetTrackKind);
+        const ensuredTrackId = virtualPlacement.shouldCreateTrack
+            ? await createTrackOfKind(assetTrackKind, {
+                adjacentToTrackId: virtualPlacement.anchorTrackId,
+                direction: virtualPlacement.direction,
+            })
+            : await ensureTrackIdForKind(assetTrackKind, {
+                preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
+            });
         const targetTrackId = ensuredTrackId || hoveredRow?.id || null;
         if (!targetTrackId) {
             console.warn('[timeline-drop] could not resolve target track', {
@@ -1883,10 +1955,20 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         }
 
         const relativeX = Math.max(0, event.clientX - rect.left - START_LEFT);
-        const dropTime = Math.max(0, (relativeX + scrollLeft) / scaleWidth);
         const sortedActions = targetRow
             ? [...targetRow.actions].sort((a, b) => a.start - b.start)
             : [];
+        const snapCandidates = [
+            0,
+            effectiveCursorTime,
+            ...sortedActions.flatMap((action) => [Number(action.start || 0), Number(action.end || 0)]),
+        ];
+        const snappedDrop = snapTimeToCandidates(
+            Math.max(0, (relativeX + scrollLeft) / scaleWidth),
+            snapCandidates,
+            Math.max(TIMELINE_SNAP_SECONDS * 0.5, 10 / Math.max(1, scaleWidth))
+        );
+        const dropTime = snappedDrop.time;
         let desiredOrder = sortedActions.length;
         let splitTarget: TimelineActionShape | null = null;
         let splitRatio = 0.5;
@@ -1969,7 +2051,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             offsetTop += height;
             const visualKind = trackIdToVisualKind(row.id);
             const definition = TRACK_DEFINITIONS[visualKind];
-            const ui = effectiveTrackUiMap[row.id] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 };
+            const ui = effectiveTrackUiMap[row.id] || createDefaultTrackUiState();
             const totalDurationSeconds = row.actions.reduce((sum, action) => (
                 sum + Math.max(0, Number(action.end || 0) - Number(action.start || 0))
             ), 0);
@@ -2000,6 +2082,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             .map((trackId) => summaryMap.get(trackId))
             .filter((track): track is NonNullable<typeof track> => !!track);
     }, [effectiveSelectedTrackIds, trackSummaries]);
+    const trackStackBottom = useMemo(
+        () => trackSummaries[trackSummaries.length - 1]
+            ? trackSummaries[trackSummaries.length - 1].top + trackSummaries[trackSummaries.length - 1].height
+            : 0,
+        [trackSummaries]
+    );
     const allSelectedTracksAudio = selectedTrackSummaries.length > 0 && selectedTrackSummaries.every((track) => track.kind === 'audio');
     const selectedTrackBatchLabel = useMemo(() => {
         if (selectedTrackSummaries.length === 0) return null;
@@ -2016,14 +2104,14 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 clipId: action.id,
                 left: START_LEFT + Number(action.start || 0) * scaleWidth - scrollLeft,
                 width: Math.max(24, (Number(action.end || 0) - Number(action.start || 0)) * scaleWidth),
-                top: track.top + 4,
+                top: track.top - scrollTop + 4,
                 height: Math.max(track.collapsed ? 30 : 44, track.height - 8),
                 selected: selectedClipIdSet.has(action.id),
                 action,
                 clip: clipById.get(String(action.id || '').trim()),
             }));
         });
-    }, [clipById, editorRows, scaleWidth, scrollLeft, selectedClipIdSet, trackSummaries]);
+    }, [clipById, editorRows, scaleWidth, scrollLeft, scrollTop, selectedClipIdSet, trackSummaries]);
     useEffect(() => {
         const visibleVideoClips = visualClips.filter(({ clip, width }) => {
             const kind = String(clip?.assetKind || '').trim().toLowerCase();
@@ -2126,14 +2214,14 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             let targetRowId = clipInteraction.rowId;
             if (clipInteraction.mode === 'move' && bodyRef.current) {
                 const rect = bodyRef.current.getBoundingClientRect();
-                const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
+                const relativeY = event.clientY - rect.top + scrollTop;
                 const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
                 const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || null : null;
                 if (hoveredRow && !lockedTrackIds.includes(hoveredRow.id) && trackIdToKind(hoveredRow.id) === sourceTrackKind) {
                     targetRowId = hoveredRow.id;
                 }
             }
-            const guideTop = trackSummaries.find((track) => track.id === targetRowId)?.top ?? 0;
+            const guideTop = (trackSummaries.find((track) => track.id === targetRowId)?.top ?? 0) - scrollTop;
             const guideHeight = trackSummaries.find((track) => track.id === targetRowId)?.height ?? TIMELINE_ROW_HEIGHT;
 
             if (clipInteraction.mode === 'move') {
@@ -2258,7 +2346,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             window.removeEventListener('pointerup', handlePointerUp);
             window.removeEventListener('pointercancel', handlePointerUp);
         };
-    }, [clipById, clipInteraction, effectiveCursorTime, editorRows, lockedTrackIds, pushUndoSnapshot, scaleWidth, scrollLeft, trackSummaries, updateRowActions]);
+    }, [clipById, clipInteraction, effectiveCursorTime, editorRows, lockedTrackIds, pushUndoSnapshot, scaleWidth, scrollLeft, scrollTop, trackSummaries, updateRowActions]);
 
     useEffect(() => {
         if (!trackReorder) return;
@@ -2318,8 +2406,55 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         return trackSummaries.find((track) => track.id === activeTrackId) || null;
     }, [activeTrackId, trackSummaries]);
 
-    function findTrackSummaryAtRelativeY(relativeY: number) {
-        return trackSummaries.find((track) => relativeY >= track.top && relativeY < track.top + track.height) || trackSummaries[trackSummaries.length - 1] || null;
+    function findTrackSummaryAtRelativeY(relativeY: number, clampToEdge = true) {
+        const exactTrack = trackSummaries.find((track) => relativeY >= track.top && relativeY < track.top + track.height) || null;
+        if (exactTrack || !clampToEdge) {
+            return exactTrack;
+        }
+        if (relativeY < 0) {
+            return trackSummaries[0] || null;
+        }
+        return trackSummaries[trackSummaries.length - 1] || null;
+    }
+
+    function resolveVirtualTrackPlacement(relativeY: number, kind: TrackKind) {
+        if (trackSummaries.length === 0) {
+            return {
+                shouldCreateTrack: true,
+                direction: 'down' as const,
+                anchorTrackId: null,
+                virtualTop: 0,
+                virtualHeight: trackKindRowHeight(kind),
+            };
+        }
+
+        if (relativeY < 0) {
+            return {
+                shouldCreateTrack: true,
+                direction: 'up' as const,
+                anchorTrackId: trackSummaries[0]?.id || null,
+                virtualTop: 0,
+                virtualHeight: trackKindRowHeight(kind),
+            };
+        }
+
+        if (relativeY >= trackStackBottom) {
+            return {
+                shouldCreateTrack: true,
+                direction: 'down' as const,
+                anchorTrackId: trackSummaries[trackSummaries.length - 1]?.id || null,
+                virtualTop: trackStackBottom,
+                virtualHeight: trackKindRowHeight(kind),
+            };
+        }
+
+        return {
+            shouldCreateTrack: false,
+            direction: 'down' as const,
+            anchorTrackId: null,
+            virtualTop: 0,
+            virtualHeight: trackKindRowHeight(kind),
+        };
     }
 
     useEffect(() => {
@@ -2362,6 +2497,14 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             Math.abs(current - safeLeft) < SCROLL_LEFT_EPSILON ? current : safeLeft
         ));
     }, [maxScrollLeft]);
+
+    const syncTimelineScrollTop = useCallback((nextTop: number) => {
+        const safeTop = clampNumber(nextTop, 0, maxScrollTop);
+        timelineRef.current?.setScrollTop(safeTop);
+        setScrollTop((current) => (
+            Math.abs(current - safeTop) < SCROLL_TOP_EPSILON ? current : safeTop
+        ));
+    }, [maxScrollTop]);
 
     const applyTimelineScale = useCallback((
         nextScaleWidth: number,
@@ -2476,19 +2619,26 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             return;
         }
 
-        const primaryDelta = Math.abs(normalizedDeltaX) > Math.abs(normalizedDeltaY)
+        const verticalDelta = Math.abs(normalizedDeltaY) >= TIMELINE_WHEEL_SCROLL_STEP
+            ? normalizedDeltaY
+            : normalizedDeltaX;
+        const horizontalDelta = Math.abs(normalizedDeltaX) >= TIMELINE_WHEEL_SCROLL_STEP
             ? normalizedDeltaX
             : normalizedDeltaY;
-        if (Math.abs(primaryDelta) < TIMELINE_WHEEL_SCROLL_STEP && !event.shiftKey) {
+        if (!event.shiftKey && Math.abs(verticalDelta) < TIMELINE_WHEEL_SCROLL_STEP) {
+            return;
+        }
+        if (event.shiftKey && Math.abs(horizontalDelta) < TIMELINE_WHEEL_SCROLL_STEP) {
             return;
         }
 
         event.preventDefault();
-        const scrollDelta = event.shiftKey && Math.abs(normalizedDeltaX) < Math.abs(normalizedDeltaY)
-            ? normalizedDeltaY
-            : primaryDelta;
-        syncTimelineScrollLeft(scrollLeft + scrollDelta);
-    }, [scrollLeft, syncTimelineScrollLeft, viewportWidth, zoomInTimeline, zoomOutTimeline]);
+        if (event.shiftKey) {
+            syncTimelineScrollLeft(scrollLeft + horizontalDelta);
+            return;
+        }
+        syncTimelineScrollTop(scrollTop + verticalDelta);
+    }, [scrollLeft, scrollTop, syncTimelineScrollLeft, syncTimelineScrollTop, viewportWidth, zoomInTimeline, zoomOutTimeline]);
 
     const selectAllClips = useCallback(() => {
         const allIds = editorRows.flatMap((row) => row.actions.map((action) => action.id));
@@ -2700,19 +2850,35 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
         const update = () => {
             const width = bodyRef.current?.clientWidth || 0;
             setViewportWidth(width);
+            const grid = bodyRef.current?.querySelector('.ReactVirtualized__Grid') as HTMLElement | null;
+            if (grid) {
+                const nextMaxScrollTop = Math.max(0, grid.scrollHeight - grid.clientHeight);
+                const nextSafeScrollTop = clampNumber(grid.scrollTop, 0, nextMaxScrollTop);
+                setMaxScrollTop((current) => (
+                    Math.abs(current - nextMaxScrollTop) < SCROLL_TOP_EPSILON ? current : nextMaxScrollTop
+                ));
+                if (Math.abs(grid.scrollTop - nextSafeScrollTop) >= SCROLL_TOP_EPSILON) {
+                    timelineRef.current?.setScrollTop(nextSafeScrollTop);
+                }
+                setScrollTop((current) => (
+                    Math.abs(current - nextSafeScrollTop) < SCROLL_TOP_EPSILON ? current : nextSafeScrollTop
+                ));
+            }
         };
         update();
         const observer = new ResizeObserver(() => update());
         observer.observe(bodyRef.current);
         return () => observer.disconnect();
-    }, []);
+    }, [editorRows]);
 
     useEffect(() => {
         onViewportMetricsChange?.({
             scrollLeft,
             maxScrollLeft,
+            scrollTop,
+            maxScrollTop,
         });
-    }, [maxScrollLeft, onViewportMetricsChange, scrollLeft]);
+    }, [maxScrollLeft, maxScrollTop, onViewportMetricsChange, scrollLeft, scrollTop]);
 
     useEffect(() => {
         const nextZoom = Number(controlledZoomPercent);
@@ -2734,6 +2900,16 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
             Math.abs(current - safeLeft) < SCROLL_LEFT_EPSILON ? current : safeLeft
         ));
     }, [controlledViewport?.scrollLeft, maxScrollLeft]);
+
+    useEffect(() => {
+        const nextScrollTop = Number(controlledViewport?.scrollTop);
+        if (!Number.isFinite(nextScrollTop)) return;
+        const safeTop = clampNumber(nextScrollTop, 0, maxScrollTop);
+        timelineRef.current?.setScrollTop(safeTop);
+        setScrollTop((current) => (
+            Math.abs(current - safeTop) < SCROLL_TOP_EPSILON ? current : safeTop
+        ));
+    }, [controlledViewport?.scrollTop, maxScrollTop]);
 
     return (
         <div
@@ -2812,6 +2988,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         void handleDeleteTrack(activeTrackId);
                     }
                 }}
+                onToggleTrackVisibility={() => toggleTrackHidden(activeTrackId)}
                 onToggleTrackLock={() => toggleTrackLock(activeTrackId)}
                 onToggleTrackMute={() => toggleTrackMuted(activeTrackId)}
                 onToggleLayerVisibility={() => {
@@ -2849,7 +3026,9 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 selectionNavDisabled={!selectedClipAction}
                 moveSelectionTrackDisabled={!selectedClipAction || effectiveSelectedClipIds.length > 1 || !selectedTrackId}
                 moveTrackDisabled={!activeTrackSummary || isPersisting}
-                deleteTrackDisabled={!activeTrackSummary || activeTrackSummary.clipCount > 0 || isPersisting}
+                deleteTrackDisabled={!activeTrackSummary || !canDeleteTrack(activeTrackSummary.id) || isPersisting}
+                trackVisibilityDisabled={!activeTrackSummary}
+                trackVisibilityLabel={activeTrackSummary?.hidden ? '显示轨道' : '隐藏轨道'}
                 trackLockDisabled={!activeTrackSummary}
                 trackLockLabel={activeTrackLocked ? '解锁轨道' : '锁定轨道'}
                 trackMuteDisabled={!activeTrackSummary || activeTrackSummary.kind !== 'audio'}
@@ -2884,28 +3063,34 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                     const rect = bodyRef.current.getBoundingClientRect();
                     const assetPayload = parseAssetPayloadFromDataTransfer(event.dataTransfer);
                     setDraggingAssetKind(assetPayload?.kind || null);
-                    const relativeY = event.clientY - rect.top - TIMELINE_HEADER_HEIGHT;
-                    const hoveredTrack = findTrackSummaryAtRelativeY(relativeY);
-                    const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || editorRows[0] : editorRows[0];
-                    const targetTrackId = assetPayload
-                        ? findCompatibleTrackId(assetKindToTrackKind(assetPayload.kind), {
-                            preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
-                        })
-                        : hoveredRow?.id || null;
-                    const targetRow = editorRows.find((row) => row.id === targetTrackId) || hoveredRow;
+                    const relativeY = event.clientY - rect.top + scrollTop;
+                    const hoveredTrack = findTrackSummaryAtRelativeY(relativeY, false);
+                    const hoveredRow = hoveredTrack ? editorRows.find((row) => row.id === hoveredTrack.id) || null : null;
+                    const assetTrackKind = assetKindToTrackKind(assetPayload?.kind);
+                    const virtualPlacement = resolveVirtualTrackPlacement(relativeY, assetTrackKind);
+                    const targetTrackId = virtualPlacement.shouldCreateTrack
+                        ? null
+                        : assetPayload
+                            ? findCompatibleTrackId(assetTrackKind, {
+                                preferredTrackId: hoveredRow && !lockedTrackIds.includes(hoveredRow.id) ? hoveredRow.id : null,
+                            })
+                            : hoveredRow?.id || null;
+                    const targetRow = targetTrackId
+                        ? editorRows.find((row) => row.id === targetTrackId) || hoveredRow
+                        : null;
                     if (targetRow && lockedTrackIds.includes(targetRow.id)) {
                         setDropIndicator(null);
                         setDragPreview(null);
                         return;
                     }
-                    if (!targetRow) {
+                    if (!targetRow && !virtualPlacement.shouldCreateTrack) {
                         setDropIndicator(null);
                         setDragPreview(null);
                         return;
                     }
                     const relativeX = Math.max(0, event.clientX - rect.left - START_LEFT);
                     const baseNextTime = Math.max(0, (relativeX + scrollLeft) / scaleWidth);
-                    const sortedActions = [...targetRow.actions].sort((a, b) => a.start - b.start);
+                    const sortedActions = targetRow ? [...targetRow.actions].sort((a, b) => a.start - b.start) : [];
                     const snapCandidates = [
                         0,
                         effectiveCursorTime,
@@ -2928,11 +3113,16 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         Math.max(START_LEFT, START_LEFT + nextTime * scaleWidth - scrollLeft),
                         Math.max(START_LEFT, viewportWidth - 14)
                     );
+                    const indicatorTrackLabel = virtualPlacement.shouldCreateTrack
+                        ? `新建 ${TRACK_DEFINITIONS[assetTrackKind].title}`
+                        : targetRow
+                            ? `${targetRow.id} · ${TRACK_DEFINITIONS[trackIdToKind(targetRow.id)].kindLabel}`
+                            : null;
                     setDropIndicator({
                         x: indicatorX,
                         time: nextTime,
-                        rowId: targetRow.id,
-                        rowLabel: `${targetRow.id} · ${TRACK_DEFINITIONS[trackIdToKind(targetRow.id)].kindLabel}`,
+                        rowId: targetRow?.id || `__create__:${assetTrackKind}`,
+                        rowLabel: indicatorTrackLabel || '新建轨道',
                         splitTarget,
                         snapLabel: snappedDrop.snapped
                             ? (snappedDrop.candidate === effectiveCursorTime ? '吸附游标' : '吸附边界')
@@ -2942,11 +3132,19 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                         const previewDurationMs = assetPayload.durationMs
                             ?? (assetPayload.kind === 'image' ? DEFAULT_IMAGE_CLIP_MS : DEFAULT_CLIP_MS);
                         const previewWidth = Math.max(28, (previewDurationMs / 1000) * scaleWidth);
+                        const targetTrackSummary = targetRow
+                            ? trackSummaries.find((track) => track.id === targetRow.id) || null
+                            : null;
+                        const previewTop = virtualPlacement.shouldCreateTrack
+                            ? virtualPlacement.virtualTop - scrollTop + 4
+                            : (targetTrackSummary?.top ?? hoveredTrack?.top ?? 0) - scrollTop + 4;
                         setDragPreview({
                             x: indicatorX + 2,
-                            y: (hoveredTrack?.top || 0) + 4,
+                            y: previewTop,
                             width: previewWidth,
-                            height: Math.max(44, (targetRow.rowHeight || TIMELINE_ROW_HEIGHT) - 8),
+                            height: virtualPlacement.shouldCreateTrack
+                                ? Math.max(32, virtualPlacement.virtualHeight - 8)
+                                : Math.max(32, ((targetRow?.rowHeight) || TIMELINE_ROW_HEIGHT) - 8),
                             kind: assetPayload.kind,
                             title: assetPayload.title,
                             durationLabel: formatSeconds(previewDurationMs / 1000),
@@ -2973,7 +3171,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                 }}
                 onDrop={handleAssetDrop}
             >
-                {selectedTrackSummaries.length > 1 ? (
+                {selectedTrackSummaries.length > 0 ? (
                     <div className="redbox-editable-timeline__track-selection-bar">
                         <div className="redbox-editable-timeline__track-selection-meta">
                             <span>轨道管理</span>
@@ -3083,9 +3281,9 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 onClick={() => {
                                     void handleDeleteTracks(effectiveSelectedTrackIds);
                                 }}
-                                disabled={!selectedTrackSummaries.every((track) => track.clipCount === 0)}
+                                disabled={!canDeleteTrackSet(effectiveSelectedTrackIds)}
                             >
-                                删除空轨
+                                删除轨道
                             </button>
                         </div>
                     </div>
@@ -3114,21 +3312,15 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                     isDraggingAsset && draggingAssetKind && !trackAcceptsAssetPayloadKind(track.id, draggingAssetKind) && 'redbox-editable-timeline__track-pill--blocked'
                                 )}
                                 style={{
-                                    top: track.top + 8,
-                                    height: Math.max(44, track.height - 16),
+                                    top: track.top - scrollTop + 3,
+                                    height: Math.max(26, track.height - 6),
                                 }}
                                 onClick={(event) => {
-                                    setTrackContextMenu(null);
-                                    const additive = event.metaKey || event.ctrlKey || event.shiftKey;
-                                    if (additive) {
-                                        const nextIds = selectedTrackIdSet.has(track.id)
-                                            ? effectiveSelectedTrackIds.filter((id) => id !== track.id)
-                                            : [...effectiveSelectedTrackIds, track.id];
-                                        applyTrackSelectionState(nextIds, track.id);
-                                    } else {
-                                        applyTrackSelectionState([track.id], track.id);
-                                    }
-                                    focusTrack(track.id, { clearClipSelection: true });
+                                    focusTrack(track.id, {
+                                        clearClipSelection: true,
+                                        selectTrack: true,
+                                        additive: event.metaKey || event.ctrlKey || event.shiftKey,
+                                    });
                                 }}
                                 onContextMenu={(event) => {
                                     event.preventDefault();
@@ -3142,12 +3334,12 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                         y: event.clientY,
                                         trackIds: targetTrackIds,
                                     });
-                                    focusTrack(track.id, { clearClipSelection: true });
+                                    focusTrack(track.id, { clearClipSelection: true, selectTrack: true });
                                 }}
                                 onKeyDown={(event) => {
                                     if (event.key === 'Enter' || event.key === ' ') {
                                         event.preventDefault();
-                                        focusTrack(track.id, { clearClipSelection: true });
+                                        focusTrack(track.id, { clearClipSelection: true, selectTrack: true });
                                     }
                                 }}
                                 role="button"
@@ -3155,7 +3347,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                             >
                                 <div className="redbox-editable-timeline__track-title-row">
                                     <div className="redbox-editable-timeline__track-title">
-                                        <TrackIcon size={12} />
+                                        <TrackIcon size={10} />
                                         <span>{track.title}</span>
                                     </div>
                                     <div className="redbox-editable-timeline__track-actions">
@@ -3169,7 +3361,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             disabled={isPersisting}
                                             title={track.hidden ? '显示轨道内容' : '隐藏轨道内容'}
                                         >
-                                            {track.hidden ? <Eye size={11} /> : <EyeOff size={11} />}
+                                            {track.hidden ? <EyeOff size={10} /> : <Eye size={10} />}
                                         </button>
                                         <button
                                             type="button"
@@ -3181,7 +3373,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             disabled={isPersisting}
                                             title={track.collapsed ? '展开轨道' : '折叠轨道'}
                                         >
-                                            <Rows size={11} />
+                                            <Rows size={10} />
                                         </button>
                                         {track.kind === 'audio' ? (
                                             <button
@@ -3194,7 +3386,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                                 disabled={isPersisting}
                                                 title={track.muted ? '取消静音轨道' : '静音轨道'}
                                             >
-                                                {track.muted ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                                                {track.muted ? <VolumeX size={10} /> : <Volume2 size={10} />}
                                             </button>
                                         ) : null}
                                         {track.kind === 'audio' ? (
@@ -3221,7 +3413,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             disabled={isPersisting}
                                             title={track.locked ? '解锁轨道' : '锁定轨道'}
                                         >
-                                            {track.locked ? <Unlock size={11} /> : <Lock size={11} />}
+                                            {track.locked ? <Unlock size={10} /> : <Lock size={10} />}
                                         </button>
                                         <button
                                             type="button"
@@ -3237,7 +3429,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                             disabled={isPersisting}
                                             title="更多轨道操作"
                                         >
-                                            <MoreHorizontal size={11} />
+                                            <MoreHorizontal size={10} />
                                         </button>
                                     </div>
                                 </div>
@@ -3265,12 +3457,16 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                             )}
                             style={{
                                 left: START_LEFT,
-                                top: track.top,
+                                top: track.top - scrollTop,
                                 height: track.height,
                             }}
                                 onClick={(event) => {
                                     event.stopPropagation();
-                                    focusTrack(track.id, { clearClipSelection: true });
+                                    focusTrack(track.id, {
+                                        clearClipSelection: true,
+                                        selectTrack: true,
+                                        additive: event.metaKey || event.ctrlKey || event.shiftKey,
+                                    });
                                 }}
                             />
                     ))}
@@ -3283,11 +3479,11 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 style={{
                                     left: START_LEFT + 14,
                                     right: 16,
-                                    top: track.top + 10,
-                                    height: Math.max(38, track.height - 20),
+                                    top: track.top - scrollTop + 6,
+                                    height: Math.max(24, track.height - 12),
                                 }}
                                 onClick={() => {
-                                    focusTrack(track.id, { clearClipSelection: true });
+                                    focusTrack(track.id, { clearClipSelection: true, selectTrack: true });
                                 }}
                             >
                                 <div className={clsx(
@@ -3701,8 +3897,19 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                     autoScroll={true}
                     onScroll={(params) => {
                         const nextScrollLeft = Number(params.scrollLeft || 0);
+                        const nextScrollTop = Number(params.scrollTop || 0);
+                        const nextMaxScrollTop = Math.max(
+                            0,
+                            Number(params.scrollHeight || 0) - Number(params.clientHeight || 0)
+                        );
                         setScrollLeft((current) => (
                             Math.abs(current - nextScrollLeft) < SCROLL_LEFT_EPSILON ? current : nextScrollLeft
+                        ));
+                        setScrollTop((current) => (
+                            Math.abs(current - nextScrollTop) < SCROLL_TOP_EPSILON ? current : nextScrollTop
+                        ));
+                        setMaxScrollTop((current) => (
+                            Math.abs(current - nextMaxScrollTop) < SCROLL_TOP_EPSILON ? current : nextMaxScrollTop
                         ));
                     }}
                     onChange={(nextRows) => {
@@ -3723,7 +3930,7 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                             || ''
                         ).trim();
                         if (nextTrackId) {
-                            focusTrack(nextTrackId, { clearClipSelection: true });
+                            focusTrack(nextTrackId, { clearClipSelection: true, selectTrack: true });
                         }
                         commitCursorTime(Number(param.time || 0), { syncTimeline: false });
                     }}
@@ -4008,12 +4215,9 @@ export const EditableTrackTimeline = forwardRef<EditableTrackTimelineHandle, Edi
                                 void handleDeleteTracks(trackContextMenu.trackIds);
                                 setTrackContextMenu(null);
                             }}
-                            disabled={!trackContextMenu.trackIds.every((trackId) => {
-                                const row = editorRows.find((item) => item.id === trackId);
-                                return !!row && row.actions.length === 0;
-                            })}
+                            disabled={!canDeleteTrackSet(trackContextMenu.trackIds)}
                         >
-                            删除空轨
+                            删除轨道
                         </button>
                     </div>
                 ) : null}

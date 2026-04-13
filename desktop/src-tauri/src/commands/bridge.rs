@@ -7,8 +7,8 @@ use crate::agent::{
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{session_bridge_detail_value, session_bridge_summary_value};
 use crate::scheduler::{
-    cancel_job_execution, derived_background_tasks, emit_scheduler_snapshot,
-    sync_redclaw_job_definitions,
+    archive_job_execution, cancel_job_execution, derived_background_tasks,
+    emit_scheduler_snapshot, retry_job_execution, sync_redclaw_job_definitions,
 };
 use crate::{
     log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string,
@@ -96,7 +96,15 @@ pub fn handle_bridge_channel(
             with_store(state, |store| {
                 let task = derived_background_tasks(&store)
                     .into_iter()
-                    .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(task_id.as_str()))
+                    .find(|item| {
+                        item.get("id").and_then(|v| v.as_str()) == Some(task_id.as_str())
+                            || item.get("executionId").and_then(|v| v.as_str())
+                                == Some(task_id.as_str())
+                            || item.get("definitionId").and_then(|v| v.as_str())
+                                == Some(task_id.as_str())
+                            || item.get("sourceTaskId").and_then(|v| v.as_str())
+                                == Some(task_id.as_str())
+                    })
                     .unwrap_or(Value::Null);
                 Ok(task)
             })
@@ -121,6 +129,40 @@ pub fn handle_bridge_channel(
                     return Ok(json!({ "success": true, "kind": "runtime-task" }));
                 }
                 Ok(json!({ "success": false, "error": "后台任务不存在" }))
+            }) {
+                Ok(result) => {
+                    emit_scheduler_snapshot(app, state);
+                    Ok(result)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        "background-tasks:retry" => {
+            let task_id = payload_string(payload, "taskId").unwrap_or_default();
+            match with_store_mut(state, |store| {
+                let (execution_id, definition_id) = retry_job_execution(store, &task_id)?;
+                sync_redclaw_job_definitions(store);
+                Ok(json!({
+                    "success": true,
+                    "executionId": execution_id,
+                    "definitionId": definition_id,
+                }))
+            }) {
+                Ok(result) => {
+                    emit_scheduler_snapshot(app, state);
+                    Ok(result)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        "background-tasks:archive" => {
+            let task_id = payload_string(payload, "taskId").unwrap_or_default();
+            match with_store_mut(state, |store| {
+                let execution_id = archive_job_execution(store, &task_id)?;
+                Ok(json!({
+                    "success": true,
+                    "executionId": execution_id,
+                }))
             }) {
                 Ok(result) => {
                     emit_scheduler_snapshot(app, state);

@@ -86,6 +86,29 @@ pub fn handle_assistant_daemon_channel(
                     ))
                 })?;
                 if enable_listening {
+                    let feishu_receive_mode = with_store(state, |store| {
+                        Ok(store
+                            .assistant_state
+                            .feishu
+                            .get("receiveMode")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("webhook")
+                            .to_string())
+                    })?;
+                    if feishu_receive_mode == "websocket" {
+                        let snapshot = with_store_mut(state, |store| {
+                            store.assistant_state.last_error = Some(
+                                "Feishu websocket 接入尚未实现，请先切回 webhook 模式。"
+                                    .to_string(),
+                            );
+                            Ok(store.assistant_state.clone())
+                        })?;
+                        emit_assistant_status(app, &snapshot);
+                        return Err(
+                            "Feishu websocket 接入尚未实现，请先切回 webhook 模式。"
+                                .to_string(),
+                        );
+                    }
                     let mut runtime_guard = state
                         .assistant_runtime
                         .lock()

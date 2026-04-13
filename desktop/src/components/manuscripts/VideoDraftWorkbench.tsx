@@ -44,6 +44,7 @@ import type {
   VideoEditorLeftPanel,
   VideoEditorRatioPreset,
   VideoEditorState,
+  VideoEditorViewportMetrics,
 } from '../../features/video-editor/store/useVideoEditorStore';
 import type {
   MotionPreset,
@@ -134,13 +135,6 @@ type MaterialDragPreviewState = {
 
 type MaterialFilter = 'all' | 'video' | 'image' | 'audio';
 
-const VIDEO_EDITING_SHORTCUTS = [
-  { label: '查看时间线', text: '请先查看当前视频工程的时间线片段，概括当前结构、轨道和明显问题。' },
-  { label: '生成字幕', text: '请为当前视频工程规划字幕策略，并说明下一步如何生成和对齐字幕。' },
-  { label: '粗剪 30 秒', text: '请基于当前视频工程，提出一个 30 秒内的粗剪方案，说明应该保留、删除和重排哪些片段。' },
-  { label: '导出粗剪', text: '请检查当前视频工程是否具备导出条件；如果条件满足，直接导出当前粗剪版本。' },
-];
-
 const RIGHT_PANEL_WIDTH = 420;
 
 const DEFAULT_CLIP_MS = 4000;
@@ -228,6 +222,58 @@ function subtitleSegmentationLabel(value: string | undefined): string {
   if (value === 'singleWord') return '逐词';
   if (value === 'time') return '按时间';
   return '按停顿';
+}
+
+function scriptParagraphs(text: string): string[] {
+  return text
+    .split(/\n{2,}|\r\n\r\n/)
+    .map((section) => section.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function buildVideoExecutionPrompts(options: {
+  title: string;
+  script: string;
+  clipCount: number;
+  trackCount: number;
+  motionPrompt: string;
+}) {
+  const paragraphs = scriptParagraphs(options.script);
+  const beats = (paragraphs.length > 0 ? paragraphs : [options.script.replace(/\s+/g, ' ').trim() || '暂无脚本内容'])
+    .slice(0, 8)
+    .map((paragraph, index) => `${index + 1}. ${paragraph}`);
+  const scriptSummary = beats.join('\n');
+  const editPrompt = [
+    `你现在要先做“脚本执行规划”，再做时间轴剪辑。`,
+    `项目：${options.title}`,
+    `当前工程：${options.trackCount} 条轨道，${options.clipCount} 个片段。`,
+    `脚本要点：`,
+    scriptSummary,
+    `请先输出一个执行 brief，至少包含：镜头段落、每段要保留/删减的素材、节奏点、字幕策略、转场策略、动画配合策略。`,
+    `输出 brief 之后，再说明应该如何调用剪辑工具按顺序执行。`,
+  ].join('\n');
+  const motionExecutionPrompt = [
+    `你现在要基于脚本先规划动画，再调用 Remotion 生成。`,
+    `项目：${options.title}`,
+    `脚本段落：`,
+    scriptSummary,
+    `当前动画提示：${options.motionPrompt || '尚未设置'}`,
+    `请先给出动画执行 brief：每段应该用什么运动、标题、字幕节奏、强调方式；再给出可直接用于 Remotion 的动画提示词。`,
+  ].join('\n');
+  const masterPrompt = [
+    `按照“脚本 -> 执行 brief -> 时间轴剪辑 -> Remotion 动画”的顺序完成当前视频工程。`,
+    `项目：${options.title}`,
+    `时间轴概况：${options.trackCount} 轨 / ${options.clipCount} 段`,
+    `脚本：`,
+    scriptSummary,
+    `要求：先明确 brief，再分别说明剪辑动作和动画动作，最后再调用工具执行。`,
+  ].join('\n');
+  return {
+    beats,
+    editPrompt,
+    motionExecutionPrompt,
+    masterPrompt,
+  };
 }
 
 function isSubtitleClipLike(clip?: VideoClipLike | null): boolean {
@@ -519,6 +565,8 @@ export function VideoDraftWorkbench({
           viewport: {
             scrollLeft: 0,
             maxScrollLeft: 0,
+            scrollTop: 0,
+            maxScrollTop: 0,
           },
           zoomPercent: 100,
           playheadSeconds: 0,
@@ -798,6 +846,7 @@ export function VideoDraftWorkbench({
         const runtimeState = result.state as Record<string, unknown>;
         const nextPreviewTime = Number(runtimeState.playheadSeconds || 0);
         const nextSelectedClipId = String(runtimeState.selectedClipId || '').trim() || null;
+        const nextActiveTrackId = String(runtimeState.activeTrackId || '').trim() || null;
         const nextSelectedSceneId = String(runtimeState.selectedSceneId || '').trim() || null;
         const nextPreviewTab = String(runtimeState.previewTab || '').trim();
         const nextRatioPreset = String(runtimeState.canvasRatioPreset || '').trim();
@@ -841,9 +890,12 @@ export function VideoDraftWorkbench({
             timeline: {
               ...state.timeline,
               selectedClipId: nextSelectedClipId,
+              activeTrackId: nextActiveTrackId,
               viewport: {
                 scrollLeft: Number(runtimeState.viewportScrollLeft || 0) || 0,
                 maxScrollLeft: Number(runtimeState.viewportMaxScrollLeft || 0) || 0,
+                scrollTop: Number(runtimeState.viewportScrollTop || state.timeline.viewport.scrollTop || 0) || 0,
+                maxScrollTop: Number(runtimeState.viewportMaxScrollTop || state.timeline.viewport.maxScrollTop || 0) || 0,
               },
               zoomPercent: Number(runtimeState.timelineZoomPercent || 100) || 100,
               playheadSeconds: Number.isFinite(nextPreviewTime) ? quantizePreviewTime(nextPreviewTime) : 0,
@@ -883,6 +935,7 @@ export function VideoDraftWorkbench({
         sessionId: editorChatSessionId,
         playheadSeconds: previewCurrentTime,
         selectedClipId,
+        activeTrackId,
         selectedSceneId,
         previewTab,
         canvasRatioPreset: ratioPreset,
@@ -896,6 +949,8 @@ export function VideoDraftWorkbench({
         focusedGroupId,
         viewportScrollLeft: timelineViewport.scrollLeft,
         viewportMaxScrollLeft: timelineViewport.maxScrollLeft,
+        viewportScrollTop: timelineViewport.scrollTop,
+        viewportMaxScrollTop: timelineViewport.maxScrollTop,
         timelineZoomPercent: editorStore.getState().timeline.zoomPercent,
         trackUi: editorStore.getState().timeline.trackUi,
       });
@@ -906,6 +961,7 @@ export function VideoDraftWorkbench({
     editorFile,
     previewCurrentTime,
     selectedClipId,
+    activeTrackId,
     selectedSceneId,
     previewTab,
     ratioPreset,
@@ -919,6 +975,8 @@ export function VideoDraftWorkbench({
     focusedGroupId,
     timelineViewport.maxScrollLeft,
     timelineViewport.scrollLeft,
+    timelineViewport.maxScrollTop,
+    timelineViewport.scrollTop,
   ]);
 
   useEffect(() => {
@@ -1114,6 +1172,17 @@ export function VideoDraftWorkbench({
       ui: timelineTrackUi[normalizedTrackId] || { locked: false, hidden: false, collapsed: false, muted: false, solo: false, volume: 1 },
     };
   }, [activeTrackId, timelineClips, timelineTrackUi]);
+  const canDeleteActiveTrack = useMemo(() => {
+    if (!activeTrackSummary) {
+      return false;
+    }
+    const prefix = activeTrackSummary.id.startsWith('A')
+      ? 'A'
+      : activeTrackSummary.id.startsWith('S')
+        ? 'S'
+        : 'V';
+    return timelineTrackNames.filter((trackId) => trackId.startsWith(prefix)).length > 1;
+  }, [activeTrackSummary, timelineTrackNames]);
   const sidebarTabs = useMemo(
     () => [
       { id: 'uploads' as const, label: '素材', icon: Plus, count: totalSearchableAssetCount },
@@ -2726,11 +2795,13 @@ export function VideoDraftWorkbench({
     }));
   }, [editorStore]);
 
-  const handleTimelineViewportChange = useCallback((metrics: { scrollLeft: number; maxScrollLeft: number }) => {
+  const handleTimelineViewportChange = useCallback((metrics: VideoEditorViewportMetrics) => {
     const currentViewport = editorStore.getState().timeline.viewport;
     if (
       currentViewport.scrollLeft === metrics.scrollLeft
       && currentViewport.maxScrollLeft === metrics.maxScrollLeft
+      && currentViewport.scrollTop === metrics.scrollTop
+      && currentViewport.maxScrollTop === metrics.maxScrollTop
     ) {
       return;
     }
@@ -2807,7 +2878,7 @@ export function VideoDraftWorkbench({
   }, [activeTrackId, editorFile, onPackageStateChange]);
 
   const handleDeleteActiveTrack = useCallback(async () => {
-    if (!editorFile || !activeTrackId) return;
+    if (!editorFile || !activeTrackId || !canDeleteActiveTrack) return;
     const result = await window.ipcRenderer.invoke('manuscripts:delete-package-track', {
       filePath: editorFile,
       trackId: activeTrackId,
@@ -2815,7 +2886,7 @@ export function VideoDraftWorkbench({
     if (result?.success && result.state) {
       onPackageStateChange(result.state as PackageStateLike);
     }
-  }, [activeTrackId, editorFile, onPackageStateChange]);
+  }, [activeTrackId, canDeleteActiveTrack, editorFile, onPackageStateChange]);
 
   const handleClearActiveTrack = useCallback(async () => {
     if (!editorFile || !activeTrackId) return;
@@ -2855,6 +2926,25 @@ export function VideoDraftWorkbench({
       ? `${editableComposition?.scenes?.length || 0} 个动画场景`
       : `${timelineClipCount} 个片段 · ${previewStatusLabel}`;
   const stageShellCompact = previewTab === 'preview';
+  const scriptExecutionPrompts = useMemo(
+    () => buildVideoExecutionPrompts({
+      title,
+      script: editorBody,
+      clipCount: timelineClipCount,
+      trackCount: timelineTrackNames.length,
+      motionPrompt,
+    }),
+    [editorBody, motionPrompt, timelineClipCount, timelineTrackNames.length, title]
+  );
+  const videoEditingShortcuts = useMemo(
+    () => [
+      { label: '脚本 Brief', text: scriptExecutionPrompts.masterPrompt },
+      { label: '规划剪辑', text: scriptExecutionPrompts.editPrompt },
+      { label: '规划动画', text: scriptExecutionPrompts.motionExecutionPrompt },
+      { label: '执行导出', text: `${scriptExecutionPrompts.editPrompt}\n\n如果工程已经具备导出条件，按 brief 先执行再导出。` },
+    ],
+    [scriptExecutionPrompts]
+  );
   const selectedSceneItemTransform = selectedSceneItemId ? itemTransforms[selectedSceneItemId] || null : null;
   const selectedSceneItemLabel = useMemo(() => {
     if (selectedSceneItemIds.length > 1) return `${selectedSceneItemIds.length} 个对象`;
@@ -4676,10 +4766,10 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => void handleDeleteActiveTrack()}
-                            disabled={activeTrackSummary.clipCount > 0}
+                            disabled={!canDeleteActiveTrack}
                             className={clsx(
                               'inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs transition',
-                              activeTrackSummary.clipCount > 0
+                              !canDeleteActiveTrack
                                 ? 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/30'
                                 : 'border-red-400/20 bg-red-400/10 text-red-100 hover:border-red-300/50'
                             )}
@@ -5582,12 +5672,88 @@ export function VideoDraftWorkbench({
                     </div>
                   )
                 ) : (
-                  <textarea
-                    value={editorBody}
-                    onChange={(event) => onEditorBodyChange(event.target.value)}
-                    placeholder="在这里写视频脚本、镜头安排、剪辑目标和导出要求。"
-                    className="h-full w-full resize-none bg-transparent px-5 py-5 text-sm leading-7 text-white outline-none placeholder:text-white/30"
-                  />
+                  <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px]">
+                    <textarea
+                      value={editorBody}
+                      onChange={(event) => onEditorBodyChange(event.target.value)}
+                      placeholder="在这里写视频脚本、镜头安排、剪辑目标和导出要求。"
+                      className="h-full w-full resize-none bg-transparent px-5 py-5 text-sm leading-7 text-white outline-none placeholder:text-white/30"
+                    />
+                    <div className="min-h-0 overflow-y-auto border-l border-white/10 bg-[#121318] px-4 py-4">
+                      <div className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/35">Script First</div>
+                        <div className="mt-2 text-sm text-white/80">
+                          先让 AI 基于脚本生成执行 brief，再分别去做时间轴剪辑和 Remotion 动画。
+                        </div>
+                        <div className="mt-4 space-y-2">
+                          {scriptExecutionPrompts.beats.map((beat) => (
+                            <div key={beat} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-white/75">
+                              {beat}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="mt-4 rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-white">执行面板</div>
+                          <button
+                            type="button"
+                            onClick={() => editorStore.setState((state) => ({
+                              panels: {
+                                ...state.panels,
+                                redclawDrawerOpen: true,
+                              },
+                            }))}
+                            className="inline-flex items-center rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1 text-[11px] text-cyan-100 transition hover:border-cyan-300/60"
+                          >
+                            打开 AI
+                          </button>
+                        </div>
+                        <div className="mt-4 space-y-3">
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">剪辑 Brief</div>
+                            <div className="mt-2 whitespace-pre-wrap text-xs leading-5 text-white/72">{scriptExecutionPrompts.editPrompt}</div>
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void navigator.clipboard?.writeText(scriptExecutionPrompts.editPrompt);
+                                }}
+                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/75 transition hover:border-white/20 hover:text-white"
+                              >
+                                复制
+                              </button>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-white/35">动画 Brief</div>
+                            <div className="mt-2 whitespace-pre-wrap text-xs leading-5 text-white/72">{scriptExecutionPrompts.motionExecutionPrompt}</div>
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => editorStore.setState((state) => ({
+                                  remotion: {
+                                    ...state.remotion,
+                                    motionPrompt: scriptExecutionPrompts.motionExecutionPrompt,
+                                  },
+                                }))}
+                                className="rounded-full border border-fuchsia-300/35 bg-fuchsia-400/12 px-3 py-1 text-[11px] text-fuchsia-100 transition hover:border-fuchsia-300/60"
+                              >
+                                同步到动画提示
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onGenerateRemotionScene(scriptExecutionPrompts.motionExecutionPrompt)}
+                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/75 transition hover:border-white/20 hover:text-white"
+                              >
+                                直接生成动画
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
           </VideoEditorStageShell>
 
@@ -5628,10 +5794,10 @@ export function VideoDraftWorkbench({
                     fixedSessionBannerText=""
                     showWelcomeShortcuts={false}
                     showComposerShortcuts={true}
-                    shortcuts={VIDEO_EDITING_SHORTCUTS}
-                    welcomeShortcuts={VIDEO_EDITING_SHORTCUTS}
+                    shortcuts={videoEditingShortcuts}
+                    welcomeShortcuts={videoEditingShortcuts}
                     welcomeTitle="视频剪辑助手"
-                    welcomeSubtitle="围绕当前视频工程做粗剪、调序、trim、字幕、Remotion 动画和导出建议"
+                    welcomeSubtitle="先基于脚本生成执行 brief，再去剪辑时间轴和制作 Remotion 动画"
                     contentLayout="default"
                     contentWidthPreset="narrow"
                     allowFileUpload={true}

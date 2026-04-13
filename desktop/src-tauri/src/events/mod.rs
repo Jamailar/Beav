@@ -24,7 +24,7 @@ fn emit_legacy_chat_compat_event(
         return;
     }
     match event_type {
-        "stream_start" => {
+        "stream_start" | "runtime:stream-start" => {
             let phase = payload_string(payload, "phase").unwrap_or_default();
             if phase.is_empty() {
                 return;
@@ -34,7 +34,7 @@ fn emit_legacy_chat_compat_event(
                 let _ = app.emit("chat:thought-start", json!({}));
             }
         }
-        "text_delta" => {
+        "text_delta" | "runtime:text-delta" => {
             let stream =
                 payload_string(payload, "stream").unwrap_or_else(|| "response".to_string());
             let content = payload_string(payload, "content").unwrap_or_default();
@@ -48,7 +48,7 @@ fn emit_legacy_chat_compat_event(
                 let _ = app.emit("chat:response-chunk", json!({ "content": content }));
             }
         }
-        "tool_request" => {
+        "tool_request" | "runtime:tool-start" => {
             let _ = app.emit(
                 "chat:tool-start",
                 json!({
@@ -59,7 +59,7 @@ fn emit_legacy_chat_compat_event(
                 }),
             );
         }
-        "tool_result" => {
+        "tool_result" | "runtime:tool-update" | "runtime:tool-end" => {
             let call_id = payload_string(payload, "callId").unwrap_or_default();
             let name = payload_string(payload, "name").unwrap_or_default();
             let output = payload_field(payload, "output")
@@ -89,7 +89,7 @@ fn emit_legacy_chat_compat_event(
                 );
             }
         }
-        "task_checkpoint_saved" => {
+        "task_checkpoint_saved" | "runtime:checkpoint" => {
             let checkpoint_type = payload_string(payload, "checkpointType").unwrap_or_default();
             let checkpoint_payload = payload_field(payload, "payload")
                 .cloned()
@@ -193,7 +193,7 @@ pub fn emit_runtime_stream_start(
 ) {
     emit_runtime_event(
         app,
-        "stream_start",
+        "runtime:stream-start",
         Some(session_id),
         None,
         json!({
@@ -206,7 +206,7 @@ pub fn emit_runtime_stream_start(
 pub fn emit_runtime_text_delta(app: &AppHandle, session_id: &str, stream: &str, content: &str) {
     emit_runtime_event(
         app,
-        "text_delta",
+        "runtime:text-delta",
         Some(session_id),
         None,
         json!({
@@ -301,7 +301,7 @@ pub fn emit_runtime_tool_request(
 ) {
     emit_runtime_event(
         app,
-        "tool_request",
+        "runtime:tool-start",
         session_id,
         None,
         json!({
@@ -323,7 +323,7 @@ pub fn emit_runtime_tool_result(
 ) {
     emit_runtime_event(
         app,
-        "tool_result",
+        "runtime:tool-end",
         session_id,
         None,
         json!({
@@ -346,7 +346,7 @@ pub fn emit_runtime_tool_partial(
 ) {
     emit_runtime_event(
         app,
-        "tool_result",
+        "runtime:tool-update",
         session_id,
         None,
         json!({
@@ -372,7 +372,7 @@ pub fn emit_runtime_task_node_changed(
 ) {
     emit_runtime_event(
         app,
-        "task_node_changed",
+        "runtime:task-node-changed",
         session_id,
         Some(task_id),
         json!({
@@ -397,7 +397,7 @@ pub fn emit_runtime_subagent_spawned(
 ) {
     emit_runtime_event_with_lineage(
         app,
-        "subagent_spawned",
+        "runtime:subagent-started",
         session_id,
         task_id,
         child_runtime_id,
@@ -429,7 +429,7 @@ pub fn emit_runtime_subagent_finished(
 ) {
     emit_runtime_event_with_lineage(
         app,
-        "subagent_finished",
+        "runtime:subagent-finished",
         session_id,
         task_id,
         child_runtime_id,
@@ -458,7 +458,7 @@ pub fn emit_runtime_task_checkpoint_saved(
 ) {
     emit_runtime_event(
         app,
-        "task_checkpoint_saved",
+        "runtime:checkpoint",
         session_id,
         task_id,
         json!({

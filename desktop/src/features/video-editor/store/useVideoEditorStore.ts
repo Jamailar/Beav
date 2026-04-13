@@ -4,6 +4,8 @@ import type { RemotionCompositionConfig } from '../../../components/manuscripts/
 export type VideoEditorViewportMetrics = {
     scrollLeft: number;
     maxScrollLeft: number;
+    scrollTop: number;
+    maxScrollTop: number;
 };
 
 export type VideoEditorTrackUiState = {
@@ -154,6 +156,8 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
             viewport: {
                 scrollLeft: 0,
                 maxScrollLeft: 0,
+                scrollTop: 0,
+                maxScrollTop: 0,
             },
             zoomPercent: 100,
             playheadSeconds: 0,
