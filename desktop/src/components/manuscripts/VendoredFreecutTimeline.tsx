@@ -1,0 +1,394 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Timeline } from '@/features/timeline';
+import { useItemsStore } from '@/features/timeline/stores/items-store';
+import { useTransitionsStore } from '@/features/timeline/stores/transitions-store';
+import { useMarkersStore } from '@/features/timeline/stores/markers-store';
+import { useKeyframesStore } from '@/features/timeline/stores/keyframes-store';
+import { useTimelineSettingsStore } from '@/features/timeline/stores/timeline-settings-store';
+import { useTimelineCommandStore } from '@/features/timeline/stores/timeline-command-store';
+import { useTimelineViewportStore } from '@/features/timeline/stores/timeline-viewport-store';
+import { useZoomStore } from '@/features/timeline/stores/zoom-store';
+import { useSelectionStore } from '@/shared/state/selection/store';
+import { usePlaybackStore } from '@/shared/state/playback/store';
+import { syncLexBoxMediaLibrary } from '@/features/timeline/deps/media-library-contract';
+import { syncLexBoxTimelineProject } from '@/features/timeline/deps/projects-contract';
+import { syncLexBoxTimelineSettings } from '@/features/timeline/deps/settings-contract';
+import type { VideoEditorTrackUiState, VideoEditorViewportMetrics } from '../../features/video-editor/store/useVideoEditorStore';
+import type { EditorProjectFile } from './editorProject';
+import {
+    buildOptimisticPackageState,
+    frameToMs,
+    freecutTimelineToProject,
+    mediaItemsFromEditorProject,
+    msToFrame,
+    projectToFreecutTimeline,
+    type LexBoxPackageStateLike,
+} from './freecutTimelineBridge';
+import './vendored-freecut-timeline.css';
+
+type VendoredFreecutTimelineProps = {
+    filePath: string;
+    packageState?: LexBoxPackageStateLike | null;
+    fallbackTracks: string[];
+    onPackageStateChange?: (state: LexBoxPackageStateLike) => void;
+    onHistoryAvailabilityChange?: (history: { canUndo: boolean; canRedo: boolean }) => void;
+    controlledCursorTime?: number | null;
+    controlledSelectedClipId?: string | null;
+    controlledActiveTrackId?: string | null;
+    onCursorTimeChange?: (time: number) => void;
+    onSelectedClipChange?: (clipId: string | null) => void;
+    onActiveTrackChange?: (trackId: string | null) => void;
+    onViewportMetricsChange?: (metrics: VideoEditorViewportMetrics) => void;
+    controlledViewport?: VideoEditorViewportMetrics | null;
+    controlledZoomPercent?: number | null;
+    onZoomPercentChange?: (zoomPercent: number) => void;
+    controlledTrackUi?: Record<string, VideoEditorTrackUiState>;
+    onTrackUiChange?: (trackUi: Record<string, VideoEditorTrackUiState>) => void;
+    fps?: number;
+    currentFrame?: number;
+    durationInFrames?: number;
+    isPlaying?: boolean;
+    onTogglePlayback?: () => void;
+    onSeekFrame?: (frame: number) => void;
+};
+
+function normalizeProject(
+    packageState: LexBoxPackageStateLike | null | undefined,
+    fallbackTracks: string[],
+    fps = 30,
+): EditorProjectFile | null {
+    const candidate = packageState?.editorProject;
+    if (candidate && typeof candidate === 'object') {
+        return candidate as EditorProjectFile;
+    }
+
+    if (fallbackTracks.length === 0) {
+        return null;
+    }
+
+    return {
+        version: 1,
+        project: {
+            id: 'lexbox-vendored-timeline',
+            title: 'LexBox Timeline',
+            width: 1080,
+            height: 1920,
+            fps,
+            ratioPreset: '9:16',
+        },
+        script: {
+            body: '',
+        },
+        assets: [],
+        tracks: fallbackTracks.map((trackId, index) => ({
+            id: trackId,
+            kind: trackId.startsWith('A')
+                ? 'audio'
+                : trackId.startsWith('S')
+                    ? 'subtitle'
+                    : trackId.startsWith('T')
+                        ? 'text'
+                        : trackId.startsWith('M')
+                            ? 'motion'
+                            : 'video',
+            name: trackId,
+            order: index,
+            ui: {
+                hidden: false,
+                locked: false,
+                muted: false,
+                solo: false,
+                collapsed: false,
+                volume: 1,
+            },
+        })),
+        items: [],
+        animationLayers: [],
+        markers: [],
+        transitions: [],
+        keyframes: [],
+        stage: {
+            itemTransforms: {},
+            itemVisibility: {},
+            itemLocks: {},
+            itemOrder: [],
+            itemGroups: {},
+            focusedGroupId: null,
+        },
+        ai: {
+            motionPrompt: '',
+        },
+    };
+}
+
+export function VendoredFreecutTimeline({
+    filePath,
+    packageState,
+    fallbackTracks,
+    onPackageStateChange,
+    onHistoryAvailabilityChange,
+    controlledCursorTime,
+    controlledSelectedClipId,
+    controlledActiveTrackId,
+    onCursorTimeChange,
+    onSelectedClipChange,
+    onActiveTrackChange,
+    onViewportMetricsChange,
+    controlledViewport,
+    controlledZoomPercent,
+    onZoomPercentChange,
+    controlledTrackUi,
+    onTrackUiChange,
+    fps,
+    isPlaying,
+    onTogglePlayback,
+    onSeekFrame,
+}: VendoredFreecutTimelineProps) {
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const localProjectRef = useRef<EditorProjectFile | null>(null);
+    const packageStateRef = useRef<LexBoxPackageStateLike | null | undefined>(packageState);
+    const hydratedSignatureRef = useRef('');
+    const isHydratingRef = useRef(false);
+    const pendingProjectSyncRef = useRef<number | null>(null);
+    const pendingSaveRef = useRef<number | null>(null);
+    const lastPlaybackFlagRef = useRef<boolean | null>(null);
+    const [localProject, setLocalProject] = useState<EditorProjectFile | null>(
+        () => normalizeProject(packageState, fallbackTracks, fps),
+    );
+
+    const projection = useMemo(
+        () => localProject ? projectToFreecutTimeline(localProject, controlledTrackUi) : null,
+        [controlledTrackUi, localProject],
+    );
+
+    packageStateRef.current = packageState;
+    localProjectRef.current = localProject;
+
+    const persistProject = useCallback((project: EditorProjectFile) => {
+        if (pendingSaveRef.current !== null) {
+            window.clearTimeout(pendingSaveRef.current);
+        }
+        pendingSaveRef.current = window.setTimeout(() => {
+            void window.ipcRenderer.invoke('manuscripts:save-editor-project', {
+                filePath,
+                project,
+            }).then((result) => {
+                if (result?.success && result.state) {
+                    onPackageStateChange?.(result.state as LexBoxPackageStateLike);
+                }
+                return window.ipcRenderer.invoke('manuscripts:get-editor-runtime-state', { filePath });
+            }).then((runtimeResult) => {
+                if (!runtimeResult?.success || !runtimeResult.state) {
+                    return;
+                }
+                const runtimeState = runtimeResult.state as Record<string, unknown>;
+                onHistoryAvailabilityChange?.({
+                    canUndo: Boolean(runtimeState.canUndo),
+                    canRedo: Boolean(runtimeState.canRedo),
+                });
+            }).catch((error) => {
+                console.error('Failed to save vendored editor project:', error);
+            });
+        }, 220);
+    }, [filePath, onHistoryAvailabilityChange, onPackageStateChange]);
+
+    const hydrateFromProject = useCallback((project: EditorProjectFile | null) => {
+        if (!project) {
+            return;
+        }
+        const nextProjection = projectToFreecutTimeline(project, controlledTrackUi);
+        isHydratingRef.current = true;
+        hydratedSignatureRef.current = JSON.stringify(nextProjection);
+        syncLexBoxMediaLibrary(mediaItemsFromEditorProject(project));
+        syncLexBoxTimelineProject({
+            id: project.project.id,
+            metadata: {
+                width: project.project.width,
+                height: project.project.height,
+                fps: project.project.fps,
+            },
+        });
+        syncLexBoxTimelineSettings({
+            editorDensity: 'compact',
+            showWaveforms: true,
+            showFilmstrips: true,
+            defaultWhisperModel: 'base',
+            maxUndoHistory: 80,
+        });
+        useItemsStore.getState().setTracks(nextProjection.tracks);
+        useItemsStore.getState().setItems(nextProjection.items);
+        useTransitionsStore.getState().setTransitions(nextProjection.transitions);
+        useMarkersStore.getState().setMarkers(nextProjection.markers);
+        useMarkersStore.getState().setInPoint(null);
+        useMarkersStore.getState().setOutPoint(null);
+        useKeyframesStore.getState().setKeyframes(nextProjection.keyframes);
+        useTimelineSettingsStore.getState().setFps(project.project.fps);
+        useTimelineSettingsStore.getState().setTimelineLoading(false);
+        useTimelineCommandStore.getState().clearHistory();
+        const initialFrame = msToFrame(controlledCursorTime || 0, project.project.fps);
+        usePlaybackStore.getState().setCurrentFrame(initialFrame);
+        if (isPlaying) {
+            usePlaybackStore.getState().play();
+        } else {
+            usePlaybackStore.getState().pause();
+        }
+        const activeTrackId = controlledActiveTrackId || null;
+        useSelectionStore.getState().setActiveTrack(activeTrackId);
+        useSelectionStore.getState().selectItems(controlledSelectedClipId ? [controlledSelectedClipId] : []);
+        useZoomStore.getState().setZoomLevelImmediate(Math.max(0.1, (controlledZoomPercent || 100) / 100));
+        const viewportState = useTimelineViewportStore.getState();
+        useTimelineViewportStore.getState().setViewport({
+            scrollLeft: controlledViewport?.scrollLeft || 0,
+            scrollTop: controlledViewport?.scrollTop || 0,
+            viewportWidth: viewportState.viewportWidth,
+            viewportHeight: viewportState.viewportHeight,
+        });
+        window.setTimeout(() => {
+            isHydratingRef.current = false;
+        }, 0);
+    }, [controlledActiveTrackId, controlledCursorTime, controlledSelectedClipId, controlledTrackUi, controlledViewport, controlledZoomPercent, isPlaying]);
+
+    useEffect(() => {
+        const nextProject = normalizeProject(packageState, fallbackTracks, fps);
+        const nextSignature = JSON.stringify({
+            project: nextProject,
+            trackUi: controlledTrackUi,
+        });
+        if (hydratedSignatureRef.current === nextSignature) {
+            return;
+        }
+        setLocalProject(nextProject);
+        hydrateFromProject(nextProject);
+        hydratedSignatureRef.current = nextSignature;
+    }, [controlledTrackUi, fallbackTracks, fps, hydrateFromProject, packageState]);
+
+    useEffect(() => {
+        if (!localProject) {
+            return;
+        }
+        const syncProjectFromStores = () => {
+            pendingProjectSyncRef.current = null;
+            if (isHydratingRef.current || !localProjectRef.current) {
+                return;
+            }
+            const nextProject = freecutTimelineToProject(localProjectRef.current, {
+                tracks: useItemsStore.getState().tracks,
+                items: useItemsStore.getState().items,
+                markers: useMarkersStore.getState().markers,
+                transitions: useTransitionsStore.getState().transitions,
+                keyframes: useKeyframesStore.getState().keyframes,
+            });
+            const previousSignature = JSON.stringify(localProjectRef.current);
+            const nextSignature = JSON.stringify(nextProject);
+            if (previousSignature === nextSignature) {
+                return;
+            }
+            localProjectRef.current = nextProject;
+            setLocalProject(nextProject);
+            onTrackUiChange?.(Object.fromEntries(
+                nextProject.tracks.map((track) => [track.id, track.ui]),
+            ));
+            onPackageStateChange?.(buildOptimisticPackageState(packageStateRef.current, nextProject));
+            persistProject(nextProject);
+        };
+
+        const scheduleProjectSync = () => {
+            if (pendingProjectSyncRef.current !== null) {
+                return;
+            }
+            pendingProjectSyncRef.current = window.setTimeout(syncProjectFromStores, 0);
+        };
+
+        const unsubscribeItems = useItemsStore.subscribe(scheduleProjectSync);
+        const unsubscribeTransitions = useTransitionsStore.subscribe(scheduleProjectSync);
+        const unsubscribeMarkers = useMarkersStore.subscribe(scheduleProjectSync);
+        const unsubscribeKeyframes = useKeyframesStore.subscribe(scheduleProjectSync);
+        const unsubscribeSelection = useSelectionStore.subscribe((state) => {
+            if (isHydratingRef.current) return;
+            onSelectedClipChange?.(state.selectedItemIds[0] || null);
+            onActiveTrackChange?.(state.activeTrackId || null);
+        });
+        const unsubscribePlayback = usePlaybackStore.subscribe((state) => {
+            if (!localProjectRef.current || isHydratingRef.current) return;
+            const nextTime = frameToMs(state.currentFrame, localProjectRef.current.project.fps) / 1000;
+            onCursorTimeChange?.(nextTime);
+            onSeekFrame?.(state.currentFrame);
+            if (lastPlaybackFlagRef.current !== null && lastPlaybackFlagRef.current !== state.isPlaying) {
+                onTogglePlayback?.();
+            }
+            lastPlaybackFlagRef.current = state.isPlaying;
+        });
+        const unsubscribeZoom = useZoomStore.subscribe((state) => {
+            if (isHydratingRef.current) return;
+            onZoomPercentChange?.(Math.round(state.level * 100));
+        });
+        const unsubscribeViewport = useTimelineViewportStore.subscribe((state) => {
+            if (isHydratingRef.current) return;
+            const container = rootRef.current?.querySelector('.timeline-container') as HTMLElement | null;
+            const maxScrollLeft = container ? Math.max(0, container.scrollWidth - container.clientWidth) : state.scrollLeft;
+            const maxScrollTop = container ? Math.max(0, container.scrollHeight - container.clientHeight) : state.scrollTop;
+            onViewportMetricsChange?.({
+                scrollLeft: state.scrollLeft,
+                maxScrollLeft,
+                scrollTop: state.scrollTop,
+                maxScrollTop,
+            });
+        });
+
+        return () => {
+            unsubscribeItems();
+            unsubscribeTransitions();
+            unsubscribeMarkers();
+            unsubscribeKeyframes();
+            unsubscribeSelection();
+            unsubscribePlayback();
+            unsubscribeZoom();
+            unsubscribeViewport();
+        };
+    }, [localProject, onActiveTrackChange, onCursorTimeChange, onPackageStateChange, onSeekFrame, onSelectedClipChange, onTogglePlayback, onTrackUiChange, onViewportMetricsChange, onZoomPercentChange, persistProject]);
+
+    useEffect(() => {
+        if (!localProject) return;
+        usePlaybackStore.getState().setCurrentFrame(msToFrame(controlledCursorTime || 0, localProject.project.fps));
+    }, [controlledCursorTime, localProject]);
+
+    useEffect(() => {
+        if (controlledActiveTrackId !== undefined) {
+            useSelectionStore.getState().setActiveTrack(controlledActiveTrackId || null);
+        }
+        useSelectionStore.getState().selectItems(controlledSelectedClipId ? [controlledSelectedClipId] : []);
+    }, [controlledActiveTrackId, controlledSelectedClipId]);
+
+    useEffect(() => {
+        useZoomStore.getState().setZoomLevelImmediate(Math.max(0.1, (controlledZoomPercent || 100) / 100));
+    }, [controlledZoomPercent]);
+
+    useEffect(() => {
+        if (!controlledViewport) return;
+        const current = useTimelineViewportStore.getState();
+        useTimelineViewportStore.getState().setViewport({
+            scrollLeft: controlledViewport.scrollLeft,
+            scrollTop: controlledViewport.scrollTop,
+            viewportWidth: current.viewportWidth,
+            viewportHeight: current.viewportHeight,
+        });
+    }, [controlledViewport]);
+
+    useEffect(() => {
+        if (isPlaying) {
+            usePlaybackStore.getState().play();
+        } else {
+            usePlaybackStore.getState().pause();
+        }
+    }, [isPlaying]);
+
+    if (!projection) {
+        return null;
+    }
+
+    return (
+        <div ref={rootRef} className="freecut-timeline-theme h-full min-h-0 overflow-hidden">
+            <Timeline duration={projection.durationSeconds} />
+        </div>
+    );
+}

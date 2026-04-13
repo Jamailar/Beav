@@ -24,7 +24,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
-import { EditableTrackTimeline } from './EditableTrackTimeline';
+import { VendoredFreecutTimeline } from './VendoredFreecutTimeline';
 import { TimelinePreviewComposition } from './TimelinePreviewComposition';
 import { VideoEditorSidebarShell } from './VideoEditorSidebarShell';
 import { VideoEditorStageShell } from './VideoEditorStageShell';
@@ -492,6 +492,8 @@ export interface VideoDraftWorkbenchProps {
   editorBody: string;
   editorBodyDirty: boolean;
   isSavingEditorBody: boolean;
+  materialsCollapsed?: boolean;
+  timelineCollapsed?: boolean;
   isActive?: boolean;
   editorChatSessionId: string | null;
   remotionComposition?: RemotionCompositionConfig | null;
@@ -511,6 +513,7 @@ export interface VideoDraftWorkbenchProps {
 export function VideoDraftWorkbench({
   title,
   editorFile,
+  packageAssets: _packageAssets,
   packageState,
   packagePreviewAssets,
   primaryVideoAsset,
@@ -520,6 +523,8 @@ export function VideoDraftWorkbench({
   editorBody,
   editorBodyDirty,
   isSavingEditorBody,
+  materialsCollapsed: externalMaterialsCollapsed = false,
+  timelineCollapsed: externalTimelineCollapsed = false,
   isActive = true,
   editorChatSessionId,
   remotionComposition,
@@ -641,6 +646,8 @@ export function VideoDraftWorkbench({
   const timelineViewport = useVideoEditorStore(editorStore, (state) => state.timeline.viewport);
   const timelineZoomPercent = useVideoEditorStore(editorStore, (state) => state.timeline.zoomPercent);
   const timelineTrackUi = useVideoEditorStore(editorStore, (state) => state.timeline.trackUi);
+  const canUndo = useVideoEditorStore(editorStore, (state) => state.editor.history.canUndo);
+  const canRedo = useVideoEditorStore(editorStore, (state) => state.editor.history.canRedo);
   const projectWidth = useVideoEditorStore(editorStore, (state) => state.project.width);
   const projectHeight = useVideoEditorStore(editorStore, (state) => state.project.height);
   const ratioPreset = useVideoEditorStore(editorStore, (state) => state.project.ratioPreset);
@@ -648,8 +655,8 @@ export function VideoDraftWorkbench({
   const materialPaneWidth = useVideoEditorStore(editorStore, (state) => state.panels.materialPaneWidth);
   const timelineHeight = useVideoEditorStore(editorStore, (state) => state.panels.timelineHeight);
   const redclawDrawerOpen = useVideoEditorStore(editorStore, (state) => state.panels.redclawDrawerOpen);
-  const [materialsCollapsed, setMaterialsCollapsed] = useState(false);
-  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
+  const [materialsCollapsed, setMaterialsCollapsed] = useState(externalMaterialsCollapsed);
+  const [timelineCollapsed, setTimelineCollapsed] = useState(externalTimelineCollapsed);
   const selectedSceneItemId = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemId);
   const selectedSceneItemIds = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemIds);
   const selectedSceneItemKind = useVideoEditorStore(editorStore, (state) => state.selection.sceneItemKind);
@@ -678,6 +685,14 @@ export function VideoDraftWorkbench({
         ? '脚本已确认'
         : '脚本待确认';
   const canRunAiExecution = scriptConfirmed && !editorBodyDirty && !isSavingEditorBody;
+
+  useEffect(() => {
+    setMaterialsCollapsed(externalMaterialsCollapsed);
+  }, [externalMaterialsCollapsed]);
+
+  useEffect(() => {
+    setTimelineCollapsed(externalTimelineCollapsed);
+  }, [externalTimelineCollapsed]);
 
   const setPreviewTab = useCallback((tab: VideoEditorState['player']['previewTab']) => {
     editorStore.setState((state) => ({
@@ -946,6 +961,14 @@ export function VideoDraftWorkbench({
               leftPanel: nextPanel ? nextPanel as VideoEditorLeftPanel : state.panels.leftPanel,
               redclawDrawerOpen: hasDrawerPanel ? nextDrawerPanel === 'redclaw' : true,
             },
+            editor: {
+              ...state.editor,
+              history: {
+                ...state.editor.history,
+                canUndo: Boolean(runtimeState.canUndo),
+                canRedo: Boolean(runtimeState.canRedo),
+              },
+            },
           };
         });
       })
@@ -957,6 +980,67 @@ export function VideoDraftWorkbench({
     };
   }, [editorFile, editorStore, quantizePreviewTime]);
 
+  const handleRuntimeHistoryAvailabilityChange = useCallback((history: { canUndo: boolean; canRedo: boolean }) => {
+    editorStore.setState((state) => ({
+      editor: {
+        ...state.editor,
+        history: {
+          ...state.editor.history,
+          canUndo: history.canUndo,
+          canRedo: history.canRedo,
+        },
+      },
+    }));
+  }, [editorStore]);
+
+  const refreshRuntimeHistoryAvailability = useCallback(async () => {
+    if (!editorFile) return;
+    try {
+      const result = await window.ipcRenderer.invoke('manuscripts:get-editor-runtime-state', {
+        filePath: editorFile,
+      }) as { success?: boolean; state?: Record<string, unknown> };
+      if (!result?.success || !result.state) {
+        return;
+      }
+      handleRuntimeHistoryAvailabilityChange({
+        canUndo: Boolean(result.state.canUndo),
+        canRedo: Boolean(result.state.canRedo),
+      });
+    } catch (error) {
+      console.error('Failed to refresh editor runtime history availability:', error);
+    }
+  }, [editorFile, handleRuntimeHistoryAvailabilityChange]);
+
+  const handleUndoEditorProject = useCallback(async () => {
+    if (!editorFile || !canUndo) return;
+    const result = await window.ipcRenderer.invoke('manuscripts:undo-editor-project', {
+      filePath: editorFile,
+    }) as { success?: boolean; state?: PackageStateLike; error?: string };
+    if (!result?.success || !result.state) {
+      console.error('Failed to undo editor project:', result?.error || 'Unknown error');
+      return;
+    }
+    onPackageStateChange(result.state);
+    await refreshRuntimeHistoryAvailability();
+  }, [canUndo, editorFile, onPackageStateChange, refreshRuntimeHistoryAvailability]);
+
+  const handleRedoEditorProject = useCallback(async () => {
+    if (!editorFile || !canRedo) return;
+    const result = await window.ipcRenderer.invoke('manuscripts:redo-editor-project', {
+      filePath: editorFile,
+    }) as { success?: boolean; state?: PackageStateLike; error?: string };
+    if (!result?.success || !result.state) {
+      console.error('Failed to redo editor project:', result?.error || 'Unknown error');
+      return;
+    }
+    onPackageStateChange(result.state);
+    await refreshRuntimeHistoryAvailability();
+  }, [canRedo, editorFile, onPackageStateChange, refreshRuntimeHistoryAvailability]);
+
+  useEffect(() => {
+    void refreshRuntimeHistoryAvailability();
+  }, [refreshRuntimeHistoryAvailability]);
+
   useEffect(() => {
     if (!editorFile) return;
     const timer = window.setTimeout(() => {
@@ -965,7 +1049,9 @@ export function VideoDraftWorkbench({
         sessionId: editorChatSessionId,
         playheadSeconds: previewCurrentTime,
         selectedClipId,
+        selectedClipIds: selectedClipId ? [selectedClipId] : [],
         activeTrackId,
+        selectedTrackIds: activeTrackId ? [activeTrackId] : [],
         selectedSceneId,
         previewTab,
         canvasRatioPreset: ratioPreset,
@@ -983,6 +1069,17 @@ export function VideoDraftWorkbench({
         viewportMaxScrollTop: timelineViewport.maxScrollTop,
         timelineZoomPercent: editorStore.getState().timeline.zoomPercent,
         trackUi: editorStore.getState().timeline.trackUi,
+      }).then((result) => {
+        if (!result?.success || !result.state) {
+          return;
+        }
+        const runtimeState = result.state as Record<string, unknown>;
+        handleRuntimeHistoryAvailabilityChange({
+          canUndo: Boolean(runtimeState.canUndo),
+          canRedo: Boolean(runtimeState.canRedo),
+        });
+      }).catch((error) => {
+        console.error('Failed to persist editor runtime state:', error);
       });
     }, 120);
     return () => window.clearTimeout(timer);
@@ -1007,6 +1104,7 @@ export function VideoDraftWorkbench({
     timelineViewport.scrollLeft,
     timelineViewport.maxScrollTop,
     timelineViewport.scrollTop,
+    handleRuntimeHistoryAvailabilityChange,
   ]);
 
   useEffect(() => {
@@ -3266,10 +3364,36 @@ export function VideoDraftWorkbench({
             ))}
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
+            <button
+              type="button"
+              onClick={() => {
+                void handleUndoEditorProject();
+              }}
+              disabled={!canUndo}
+              title={canUndo ? '撤销上一步编辑' : '没有可撤销的编辑'}
+              className={clsx(
+                'inline-flex h-9 w-9 items-center justify-center rounded-full border transition',
+                canUndo
+                  ? 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/6 hover:text-white'
+                  : 'border-white/10 bg-white/[0.03] text-white/35'
+              )}
+            >
               <Undo2 className="h-4 w-4" />
             </button>
-            <button type="button" disabled className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/35">
+            <button
+              type="button"
+              onClick={() => {
+                void handleRedoEditorProject();
+              }}
+              disabled={!canRedo}
+              title={canRedo ? '重做上一步编辑' : '没有可重做的编辑'}
+              className={clsx(
+                'inline-flex h-9 w-9 items-center justify-center rounded-full border transition',
+                canRedo
+                  ? 'border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/6 hover:text-white'
+                  : 'border-white/10 bg-white/[0.03] text-white/35'
+              )}
+            >
               <Redo2 className="h-4 w-4" />
             </button>
             <button
@@ -5977,6 +6101,7 @@ export function VideoDraftWorkbench({
 
           {!timelineCollapsed ? (
           <VideoEditorTimelineShell
+            sectionClassName="col-start-1 col-end-4 row-start-3 min-h-0 overflow-hidden rounded-[20px] bg-[#121315] shadow-[0_12px_32px_rgba(0,0,0,0.22)]"
             onResizeStart={(event) => {
               event.preventDefault();
               setDragState({
@@ -5988,15 +6113,14 @@ export function VideoDraftWorkbench({
               });
             }}
           >
-            <EditableTrackTimeline
+            <VendoredFreecutTimeline
               filePath={editorFile}
-              clips={timelineClips as Array<Record<string, unknown>>}
+              packageState={packageState as PackageStateLike}
               fallbackTracks={timelineTrackNames}
-              accent="cyan"
-              emptyLabel="把视频、图片或关键帧拖入时间轴开始排布"
               onPackageStateChange={onPackageStateChange}
               controlledCursorTime={previewCurrentTime}
               controlledSelectedClipId={selectedClipId}
+              controlledActiveTrackId={activeTrackId}
               onCursorTimeChange={handleTimelineCursorChange}
               fps={effectiveFps}
               currentFrame={currentFrame}
@@ -6013,12 +6137,7 @@ export function VideoDraftWorkbench({
               onZoomPercentChange={handleTimelineZoomChange}
               controlledTrackUi={timelineTrackUi}
               onTrackUiChange={handleTimelineTrackUiChange}
-              sceneItemVisibility={sceneItemVisibility}
-              sceneItemLocks={sceneItemLocks}
-              sceneItemGroups={sceneItemGroups}
-              onToggleSceneItemVisibility={handleToggleSceneItemVisibility}
-              onToggleSceneItemLock={(sceneItemId) => handleSetSceneItemLocks([sceneItemId], !sceneItemLocks[sceneItemId])}
-              onMoveSceneItemsToEdge={handleMoveSceneItemsToEdge}
+              onHistoryAvailabilityChange={handleRuntimeHistoryAvailabilityChange}
             />
           </VideoEditorTimelineShell>
           ) : null}

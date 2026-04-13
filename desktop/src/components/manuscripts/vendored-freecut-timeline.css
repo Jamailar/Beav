@@ -1,0 +1,292 @@
+.freecut-timeline-theme {
+  --freecut-background: 38 38 38;
+  --freecut-foreground: 242 242 242;
+  --freecut-card: 46 46 46;
+  --freecut-card-foreground: 235 235 235;
+  --freecut-popover: 41 41 41;
+  --freecut-popover-foreground: 235 235 235;
+  --freecut-primary: 255 140 58;
+  --freecut-primary-foreground: 31 31 31;
+  --freecut-secondary: 56 56 56;
+  --freecut-secondary-foreground: 224 224 224;
+  --freecut-muted: 51 51 51;
+  --freecut-muted-foreground: 153 153 153;
+  --freecut-accent: 61 61 61;
+  --freecut-accent-foreground: 242 242 242;
+  --freecut-destructive: 229 62 62;
+  --freecut-destructive-foreground: 250 250 250;
+  --freecut-border: 64 64 64;
+  --freecut-input: 61 61 61;
+  --freecut-ring: 255 140 58;
+  --freecut-panel-bg: 46 46 46;
+  --freecut-panel-header: 36 36 36;
+  --freecut-timeline-bg: 31 31 31;
+  --freecut-timeline-baseclip: 107 107 107;
+  --freecut-timeline-video: 74 93 129;
+  --freecut-timeline-audio: 50 43 58;
+  --freecut-timeline-image: 99 160 255;
+  --freecut-timeline-text: 178 146 201;
+  --freecut-timeline-shape: 225 149 77;
+  --freecut-timeline-playhead: 255 140 58;
+  --freecut-timeline-in: 58 196 105;
+  --freecut-timeline-out: 227 91 77;
+  --freecut-timeline-marker: 91 159 255;
+  --freecut-timeline-snap: 249 115 22;
+  --freecut-timeline-join: 251 146 60;
+  color: rgb(var(--freecut-foreground) / 1);
+}
+
+.freecut-timeline-theme .bg-background { background-color: rgb(var(--freecut-background) / 1) !important; }
+.freecut-timeline-theme .bg-background\/20 { background-color: rgb(var(--freecut-background) / 0.2) !important; }
+.freecut-timeline-theme .bg-background\/30 { background-color: rgb(var(--freecut-background) / 0.3) !important; }
+.freecut-timeline-theme .bg-background\/80 { background-color: rgb(var(--freecut-background) / 0.8) !important; }
+.freecut-timeline-theme .bg-background\/90 { background-color: rgb(var(--freecut-background) / 0.9) !important; }
+.freecut-timeline-theme .bg-card { background-color: rgb(var(--freecut-card) / 1) !important; }
+.freecut-timeline-theme .bg-popover { background-color: rgb(var(--freecut-popover) / 1) !important; }
+.freecut-timeline-theme .bg-muted { background-color: rgb(var(--freecut-muted) / 1) !important; }
+.freecut-timeline-theme .bg-muted\/30 { background-color: rgb(var(--freecut-muted) / 0.3) !important; }
+.freecut-timeline-theme .bg-muted\/50 { background-color: rgb(var(--freecut-muted) / 0.5) !important; }
+.freecut-timeline-theme .bg-accent { background-color: rgb(var(--freecut-accent) / 1) !important; }
+.freecut-timeline-theme .bg-primary { background-color: rgb(var(--freecut-primary) / 1) !important; }
+.freecut-timeline-theme .bg-primary\/10 { background-color: rgb(var(--freecut-primary) / 0.1) !important; }
+.freecut-timeline-theme .bg-primary\/20 { background-color: rgb(var(--freecut-primary) / 0.2) !important; }
+.freecut-timeline-theme .bg-primary\/30 { background-color: rgb(var(--freecut-primary) / 0.3) !important; }
+.freecut-timeline-theme .bg-primary\/50 { background-color: rgb(var(--freecut-primary) / 0.5) !important; }
+.freecut-timeline-theme .bg-primary\/90 { background-color: rgb(var(--freecut-primary) / 0.9) !important; }
+.freecut-timeline-theme .bg-destructive { background-color: rgb(var(--freecut-destructive) / 1) !important; }
+.freecut-timeline-theme .bg-destructive\/85 { background-color: rgb(var(--freecut-destructive) / 0.85) !important; }
+.freecut-timeline-theme .bg-destructive\/90 { background-color: rgb(var(--freecut-destructive) / 0.9) !important; }
+
+.freecut-timeline-theme .text-foreground { color: rgb(var(--freecut-foreground) / 1) !important; }
+.freecut-timeline-theme .text-foreground\/70 { color: rgb(var(--freecut-foreground) / 0.7) !important; }
+.freecut-timeline-theme .text-foreground\/80 { color: rgb(var(--freecut-foreground) / 0.8) !important; }
+.freecut-timeline-theme .text-card-foreground { color: rgb(var(--freecut-card-foreground) / 1) !important; }
+.freecut-timeline-theme .text-popover,
+.freecut-timeline-theme .text-popover-foreground { color: rgb(var(--freecut-popover-foreground) / 1) !important; }
+.freecut-timeline-theme .text-muted,
+.freecut-timeline-theme .text-muted-foreground { color: rgb(var(--freecut-muted-foreground) / 1) !important; }
+.freecut-timeline-theme .text-accent,
+.freecut-timeline-theme .text-accent-foreground { color: rgb(var(--freecut-accent-foreground) / 1) !important; }
+.freecut-timeline-theme .text-primary { color: rgb(var(--freecut-primary) / 1) !important; }
+.freecut-timeline-theme .text-primary-foreground { color: rgb(var(--freecut-primary-foreground) / 1) !important; }
+.freecut-timeline-theme .text-destructive { color: rgb(var(--freecut-destructive) / 1) !important; }
+.freecut-timeline-theme .text-destructive-foreground { color: rgb(var(--freecut-destructive-foreground) / 1) !important; }
+
+.freecut-timeline-theme .border-border { border-color: rgb(var(--freecut-border) / 1) !important; }
+.freecut-timeline-theme .border-border\/50 { border-color: rgb(var(--freecut-border) / 0.5) !important; }
+.freecut-timeline-theme .border-border\/60 { border-color: rgb(var(--freecut-border) / 0.6) !important; }
+.freecut-timeline-theme .border-border\/80 { border-color: rgb(var(--freecut-border) / 0.8) !important; }
+.freecut-timeline-theme .border-primary { border-color: rgb(var(--freecut-primary) / 1) !important; }
+.freecut-timeline-theme .border-primary\/50 { border-color: rgb(var(--freecut-primary) / 0.5) !important; }
+.freecut-timeline-theme .border-destructive { border-color: rgb(var(--freecut-destructive) / 1) !important; }
+.freecut-timeline-theme .border-destructive\/50 { border-color: rgb(var(--freecut-destructive) / 0.5) !important; }
+.freecut-timeline-theme .border-muted { border-color: rgb(var(--freecut-muted) / 1) !important; }
+
+.freecut-timeline-theme .bg-timeline-video { background-color: rgb(var(--freecut-timeline-video) / 1) !important; }
+.freecut-timeline-theme .bg-timeline-video\/10 { background-color: rgb(var(--freecut-timeline-video) / 0.1) !important; }
+.freecut-timeline-theme .bg-timeline-video\/20 { background-color: rgb(var(--freecut-timeline-video) / 0.2) !important; }
+.freecut-timeline-theme .bg-timeline-video\/30 { background-color: rgb(var(--freecut-timeline-video) / 0.3) !important; }
+.freecut-timeline-theme .bg-timeline-audio { background-color: rgb(var(--freecut-timeline-audio) / 1) !important; }
+.freecut-timeline-theme .bg-timeline-audio\/10 { background-color: rgb(var(--freecut-timeline-audio) / 0.1) !important; }
+.freecut-timeline-theme .bg-timeline-audio\/20 { background-color: rgb(var(--freecut-timeline-audio) / 0.2) !important; }
+.freecut-timeline-theme .bg-timeline-image { background-color: rgb(var(--freecut-timeline-image) / 1) !important; }
+.freecut-timeline-theme .bg-timeline-image\/10 { background-color: rgb(var(--freecut-timeline-image) / 0.1) !important; }
+.freecut-timeline-theme .bg-timeline-image\/20 { background-color: rgb(var(--freecut-timeline-image) / 0.2) !important; }
+.freecut-timeline-theme .bg-timeline-image\/30 { background-color: rgb(var(--freecut-timeline-image) / 0.3) !important; }
+.freecut-timeline-theme .bg-timeline-text { background-color: rgb(var(--freecut-timeline-text) / 1) !important; }
+.freecut-timeline-theme .bg-timeline-text\/10 { background-color: rgb(var(--freecut-timeline-text) / 0.1) !important; }
+.freecut-timeline-theme .bg-timeline-text\/20 { background-color: rgb(var(--freecut-timeline-text) / 0.2) !important; }
+.freecut-timeline-theme .bg-timeline-text\/30 { background-color: rgb(var(--freecut-timeline-text) / 0.3) !important; }
+.freecut-timeline-theme .bg-timeline-shape { background-color: rgb(var(--freecut-timeline-shape) / 1) !important; }
+.freecut-timeline-theme .bg-timeline-shape\/10 { background-color: rgb(var(--freecut-timeline-shape) / 0.1) !important; }
+.freecut-timeline-theme .bg-timeline-shape\/20 { background-color: rgb(var(--freecut-timeline-shape) / 0.2) !important; }
+.freecut-timeline-theme .bg-timeline-shape\/30 { background-color: rgb(var(--freecut-timeline-shape) / 0.3) !important; }
+.freecut-timeline-theme .bg-timeline-playhead { background-color: rgb(var(--freecut-timeline-playhead) / 1) !important; }
+
+.freecut-timeline-theme .border-timeline-video { border-color: rgb(var(--freecut-timeline-video) / 1) !important; }
+.freecut-timeline-theme .border-timeline-video\/60 { border-color: rgb(var(--freecut-timeline-video) / 0.6) !important; }
+.freecut-timeline-theme .border-timeline-audio { border-color: rgb(var(--freecut-timeline-audio) / 1) !important; }
+.freecut-timeline-theme .border-timeline-audio\/60 { border-color: rgb(var(--freecut-timeline-audio) / 0.6) !important; }
+.freecut-timeline-theme .border-timeline-image { border-color: rgb(var(--freecut-timeline-image) / 1) !important; }
+.freecut-timeline-theme .border-timeline-image\/60 { border-color: rgb(var(--freecut-timeline-image) / 0.6) !important; }
+.freecut-timeline-theme .border-timeline-text { border-color: rgb(var(--freecut-timeline-text) / 1) !important; }
+.freecut-timeline-theme .border-timeline-text\/60 { border-color: rgb(var(--freecut-timeline-text) / 0.6) !important; }
+.freecut-timeline-theme .border-timeline-shape { border-color: rgb(var(--freecut-timeline-shape) / 1) !important; }
+.freecut-timeline-theme .border-timeline-shape\/60 { border-color: rgb(var(--freecut-timeline-shape) / 0.6) !important; }
+.freecut-timeline-theme .border-timeline-playhead { border-color: rgb(var(--freecut-timeline-playhead) / 1) !important; }
+
+.freecut-timeline-theme .timeline-container {
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.freecut-timeline-theme .timeline-container::-webkit-scrollbar {
+  height: 0;
+}
+
+.freecut-timeline-theme [data-track-section-scroll] {
+  scrollbar-width: none;
+}
+
+.freecut-timeline-theme [data-track-section-scroll]::-webkit-scrollbar {
+  width: 0;
+}
+
+.freecut-timeline-theme .bg-group-stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 6px,
+    rgba(128, 128, 128, 0.12) 6px,
+    rgba(128, 128, 128, 0.12) 8px
+  );
+}
+
+.freecut-timeline-theme .bg-waveform-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgba(32, 32, 32, 1) 0%,
+    rgba(46, 46, 46, 1) 50%,
+    rgba(32, 32, 32, 1) 100%
+  );
+}
+
+.freecut-timeline-theme [data-item-id] {
+  border-width: 1px;
+  border-style: solid;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 20px rgba(0, 0, 0, 0.22);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-video {
+  background:
+    linear-gradient(180deg, rgba(101, 124, 171, 0.24) 0%, rgba(74, 93, 129, 0.98) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-audio {
+  background:
+    linear-gradient(180deg, rgba(109, 88, 140, 0.18) 0%, rgba(50, 43, 58, 0.98) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-image\/30 {
+  background:
+    linear-gradient(180deg, rgba(153, 194, 255, 0.18) 0%, rgba(86, 122, 181, 0.92) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-text\/30 {
+  background:
+    linear-gradient(180deg, rgba(208, 171, 232, 0.18) 0%, rgba(112, 85, 134, 0.92) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-shape\/30 {
+  background:
+    linear-gradient(180deg, rgba(255, 188, 127, 0.18) 0%, rgba(128, 87, 48, 0.92) 100%);
+}
+
+.freecut-timeline-theme [data-item-id]:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
+.freecut-timeline-theme [data-item-id] > .absolute.inset-px {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-video > .absolute.inset-px {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 100%);
+}
+
+.freecut-timeline-theme [data-item-id].bg-timeline-audio > .absolute.inset-px,
+.freecut-timeline-theme [data-item-id].bg-timeline-image\/30 > .absolute.inset-px,
+.freecut-timeline-theme [data-item-id].bg-timeline-text\/30 > .absolute.inset-px,
+.freecut-timeline-theme [data-item-id].bg-timeline-shape\/30 > .absolute.inset-px {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.012) 100%);
+}
+
+.freecut-timeline-theme [data-item-id] .backdrop-blur-\[1px\] {
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.freecut-timeline-theme [data-item-id] .bg-black\/20 {
+  background:
+    linear-gradient(180deg, rgba(18, 18, 18, 0.38) 0%, rgba(12, 12, 12, 0.24) 100%) !important;
+}
+
+.freecut-timeline-theme [data-item-id] [class*='text-muted-foreground'] {
+  color: rgba(230, 230, 230, 0.72) !important;
+}
+
+.freecut-timeline-theme [data-item-id] .text-white\/90 {
+  color: rgba(248, 248, 248, 0.92) !important;
+}
+
+.freecut-timeline-theme [data-item-id] .text-violet-100\/90 {
+  color: rgba(232, 221, 255, 0.92) !important;
+}
+
+.freecut-timeline-theme [data-item-id] .bg-violet-950\/40 {
+  background-color: rgba(76, 47, 112, 0.45) !important;
+}
+
+.freecut-timeline-theme .bg-image-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgba(32, 40, 62, 1) 0%,
+    rgba(45, 57, 82, 1) 50%,
+    rgba(32, 40, 62, 1) 100%
+  );
+}
+
+.freecut-timeline-theme .bg-audio-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgba(30, 25, 40, 1) 0%,
+    rgba(42, 36, 54, 1) 50%,
+    rgba(30, 25, 40, 1) 100%
+  );
+}
+
+.freecut-timeline-theme .bg-text-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgba(45, 33, 51, 1) 0%,
+    rgba(58, 43, 65, 1) 50%,
+    rgba(45, 33, 51, 1) 100%
+  );
+}
+
+.freecut-timeline-theme .bg-shape-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgba(58, 38, 25, 1) 0%,
+    rgba(72, 48, 31, 1) 50%,
+    rgba(58, 38, 25, 1) 100%
+  );
+}
+
+.freecut-timeline-theme .timeline-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--editor-timeline-track-height, 72px);
+}
+
+.freecut-timeline-theme .track-header-item {
+  content-visibility: auto;
+  contain-intrinsic-size: var(--editor-timeline-sidebar-width, 176px) var(--editor-timeline-track-height, 72px);
+}
+
+.cursor-scissors {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg transform='rotate(-90 12 12)'%3E%3Ccircle cx='6' cy='6' r='3'/%3E%3Cpath d='M8.12 8.12 12 12'/%3E%3Cpath d='M20 4 8.12 15.88'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M14.8 14.8 20 20'/%3E%3C/g%3E%3C/svg%3E") 12 12, crosshair !important;
+}
+
+.cursor-gauge {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 14 4-4'/%3E%3Cpath d='M3.34 19a10 10 0 1 1 17.32 0'/%3E%3C/svg%3E") 12 12, crosshair !important;
+}
+
+.cursor-track-push {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 12h16'/%3E%3Cpath d='m8 8-4 4 4 4'/%3E%3Cpath d='m16 8 4 4-4 4'/%3E%3C/svg%3E") 12 12, ew-resize !important;
+}

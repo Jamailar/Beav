@@ -405,7 +405,9 @@ fn editor_runtime_state_value(
             "sessionId": record.session_id,
             "playheadSeconds": record.playhead_seconds,
             "selectedClipId": record.selected_clip_id,
+            "selectedClipIds": record.selected_clip_ids,
             "activeTrackId": record.active_track_id,
+            "selectedTrackIds": record.selected_track_ids,
             "selectedSceneId": record.selected_scene_id,
             "previewTab": record.preview_tab,
             "canvasRatioPreset": record.canvas_ratio_preset,
@@ -423,6 +425,8 @@ fn editor_runtime_state_value(
             "viewportScrollTop": record.viewport_scroll_top,
             "viewportMaxScrollTop": record.viewport_max_scroll_top,
             "timelineZoomPercent": record.timeline_zoom_percent,
+            "canUndo": !record.undo_stack.is_empty(),
+            "canRedo": !record.redo_stack.is_empty(),
             "updatedAt": record.updated_at,
         }),
         None => json!({
@@ -430,7 +434,9 @@ fn editor_runtime_state_value(
             "sessionId": Value::Null,
             "playheadSeconds": 0.0,
             "selectedClipId": Value::Null,
+            "selectedClipIds": json!([]),
             "activeTrackId": Value::Null,
+            "selectedTrackIds": json!([]),
             "selectedSceneId": Value::Null,
             "previewTab": Value::Null,
             "canvasRatioPreset": Value::Null,
@@ -448,6 +454,8 @@ fn editor_runtime_state_value(
             "viewportScrollTop": 0.0,
             "viewportMaxScrollTop": 0.0,
             "timelineZoomPercent": 100.0,
+            "canUndo": false,
+            "canRedo": false,
             "updatedAt": now_ms(),
         }),
     })
@@ -462,6 +470,98 @@ fn editor_runtime_state_record(
         .lock()
         .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
     Ok(guard.get(file_path).cloned())
+}
+
+fn empty_editor_runtime_state_record(file_path: &str) -> EditorRuntimeStateRecord {
+    EditorRuntimeStateRecord {
+        file_path: file_path.to_string(),
+        session_id: None,
+        playhead_seconds: 0.0,
+        selected_clip_id: None,
+        selected_clip_ids: Some(json!([])),
+        active_track_id: None,
+        selected_track_ids: Some(json!([])),
+        selected_scene_id: None,
+        preview_tab: None,
+        canvas_ratio_preset: None,
+        active_panel: None,
+        drawer_panel: None,
+        scene_item_transforms: None,
+        scene_item_visibility: None,
+        scene_item_order: None,
+        scene_item_locks: None,
+        scene_item_groups: None,
+        focused_group_id: None,
+        track_ui: None,
+        viewport_scroll_left: 0.0,
+        viewport_max_scroll_left: 0.0,
+        viewport_scroll_top: 0.0,
+        viewport_max_scroll_top: 0.0,
+        timeline_zoom_percent: 100.0,
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
+        updated_at: now_ms(),
+    }
+}
+
+fn push_editor_project_undo_snapshot(
+    state: &State<'_, AppState>,
+    file_path: &str,
+    project: &Value,
+) -> Result<(), String> {
+    let mut guard = state
+        .editor_runtime_states
+        .lock()
+        .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+    let record = guard
+        .entry(file_path.to_string())
+        .or_insert_with(|| empty_editor_runtime_state_record(file_path));
+    record.undo_stack.push(project.clone());
+    if record.undo_stack.len() > 80 {
+        record.undo_stack.remove(0);
+    }
+    record.redo_stack.clear();
+    record.updated_at = now_ms();
+    Ok(())
+}
+
+fn restore_editor_project_from_history(
+    state: &State<'_, AppState>,
+    file_path: &str,
+    full_path: &Path,
+    direction: &str,
+) -> Result<Value, String> {
+    let current_project = ensure_editor_project(full_path)?;
+    let mut guard = state
+        .editor_runtime_states
+        .lock()
+        .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+    let record = guard
+        .entry(file_path.to_string())
+        .or_insert_with(|| empty_editor_runtime_state_record(file_path));
+    let source_stack = if direction == "redo" {
+        &mut record.redo_stack
+    } else {
+        &mut record.undo_stack
+    };
+    let Some(next_project) = source_stack.pop() else {
+        return Ok(json!({
+            "success": false,
+            "error": if direction == "redo" { "Nothing to redo" } else { "Nothing to undo" }
+        }));
+    };
+    if direction == "redo" {
+        record.undo_stack.push(current_project.clone());
+    } else {
+        record.redo_stack.push(current_project.clone());
+    }
+    record.updated_at = now_ms();
+    drop(guard);
+    write_json_value(&package_editor_project_path(full_path), &next_project)?;
+    Ok(json!({
+        "success": true,
+        "state": get_manuscript_package_state(full_path)?
+    }))
 }
 
 fn merge_json_objects(base: &Value, patch: &Value) -> Value {
@@ -2526,6 +2626,9 @@ pub fn handle_manuscripts_channel(
                         let _ = ensure_editor_project_ai_state(&mut project)?;
                     }
                 }
+                if existing_project != project {
+                    push_editor_project_undo_snapshot(state, &file_path, &existing_project)?;
+                }
                 write_json_value(&package_editor_project_path(&full_path), &project)?;
                 if let Some(script_body) = next_script_body.as_deref() {
                     let manifest =
@@ -2534,6 +2637,175 @@ pub fn handle_manuscripts_channel(
                     write_text_file(&entry_path, script_body)?;
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:duplicate-editor-project-clip" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
+                if file_path.is_empty() || clip_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath and clipId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let mut project = ensure_editor_project(&full_path)?;
+                push_editor_project_undo_snapshot(state, &file_path, &project)?;
+                let items = project
+                    .pointer_mut("/items")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Editor project items missing".to_string())?;
+                let Some(source_item) = items.iter().find(|item| {
+                    item.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
+                }).cloned() else {
+                    return Ok(json!({ "success": false, "error": "Clip not found in editor project" }));
+                };
+                let mut duplicate = source_item;
+                let from_ms = payload_field(&payload, "fromMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(|| {
+                        duplicate.get("fromMs").and_then(Value::as_i64).unwrap_or(0)
+                            + duplicate.get("durationMs").and_then(Value::as_i64).unwrap_or(0)
+                    });
+                if let Some(object) = duplicate.as_object_mut() {
+                    object.insert("id".to_string(), json!(create_timeline_clip_id()));
+                    object.insert("fromMs".to_string(), json!(from_ms.max(0)));
+                    if let Some(track_id) = payload_string(&payload, "trackId") {
+                        object.insert("trackId".to_string(), json!(track_id));
+                    }
+                }
+                items.push(duplicate);
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:replace-editor-project-clip-asset" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
+                let asset_id = payload_string(&payload, "assetId").unwrap_or_default();
+                if file_path.is_empty() || clip_id.is_empty() || asset_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath, clipId, and assetId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let mut project = ensure_editor_project(&full_path)?;
+                push_editor_project_undo_snapshot(state, &file_path, &project)?;
+                let items = project
+                    .pointer_mut("/items")
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Editor project items missing".to_string())?;
+                let Some(target_item) = items.iter_mut().find(|item| {
+                    item.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
+                }) else {
+                    return Ok(json!({ "success": false, "error": "Clip not found in editor project" }));
+                };
+                if let Some(object) = target_item.as_object_mut() {
+                    object.insert("assetId".to_string(), json!(asset_id));
+                }
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:add-editor-project-marker" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let mut project = ensure_editor_project(&full_path)?;
+                push_editor_project_undo_snapshot(state, &file_path, &project)?;
+                let markers = project
+                    .as_object_mut()
+                    .ok_or_else(|| "Editor project malformed".to_string())?
+                    .entry("markers".to_string())
+                    .or_insert_with(|| json!([]));
+                let markers = markers
+                    .as_array_mut()
+                    .ok_or_else(|| "Editor project markers malformed".to_string())?;
+                markers.push(json!({
+                    "id": make_id("marker"),
+                    "frame": payload_field(&payload, "frame").and_then(Value::as_i64).unwrap_or(0).max(0),
+                    "color": payload_string(&payload, "color").unwrap_or_else(|| "#3B82F6".to_string()),
+                    "label": payload_string(&payload, "label").unwrap_or_default(),
+                }));
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:update-editor-project-marker" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let marker_id = payload_string(&payload, "markerId").unwrap_or_default();
+                if file_path.is_empty() || marker_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath and markerId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let mut project = ensure_editor_project(&full_path)?;
+                push_editor_project_undo_snapshot(state, &file_path, &project)?;
+                let markers = project
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("markers"))
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Editor project markers missing".to_string())?;
+                let Some(marker) = markers.iter_mut().find(|item| {
+                    item.get("id").and_then(Value::as_str) == Some(marker_id.as_str())
+                }) else {
+                    return Ok(json!({ "success": false, "error": "Marker not found in editor project" }));
+                };
+                if let Some(object) = marker.as_object_mut() {
+                    if let Some(frame) = payload_field(&payload, "frame").and_then(Value::as_i64) {
+                        object.insert("frame".to_string(), json!(frame.max(0)));
+                    }
+                    if let Some(color) = payload_string(&payload, "color") {
+                        object.insert("color".to_string(), json!(color));
+                    }
+                    if let Some(label) = payload_string(&payload, "label") {
+                        object.insert("label".to_string(), json!(label));
+                    }
+                }
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:delete-editor-project-marker" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let marker_id = payload_string(&payload, "markerId").unwrap_or_default();
+                if file_path.is_empty() || marker_id.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath and markerId are required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                let mut project = ensure_editor_project(&full_path)?;
+                push_editor_project_undo_snapshot(state, &file_path, &project)?;
+                let markers = project
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("markers"))
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| "Editor project markers missing".to_string())?;
+                let before = markers.len();
+                markers.retain(|marker| marker.get("id").and_then(Value::as_str) != Some(marker_id.as_str()));
+                if before == markers.len() {
+                    return Ok(json!({ "success": false, "error": "Marker not found in editor project" }));
+                }
+                write_json_value(&package_editor_project_path(&full_path), &project)?;
+                Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:undo-editor-project" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                restore_editor_project_from_history(state, &file_path, &full_path, "undo")
+            }
+            "manuscripts:redo-editor-project" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                restore_editor_project_from_history(state, &file_path, &full_path, "redo")
             }
             "manuscripts:import-legacy-editor-project" => {
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
@@ -3017,6 +3289,7 @@ pub fn handle_manuscripts_channel(
                     .editor_runtime_states
                     .lock()
                     .map_err(|_| "editor runtime state lock 已损坏".to_string())?;
+                let previous = guard.get(&file_path).cloned();
                 let updated_at = now_ms();
                 guard.insert(
                     file_path.clone(),
@@ -3027,7 +3300,13 @@ pub fn handle_manuscripts_channel(
                             .and_then(|value| value.as_f64())
                             .unwrap_or(0.0),
                         selected_clip_id: payload_string(&payload, "selectedClipId"),
+                        selected_clip_ids: payload_field(&payload, "selectedClipIds")
+                            .cloned()
+                            .or_else(|| previous.as_ref().and_then(|record| record.selected_clip_ids.clone())),
                         active_track_id: payload_string(&payload, "activeTrackId"),
+                        selected_track_ids: payload_field(&payload, "selectedTrackIds")
+                            .cloned()
+                            .or_else(|| previous.as_ref().and_then(|record| record.selected_track_ids.clone())),
                         selected_scene_id: payload_string(&payload, "selectedSceneId"),
                         preview_tab: payload_string(&payload, "previewTab"),
                         canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
@@ -3057,6 +3336,14 @@ pub fn handle_manuscripts_channel(
                         timeline_zoom_percent: payload_field(&payload, "timelineZoomPercent")
                             .and_then(|value| value.as_f64())
                             .unwrap_or(100.0),
+                        undo_stack: previous
+                            .as_ref()
+                            .map(|record| record.undo_stack.clone())
+                            .unwrap_or_default(),
+                        redo_stack: previous
+                            .as_ref()
+                            .map(|record| record.redo_stack.clone())
+                            .unwrap_or_default(),
                         updated_at,
                     },
                 );

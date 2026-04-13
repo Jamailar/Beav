@@ -614,7 +614,9 @@ struct EditorRuntimeStateRecord {
     session_id: Option<String>,
     playhead_seconds: f64,
     selected_clip_id: Option<String>,
+    selected_clip_ids: Option<Value>,
     active_track_id: Option<String>,
+    selected_track_ids: Option<Value>,
     selected_scene_id: Option<String>,
     preview_tab: Option<String>,
     canvas_ratio_preset: Option<String>,
@@ -632,6 +634,8 @@ struct EditorRuntimeStateRecord {
     viewport_scroll_top: f64,
     viewport_max_scroll_top: f64,
     timeline_zoom_percent: f64,
+    undo_stack: Vec<Value>,
+    redo_stack: Vec<Value>,
     updated_at: u128,
 }
 
@@ -2874,6 +2878,141 @@ fn execute_interactive_tool_call(
                         ensure_script_confirmed("clip_split")?;
                         editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"])
                     })
+                }
+                "clip_duplicate" | "clip-duplicate" => {
+                    let result = call_manuscript_channel("manuscripts:duplicate-editor-project-clip", {
+                        ensure_script_confirmed("clip_duplicate")?;
+                        editor_tool_payload(file_path.clone(), arguments, &["clipId", "trackId", "fromMs"])
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor clip duplicated",
+                            Some(json!({
+                                "filePath": file_path,
+                                "clipId": payload_string(arguments, "clipId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "clip_replace_asset" | "clip-replace-asset" => {
+                    let result = call_manuscript_channel("manuscripts:replace-editor-project-clip-asset", {
+                        ensure_script_confirmed("clip_replace_asset")?;
+                        editor_tool_payload(file_path.clone(), arguments, &["clipId", "assetId"])
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor clip asset replaced",
+                            Some(json!({
+                                "filePath": file_path,
+                                "clipId": payload_string(arguments, "clipId"),
+                                "assetId": payload_string(arguments, "assetId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "marker_add" | "marker-add" => {
+                    let result = call_manuscript_channel("manuscripts:add-editor-project-marker", {
+                        ensure_script_confirmed("marker_add")?;
+                        editor_tool_payload(file_path.clone(), arguments, &["frame", "color", "label"])
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor marker added",
+                            Some(json!({
+                                "filePath": file_path,
+                                "frame": payload_field(arguments, "frame").cloned().unwrap_or(Value::Null)
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "marker_update" | "marker-update" => {
+                    let result = call_manuscript_channel("manuscripts:update-editor-project-marker", {
+                        ensure_script_confirmed("marker_update")?;
+                        editor_tool_payload(file_path.clone(), arguments, &["markerId", "frame", "color", "label"])
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor marker updated",
+                            Some(json!({
+                                "filePath": file_path,
+                                "markerId": payload_string(arguments, "markerId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "marker_delete" | "marker-delete" => {
+                    let result = call_manuscript_channel("manuscripts:delete-editor-project-marker", {
+                        ensure_script_confirmed("marker_delete")?;
+                        editor_tool_payload(file_path.clone(), arguments, &["markerId"])
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor marker deleted",
+                            Some(json!({
+                                "filePath": file_path,
+                                "markerId": payload_string(arguments, "markerId")
+                            })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "undo" => {
+                    let result = call_manuscript_channel("manuscripts:undo-editor-project", {
+                        ensure_script_confirmed("undo")?;
+                        json!({ "filePath": file_path.clone() })
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor undo",
+                            Some(json!({ "filePath": file_path })),
+                        );
+                    }
+                    Ok(result)
+                }
+                "redo" => {
+                    let result = call_manuscript_channel("manuscripts:redo-editor-project", {
+                        ensure_script_confirmed("redo")?;
+                        json!({ "filePath": file_path.clone() })
+                    })?;
+                    if let Some(active_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(active_session_id),
+                            "editor.timeline_changed",
+                            "editor redo",
+                            Some(json!({ "filePath": file_path })),
+                        );
+                    }
+                    Ok(result)
                 }
                 "remotion_generate" | "remotion-generate" => {
                     call_manuscript_channel("manuscripts:generate-remotion-scene", {

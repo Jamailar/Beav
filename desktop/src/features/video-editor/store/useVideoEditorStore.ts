@@ -119,6 +119,8 @@ export type VideoEditorState = {
         history: {
             undoStack: EditorProjectFile[];
             redoStack: EditorProjectFile[];
+            canUndo: boolean;
+            canRedo: boolean;
         };
         derived: {
             durationMs: number;
@@ -236,6 +238,8 @@ export function createVideoEditorStore(initialState?: Partial<VideoEditorState>)
             history: {
                 undoStack: [],
                 redoStack: [],
+                canUndo: false,
+                canRedo: false,
             },
             derived: {
                 durationMs: 0,

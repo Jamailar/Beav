@@ -5,6 +5,9 @@ import type {
     RemotionScene,
     RemotionSceneEntity,
 } from './remotion/types';
+import type { ItemKeyframes } from '@/types/keyframe';
+import type { ProjectMarker } from '@/types/timeline';
+import type { Transition } from '@/types/transition';
 
 export type EditorTrackKind = 'video' | 'audio' | 'subtitle' | 'text' | 'motion';
 export type EditorItemType = 'media' | 'subtitle' | 'text' | 'motion';
@@ -122,6 +125,9 @@ export type EditorProjectFile = {
     tracks: EditorTrack[];
     items: EditorItem[];
     animationLayers: EditorAnimationLayer[];
+    markers?: ProjectMarker[];
+    transitions?: Transition[];
+    keyframes?: ItemKeyframes[];
     stage: {
         itemTransforms: Record<string, {
             x: number;
@@ -322,6 +328,9 @@ export function deriveLegacyTimelineClips(project: EditorProjectFile): LegacyTim
     const assetMap = buildAssetMap(project);
     const orderedTrackIds = deriveTrackNames(project, false);
     const trackIndex = new Map(orderedTrackIds.map((trackId, index) => [trackId, index]));
+    const outgoingTransitions = new Map(
+        (project.transitions || []).map((transition) => [transition.leftClipId, transition]),
+    );
     return projectedItems
         .filter((item) => item.type !== 'motion')
         .slice()
@@ -352,7 +361,22 @@ export function deriveLegacyTimelineClips(project: EditorProjectFile): LegacyTim
                     mimeType: asset?.mimeType,
                     subtitleStyle: {},
                     textStyle: {},
-                    transitionStyle: {},
+                    transitionStyle: outgoingTransitions.has(item.id)
+                        ? {
+                            presetId: outgoingTransitions.get(item.id)?.presentation,
+                            kind: outgoingTransitions.get(item.id)?.presentation === 'fade'
+                                ? 'fade'
+                                : outgoingTransitions.get(item.id)?.presentation === 'slide'
+                                    ? 'slide'
+                                    : outgoingTransitions.get(item.id)?.presentation === 'wipe'
+                                        ? 'wipe'
+                                        : outgoingTransitions.get(item.id)?.presentation === 'flip'
+                                            ? 'flip'
+                                            : 'none',
+                            direction: outgoingTransitions.get(item.id)?.direction as LegacyTimelineClip['transitionStyle']['direction'],
+                            durationMs: Math.round(((outgoingTransitions.get(item.id)?.durationInFrames || 0) / Math.max(1, project.project.fps)) * 1000),
+                        }
+                        : {},
                 };
             }
             return {
@@ -373,7 +397,22 @@ export function deriveLegacyTimelineClips(project: EditorProjectFile): LegacyTim
                 mimeType: 'text/plain',
                 subtitleStyle: item.type === 'subtitle' ? item.style : {},
                 textStyle: item.type === 'text' ? item.style : {},
-                transitionStyle: {},
+                transitionStyle: outgoingTransitions.has(item.id)
+                    ? {
+                        presetId: outgoingTransitions.get(item.id)?.presentation,
+                        kind: outgoingTransitions.get(item.id)?.presentation === 'fade'
+                            ? 'fade'
+                            : outgoingTransitions.get(item.id)?.presentation === 'slide'
+                                ? 'slide'
+                                : outgoingTransitions.get(item.id)?.presentation === 'wipe'
+                                    ? 'wipe'
+                                    : outgoingTransitions.get(item.id)?.presentation === 'flip'
+                                        ? 'flip'
+                                        : 'none',
+                        direction: outgoingTransitions.get(item.id)?.direction as LegacyTimelineClip['transitionStyle']['direction'],
+                        durationMs: Math.round(((outgoingTransitions.get(item.id)?.durationInFrames || 0) / Math.max(1, project.project.fps)) * 1000),
+                    }
+                    : {},
             };
         });
 }
