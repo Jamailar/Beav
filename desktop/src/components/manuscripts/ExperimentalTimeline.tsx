@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import { AudioLines, Eye, EyeOff, Lock, Minus, Orbit, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
+import { AudioLines, Eye, EyeOff, GripVertical, Lock, Minus, Orbit, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
 import {
     buildAssetMap,
     deriveProjectedEditorItems,
@@ -52,7 +52,13 @@ type DragPreviewMap = Record<string, {
     trackId?: string;
 }>;
 
-const RAIL_WIDTH = 184;
+type TrackReorderState = {
+    pointerId: number;
+    trackId: string;
+    startClientY: number;
+};
+
+const RAIL_WIDTH = 160;
 const RULER_HEIGHT = 38;
 const ROW_HEIGHT: Record<EditorTrackKind, number> = {
     video: 54,
@@ -175,7 +181,10 @@ export function ExperimentalTimeline({
     const bodyRef = useRef<HTMLDivElement | null>(null);
     const [dragState, setDragState] = useState<DragState | null>(null);
     const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
+    const [trackReorderState, setTrackReorderState] = useState<TrackReorderState | null>(null);
+    const [trackReorderInsertIndex, setTrackReorderInsertIndex] = useState<number | null>(null);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; itemId: string } | null>(null);
+    const [trackContextMenu, setTrackContextMenu] = useState<{ x: number; y: number; trackId: string } | null>(null);
     const tracks = useMemo(() => timelineTracks(project), [project]);
     const projectedItems = useMemo(() => deriveProjectedEditorItems(project), [project]);
     const assetMap = useMemo(() => buildAssetMap(project), [project]);
@@ -195,6 +204,7 @@ export function ExperimentalTimeline({
         () => new Map(rowOffsets.map((row) => [row.track.id, row.top])),
         [rowOffsets],
     );
+    const trackContentHeight = rowOffsets.reduce((sum, row) => sum + row.height, 0);
 
     const clientXToTimelineMs = (clientX: number) => {
         const rect = bodyRef.current?.getBoundingClientRect();
@@ -210,6 +220,22 @@ export function ExperimentalTimeline({
         if (!rect) return null;
         const contentY = clientY - rect.top - RULER_HEIGHT + scrollTop;
         return rowOffsets.find((row) => contentY >= row.top && contentY < row.top + row.height)?.track || null;
+    };
+
+    const clientYToTrackInsertIndex = (clientY: number) => {
+        const rect = bodyRef.current?.getBoundingClientRect();
+        const scrollTop = bodyRef.current?.scrollTop || 0;
+        if (!rect) return 0;
+        const contentY = clientY - rect.top - RULER_HEIGHT + scrollTop;
+
+        for (let index = 0; index < rowOffsets.length; index += 1) {
+            const row = rowOffsets[index]!;
+            if (contentY < row.top + row.height / 2) {
+                return index;
+            }
+        }
+
+        return rowOffsets.length;
     };
 
     const resolveMoveTargetTrackId = (kind: EditorTrackKind, hoveredTrackId: string | null | undefined, fallbackTrackId: string) => {
@@ -315,10 +341,59 @@ export function ExperimentalTimeline({
         };
     }, [clientXToTimelineMs, contentWidth, dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond, rowOffsets, tracks]);
 
+    useEffect(() => {
+        if (!trackReorderState) return;
+
+        const handlePointerMove = (event: PointerEvent) => {
+            if (event.pointerId !== trackReorderState.pointerId) return;
+            setTrackReorderInsertIndex(clientYToTrackInsertIndex(event.clientY));
+        };
+
+        const handlePointerUp = (event: PointerEvent) => {
+            if (event.pointerId !== trackReorderState.pointerId) return;
+
+            const currentIndex = tracks.findIndex((track) => track.id === trackReorderState.trackId);
+            const rawInsertIndex = trackReorderInsertIndex ?? currentIndex;
+            let targetIndex = rawInsertIndex;
+            if (targetIndex > currentIndex) {
+                targetIndex -= 1;
+            }
+            targetIndex = clamp(targetIndex, 0, Math.max(0, tracks.length - 1));
+
+            if (currentIndex >= 0 && targetIndex !== currentIndex) {
+                const direction: 'up' | 'down' = targetIndex > currentIndex ? 'down' : 'up';
+                const distance = Math.abs(targetIndex - currentIndex);
+                onApplyCommands(Array.from({ length: distance }, () => ({
+                    type: 'reorder_tracks',
+                    trackId: trackReorderState.trackId,
+                    direction,
+                } as EditorCommand)));
+                onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [trackReorderState.trackId] });
+            }
+
+            setTrackReorderState(null);
+            setTrackReorderInsertIndex(null);
+        };
+
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'ns-resize';
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('pointercancel', handlePointerUp);
+
+        return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
+            window.removeEventListener('pointercancel', handlePointerUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        };
+    }, [clientYToTrackInsertIndex, onApplyCommands, onSelectionChange, rowOffsets.length, trackReorderInsertIndex, trackReorderState, tracks]);
+
     const selectedItems = projectedItems.filter((item) => selectedItemIds.includes(item.id));
     const primaryItem = primaryItemId ? projectedItems.find((item) => item.id === primaryItemId) || null : null;
-    const activeTrack = selectedTrackIds[0] ? project.tracks.find((track) => track.id === selectedTrackIds[0]) || null : null;
     const contextMenuItem = contextMenu ? projectedItems.find((item) => item.id === contextMenu.itemId) || null : null;
+    const trackContextMenuTrack = trackContextMenu ? project.tracks.find((track) => track.id === trackContextMenu.trackId) || null : null;
     const itemAtPlayhead = projectedItems.find((item) => (
         item.type !== 'motion'
         && currentTimeMs >= item.fromMs
@@ -332,6 +407,12 @@ export function ExperimentalTimeline({
     const activeDragTrackId = dragState?.mode === 'move' && dragState.itemId
         ? dragPreview?.[dragState.itemId]?.trackId || null
         : null;
+    const activeTrackReorderId = trackReorderState?.trackId || null;
+    const trackReorderIndicatorTop = trackReorderInsertIndex === null
+        ? null
+        : trackReorderInsertIndex >= rowOffsets.length
+            ? trackContentHeight
+            : rowOffsets[trackReorderInsertIndex]?.top ?? 0;
 
     const addTrack = (kind: EditorTrackKind) => {
         onApplyCommands([{ type: 'add_track', kind, trackId: nextTrackId(project, kind) }]);
@@ -383,15 +464,18 @@ export function ExperimentalTimeline({
     };
 
     useEffect(() => {
-        if (!contextMenu) return;
-        const closeMenu = () => setContextMenu(null);
+        if (!contextMenu && !trackContextMenu) return;
+        const closeMenu = () => {
+            setContextMenu(null);
+            setTrackContextMenu(null);
+        };
         window.addEventListener('pointerdown', closeMenu);
         window.addEventListener('scroll', closeMenu, true);
         return () => {
             window.removeEventListener('pointerdown', closeMenu);
             window.removeEventListener('scroll', closeMenu, true);
         };
-    }, [contextMenu]);
+    }, [contextMenu, trackContextMenu]);
 
     const onDropAsset = (event: DragEvent<HTMLDivElement>) => {
         event.preventDefault();
@@ -517,7 +601,7 @@ export function ExperimentalTimeline({
             >
                 <div className="relative" style={{ width: contentWidth, minHeight: RULER_HEIGHT + rowOffsets.reduce((sum, row) => sum + row.height, 0) }}>
                     <div className="sticky top-0 z-20 flex h-[38px] border-b border-white/10 bg-[#141519]">
-                        <div className="flex w-[184px] items-center px-4 text-[11px] uppercase tracking-[0.2em] text-white/35">Tracks</div>
+                        <div className="flex items-center px-3 text-[11px] uppercase tracking-[0.2em] text-white/35" style={{ width: RAIL_WIDTH }}>Tracks</div>
                         <div
                             className="relative flex-1 cursor-pointer"
                             onPointerDown={(event) => {
@@ -548,6 +632,12 @@ export function ExperimentalTimeline({
                             height: rowOffsets.reduce((sum, row) => sum + row.height, 0),
                         }}
                     />
+                    {trackReorderIndicatorTop !== null ? (
+                        <div
+                            className="pointer-events-none absolute left-0 right-0 z-[19] h-[2px] bg-cyan-300 shadow-[0_0_0_1px_rgba(34,211,238,0.18)]"
+                            style={{ top: RULER_HEIGHT + trackReorderIndicatorTop }}
+                        />
+                    ) : null}
 
                     {rowOffsets.map(({ track, top, height }) => {
                         const TrackIcon = kindIcon(track.kind);
@@ -559,12 +649,51 @@ export function ExperimentalTimeline({
                             <div key={track.id} className="relative flex border-b border-white/[0.06]" style={{ height }}>
                                 <div
                                     className={clsx(
-                                        'sticky left-0 z-10 flex w-[184px] shrink-0 items-center justify-between gap-2 border-r border-white/10 px-3',
-                                        selectedTrackIds.includes(track.id) ? 'bg-cyan-400/10' : 'bg-[#141519]'
+                                        'sticky left-0 z-10 flex shrink-0 items-center justify-between gap-1.5 border-r border-white/10 px-2.5',
+                                        selectedTrackIds.includes(track.id) ? 'bg-cyan-400/10' : 'bg-[#141519]',
+                                        activeTrackReorderId === track.id && 'bg-cyan-400/14'
                                     )}
+                                    style={{ width: RAIL_WIDTH }}
                                     onClick={() => onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [track.id] })}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        setContextMenu(null);
+                                        onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [track.id] });
+                                        setTrackContextMenu({
+                                            x: event.clientX,
+                                            y: event.clientY,
+                                            trackId: track.id,
+                                        });
+                                    }}
                                 >
-                                    <div className="flex min-w-0 items-center gap-2">
+                                    <div className="flex min-w-0 items-center gap-1.5">
+                                        <button
+                                            type="button"
+                                            className={clsx(
+                                                'group inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/35 transition hover:bg-white/[0.06] hover:text-white/70',
+                                                activeTrackReorderId === track.id ? 'cursor-grabbing' : 'cursor-grab',
+                                            )}
+                                            style={{ cursor: activeTrackReorderId === track.id ? 'grabbing' : 'grab' }}
+                                            title="拖动调整轨道顺序"
+                                            aria-label={`拖动调整 ${track.name} 顺序`}
+                                            onPointerDown={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [track.id] });
+                                                setTrackReorderState({
+                                                    pointerId: event.pointerId,
+                                                    trackId: track.id,
+                                                    startClientY: event.clientY,
+                                                });
+                                                setTrackReorderInsertIndex(rowOffsets.findIndex((row) => row.track.id === track.id));
+                                            }}
+                                        >
+                                            <GripVertical
+                                                className={clsx('h-4.5 w-4.5', activeTrackReorderId === track.id ? 'cursor-grabbing' : 'cursor-grab')}
+                                                style={{ cursor: activeTrackReorderId === track.id ? 'grabbing' : 'grab' }}
+                                            />
+                                        </button>
                                         <TrackIcon className="h-4 w-4 text-white/65" />
                                         <div className="min-w-0 truncate text-xs font-medium text-white">{track.name}</div>
                                     </div>
@@ -728,18 +857,37 @@ export function ExperimentalTimeline({
                 </div>
             </div>
 
-            {activeTrack ? (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/75">
-                    <span>{activeTrack.name}</span>
-                    <button type="button" onClick={() => onApplyCommands([{ type: 'reorder_tracks', trackId: activeTrack.id, direction: 'up' }])} className="rounded-full border border-white/10 px-3 py-1">上移</button>
-                    <button type="button" onClick={() => onApplyCommands([{ type: 'reorder_tracks', trackId: activeTrack.id, direction: 'down' }])} className="rounded-full border border-white/10 px-3 py-1">下移</button>
-                    <button type="button" onClick={() => deleteSelected()} className="rounded-full border border-red-400/20 bg-red-400/10 px-3 py-1 text-red-100">删除轨道</button>
-                </div>
-            ) : null}
-
             {selectedItems.length > 0 ? (
                 <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/65">
                     已选 {selectedItems.length} 项
+                </div>
+            ) : null}
+            {trackContextMenu && trackContextMenuTrack ? (
+                <div
+                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                    style={{ left: trackContextMenu.x, top: trackContextMenu.y }}
+                >
+                    <button
+                        type="button"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-white/85 hover:bg-white/10"
+                        onClick={() => {
+                            onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [trackContextMenuTrack.id] });
+                            setTrackContextMenu(null);
+                        }}
+                    >
+                        选中轨道
+                    </button>
+                    <button
+                        type="button"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
+                        onClick={() => {
+                            onApplyCommands([{ type: 'delete_tracks', trackIds: [trackContextMenuTrack.id] }]);
+                            onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
+                            setTrackContextMenu(null);
+                        }}
+                    >
+                        删除轨道
+                    </button>
                 </div>
             ) : null}
             {contextMenu && contextMenuItem ? (
