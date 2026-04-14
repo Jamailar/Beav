@@ -17,11 +17,15 @@ type ExperimentalTimelineProps = {
     project: EditorProjectFile;
     currentTimeMs: number;
     isPlaying: boolean;
+    canAutoTranscribeSubtitles?: boolean;
+    isTranscribingSubtitles?: boolean;
     selectedItemIds: string[];
     primaryItemId: string | null;
     selectedTrackIds: string[];
+    subtitleTranscriptionNotice?: string | null;
     zoomPercent: number;
     onApplyCommands: (commands: EditorCommand[]) => void;
+    onAutoTranscribeSubtitles: () => void;
     onSeekTimeMs: (timeMs: number) => void;
     onTogglePlayback: () => void;
     onSelectionChange: (selection: { itemIds: string[]; primaryItemId: string | null; trackIds: string[] }) => void;
@@ -173,11 +177,15 @@ export function ExperimentalTimeline({
     project,
     currentTimeMs,
     isPlaying,
+    canAutoTranscribeSubtitles = true,
+    isTranscribingSubtitles = false,
     selectedItemIds,
     primaryItemId,
     selectedTrackIds,
+    subtitleTranscriptionNotice = null,
     zoomPercent,
     onApplyCommands,
+    onAutoTranscribeSubtitles,
     onSeekTimeMs,
     onTogglePlayback,
     onSelectionChange,
@@ -651,6 +659,20 @@ export function ExperimentalTimeline({
                 >
                     <Trash2 className="h-3.5 w-3.5" />
                 </button>
+                <button
+                    type="button"
+                    onClick={onAutoTranscribeSubtitles}
+                    disabled={!canAutoTranscribeSubtitles || isTranscribingSubtitles}
+                    className={clsx(
+                        toolbarIconButtonClass,
+                        'text-cyan-100/85 hover:bg-cyan-400/10 hover:text-cyan-50 disabled:opacity-40',
+                        isTranscribingSubtitles && 'animate-pulse',
+                    )}
+                    title={isTranscribingSubtitles ? '字幕识别中' : '自动识别字幕'}
+                    aria-label={isTranscribingSubtitles ? '字幕识别中' : '自动识别字幕'}
+                >
+                    <Type className="h-3.5 w-3.5" />
+                </button>
             </div>
 
             <div
@@ -925,6 +947,11 @@ export function ExperimentalTimeline({
             {selectedItems.length > 0 ? (
                 <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/65">
                     已选 {selectedItems.length} 项
+                </div>
+            ) : null}
+            {subtitleTranscriptionNotice ? (
+                <div className="mt-3 rounded-2xl border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2 text-xs text-cyan-100/85">
+                    {subtitleTranscriptionNotice}
                 </div>
             ) : null}
             {trackContextMenu && trackContextMenuTrack ? (

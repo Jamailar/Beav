@@ -185,6 +185,8 @@ export function ExperimentalVideoWorkbench({
     const [localProject, setLocalProject] = useState<EditorProjectFile | null>(packageState?.editorProject || null);
     const [saveNonce, setSaveNonce] = useState(0);
     const [isGeneratingMotion, setIsGeneratingMotion] = useState(false);
+    const [isTranscribingSubtitles, setIsTranscribingSubtitles] = useState(false);
+    const [subtitleTranscriptionNotice, setSubtitleTranscriptionNotice] = useState<string | null>(null);
     const [chatPaneWidth, setChatPaneWidth] = useState(420);
     const [chatResizeState, setChatResizeState] = useState<ChatResizeState | null>(null);
     const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('assets');
@@ -455,6 +457,23 @@ export function ExperimentalVideoWorkbench({
         }
         return null;
     }, [localProject, selectedAssetId, selectedEditorItem]);
+    const subtitleRecognitionItem = useMemo(() => {
+        if (!localProject) return null;
+        const isTranscribableMediaItem = (item: typeof projectedItems[number]) => {
+            if (item.type !== 'media') return false;
+            const asset = localProject.assets.find((candidate) => candidate.id === item.assetId) || null;
+            return asset?.kind === 'audio' || asset?.kind === 'video';
+        };
+        const primarySelected = projectedItems.find((item) => item.id === selection.primaryItemId) || null;
+        if (primarySelected && isTranscribableMediaItem(primarySelected)) {
+            return primarySelected;
+        }
+        return projectedItems.find((item) => (
+            isTranscribableMediaItem(item)
+            && currentTime * 1000 >= item.fromMs
+            && currentTime * 1000 <= item.fromMs + item.durationMs
+        )) || null;
+    }, [currentTime, localProject, projectedItems, selection.primaryItemId]);
     const selectedStageTransform = useMemo(
         () => stageSelection.primaryId ? localProject?.stage.itemTransforms[stageSelection.primaryId] || null : null,
         [localProject, stageSelection.primaryId]
@@ -620,6 +639,44 @@ export function ExperimentalVideoWorkbench({
             }
         } catch (error) {
             console.error('Failed to save animation element:', error);
+        }
+    };
+
+    const handleAutoTranscribeSubtitles = async () => {
+        const clipId = String(subtitleRecognitionItem?.id || '').trim();
+        if (!editorFile || !clipId || isTranscribingSubtitles) return;
+        setIsTranscribingSubtitles(true);
+        setSubtitleTranscriptionNotice(null);
+        try {
+            const selectedSubtitleTrackId = selection.trackIds.find((trackId) => {
+                const track = localProject?.tracks.find((candidate) => candidate.id === trackId) || null;
+                return track?.kind === 'subtitle';
+            });
+            const result = await window.ipcRenderer.invoke('manuscripts:transcribe-package-subtitles', {
+                filePath: editorFile,
+                clipId,
+                track: selectedSubtitleTrackId || undefined,
+            }) as {
+                success?: boolean;
+                error?: string;
+                subtitleCount?: number;
+                subtitleFile?: string;
+                insertedClipId?: string;
+                state?: PackageStateLike;
+            };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '字幕识别失败');
+            }
+            onPackageStateChange(result.state);
+            const insertedClipId = String(result.insertedClipId || '').trim();
+            if (insertedClipId) {
+                setSelection({ itemIds: [insertedClipId], primaryItemId: insertedClipId, trackIds: [] });
+            }
+            setSubtitleTranscriptionNotice(`已生成 ${Math.max(0, Number(result.subtitleCount || 0))} 段字幕`);
+        } catch (error) {
+            setSubtitleTranscriptionNotice(error instanceof Error ? error.message : String(error));
+        } finally {
+            setIsTranscribingSubtitles(false);
         }
     };
 
@@ -1371,12 +1428,18 @@ export function ExperimentalVideoWorkbench({
                     project={localProject}
                     currentTimeMs={currentTime * 1000}
                     isPlaying={isPlaying}
+                    canAutoTranscribeSubtitles={Boolean(subtitleRecognitionItem)}
+                    isTranscribingSubtitles={isTranscribingSubtitles}
                     selectedItemIds={selection.itemIds}
                     primaryItemId={selection.primaryItemId}
                     selectedTrackIds={selection.trackIds}
+                    subtitleTranscriptionNotice={subtitleTranscriptionNotice}
                     zoomPercent={zoomPercent}
                     onApplyCommands={(commands) => {
                         void dispatchEditorCommands(commands);
+                    }}
+                    onAutoTranscribeSubtitles={() => {
+                        void handleAutoTranscribeSubtitles();
                     }}
                     onSeekTimeMs={seekTimeMs}
                     onTogglePlayback={handleTogglePlayback}
