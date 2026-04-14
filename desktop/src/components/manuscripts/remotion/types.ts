@@ -13,6 +13,7 @@ export type OverlayPosition = 'top' | 'center' | 'bottom';
 export type RemotionRenderMode = 'full' | 'motion-layer';
 export type RemotionEntityType = 'text' | 'shape' | 'image' | 'svg' | 'video' | 'group';
 export type RemotionShapeKind = 'rect' | 'circle' | 'apple';
+export type RemotionEntityPositionMode = 'canvas-space' | 'video-space';
 export type RemotionTransitionPresentation = 'fade' | 'wipe' | 'slide' | 'flip' | 'clockWipe' | 'iris' | string;
 export type RemotionTransitionTiming = 'linear' | 'spring' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier';
 export type RemotionTransitionDirection = 'from-left' | 'from-right' | 'from-top' | 'from-bottom';
@@ -51,6 +52,9 @@ export interface RemotionEntityAnimation {
 export interface RemotionSceneEntity {
     id: string;
     type: RemotionEntityType;
+    positionMode?: RemotionEntityPositionMode;
+    referenceWidth?: number | null;
+    referenceHeight?: number | null;
     startFrame?: number;
     durationInFrames?: number;
     x: number;
@@ -144,6 +148,8 @@ export interface RemotionBaseMedia {
     sourceAssetIds?: string[];
     outputPath?: string | null;
     durationMs?: number;
+    width?: number | null;
+    height?: number | null;
     status?: string;
     updatedAt?: number | null;
 }

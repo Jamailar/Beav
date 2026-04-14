@@ -38,6 +38,7 @@
 - React / Remotion 层要围绕这个对象组织渲染与动画，而不是只生成 overlayTitle / overlayBody。
 
 只有当用户明确要“屏幕上显示一句描述性文字”时，才把描述写成 `text` entity 或 overlay。
+默认情况下，`overlayTitle`、`overlayBody`、`overlays` 都应保持为空，只保留动画对象本身。
 
 ### 第三阶段：先确定时间，再确定动画
 动画设计时必须明确：

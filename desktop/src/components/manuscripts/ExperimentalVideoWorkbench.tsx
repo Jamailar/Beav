@@ -46,6 +46,8 @@ type VideoProjectLike = {
         sourceAssetIds?: string[];
         outputPath?: string | null;
         durationMs?: number;
+        width?: number | null;
+        height?: number | null;
         status?: string;
         updatedAt?: number | null;
     };
@@ -251,6 +253,8 @@ export function ExperimentalVideoWorkbench({
             && composition.height === nextHeight
             && composition.durationInFrames === nextDurationInFrames
             && (composition.baseMedia?.durationMs || 0) === (nextBaseDurationMs || 0)
+            && (composition.baseMedia?.width || 0) === (previewMediaMetrics.width || 0)
+            && (composition.baseMedia?.height || 0) === (previewMediaMetrics.height || 0)
             && nextScenes === composition.scenes;
         if (unchanged) {
             return composition;
@@ -264,6 +268,8 @@ export function ExperimentalVideoWorkbench({
             baseMedia: {
                 ...(composition.baseMedia || {}),
                 durationMs: nextBaseDurationMs,
+                width: previewMediaMetrics.width,
+                height: previewMediaMetrics.height,
             },
         };
     }, [composition, compositionHasMotion, naturalDurationInFrames, previewMediaMetrics]);
@@ -338,19 +344,21 @@ export function ExperimentalVideoWorkbench({
 
     useEffect(() => {
         if (!onSaveRemotionScene || !composition || !previewMediaMetrics?.width || !previewMediaMetrics?.height) return;
-        if (compositionHasMotion) return;
         const needsCanvasResize = composition.width === 1080
             && composition.height === 1920
             && !(composition.width === previewMediaMetrics.width && composition.height === previewMediaMetrics.height);
         const needsDurationResize = shouldAutoExpandDuration(composition, naturalDurationInFrames);
-        if (!needsCanvasResize && !needsDurationResize) return;
+        const needsBaseMediaSizing = (composition.baseMedia?.width || 0) !== previewMediaMetrics.width
+            || (composition.baseMedia?.height || 0) !== previewMediaMetrics.height;
+        if (compositionHasMotion && !needsBaseMediaSizing) return;
+        if (!needsCanvasResize && !needsDurationResize && !needsBaseMediaSizing) return;
         const nextKey = `${editorFile}:${previewMediaMetrics.width}x${previewMediaMetrics.height}:${naturalDurationInFrames}`;
         if (lastAutoSizedCompositionKeyRef.current === nextKey) return;
         lastAutoSizedCompositionKeyRef.current = nextKey;
         onSaveRemotionScene({
             ...composition,
-            width: needsCanvasResize ? previewMediaMetrics.width : composition.width,
-            height: needsCanvasResize ? previewMediaMetrics.height : composition.height,
+            width: !compositionHasMotion && needsCanvasResize ? previewMediaMetrics.width : composition.width,
+            height: !compositionHasMotion && needsCanvasResize ? previewMediaMetrics.height : composition.height,
             durationInFrames: needsDurationResize ? naturalDurationInFrames : composition.durationInFrames,
             scenes: needsDurationResize && composition.scenes[0]
                 ? [{
@@ -363,6 +371,8 @@ export function ExperimentalVideoWorkbench({
                 durationMs: needsDurationResize
                     ? Math.round((naturalDurationInFrames / (composition.fps || 30)) * 1000)
                     : composition.baseMedia?.durationMs,
+                width: previewMediaMetrics.width,
+                height: previewMediaMetrics.height,
             },
         });
     }, [composition, compositionHasMotion, editorFile, naturalDurationInFrames, onSaveRemotionScene, previewMediaMetrics]);
@@ -780,11 +790,11 @@ export function ExperimentalVideoWorkbench({
                         contentWidthPreset="default"
                         allowFileUpload
                         welcomeTitle="AI 剪辑助手"
-                        welcomeSubtitle="先确认脚本，再让 AI 生成基础视频与 Remotion 图层。"
+                        welcomeSubtitle="先确认脚本，再让 AI 生成基础视频与 Remotion 动画图层。默认只生成动画主体。"
                         shortcuts={[
                             { label: '读取工程', text: '请先使用 redbox_editor 的 project_read 读取当前视频工程，然后总结脚本状态、基础视频状态和当前 Remotion 结构。' },
                             { label: '生成基础剪辑', text: '请先读取当前脚本和工程，然后用 redbox_editor 的 ffmpeg_edit 生成基础视频，并说明你执行了哪些剪辑步骤。' },
-                            { label: '生成动画', text: '请先读取当前 project_read 和 remotion_read，基于已确认脚本生成一版 Remotion 标题/字幕/图形动画方案。' },
+                            { label: '生成动画', text: '请先读取当前 project_read 和 remotion_read，基于已确认脚本生成一版 Remotion 对象动画方案。除非脚本明确要求文字层，否则不要添加标题、字幕或说明。' },
                         ]}
                         fixedSessionBannerText="视频 AI 工作台"
                     />

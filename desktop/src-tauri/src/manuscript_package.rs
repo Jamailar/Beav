@@ -243,6 +243,8 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
             "sourceAssetIds": [],
             "outputPath": Value::Null,
             "durationMs": ((duration_in_frames as f64 / fps as f64) * 1000.0).round() as i64,
+            "width": Value::Null,
+            "height": Value::Null,
             "status": "missing",
             "updatedAt": Value::Null
         },
@@ -425,6 +427,8 @@ fn infer_legacy_base_media(
         "sourceAssetIds": source_asset_ids,
         "outputPath": output_path,
         "durationMs": duration_ms_from_remotion.or(duration_ms_from_clips).unwrap_or(0),
+        "width": remotion.get("width").cloned().unwrap_or(Value::Null),
+        "height": remotion.get("height").cloned().unwrap_or(Value::Null),
         "status": if output_path.is_some() { "ready" } else { "missing" },
         "updatedAt": updated_at
     })
@@ -588,6 +592,17 @@ fn normalize_video_remotion_scene(
                 "baseMedia".to_string(),
                 legacy_base_media,
             );
+        } else {
+            let object_width = object.get("width").cloned().unwrap_or(Value::Null);
+            let object_height = object.get("height").cloned().unwrap_or(Value::Null);
+            if let Some(base_media) = object.get_mut("baseMedia").and_then(Value::as_object_mut) {
+            base_media
+                .entry("width".to_string())
+                .or_insert(object_width);
+            base_media
+                .entry("height".to_string())
+                .or_insert(object_height);
+            }
         }
         if !object.contains_key("ffmpegRecipe") {
             object.insert(
@@ -627,6 +642,8 @@ pub(crate) fn get_video_project_state(
             "sourceAssetIds": [],
             "outputPath": Value::Null,
             "durationMs": 0,
+            "width": Value::Null,
+            "height": Value::Null,
             "status": "missing",
             "updatedAt": Value::Null
         })),
@@ -1690,14 +1707,73 @@ fn normalize_entity_animation_kind(value: Option<&str>) -> &'static str {
     }
 }
 
-fn normalize_entity_animations(entity: &Value, duration_in_frames: i64) -> Vec<Value> {
-    let entity_y = entity.get("y").and_then(Value::as_f64).or_else(|| {
+fn normalize_entity_position_mode(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "video-space" | "video" | "media-space" | "media" => "video-space",
+        _ => "canvas-space",
+    }
+}
+
+fn entity_axis_value(entity: &Value, axis: &str) -> Option<f64> {
+    entity.get(axis).and_then(Value::as_f64).or_else(|| {
         entity
             .get("style")
             .and_then(Value::as_object)
-            .and_then(|style| style.get("y"))
+            .and_then(|style| style.get(axis))
             .and_then(Value::as_f64)
-    });
+    })
+}
+
+fn nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1.0
+}
+
+fn detect_absolute_fall_bounce_correction(
+    source_entity_y: Option<f64>,
+    animation: &Value,
+) -> Option<(f64, f64, f64)> {
+    if normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str)) != "fall-bounce" {
+        return None;
+    }
+    let source_entity_y = source_entity_y?;
+    let raw_from_y = animation
+        .get("params")
+        .and_then(Value::as_object)
+        .and_then(|params| params.get("fromY"))
+        .and_then(Value::as_f64)
+        .or_else(|| animation.get("fromY").and_then(Value::as_f64))?;
+    let raw_floor_y = animation
+        .get("params")
+        .and_then(Value::as_object)
+        .and_then(|params| params.get("floorY").or_else(|| params.get("toY")))
+        .and_then(Value::as_f64)
+        .or_else(|| animation.get("floorY").and_then(Value::as_f64))
+        .or_else(|| animation.get("toY").and_then(Value::as_f64))?;
+    if !nearly_equal(raw_from_y, source_entity_y)
+        || nearly_equal(raw_floor_y, 0.0)
+        || nearly_equal(raw_floor_y, source_entity_y)
+    {
+        return None;
+    }
+    Some((raw_floor_y, raw_from_y - raw_floor_y, 0.0))
+}
+
+fn normalized_entity_rest_y(entity: &Value) -> Option<f64> {
+    let source_entity_y = entity_axis_value(entity, "y");
+    let animations = entity.get("animations").and_then(Value::as_array)?;
+    animations
+        .iter()
+        .find_map(|animation| detect_absolute_fall_bounce_correction(source_entity_y, animation))
+        .map(|(rest_y, _, _)| rest_y)
+}
+
+fn normalize_entity_animations(
+    entity: &Value,
+    duration_in_frames: i64,
+    normalized_entity_y: Option<f64>,
+) -> Vec<Value> {
+    let source_entity_y = entity_axis_value(entity, "y");
+    let entity_y = normalized_entity_y.or(source_entity_y);
     entity
         .get("animations")
         .and_then(Value::as_array)
@@ -1748,34 +1824,41 @@ fn normalize_entity_animations(entity: &Value, duration_in_frames: i64) -> Vec<V
                     }
                 }
                 if kind == "fall-bounce" {
-                    let absolute_from_y = animation
-                        .get("fromY")
-                        .and_then(Value::as_f64)
-                        .or_else(|| object.get("fromY").and_then(Value::as_f64));
-                    let absolute_to_y = animation
-                        .get("toY")
-                        .and_then(Value::as_f64)
-                        .or_else(|| animation.get("floorY").and_then(Value::as_f64))
-                        .or_else(|| object.get("toY").and_then(Value::as_f64))
-                        .or_else(|| object.get("floorY").and_then(Value::as_f64));
-                    let relative_from_y = match (absolute_from_y, entity_y) {
-                        (Some(from_y), Some(entity_y)) => Some(from_y - entity_y),
-                        (Some(from_y), None) => Some(from_y),
-                        _ => None,
-                    };
-                    let relative_floor_y = match (absolute_to_y, entity_y) {
-                        (Some(to_y), Some(entity_y)) => Some(to_y - entity_y),
-                        (Some(to_y), None) => Some(to_y),
-                        _ => None,
-                    };
-                    if object.get("fromY").is_none() {
-                        if let Some(value) = relative_from_y {
-                            object.insert("fromY".to_string(), json!(value));
+                    if let Some((_, corrected_from_y, corrected_floor_y)) =
+                        detect_absolute_fall_bounce_correction(source_entity_y, &animation)
+                    {
+                        object.insert("fromY".to_string(), json!(corrected_from_y));
+                        object.insert("floorY".to_string(), json!(corrected_floor_y));
+                    } else {
+                        let absolute_from_y = animation
+                            .get("fromY")
+                            .and_then(Value::as_f64)
+                            .or_else(|| object.get("fromY").and_then(Value::as_f64));
+                        let absolute_to_y = animation
+                            .get("toY")
+                            .and_then(Value::as_f64)
+                            .or_else(|| animation.get("floorY").and_then(Value::as_f64))
+                            .or_else(|| object.get("toY").and_then(Value::as_f64))
+                            .or_else(|| object.get("floorY").and_then(Value::as_f64));
+                        let relative_from_y = match (absolute_from_y, entity_y) {
+                            (Some(from_y), Some(entity_y)) => Some(from_y - entity_y),
+                            (Some(from_y), None) => Some(from_y),
+                            _ => None,
+                        };
+                        let relative_floor_y = match (absolute_to_y, entity_y) {
+                            (Some(to_y), Some(entity_y)) => Some(to_y - entity_y),
+                            (Some(to_y), None) => Some(to_y),
+                            _ => None,
+                        };
+                        if object.get("fromY").is_none() {
+                            if let Some(value) = relative_from_y {
+                                object.insert("fromY".to_string(), json!(value));
+                            }
                         }
-                    }
-                    if object.get("floorY").is_none() {
-                        if let Some(value) = relative_floor_y {
-                            object.insert("floorY".to_string(), json!(value));
+                        if object.get("floorY").is_none() {
+                            if let Some(value) = relative_floor_y {
+                                object.insert("floorY".to_string(), json!(value));
+                            }
                         }
                     }
                 }
@@ -1940,6 +2023,30 @@ pub(crate) fn normalize_ai_remotion_scene(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("#05070b");
+    let fallback_base_media = fallback.get("baseMedia").cloned().unwrap_or_else(|| json!({}));
+    let candidate_base_media = candidate.get("baseMedia").cloned().unwrap_or_else(|| json!({}));
+    let base_media_reference_width = candidate_base_media
+        .get("width")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            fallback_base_media
+                .get("width")
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(width);
+    let base_media_reference_height = candidate_base_media
+        .get("height")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            fallback_base_media
+                .get("height")
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(height);
 
     let mut normalized_scenes = Vec::new();
     let mut current_frame = 0_i64;
@@ -2049,13 +2156,43 @@ pub(crate) fn normalize_ai_remotion_scene(
                     .unwrap_or(duration_in_frames);
                 let (entity_start_frame, entity_duration_in_frames) =
                     clamp_start_and_duration(requested_start, requested_duration, duration_in_frames);
+                let position_mode = normalize_entity_position_mode(
+                    entity
+                        .get("positionMode")
+                        .or_else(|| style.get("positionMode"))
+                        .and_then(Value::as_str),
+                );
+                let normalized_entity_y = normalized_entity_rest_y(&entity);
                 json!({
                     "id": entity.get("id").cloned().unwrap_or_else(|| json!(make_id("entity"))),
                     "type": entity.get("type").cloned().unwrap_or_else(|| json!("text")),
+                    "positionMode": position_mode,
+                    "referenceWidth": entity.get("referenceWidth")
+                        .cloned()
+                        .or_else(|| style.get("referenceWidth").cloned())
+                        .unwrap_or_else(|| {
+                            if position_mode == "video-space" {
+                                json!(base_media_reference_width)
+                            } else {
+                                json!(width)
+                            }
+                        }),
+                    "referenceHeight": entity.get("referenceHeight")
+                        .cloned()
+                        .or_else(|| style.get("referenceHeight").cloned())
+                        .unwrap_or_else(|| {
+                            if position_mode == "video-space" {
+                                json!(base_media_reference_height)
+                            } else {
+                                json!(height)
+                            }
+                        }),
                     "startFrame": entity_start_frame,
                     "durationInFrames": entity_duration_in_frames,
                     "x": entity.get("x").cloned().or_else(|| style.get("x").cloned()).unwrap_or_else(|| json!(0)),
-                    "y": entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0)),
+                    "y": normalized_entity_y
+                        .map(|value| json!(value))
+                        .unwrap_or_else(|| entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0))),
                     "width": entity.get("width").cloned().or_else(|| style.get("width").cloned()).unwrap_or_else(|| json!(320)),
                     "height": entity.get("height").cloned().or_else(|| style.get("height").cloned()).unwrap_or_else(|| json!(180)),
                     "rotation": entity.get("rotation").cloned().or_else(|| style.get("rotation").cloned()).unwrap_or_else(|| json!(0)),
@@ -2076,7 +2213,7 @@ pub(crate) fn normalize_ai_remotion_scene(
                     "src": entity.get("src").cloned().unwrap_or(Value::Null),
                     "svgMarkup": entity.get("svgMarkup").cloned().or_else(|| entity.get("svg").cloned()).unwrap_or(Value::Null),
                     "borderRadius": entity.get("borderRadius").cloned().or_else(|| style.get("borderRadius").cloned()).unwrap_or(Value::Null),
-                    "animations": normalize_entity_animations(&entity, entity_duration_in_frames),
+                    "animations": normalize_entity_animations(&entity, entity_duration_in_frames, normalized_entity_y),
                     "children": entity.get("children").cloned().unwrap_or_else(|| json!([]))
                 })
             })
@@ -2122,8 +2259,46 @@ pub(crate) fn normalize_ai_remotion_scene(
         .unwrap_or("motion-layer")
         .to_string();
 
+    let normalized_base_media = json!({
+        "sourceAssetIds": candidate_base_media
+            .get("sourceAssetIds")
+            .cloned()
+            .or_else(|| fallback_base_media.get("sourceAssetIds").cloned())
+            .unwrap_or_else(|| json!([])),
+        "outputPath": candidate_base_media
+            .get("outputPath")
+            .cloned()
+            .or_else(|| fallback_base_media.get("outputPath").cloned())
+            .unwrap_or(Value::Null),
+        "durationMs": candidate_base_media
+            .get("durationMs")
+            .cloned()
+            .or_else(|| fallback_base_media.get("durationMs").cloned())
+            .unwrap_or_else(|| json!(((current_frame.max(1) as f64 / fps as f64) * 1000.0).round() as i64)),
+        "width": candidate_base_media
+            .get("width")
+            .cloned()
+            .or_else(|| fallback_base_media.get("width").cloned())
+            .unwrap_or_else(|| json!(base_media_reference_width)),
+        "height": candidate_base_media
+            .get("height")
+            .cloned()
+            .or_else(|| fallback_base_media.get("height").cloned())
+            .unwrap_or_else(|| json!(base_media_reference_height)),
+        "status": candidate_base_media
+            .get("status")
+            .cloned()
+            .or_else(|| fallback_base_media.get("status").cloned())
+            .unwrap_or_else(|| json!("ready")),
+        "updatedAt": candidate_base_media
+            .get("updatedAt")
+            .cloned()
+            .or_else(|| fallback_base_media.get("updatedAt").cloned())
+            .unwrap_or(Value::Null)
+    });
+
     json!({
-        "version": 1,
+        "version": 2,
         "title": normalized_title,
         "entryCompositionId": candidate
             .get("entryCompositionId")
@@ -2136,6 +2311,16 @@ pub(crate) fn normalize_ai_remotion_scene(
         "durationInFrames": current_frame.max(1),
         "backgroundColor": background_color,
         "renderMode": normalized_render_mode,
+        "baseMedia": normalized_base_media,
+        "ffmpegRecipe": candidate
+            .get("ffmpegRecipe")
+            .cloned()
+            .or_else(|| fallback.get("ffmpegRecipe").cloned())
+            .unwrap_or_else(|| json!({
+                "operations": [],
+                "artifacts": [],
+                "summary": Value::Null
+            })),
         "scenes": normalized_scenes,
         "transitions": normalize_remotion_transitions(candidate, fallback),
         "sceneItemTransforms": candidate

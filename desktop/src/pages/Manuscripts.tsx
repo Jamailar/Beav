@@ -187,6 +187,8 @@ type VideoProjectState = {
         sourceAssetIds?: string[];
         outputPath?: string | null;
         durationMs?: number;
+        width?: number | null;
+        height?: number | null;
         status?: string;
         updatedAt?: number | null;
     };

@@ -208,6 +208,8 @@ function mergeAnimationStyles(
     frame: number,
     fps: number,
     animations: RemotionEntityAnimation[] | undefined,
+    scaleX = 1,
+    scaleY = 1,
 ): React.CSSProperties {
     if (!animations?.length) return {};
     return animations.reduce<React.CSSProperties>((style, animation) => {
@@ -229,25 +231,25 @@ function mergeAnimationStyles(
                 return {
                     ...style,
                     opacity: currentOpacity * progress,
-                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? -120), 0])}px, 0, 0)`,
+                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? -120) * scaleX, 0])}px, 0, 0)`,
                 };
             case 'slide-in-right':
                 return {
                     ...style,
                     opacity: currentOpacity * progress,
-                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? 120), 0])}px, 0, 0)`,
+                    transform: `${baseTransform} translate3d(${interpolate(progress, [0, 1], [Number(params.fromX ?? 120) * scaleX, 0])}px, 0, 0)`,
                 };
             case 'slide-up':
                 return {
                     ...style,
                     opacity: currentOpacity * progress,
-                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? 120), 0])}px, 0)`,
+                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? 120) * scaleY, 0])}px, 0)`,
                 };
             case 'slide-down':
                 return {
                     ...style,
                     opacity: currentOpacity * progress,
-                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? -120), 0])}px, 0)`,
+                    transform: `${baseTransform} translate3d(0, ${interpolate(progress, [0, 1], [Number(params.fromY ?? -120) * scaleY, 0])}px, 0)`,
                 };
             case 'pop': {
                 const popSpring = spring({
@@ -263,8 +265,8 @@ function mergeAnimationStyles(
             }
             case 'fall-bounce': {
                 const bounceCount = Math.max(1, Number(params.bounces ?? 3));
-                const floorY = Number(params.floorY ?? 0);
-                const startY = Number(params.fromY ?? -320);
+                const floorY = Number(params.floorY ?? 0) * scaleY;
+                const startY = Number(params.fromY ?? -320) * scaleY;
                 const bounceDecay = Number(params.decay ?? 0.38);
                 let translateY = 0;
                 if (progress < 0.65) {
@@ -287,12 +289,53 @@ function mergeAnimationStyles(
             case 'float':
                 return {
                     ...style,
-                    transform: `${baseTransform} translate3d(0, ${Math.sin(progress * Math.PI * 2) * Number(params.amplitude ?? 14)}px, 0)`,
+                    transform: `${baseTransform} translate3d(0, ${Math.sin(progress * Math.PI * 2) * Number(params.amplitude ?? 14) * scaleY}px, 0)`,
                 };
             default:
                 return style;
         }
     }, {});
+}
+
+function safeReferenceDimension(value: number | undefined | null, fallback: number) {
+    return Number.isFinite(value) && Number(value) > 0 ? Number(value) : fallback;
+}
+
+function resolveEntityLayoutMetrics(
+    entity: RemotionSceneEntity,
+    canvasWidth: number,
+    canvasHeight: number,
+    baseMediaWidth: number,
+    baseMediaHeight: number,
+) {
+    const positionMode = entity.positionMode === 'video-space' ? 'video-space' : 'canvas-space';
+    const referenceWidth = safeReferenceDimension(
+        entity.referenceWidth,
+        positionMode === 'video-space' ? baseMediaWidth : canvasWidth,
+    );
+    const referenceHeight = safeReferenceDimension(
+        entity.referenceHeight,
+        positionMode === 'video-space' ? baseMediaHeight : canvasHeight,
+    );
+    if (positionMode === 'video-space') {
+        const coverScale = Math.max(canvasWidth / referenceWidth, canvasHeight / referenceHeight);
+        return {
+            scaleX: coverScale,
+            scaleY: coverScale,
+            visualScale: coverScale,
+            offsetX: (canvasWidth - referenceWidth * coverScale) / 2,
+            offsetY: (canvasHeight - referenceHeight * coverScale) / 2,
+        };
+    }
+    const scaleX = canvasWidth / referenceWidth;
+    const scaleY = canvasHeight / referenceHeight;
+    return {
+        scaleX,
+        scaleY,
+        visualScale: Math.min(scaleX, scaleY),
+        offsetX: 0,
+        offsetY: 0,
+    };
 }
 
 function renderAppleShape(fill: string, stroke: string | undefined, strokeWidth: number) {
@@ -630,10 +673,18 @@ function SceneEntity({
     entity,
     sceneFrame,
     runtime,
+    canvasWidth,
+    canvasHeight,
+    baseMediaWidth,
+    baseMediaHeight,
 }: {
     entity: RemotionSceneEntity;
     sceneFrame: number;
     runtime: RuntimeMode;
+    canvasWidth: number;
+    canvasHeight: number;
+    baseMediaWidth: number;
+    baseMediaHeight: number;
 }) {
     const { fps } = useVideoConfig();
     const entityStartFrame = Math.max(0, entity.startFrame || 0);
@@ -642,19 +693,45 @@ function SceneEntity({
         return null;
     }
     const entityFrame = normalizeEntityFrame(sceneFrame, entity.startFrame, entity.durationInFrames);
-    const animationStyle = mergeAnimationStyles(entityFrame, fps, entity.animations);
+    const layoutMetrics = resolveEntityLayoutMetrics(
+        entity,
+        canvasWidth,
+        canvasHeight,
+        baseMediaWidth,
+        baseMediaHeight,
+    );
+    const animationStyle = mergeAnimationStyles(
+        entityFrame,
+        fps,
+        entity.animations,
+        layoutMetrics.scaleX,
+        layoutMetrics.scaleY,
+    );
     const mediaSource = resolveSceneSource(entity.src || '', runtime);
     const opacity = typeof entity.opacity === 'number' ? entity.opacity : 1;
     const scale = typeof entity.scale === 'number' ? entity.scale : 1;
     const rotation = typeof entity.rotation === 'number' ? entity.rotation : 0;
     const visible = entity.visible !== false;
     if (!visible) return null;
+    const resolvedX = layoutMetrics.offsetX + entity.x * layoutMetrics.scaleX;
+    const resolvedY = layoutMetrics.offsetY + entity.y * layoutMetrics.scaleY;
+    const resolvedWidth = entity.width * layoutMetrics.scaleX;
+    const resolvedHeight = entity.height * layoutMetrics.scaleY;
+    const resolvedFontSize = entity.fontSize ? entity.fontSize * layoutMetrics.visualScale : undefined;
+    const resolvedLineHeight = entity.lineHeight ? entity.lineHeight : undefined;
+    const resolvedStrokeWidth = entity.strokeWidth ? entity.strokeWidth * layoutMetrics.visualScale : 0;
+    const resolvedBorderRadius = entity.borderRadius !== undefined
+        ? entity.borderRadius * layoutMetrics.visualScale
+        : undefined;
+    const resolvedRadius = entity.radius !== undefined
+        ? entity.radius * layoutMetrics.visualScale
+        : undefined;
     const baseStyle: React.CSSProperties = {
         position: 'absolute',
-        left: entity.x,
-        top: entity.y,
-        width: entity.width,
-        height: entity.height,
+        left: resolvedX,
+        top: resolvedY,
+        width: resolvedWidth,
+        height: resolvedHeight,
         opacity,
         transform: `rotate(${rotation}deg) scale(${scale})`,
         transformOrigin: 'center center',
@@ -665,7 +742,16 @@ function SceneEntity({
         return (
             <div style={baseStyle}>
                 {(entity.children || []).map((child) => (
-                    <SceneEntity key={child.id} entity={child} sceneFrame={sceneFrame} runtime={runtime} />
+                    <SceneEntity
+                        key={child.id}
+                        entity={child}
+                        sceneFrame={sceneFrame}
+                        runtime={runtime}
+                        canvasWidth={canvasWidth}
+                        canvasHeight={canvasHeight}
+                        baseMediaWidth={baseMediaWidth}
+                        baseMediaHeight={baseMediaHeight}
+                    />
                 ))}
             </div>
         );
@@ -680,9 +766,9 @@ function SceneEntity({
                     alignItems: 'center',
                     justifyContent: entity.align === 'left' ? 'flex-start' : entity.align === 'right' ? 'flex-end' : 'center',
                     color: entity.color || '#ffffff',
-                    fontSize: entity.fontSize || 48,
+                    fontSize: resolvedFontSize || 48,
                     fontWeight: entity.fontWeight || 700,
-                    lineHeight: entity.lineHeight || 1.2,
+                    lineHeight: resolvedLineHeight || 1.2,
                     textAlign: entity.align || 'center',
                     whiteSpace: 'pre-wrap',
                 }}
@@ -694,7 +780,7 @@ function SceneEntity({
 
     if (entity.type === 'shape') {
         const fill = entity.fill || entity.color || '#ffffff';
-        const strokeWidth = entity.strokeWidth || 0;
+        const strokeWidth = resolvedStrokeWidth || 0;
         if (entity.shape === 'apple') {
             return <div style={baseStyle}>{renderAppleShape(fill, entity.stroke, strokeWidth)}</div>;
         }
@@ -706,10 +792,10 @@ function SceneEntity({
                     border: entity.stroke ? `${strokeWidth}px solid ${entity.stroke}` : undefined,
                     borderRadius: entity.shape === 'circle'
                         ? '999px'
-                        : entity.borderRadius !== undefined
-                            ? entity.borderRadius
-                            : entity.radius !== undefined
-                                ? entity.radius
+                        : resolvedBorderRadius !== undefined
+                            ? resolvedBorderRadius
+                            : resolvedRadius !== undefined
+                                ? resolvedRadius
                                 : 12,
                 }}
             />
@@ -790,12 +876,20 @@ function SceneLayerContent({
     runtime,
     renderMode,
     compositionTitle,
+    canvasWidth,
+    canvasHeight,
+    baseMediaWidth,
+    baseMediaHeight,
 }: {
     scene: RemotionScene;
     sceneFrame: number;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
     compositionTitle?: string;
+    canvasWidth: number;
+    canvasHeight: number;
+    baseMediaWidth: number;
+    baseMediaHeight: number;
 }) {
     const { fps } = useVideoConfig();
     const source = resolveSceneSource(scene.src, runtime);
@@ -873,7 +967,16 @@ function SceneLayerContent({
                 </AbsoluteFill>
             ) : null}
             {entities.map((entity) => (
-                <SceneEntity key={entity.id} entity={entity} sceneFrame={localFrame} runtime={runtime} />
+                <SceneEntity
+                    key={entity.id}
+                    entity={entity}
+                    sceneFrame={localFrame}
+                    runtime={runtime}
+                    canvasWidth={canvasWidth}
+                    canvasHeight={canvasHeight}
+                    baseMediaWidth={baseMediaWidth}
+                    baseMediaHeight={baseMediaHeight}
+                />
             ))}
             {overlayItems.map((overlay) => (
                 <SceneOverlay key={overlay.id} overlay={overlay} sceneFrame={localFrame} />
@@ -888,12 +991,20 @@ function MotionSceneLayer({
     renderMode,
     transitionWindows,
     compositionTitle,
+    canvasWidth,
+    canvasHeight,
+    baseMediaWidth,
+    baseMediaHeight,
 }: {
     scene: RemotionScene;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
     transitionWindows?: SceneTransitionWindow[];
     compositionTitle?: string;
+    canvasWidth: number;
+    canvasHeight: number;
+    baseMediaWidth: number;
+    baseMediaHeight: number;
 }) {
     const frame = useCurrentFrame();
     const sceneFrame = clampFrame(frame, scene.durationInFrames);
@@ -908,6 +1019,10 @@ function MotionSceneLayer({
             runtime={runtime}
             renderMode={renderMode}
             compositionTitle={compositionTitle}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+            baseMediaWidth={baseMediaWidth}
+            baseMediaHeight={baseMediaHeight}
         />
     );
 }
@@ -919,6 +1034,8 @@ function TransitionSequenceLayer({
     width,
     height,
     compositionTitle,
+    baseMediaWidth,
+    baseMediaHeight,
 }: {
     window: SceneTransitionWindow;
     runtime: RuntimeMode;
@@ -926,6 +1043,8 @@ function TransitionSequenceLayer({
     width: number;
     height: number;
     compositionTitle?: string;
+    baseMediaWidth: number;
+    baseMediaHeight: number;
 }) {
     const frame = useCurrentFrame();
     const absoluteFrame = window.startFrame + frame;
@@ -954,6 +1073,10 @@ function TransitionSequenceLayer({
                     runtime={runtime}
                     renderMode={renderMode}
                     compositionTitle={compositionTitle}
+                    canvasWidth={width}
+                    canvasHeight={height}
+                    baseMediaWidth={baseMediaWidth}
+                    baseMediaHeight={baseMediaHeight}
                 />
             </div>
             <div
@@ -970,6 +1093,10 @@ function TransitionSequenceLayer({
                     runtime={runtime}
                     renderMode={renderMode}
                     compositionTitle={compositionTitle}
+                    canvasWidth={width}
+                    canvasHeight={height}
+                    baseMediaWidth={baseMediaWidth}
+                    baseMediaHeight={baseMediaHeight}
                 />
             </div>
         </AbsoluteFill>
@@ -987,7 +1114,10 @@ export function VideoMotionComposition({
         scenes,
         transitions,
         renderMode = 'full',
+        baseMedia,
     } = composition;
+    const baseMediaWidth = safeReferenceDimension(baseMedia?.width, width);
+    const baseMediaHeight = safeReferenceDimension(baseMedia?.height, height);
     const transitionWindows = buildSceneTransitionWindows(scenes, transitions);
     const transitionLookup = buildTransitionWindowLookup(transitionWindows);
 
@@ -1012,6 +1142,10 @@ export function VideoMotionComposition({
                         renderMode={renderMode}
                         transitionWindows={transitionLookup.get(scene.id)}
                         compositionTitle={composition.title}
+                        canvasWidth={width}
+                        canvasHeight={height}
+                        baseMediaWidth={baseMediaWidth}
+                        baseMediaHeight={baseMediaHeight}
                     />
                 </Sequence>
             ))}
@@ -1028,6 +1162,8 @@ export function VideoMotionComposition({
                         width={width}
                         height={height}
                         compositionTitle={composition.title}
+                        baseMediaWidth={baseMediaWidth}
+                        baseMediaHeight={baseMediaHeight}
                     />
                 </Sequence>
             ))}

@@ -18,7 +18,69 @@ const DEFAULT_TIMELINE_CLIP_MS: i64 = 4000;
 const IMAGE_TIMELINE_CLIP_MS: i64 = 500;
 const DEFAULT_MIN_CLIP_MS: i64 = 1000;
 const DEFAULT_EDITOR_MOTION_PROMPT: &str =
-    "请根据当前时间线和脚本，生成适合短视频的动画节奏与标题强调。";
+    "请根据当前时间线和脚本，生成适合短视频的对象动画与节奏设计。默认不要额外标题、说明或字幕。";
+
+fn instructions_request_visual_text_layers(instructions: &str) -> bool {
+    let normalized = instructions.trim().to_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    let negative_markers = [
+        "不要标题",
+        "不要字幕",
+        "不要说明",
+        "不要文案",
+        "不需要标题",
+        "不需要字幕",
+        "不需要说明",
+        "不需要文案",
+        "只要动画",
+        "纯动画",
+        "only animation",
+        "no title",
+        "no subtitle",
+        "no caption",
+        "no overlay",
+    ];
+    if negative_markers.iter().any(|marker| normalized.contains(marker)) {
+        return false;
+    }
+    let positive_markers = [
+        "加标题",
+        "显示标题",
+        "带标题",
+        "片头标题",
+        "加字幕",
+        "字幕",
+        "caption",
+        "文案",
+        "屏幕文字",
+        "文字说明",
+        "文字提示",
+        "overlay",
+        "title card",
+        "on-screen text",
+        "text overlay",
+        "subtitle",
+    ];
+    positive_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn strip_incidental_remotion_text_layers(scene: &mut Value) {
+    let Some(scenes) = scene.get_mut("scenes").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in scenes.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        object.insert("overlayTitle".to_string(), Value::Null);
+        object.insert("overlayBody".to_string(), Value::Null);
+        object.insert("overlays".to_string(), json!([]));
+    }
+}
 
 fn min_clip_duration_ms_for_asset_kind(asset_kind: &str) -> i64 {
     if asset_kind.eq_ignore_ascii_case("image") {
@@ -1354,7 +1416,7 @@ fn editor_project_animation_layers_mut(project: &mut Value) -> Result<&mut Vec<V
         .ok_or_else(|| "Editor project animationLayers missing".to_string())
 }
 
-fn default_motion_item_from_media(media_item: &Value, project: &Value, index: usize) -> Value {
+fn default_motion_item_from_media(media_item: &Value, _project: &Value, index: usize) -> Value {
     let item_id = media_item
         .get("id")
         .and_then(|value| value.as_str())
@@ -1368,24 +1430,6 @@ fn default_motion_item_from_media(media_item: &Value, project: &Value, index: us
         .and_then(|value| value.as_i64())
         .unwrap_or(DEFAULT_TIMELINE_CLIP_MS)
         .max(500);
-    let asset_id = media_item
-        .get("assetId")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let asset_title = project
-        .get("assets")
-        .and_then(Value::as_array)
-        .and_then(|assets| {
-            assets.iter().find(|asset| {
-                asset
-                    .get("id")
-                    .and_then(|value| value.as_str())
-                    .map(|value| value == asset_id)
-                    .unwrap_or(false)
-            })
-        })
-        .and_then(|asset| asset.get("title").and_then(|value| value.as_str()))
-        .unwrap_or("镜头");
     let template_id = match index % 5 {
         0 => "slow-zoom-in",
         1 => "pan-left",
@@ -1402,7 +1446,7 @@ fn default_motion_item_from_media(media_item: &Value, project: &Value, index: us
         "durationMs": duration_ms,
         "templateId": template_id,
         "props": {
-            "overlayTitle": asset_title,
+            "overlayTitle": Value::Null,
             "overlayBody": Value::Null,
             "overlays": []
         },
@@ -1552,7 +1596,7 @@ fn generate_motion_items_for_project(
 2. fromMs / durationMs 要落在绑定片段范围内或与其基本一致。\n\
 3. 模板只允许 static, slow-zoom-in, slow-zoom-out, pan-left, pan-right, slide-up, slide-down。\n\
 4. 适合短视频节奏，前段更强，后段更稳。\n\
-5. 如果你不确定，就保守生成 overlayTitle，不要编造复杂文案。\n\
+5. 默认不要生成 overlayTitle、overlayBody 或 overlays；除非脚本明确要求屏幕文字、标题或字幕。\n\
 \n\
 脚本：{}\n\
 目标片段：{}",
@@ -5121,8 +5165,14 @@ pub fn handle_manuscripts_channel(
 8. 对象动画优先用 entities[].animations[] 表达，例如 fall-bounce、slide-in-left、pop、fade-in。\n\
 9. 不要通过文字轨道片段模拟动画；动画只能体现在 Remotion scene / M1 动画轨道。\n\
 10. 不要修改 src / assetKind / trimInFrames，这些字段由宿主兜底；如果是独立动画层，src 可以为空。\n\
-11. overlayTitle 用场景标题，overlayBody 用屏幕文案或强调点；主体动画本身必须在 entities 里。\n\
-12. 如果任务涉及镜头切换，可以使用顶层 transitions[]，字段必须遵守 leftClipId / rightClipId / presentation / timing / durationInFrames；不要把转场偷偷降级成说明文字。\n\
+11. 默认只生成动画主体本身；如果脚本没有明确要求标题、字幕、说明或其他屏幕文字，请把 overlayTitle / overlayBody 设为 null，overlays 设为空数组。\n\
+12. 只有当脚本明确要求屏幕文字时，才使用 overlayTitle / overlayBody / overlays 或 text entity；不要自动补顶部标题或底部说明。\n\
+13. entities 默认使用 `positionMode=\"canvas-space\"`；如果任务明确要求与视频中已有元素精准对位，才使用 `positionMode=\"video-space\"`，并同时提供 `referenceWidth` / `referenceHeight`，其基准应与 baseMedia 一致。\n\
+14. `x` / `y` 表示实体最终停留位置的左上角坐标，不是中心点坐标；如果需要水平居中，必须按 `(referenceWidth - width) / 2` 计算。\n\
+15. `fall-bounce` 的 `params.fromY` / `params.floorY` 是相对位移，不是绝对位置；常规下落动画应把实体最终落点写在 `entity.y`，并把 `floorY` 设为 `0`。\n\
+16. 如果对象需要跨越较大画面范围运动，位移幅度必须与 `referenceHeight` / `referenceWidth` 成比例，不要只写很小的固定像素，避免动画只停留在画面一角。\n\
+17. 对于 `video-space` 实体，x / y / width / height 与动画位移参数都必须按同一参考坐标系表达，不要混用画布像素和视频像素。\n\
+18. 如果任务涉及镜头切换，可以使用顶层 transitions[]，字段必须遵守 leftClipId / rightClipId / presentation / timing / durationInFrames；不要把转场偷偷降级成说明文字。\n\
 \n\
 工程标题：{}\n\
 脚本：{}\n\
@@ -5198,7 +5248,10 @@ Remotion 读取结果 JSON：{}\n\
                 );
                 eprintln!("{}", raw_log);
                 append_debug_log_state(state, raw_log);
-                let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &clips, &title);
+                let mut normalized = normalize_ai_remotion_scene(&candidate, &fallback, &clips, &title);
+                if !instructions_request_visual_text_layers(&instructions) {
+                    strip_incidental_remotion_text_layers(&mut normalized);
+                }
                 let normalized_scene_count = normalized
                     .get("scenes")
                     .and_then(Value::as_array)

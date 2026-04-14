@@ -35,6 +35,7 @@ promptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落
 ## 强制约束
 
 - 禁止用普通文字轨冒充对象动画。
+- 若脚本没有明确要求屏幕文字，默认不要生成 `overlayTitle`、`overlayBody`、`overlays` 或解释性 `text` entity；优先只保留动画主体。
 - 禁止在 Remotion 层使用 CSS transition、CSS animation 或 Tailwind animate 类名。
 - 若需要切换、字幕、素材测长等能力，必须先映射到宿主当前支持的数据结构。
 - 导出相关默认项必须通过 Composition 顶层字段与 `render` 配置表达，保持预览与导出一致。
