@@ -26,6 +26,47 @@ import {
 } from './freecutTimelineBridge';
 import './vendored-freecut-timeline.css';
 
+const FLOAT_EPSILON = 0.0005;
+
+function nearlyEqual(left: number | null | undefined, right: number | null | undefined, epsilon = FLOAT_EPSILON) {
+    return Math.abs((left ?? 0) - (right ?? 0)) <= epsilon;
+}
+
+function viewportEqual(
+    left: VideoEditorViewportMetrics | null | undefined,
+    right: VideoEditorViewportMetrics | null | undefined,
+) {
+    if (!left && !right) return true;
+    if (!left || !right) return false;
+    return nearlyEqual(left.scrollLeft, right.scrollLeft, 0.5)
+        && nearlyEqual(left.scrollTop, right.scrollTop, 0.5)
+        && nearlyEqual(left.maxScrollLeft, right.maxScrollLeft, 0.5)
+        && nearlyEqual(left.maxScrollTop, right.maxScrollTop, 0.5);
+}
+
+function trackUiEqual(
+    left: Record<string, VideoEditorTrackUiState> | null | undefined,
+    right: Record<string, VideoEditorTrackUiState> | null | undefined,
+) {
+    const leftKeys = Object.keys(left || {}).sort();
+    const rightKeys = Object.keys(right || {}).sort();
+    if (leftKeys.length !== rightKeys.length) return false;
+
+    return leftKeys.every((key, index) => {
+        if (rightKeys[index] !== key) return false;
+        const leftValue = left?.[key];
+        const rightValue = right?.[key];
+        return !!leftValue
+            && !!rightValue
+            && leftValue.locked === rightValue.locked
+            && leftValue.hidden === rightValue.hidden
+            && leftValue.collapsed === rightValue.collapsed
+            && leftValue.muted === rightValue.muted
+            && leftValue.solo === rightValue.solo
+            && nearlyEqual(leftValue.volume, rightValue.volume, 0.001);
+    });
+}
+
 type VendoredFreecutTimelineProps = {
     filePath: string;
     packageState?: LexBoxPackageStateLike | null;
@@ -151,7 +192,18 @@ export function VendoredFreecutTimeline({
     const isHydratingRef = useRef(false);
     const pendingProjectSyncRef = useRef<number | null>(null);
     const pendingSaveRef = useRef<number | null>(null);
-    const lastPlaybackFlagRef = useRef<boolean | null>(null);
+    const reportedCursorTimeRef = useRef<number | null>(controlledCursorTime ?? null);
+    const reportedSelectedClipIdRef = useRef<string | null>(controlledSelectedClipId ?? null);
+    const reportedActiveTrackIdRef = useRef<string | null>(controlledActiveTrackId ?? null);
+    const reportedZoomPercentRef = useRef<number | null>(controlledZoomPercent ?? null);
+    const reportedViewportRef = useRef<VideoEditorViewportMetrics | null>(controlledViewport ?? null);
+    const externalPlayingRef = useRef<boolean>(Boolean(isPlaying));
+    const externalCursorTimeRef = useRef<number | null>(controlledCursorTime ?? null);
+    const externalSelectedClipIdRef = useRef<string | null>(controlledSelectedClipId ?? null);
+    const externalActiveTrackIdRef = useRef<string | null>(controlledActiveTrackId ?? null);
+    const externalZoomPercentRef = useRef<number | null>(controlledZoomPercent ?? null);
+    const externalViewportRef = useRef<VideoEditorViewportMetrics | null>(controlledViewport ?? null);
+    const externalTrackUiRef = useRef<Record<string, VideoEditorTrackUiState> | null | undefined>(controlledTrackUi);
     const [localProject, setLocalProject] = useState<EditorProjectFile | null>(
         () => normalizeProject(packageState, fallbackTracks, fps),
     );
@@ -163,6 +215,13 @@ export function VendoredFreecutTimeline({
 
     packageStateRef.current = packageState;
     localProjectRef.current = localProject;
+    externalPlayingRef.current = Boolean(isPlaying);
+    externalCursorTimeRef.current = controlledCursorTime ?? null;
+    externalSelectedClipIdRef.current = controlledSelectedClipId ?? null;
+    externalActiveTrackIdRef.current = controlledActiveTrackId ?? null;
+    externalZoomPercentRef.current = controlledZoomPercent ?? null;
+    externalViewportRef.current = controlledViewport ?? null;
+    externalTrackUiRef.current = controlledTrackUi;
 
     const persistProject = useCallback((project: EditorProjectFile) => {
         if (pendingSaveRef.current !== null) {
@@ -285,9 +344,12 @@ export function VendoredFreecutTimeline({
             }
             localProjectRef.current = nextProject;
             setLocalProject(nextProject);
-            onTrackUiChange?.(Object.fromEntries(
+            const nextTrackUi = Object.fromEntries(
                 nextProject.tracks.map((track) => [track.id, track.ui]),
-            ));
+            );
+            if (!trackUiEqual(nextTrackUi, externalTrackUiRef.current)) {
+                onTrackUiChange?.(nextTrackUi);
+            }
             onPackageStateChange?.(buildOptimisticPackageState(packageStateRef.current, nextProject));
             persistProject(nextProject);
         };
@@ -296,7 +358,7 @@ export function VendoredFreecutTimeline({
             if (pendingProjectSyncRef.current !== null) {
                 return;
             }
-            pendingProjectSyncRef.current = window.setTimeout(syncProjectFromStores, 0);
+            pendingProjectSyncRef.current = window.setTimeout(syncProjectFromStores, 16);
         };
 
         const unsubscribeItems = useItemsStore.subscribe(scheduleProjectSync);
@@ -305,34 +367,54 @@ export function VendoredFreecutTimeline({
         const unsubscribeKeyframes = useKeyframesStore.subscribe(scheduleProjectSync);
         const unsubscribeSelection = useSelectionStore.subscribe((state) => {
             if (isHydratingRef.current) return;
-            onSelectedClipChange?.(state.selectedItemIds[0] || null);
-            onActiveTrackChange?.(state.activeTrackId || null);
+            const nextSelectedClipId = state.selectedItemIds[0] || null;
+            const nextActiveTrackId = state.activeTrackId || null;
+            if (nextSelectedClipId !== reportedSelectedClipIdRef.current && nextSelectedClipId !== externalSelectedClipIdRef.current) {
+                reportedSelectedClipIdRef.current = nextSelectedClipId;
+                onSelectedClipChange?.(nextSelectedClipId);
+            }
+            if (nextActiveTrackId !== reportedActiveTrackIdRef.current && nextActiveTrackId !== externalActiveTrackIdRef.current) {
+                reportedActiveTrackIdRef.current = nextActiveTrackId;
+                onActiveTrackChange?.(nextActiveTrackId);
+            }
         });
         const unsubscribePlayback = usePlaybackStore.subscribe((state) => {
             if (!localProjectRef.current || isHydratingRef.current) return;
             const nextTime = frameToMs(state.currentFrame, localProjectRef.current.project.fps) / 1000;
-            onCursorTimeChange?.(nextTime);
-            onSeekFrame?.(state.currentFrame);
-            if (lastPlaybackFlagRef.current !== null && lastPlaybackFlagRef.current !== state.isPlaying) {
+            if (!nearlyEqual(nextTime, reportedCursorTimeRef.current) && !nearlyEqual(nextTime, externalCursorTimeRef.current)) {
+                reportedCursorTimeRef.current = nextTime;
+                onCursorTimeChange?.(nextTime);
+            }
+            if (state.currentFrame !== currentFrame) {
+                onSeekFrame?.(state.currentFrame);
+            }
+            if (state.isPlaying !== externalPlayingRef.current) {
                 onTogglePlayback?.();
             }
-            lastPlaybackFlagRef.current = state.isPlaying;
         });
         const unsubscribeZoom = useZoomStore.subscribe((state) => {
             if (isHydratingRef.current) return;
-            onZoomPercentChange?.(Math.round(state.level * 100));
+            const nextZoomPercent = Math.round(state.level * 100);
+            if (nextZoomPercent !== reportedZoomPercentRef.current && nextZoomPercent !== externalZoomPercentRef.current) {
+                reportedZoomPercentRef.current = nextZoomPercent;
+                onZoomPercentChange?.(nextZoomPercent);
+            }
         });
         const unsubscribeViewport = useTimelineViewportStore.subscribe((state) => {
             if (isHydratingRef.current) return;
             const container = rootRef.current?.querySelector('.timeline-container') as HTMLElement | null;
             const maxScrollLeft = container ? Math.max(0, container.scrollWidth - container.clientWidth) : state.scrollLeft;
             const maxScrollTop = container ? Math.max(0, container.scrollHeight - container.clientHeight) : state.scrollTop;
-            onViewportMetricsChange?.({
+            const nextViewport = {
                 scrollLeft: state.scrollLeft,
                 maxScrollLeft,
                 scrollTop: state.scrollTop,
                 maxScrollTop,
-            });
+            };
+            if (!viewportEqual(nextViewport, reportedViewportRef.current) && !viewportEqual(nextViewport, externalViewportRef.current)) {
+                reportedViewportRef.current = nextViewport;
+                onViewportMetricsChange?.(nextViewport);
+            }
         });
 
         return () => {
@@ -348,37 +430,75 @@ export function VendoredFreecutTimeline({
     }, [localProject, onActiveTrackChange, onCursorTimeChange, onPackageStateChange, onSeekFrame, onSelectedClipChange, onTogglePlayback, onTrackUiChange, onViewportMetricsChange, onZoomPercentChange, persistProject]);
 
     useEffect(() => {
-        if (!localProject) return;
-        usePlaybackStore.getState().setCurrentFrame(msToFrame(controlledCursorTime || 0, localProject.project.fps));
-    }, [controlledCursorTime, localProject]);
+        return () => {
+            if (pendingProjectSyncRef.current !== null) {
+                window.clearTimeout(pendingProjectSyncRef.current);
+            }
+            if (pendingSaveRef.current !== null) {
+                window.clearTimeout(pendingSaveRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
-        if (controlledActiveTrackId !== undefined) {
-            useSelectionStore.getState().setActiveTrack(controlledActiveTrackId || null);
+        if (!localProject) return;
+        const nextFrame = typeof currentFrame === 'number'
+            ? currentFrame
+            : msToFrame(controlledCursorTime || 0, localProject.project.fps);
+        if (usePlaybackStore.getState().currentFrame !== nextFrame) {
+            usePlaybackStore.getState().setCurrentFrame(nextFrame);
         }
-        useSelectionStore.getState().selectItems(controlledSelectedClipId ? [controlledSelectedClipId] : []);
+    }, [controlledCursorTime, currentFrame, localProject]);
+
+    useEffect(() => {
+        const selectionState = useSelectionStore.getState();
+        const nextActiveTrackId = controlledActiveTrackId || null;
+        if (controlledActiveTrackId !== undefined && selectionState.activeTrackId !== nextActiveTrackId) {
+            selectionState.setActiveTrack(nextActiveTrackId);
+        }
+        const nextSelectedIds = controlledSelectedClipId ? [controlledSelectedClipId] : [];
+        const currentSelectedIds = selectionState.selectedItemIds;
+        if (
+            currentSelectedIds.length !== nextSelectedIds.length
+            || currentSelectedIds.some((itemId, index) => itemId !== nextSelectedIds[index])
+        ) {
+            selectionState.selectItems(nextSelectedIds);
+        }
     }, [controlledActiveTrackId, controlledSelectedClipId]);
 
     useEffect(() => {
-        useZoomStore.getState().setZoomLevelImmediate(Math.max(0.1, (controlledZoomPercent || 100) / 100));
+        const nextZoomLevel = Math.max(0.1, (controlledZoomPercent || 100) / 100);
+        if (!nearlyEqual(useZoomStore.getState().level, nextZoomLevel, 0.001)) {
+            useZoomStore.getState().setZoomLevelImmediate(nextZoomLevel);
+        }
     }, [controlledZoomPercent]);
 
     useEffect(() => {
         if (!controlledViewport) return;
         const current = useTimelineViewportStore.getState();
-        useTimelineViewportStore.getState().setViewport({
-            scrollLeft: controlledViewport.scrollLeft,
-            scrollTop: controlledViewport.scrollTop,
-            viewportWidth: current.viewportWidth,
-            viewportHeight: current.viewportHeight,
-        });
+        if (!viewportEqual(controlledViewport, {
+            scrollLeft: current.scrollLeft,
+            maxScrollLeft: current.scrollLeft,
+            scrollTop: current.scrollTop,
+            maxScrollTop: current.scrollTop,
+        })) {
+            useTimelineViewportStore.getState().setViewport({
+                scrollLeft: controlledViewport.scrollLeft,
+                scrollTop: controlledViewport.scrollTop,
+                viewportWidth: current.viewportWidth,
+                viewportHeight: current.viewportHeight,
+            });
+        }
     }, [controlledViewport]);
 
     useEffect(() => {
-        if (isPlaying) {
-            usePlaybackStore.getState().play();
-        } else {
-            usePlaybackStore.getState().pause();
+        const playbackStore = usePlaybackStore.getState();
+        if (Boolean(isPlaying) !== playbackStore.isPlaying) {
+            if (isPlaying) {
+                playbackStore.play();
+            } else {
+                playbackStore.pause();
+            }
         }
     }, [isPlaying]);
 

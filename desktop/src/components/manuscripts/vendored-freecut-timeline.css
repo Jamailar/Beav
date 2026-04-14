@@ -34,6 +34,15 @@
   --freecut-timeline-snap: 249 115 22;
   --freecut-timeline-join: 251 146 60;
   color: rgb(var(--freecut-foreground) / 1);
+  color-scheme: dark;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.freecut-timeline-theme code,
+.freecut-timeline-theme pre,
+.freecut-timeline-theme .font-mono,
+.freecut-timeline-theme [data-mono] {
+  font-family: 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
 }
 
 .freecut-timeline-theme .bg-background { background-color: rgb(var(--freecut-background) / 1) !important; }
@@ -81,6 +90,18 @@
 .freecut-timeline-theme .border-destructive { border-color: rgb(var(--freecut-destructive) / 1) !important; }
 .freecut-timeline-theme .border-destructive\/50 { border-color: rgb(var(--freecut-destructive) / 0.5) !important; }
 .freecut-timeline-theme .border-muted { border-color: rgb(var(--freecut-muted) / 1) !important; }
+
+.freecut-timeline-theme .panel-bg {
+  background-color: oklch(0.18 0 0) !important;
+}
+
+.freecut-timeline-theme .panel-header {
+  background-color: oklch(0.14 0 0) !important;
+}
+
+.freecut-timeline-theme .timeline-bg {
+  background-color: oklch(0.12 0 0) !important;
+}
 
 .freecut-timeline-theme .bg-timeline-video { background-color: rgb(var(--freecut-timeline-video) / 1) !important; }
 .freecut-timeline-theme .bg-timeline-video\/10 { background-color: rgb(var(--freecut-timeline-video) / 0.1) !important; }
@@ -137,135 +158,53 @@
     -45deg,
     transparent,
     transparent 6px,
-    rgba(128, 128, 128, 0.12) 6px,
-    rgba(128, 128, 128, 0.12) 8px
+    oklch(50% 0 0deg / 12%) 6px,
+    oklch(50% 0 0deg / 12%) 8px
   );
 }
 
 .freecut-timeline-theme .bg-waveform-gradient {
   background: linear-gradient(
     to bottom,
-    rgba(32, 32, 32, 1) 0%,
-    rgba(46, 46, 46, 1) 50%,
-    rgba(32, 32, 32, 1) 100%
+    oklch(0.20 0 0) 0%,
+    oklch(0.28 0 0) 50%,
+    oklch(0.20 0 0) 100%
   );
-}
-
-.freecut-timeline-theme [data-item-id] {
-  border-width: 1px;
-  border-style: solid;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 20px rgba(0, 0, 0, 0.22);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-video {
-  background:
-    linear-gradient(180deg, rgba(101, 124, 171, 0.24) 0%, rgba(74, 93, 129, 0.98) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-audio {
-  background:
-    linear-gradient(180deg, rgba(109, 88, 140, 0.18) 0%, rgba(50, 43, 58, 0.98) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-image\/30 {
-  background:
-    linear-gradient(180deg, rgba(153, 194, 255, 0.18) 0%, rgba(86, 122, 181, 0.92) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-text\/30 {
-  background:
-    linear-gradient(180deg, rgba(208, 171, 232, 0.18) 0%, rgba(112, 85, 134, 0.92) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-shape\/30 {
-  background:
-    linear-gradient(180deg, rgba(255, 188, 127, 0.18) 0%, rgba(128, 87, 48, 0.92) 100%);
-}
-
-.freecut-timeline-theme [data-item-id]:hover {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    0 12px 24px rgba(0, 0, 0, 0.28);
-}
-
-.freecut-timeline-theme [data-item-id] > .absolute.inset-px {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-video > .absolute.inset-px {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.015) 100%);
-}
-
-.freecut-timeline-theme [data-item-id].bg-timeline-audio > .absolute.inset-px,
-.freecut-timeline-theme [data-item-id].bg-timeline-image\/30 > .absolute.inset-px,
-.freecut-timeline-theme [data-item-id].bg-timeline-text\/30 > .absolute.inset-px,
-.freecut-timeline-theme [data-item-id].bg-timeline-shape\/30 > .absolute.inset-px {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.012) 100%);
-}
-
-.freecut-timeline-theme [data-item-id] .backdrop-blur-\[1px\] {
-  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.02);
-}
-
-.freecut-timeline-theme [data-item-id] .bg-black\/20 {
-  background:
-    linear-gradient(180deg, rgba(18, 18, 18, 0.38) 0%, rgba(12, 12, 12, 0.24) 100%) !important;
-}
-
-.freecut-timeline-theme [data-item-id] [class*='text-muted-foreground'] {
-  color: rgba(230, 230, 230, 0.72) !important;
-}
-
-.freecut-timeline-theme [data-item-id] .text-white\/90 {
-  color: rgba(248, 248, 248, 0.92) !important;
-}
-
-.freecut-timeline-theme [data-item-id] .text-violet-100\/90 {
-  color: rgba(232, 221, 255, 0.92) !important;
-}
-
-.freecut-timeline-theme [data-item-id] .bg-violet-950\/40 {
-  background-color: rgba(76, 47, 112, 0.45) !important;
 }
 
 .freecut-timeline-theme .bg-image-gradient {
   background: linear-gradient(
     to bottom,
-    rgba(32, 40, 62, 1) 0%,
-    rgba(45, 57, 82, 1) 50%,
-    rgba(32, 40, 62, 1) 100%
+    oklch(0.20 0.02 250) 0%,
+    oklch(0.28 0.02 250) 50%,
+    oklch(0.20 0.02 250) 100%
   );
 }
 
 .freecut-timeline-theme .bg-audio-gradient {
   background: linear-gradient(
     to bottom,
-    rgba(30, 25, 40, 1) 0%,
-    rgba(42, 36, 54, 1) 50%,
-    rgba(30, 25, 40, 1) 100%
+    oklch(0.20 0.02 302) 0%,
+    oklch(0.28 0.02 302) 50%,
+    oklch(0.20 0.02 302) 100%
   );
 }
 
 .freecut-timeline-theme .bg-text-gradient {
   background: linear-gradient(
     to bottom,
-    rgba(45, 33, 51, 1) 0%,
-    rgba(58, 43, 65, 1) 50%,
-    rgba(45, 33, 51, 1) 100%
+    oklch(0.20 0.02 290) 0%,
+    oklch(0.28 0.02 290) 50%,
+    oklch(0.20 0.02 290) 100%
   );
 }
 
 .freecut-timeline-theme .bg-shape-gradient {
   background: linear-gradient(
     to bottom,
-    rgba(58, 38, 25, 1) 0%,
-    rgba(72, 48, 31, 1) 50%,
-    rgba(58, 38, 25, 1) 100%
+    oklch(0.20 0.02 45) 0%,
+    oklch(0.28 0.02 45) 50%,
+    oklch(0.20 0.02 45) 100%
   );
 }
 
@@ -276,115 +215,21 @@
 
 .freecut-timeline-theme .track-header-item {
   content-visibility: auto;
-  contain-intrinsic-size: var(--editor-timeline-sidebar-width, 176px) var(--editor-timeline-track-height, 72px);
+  contain-intrinsic-size:
+    var(--editor-timeline-sidebar-width, 176px)
+    var(--editor-timeline-track-height, 72px);
 }
 
-.freecut-timeline-theme [data-lexbox-timeline] {
-  background:
-    radial-gradient(circle at top, rgba(255, 140, 58, 0.08), transparent 28%),
-    linear-gradient(180deg, rgba(16, 17, 20, 1) 0%, rgba(11, 12, 16, 1) 100%);
-  border-top-color: rgba(255, 255, 255, 0.06) !important;
+.freecut-timeline-theme .glow-primary {
+  box-shadow: 0 0 12px oklch(0.68 0.19 45 / 0.3);
 }
 
-.freecut-timeline-theme [role='toolbar'][aria-label='Timeline controls'] {
-  background:
-    linear-gradient(180deg, rgba(26, 27, 31, 0.96) 0%, rgba(20, 21, 25, 0.98) 100%);
-  box-shadow:
-    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
-    0 10px 24px rgba(0, 0, 0, 0.16);
+.freecut-timeline-theme .glow-primary-sm {
+  box-shadow: 0 0 6px oklch(0.68 0.19 45 / 0.25);
 }
 
-.freecut-timeline-theme [data-track-sidebar],
-.freecut-timeline-theme [data-track-sidebar-spacer] {
-  background:
-    linear-gradient(180deg, rgba(21, 22, 26, 1) 0%, rgba(16, 17, 21, 1) 100%);
-}
-
-.freecut-timeline-theme [data-track-sidebar-header] {
-  background:
-    linear-gradient(180deg, rgba(34, 35, 40, 0.94) 0%, rgba(24, 25, 29, 0.98) 100%) !important;
-  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04);
-}
-
-.freecut-timeline-theme [data-track-sidebar-actions] {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.freecut-timeline-theme [data-track-sidebar-actions] button {
-  border-radius: 999px;
-}
-
-.freecut-timeline-theme [data-timeline-navigator-shell] {
-  background:
-    linear-gradient(180deg, rgba(20, 21, 24, 0.98) 0%, rgba(15, 16, 19, 0.98) 100%);
-}
-
-.freecut-timeline-theme [data-track-header] {
-  background:
-    linear-gradient(180deg, rgba(35, 36, 40, 0.9) 0%, rgba(26, 27, 31, 0.95) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 8px 16px rgba(0, 0, 0, 0.18);
-}
-
-.freecut-timeline-theme [data-track-header='true'] {
-  isolation: isolate;
-}
-
-.freecut-timeline-theme [data-track-header][data-selected='true'] {
-  background:
-    linear-gradient(180deg, rgba(72, 50, 33, 0.94) 0%, rgba(38, 31, 28, 0.98) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 228, 206, 0.06),
-    0 10px 20px rgba(0, 0, 0, 0.2);
-}
-
-.freecut-timeline-theme [data-track-header][data-active='true'] {
-  border-color: rgba(255, 140, 58, 0.42) !important;
-}
-
-.freecut-timeline-theme [data-track-header-controls] {
-  backdrop-filter: blur(8px);
-}
-
-.freecut-timeline-theme [data-track-kind-icon] {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 4px 12px rgba(0, 0, 0, 0.18);
-}
-
-.freecut-timeline-theme [data-track-kind-badge] {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.freecut-timeline-theme [data-track-header][data-track-kind='video'] [data-track-kind-icon],
-.freecut-timeline-theme [data-track-header][data-track-kind='video'] [data-track-kind-badge] {
-  color: rgba(171, 196, 255, 0.92);
-  border-color: rgba(124, 150, 209, 0.45);
-  background: rgba(75, 96, 140, 0.22);
-}
-
-.freecut-timeline-theme [data-track-header][data-track-kind='audio'] [data-track-kind-icon],
-.freecut-timeline-theme [data-track-header][data-track-kind='audio'] [data-track-kind-badge] {
-  color: rgba(218, 194, 255, 0.92);
-  border-color: rgba(127, 102, 171, 0.44);
-  background: rgba(79, 62, 108, 0.24);
-}
-
-.freecut-timeline-theme [data-track-header][data-track-kind='text'] [data-track-kind-icon],
-.freecut-timeline-theme [data-track-header][data-track-kind='text'] [data-track-kind-badge],
-.freecut-timeline-theme [data-track-header][data-track-kind='subtitle'] [data-track-kind-icon],
-.freecut-timeline-theme [data-track-header][data-track-kind='subtitle'] [data-track-kind-badge] {
-  color: rgba(255, 222, 166, 0.92);
-  border-color: rgba(183, 136, 71, 0.45);
-  background: rgba(100, 73, 34, 0.24);
-}
-
-.freecut-timeline-theme [data-track-header][data-track-kind='motion'] [data-track-kind-icon],
-.freecut-timeline-theme [data-track-header][data-track-kind='motion'] [data-track-kind-badge] {
-  color: rgba(201, 214, 255, 0.92);
-  border-color: rgba(105, 129, 190, 0.45);
-  background: rgba(51, 67, 112, 0.24);
+.freecut-timeline-theme .text-shadow {
+  text-shadow: 0 1px 2px oklch(0 0 0 / 0.8);
 }
 
 .cursor-scissors {

@@ -90,7 +90,7 @@ function mediaItemToTimelineItem(item: EditorMediaItem, asset: EditorAsset | und
     };
     const sourceWidth = pickNumber(asset?.metadata?.width);
     const sourceHeight = pickNumber(asset?.metadata?.height);
-    const src = asset?.src || '';
+    const src = asset?.src ? resolveAssetUrl(asset.src) : '';
 
     if (asset?.kind === 'audio') {
         return {

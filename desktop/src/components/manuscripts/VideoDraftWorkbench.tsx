@@ -918,8 +918,6 @@ export function VideoDraftWorkbench({
       const inferredRatioPreset: VideoEditorRatioPreset = (nextComposition?.width || state.project.width) >= (nextComposition?.height || state.project.height) ? '16:9' : '9:16';
       const packageTrackUi = packageEditorProject
         ? deriveTrackUiMap(packageEditorProject)
-        : packageState?.timelineSummary && typeof (packageState.timelineSummary as { trackUi?: unknown }).trackUi === 'object'
-          ? ((packageState.timelineSummary as { trackUi?: VideoEditorState['timeline']['trackUi'] }).trackUi || {})
         : state.timeline.trackUi;
       const packageSceneUi = packageState && typeof (packageState as { sceneUi?: unknown }).sceneUi === 'object'
         ? ((packageState as { sceneUi?: {
@@ -6216,7 +6214,6 @@ export function VideoDraftWorkbench({
               durationInFrames={effectiveDurationInFrames}
               isPlaying={isPreviewPlaying}
               onTogglePlayback={togglePreviewPlayback}
-              onStepFrame={stepPreviewFrame}
               onSeekFrame={seekPreviewFrame}
               onSelectedClipChange={handleTimelineSelectedClipChange}
               onActiveTrackChange={handleTimelineActiveTrackChange}

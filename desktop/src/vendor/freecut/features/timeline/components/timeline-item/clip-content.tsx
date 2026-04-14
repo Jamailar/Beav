@@ -213,7 +213,7 @@ export const ClipContent = memo(function ClipContent({
 
   const renderCompoundClipLabel = useCallback((label: string) => (
     <div
-      className="flex items-center gap-1.5 px-2 text-[11px] font-medium truncate shrink-0 border-b border-black/25 bg-black/20 text-white/90 backdrop-blur-[1px]"
+      className="flex items-center gap-1.5 px-2 text-[11px] font-medium truncate shrink-0"
       style={{
         height: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
         lineHeight: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
@@ -234,7 +234,7 @@ export const ClipContent = memo(function ClipContent({
       <div className="absolute inset-0 flex flex-col">
         {/* Row 1: Label - fixed height */}
         <div
-          className="px-2 text-[11px] font-medium truncate shrink-0 border-b border-black/25 bg-black/20 text-white/90 backdrop-blur-[1px]"
+          className="px-2 text-[11px] font-medium truncate shrink-0"
           style={{
             height: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
             lineHeight: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
@@ -243,7 +243,7 @@ export const ClipContent = memo(function ClipContent({
           {renderTitleText(item.label)}
         </div>
         {/* Row 2: Filmstrip - flex-1 to fill remaining space */}
-        <div className="relative overflow-hidden flex-1 min-h-0 bg-image-gradient">
+        <div className="relative overflow-hidden flex-1 min-h-0">
           {showFilmstrips && (
             <ClipFilmstrip
               mediaId={item.mediaId}
@@ -272,7 +272,7 @@ export const ClipContent = memo(function ClipContent({
       <div className="absolute inset-0 flex flex-col">
         {/* Row 1: Label - fixed height */}
         <div
-          className="px-2 text-[11px] font-medium truncate shrink-0 border-b border-black/25 bg-black/20 text-white/90 backdrop-blur-[1px]"
+          className="px-2 text-[11px] font-medium truncate shrink-0"
           style={{
             height: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
             lineHeight: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
@@ -353,7 +353,7 @@ export const ClipContent = memo(function ClipContent({
         <div className="absolute inset-0 flex flex-col">
           {renderCompoundClipLabel(item.label || 'Compound Clip')}
           {/* Row 2: Filmstrip - flex-1 */}
-          <div className="relative overflow-hidden flex-1 min-h-0 bg-image-gradient">
+          <div className="relative overflow-hidden flex-1 min-h-0">
             {showFilmstrips && (
               <ClipFilmstrip
                 mediaId={compositionVisualMediaId}
@@ -449,7 +449,7 @@ export const ClipContent = memo(function ClipContent({
     return (
       <div className="absolute inset-0 flex flex-col">
         <div
-          className="px-2 text-[11px] font-medium truncate shrink-0 border-b border-black/25 bg-black/20 text-white/90 backdrop-blur-[1px]"
+          className="px-2 text-[11px] font-medium truncate shrink-0"
           style={{
             height: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
             lineHeight: EDITOR_LAYOUT_CSS_VALUES.timelineClipLabelRowHeight,
@@ -457,7 +457,7 @@ export const ClipContent = memo(function ClipContent({
         >
           {renderTitleText(item.label)}
         </div>
-        <div className="relative overflow-hidden flex-1 min-h-0 bg-image-gradient">
+        <div className="relative overflow-hidden flex-1 min-h-0">
           {showFilmstrips && (
             <ImageFilmstrip
               mediaId={item.mediaId}

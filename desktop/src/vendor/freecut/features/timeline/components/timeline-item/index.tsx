@@ -66,6 +66,7 @@ import { useTimelineItemDropHandlers } from './use-timeline-item-drop-handlers';
 import { AnchorDragGhost, FollowerDragGhost } from './drag-ghosts';
 import { DragBlockedTooltip } from './drag-blocked-tooltip';
 import { ItemContextMenu } from './item-context-menu';
+import { LEXBOX_FREECUT_TIMELINE_CAPABILITIES } from '@lexbox/components/manuscripts/freecutTimelineCapabilities';
 import { getRazorSplitPosition } from '../../utils/razor-snap';
 import type { RazorSnapTarget } from '../../utils/razor-snap';
 import { getFilteredItemSnapEdges } from '../../utils/timeline-snap-utils';
@@ -1148,7 +1149,11 @@ export const TimelineItem = memo(function TimelineItem({ item, timelineDuration 
     if (activeToolRef.current === 'razor') return;
 
     // Compound clip wrappers: enter the sub-composition
-    if ((item.type === 'composition' || (item.type === 'audio' && item.compositionId)) && item.compositionId) {
+    if (
+      LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips
+      && (item.type === 'composition' || (item.type === 'audio' && item.compositionId))
+      && item.compositionId
+    ) {
       useCompositionNavigationStore.getState().enterComposition(item.compositionId, item.label, item.id);
       return;
     }
@@ -2431,23 +2436,23 @@ export const TimelineItem = memo(function TimelineItem({ item, timelineDuration 
           const frame = usePlaybackStore.getState().currentFrame;
           return frame > item.from && frame < item.from + item.durationInFrames;
         })()}
-        onFreezeFrame={handleFreezeFrame}
+        onFreezeFrame={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowFreezeFrame ? handleFreezeFrame : undefined}
         isTextItem={item.type === 'text' && hasSpeakableText}
-        onGenerateAudioFromText={handleGenerateAudioFromText}
-        canGenerateCaptions={(item.type === 'video' || item.type === 'audio') && !!item.mediaId && !isBroken}
+        onGenerateAudioFromText={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowGeneratedAudioFromText ? handleGenerateAudioFromText : undefined}
+        canGenerateCaptions={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCaptionGeneration && (item.type === 'video' || item.type === 'audio') && !!item.mediaId && !isBroken}
         canRegenerateCaptions={hasGeneratedCaptions}
         isGeneratingCaptions={isCaptionGenerationActive || transcriptStatus === 'transcribing'}
         defaultCaptionModel={defaultWhisperModel}
-        onGenerateCaptions={handleGenerateCaptions}
-        onRegenerateCaptions={handleRegenerateCaptions}
-        isCompositionItem={isCompositionItem}
-        onEnterComposition={handleEnterComposition}
-        onDissolveComposition={handleDissolveComposition}
-        canCreatePreComp={isSelected}
-        onCreatePreComp={handleCreatePreComp}
-        canDetectScenes={item.type === 'video' && !!item.mediaId && !isBroken}
+        onGenerateCaptions={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCaptionGeneration ? handleGenerateCaptions : undefined}
+        onRegenerateCaptions={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCaptionGeneration ? handleRegenerateCaptions : undefined}
+        isCompositionItem={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips && isCompositionItem}
+        onEnterComposition={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips ? handleEnterComposition : undefined}
+        onDissolveComposition={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips ? handleDissolveComposition : undefined}
+        canCreatePreComp={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips && isSelected}
+        onCreatePreComp={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowCompoundClips ? handleCreatePreComp : undefined}
+        canDetectScenes={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowSceneDetection && item.type === 'video' && !!item.mediaId && !isBroken}
         isDetectingScenes={isSceneDetectionActive}
-        onDetectScenes={handleDetectScenes}
+        onDetectScenes={LEXBOX_FREECUT_TIMELINE_CAPABILITIES.allowSceneDetection ? handleDetectScenes : undefined}
       >
         <div
           ref={transformRef}

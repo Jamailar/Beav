@@ -7,7 +7,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { AudioLines, FoldHorizontal, GripVertical, Link2, Lock, Power, PowerOff, Radio, Rows, Type, Video } from 'lucide-react';
+import { Power, PowerOff, Lock, GripVertical, Radio, FoldHorizontal, Link2 } from 'lucide-react';
 import type { TimelineTrack } from '@/types/timeline';
 import { useTrackDrag } from '../hooks/use-track-drag';
 import { TIMELINE_SIDEBAR_WIDTH } from '../constants';
@@ -34,9 +34,6 @@ interface TrackHeaderProps {
   onDeleteEmptyTracks: () => void;
 }
 
-/**
- * Custom equality for TrackHeader memo - ignores callback props which are recreated each render
- */
 function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps): boolean {
   return (
     prev.track === next.track &&
@@ -45,18 +42,8 @@ function areTrackHeaderPropsEqual(prev: TrackHeaderProps, next: TrackHeaderProps
     prev.canDeleteTrack === next.canDeleteTrack &&
     prev.canDeleteEmptyTracks === next.canDeleteEmptyTracks
   );
-  // Callbacks (onToggleLock, etc.) are ignored - they're recreated each render but functionality is same
 }
 
-/**
- * Track Header Component
- *
- * Displays track name, controls, and handles selection.
- * Shows active state with background color.
- * Supports group tracks with collapse/expand and indentation.
- * Right-click context menu for track actions.
- * Memoized to prevent re-renders when props haven't changed.
- */
 export const TrackHeader = memo(function TrackHeader({
   track,
   isActive,
@@ -83,59 +70,33 @@ export const TrackHeader = memo(function TrackHeader({
       ? track.visible === false
       : track.visible === false || track.muted;
 
-  // Use track drag hook (visuals handled centrally by timeline.tsx via DOM)
   const { handleDragStart } = useTrackDrag(track);
   const itemCountLabel = `${itemCount} ${itemCount === 1 ? 'Clip' : 'Clips'}`;
-  const TrackKindIcon = trackKind === 'audio'
-    ? AudioLines
-    : trackKind === 'text' || trackKind === 'subtitle'
-      ? Type
-      : trackKind === 'motion'
-        ? Rows
-        : Video;
-  const trackKindLabel = trackKind === 'audio'
-    ? 'Audio'
-    : trackKind === 'text'
-      ? 'Text'
-      : trackKind === 'subtitle'
-        ? 'Sub'
-        : trackKind === 'motion'
-          ? 'FX'
-          : 'Video';
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
           className={`
-            track-header-item group relative flex flex-col overflow-hidden rounded-[14px] border px-1.5 py-1.5
-            cursor-grab active:cursor-grabbing
-            ${isSelected ? 'bg-primary/10 border-primary/40' : 'border-transparent hover:bg-secondary/50 hover:border-border/70'}
-            ${isActive ? 'shadow-[inset_2px_0_0_rgba(255,140,58,0.95)]' : ''}
-            transition-[background-color,border-color,box-shadow] duration-150
+            flex flex-col overflow-hidden px-1
+            cursor-grab active:cursor-grabbing relative
+            ${isSelected ? 'bg-primary/10' : 'hover:bg-secondary/50'}
+            ${isActive ? 'border-l-3 border-l-primary' : 'border-l-3 border-l-transparent'}
+            transition-colors duration-150
           `}
           style={{
             height: `${track.height}px`,
-            // content-visibility optimization for long track lists (rendering-content-visibility)
             contentVisibility: 'auto',
             containIntrinsicSize: `${TIMELINE_SIDEBAR_WIDTH}px ${track.height}px`,
           }}
           onClick={onSelect}
           onMouseDown={handleDragStart}
           data-track-id={track.id}
-          data-track-header
-          data-track-kind={trackKind}
-          data-active={isActive}
-          data-selected={isSelected}
         >
-          <div
-            className="flex h-6 shrink-0 items-center gap-0.5 overflow-hidden rounded-[10px] border border-border/50 bg-background/35 px-0.5"
-            data-track-header-controls
-          >
+          <div className="flex h-6 shrink-0 items-center gap-0.5 overflow-hidden border-b border-border/60">
             <div className="flex h-5 w-4 shrink-0 items-center justify-center">
               <GripVertical className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
             </div>
-            {/* Disable Button */}
             <Button
               variant="ghost"
               size="icon"
@@ -156,7 +117,6 @@ export const TrackHeader = memo(function TrackHeader({
               )}
             </Button>
 
-            {/* Solo Button */}
             <Button
               variant="ghost"
               size="icon"
@@ -175,7 +135,6 @@ export const TrackHeader = memo(function TrackHeader({
               />
             </Button>
 
-            {/* Lock Button */}
             <Button
               variant="ghost"
               size="icon"
@@ -229,29 +188,13 @@ export const TrackHeader = memo(function TrackHeader({
             </Button>
           </div>
 
-          <div className="flex min-h-0 flex-1 items-center gap-2 overflow-hidden px-1 pt-1" data-track-header-body>
-            <div
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] border border-border/60 bg-background/55"
-              data-track-kind-icon
-            >
-              <TrackKindIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold leading-none font-mono">
-                  {track.name}
-                </span>
-                <span
-                  className="shrink-0 rounded-full border border-border/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
-                  data-track-kind-badge
-                >
-                  {trackKindLabel}
-                </span>
-              </div>
-              <div className="mt-1 text-[10px] leading-none text-muted-foreground">
-                {itemCountLabel}
-              </div>
-            </div>
+          <div className="flex min-h-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5">
+            <span className="min-w-0 truncate text-xs font-semibold leading-none font-mono">
+              {track.name}
+            </span>
+            <span className="shrink-0 text-[10px] leading-none text-muted-foreground">
+              {itemCountLabel}
+            </span>
           </div>
         </div>
       </ContextMenuTrigger>
