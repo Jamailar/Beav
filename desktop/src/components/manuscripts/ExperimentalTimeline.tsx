@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import { AudioLines, Eye, EyeOff, Lock, Minus, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
+import { AudioLines, Eye, EyeOff, Lock, Minus, Orbit, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
 import {
     buildAssetMap,
     deriveProjectedEditorItems,
@@ -86,7 +86,7 @@ function nextTrackId(project: EditorProjectFile, kind: EditorTrackKind): string 
 function kindIcon(kind: EditorTrackKind) {
     if (kind === 'audio') return AudioLines;
     if (kind === 'subtitle' || kind === 'text') return Type;
-    if (kind === 'motion') return Rows;
+    if (kind === 'motion') return Orbit;
     return Video;
 }
 
@@ -566,10 +566,7 @@ export function ExperimentalTimeline({
                                 >
                                     <div className="flex min-w-0 items-center gap-2">
                                         <TrackIcon className="h-4 w-4 text-white/65" />
-                                        <div className="min-w-0">
-                                            <div className="truncate text-xs font-medium text-white">{track.name}</div>
-                                            <div className="text-[10px] uppercase tracking-[0.18em] text-white/35">{track.kind}</div>
-                                        </div>
+                                        <div className="min-w-0 truncate text-xs font-medium text-white">{track.name}</div>
                                     </div>
                                     <div className="flex items-center gap-1">
                                         <button type="button" onClick={(event) => { event.stopPropagation(); onApplyCommands([{ type: 'set_track_ui', trackId: track.id, patch: { hidden: !track.ui.hidden } }]); }} className="text-white/55 hover:text-white">{track.ui.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
