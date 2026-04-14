@@ -140,6 +140,21 @@ export interface RemotionRenderResult {
     sampleRate?: number;
 }
 
+export interface RemotionBaseMedia {
+    sourceAssetIds?: string[];
+    outputPath?: string | null;
+    durationMs?: number;
+    status?: string;
+    updatedAt?: number | null;
+}
+
+export interface RemotionFfmpegRecipe {
+    operations?: Array<Record<string, unknown>>;
+    artifacts?: Array<Record<string, unknown>>;
+    summary?: string | null;
+    updatedAt?: number | null;
+}
+
 export interface RemotionCompositionConfig {
     version?: number;
     title?: string;
@@ -153,5 +168,7 @@ export interface RemotionCompositionConfig {
     scenes: RemotionScene[];
     transitions?: RemotionTransition[];
     sceneItemTransforms?: Record<string, RemotionSceneItemTransform>;
+    baseMedia?: RemotionBaseMedia;
+    ffmpegRecipe?: RemotionFfmpegRecipe;
     render?: RemotionRenderResult;
 }

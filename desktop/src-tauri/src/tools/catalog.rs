@@ -78,7 +78,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_editor" => Some(ToolDescriptor {
             name: "redbox_editor",
-            description: "Inspect and edit the current video/audio manuscript package with a script-first workflow. Read or update the script first, confirm it, then mutate timeline or Remotion animation.",
+            description: "Inspect and edit the current video/audio manuscript package with a script-first workflow. Video mode now prefers project_read + ffmpeg_edit + Remotion actions.",
             kind: ToolKind::Editor,
             requires_approval: false,
             concurrency_safe: false,
@@ -268,7 +268,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_editor",
-                "description": "Inspect and edit the bound RedBox video/audio manuscript package. Strict workflow: script_read -> script_update -> user review -> script_confirm -> timeline / Remotion / export.",
+                "description": "Inspect and edit the bound RedBox video/audio manuscript package. In video mode, prefer script_read -> script_update -> script_confirm -> project_read -> ffmpeg_edit -> remotion_* -> export.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -278,6 +278,10 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "script_read",
                                 "script_update",
                                 "script_confirm",
+                                "project_read",
+                                "project-read",
+                                "ffmpeg_edit",
+                                "ffmpeg-edit",
                                 "timeline_read",
                                 "remotion_read",
                                 "remotion-read",
@@ -354,8 +358,10 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "sceneId": { "type": "string" },
                         "track": { "type": "string" },
                         "content": { "type": "string" },
+                        "intentSummary": { "type": "string" },
                         "text": { "type": "string" },
                         "name": { "type": "string" },
+                        "operations": { "type": "array", "items": { "type": "object" } },
                         "previewTab": { "type": "string", "enum": ["preview", "motion", "script"] },
                         "renderMode": { "type": "string", "enum": ["full", "motion-layer"] },
                         "activePanel": { "type": "string" },

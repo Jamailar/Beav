@@ -172,6 +172,30 @@ type DraftContextMenuState = {
     title: string;
 };
 
+type VideoScriptApprovalState = {
+    status?: 'pending' | 'confirmed';
+    lastScriptUpdateAt?: number | null;
+    lastScriptUpdateSource?: string | null;
+    confirmedAt?: number | null;
+};
+
+type VideoProjectState = {
+    scriptBody?: string;
+    scriptApproval?: VideoScriptApprovalState;
+    assets?: Array<Record<string, unknown>>;
+    baseMedia?: {
+        sourceAssetIds?: string[];
+        outputPath?: string | null;
+        durationMs?: number;
+        status?: string;
+        updatedAt?: number | null;
+    };
+    ffmpegRecipeSummary?: string | null;
+    remotion?: RemotionCompositionConfig | null;
+    renderOutput?: string | null;
+    legacy?: Record<string, unknown>;
+};
+
 type PackageState = {
     manifest?: Record<string, unknown>;
     assets?: { items?: Array<Record<string, unknown>> };
@@ -193,6 +217,7 @@ type PackageState = {
         trackUi?: Record<string, unknown>;
     };
     editorProject?: EditorProjectFile | null;
+    videoProject?: VideoProjectState | null;
     hasLayoutHtml?: boolean;
     hasWechatHtml?: boolean;
     layoutHtml?: string;
@@ -1380,14 +1405,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [editorDescriptor?.draftType, editorFile]);
 
     const handleOpenRenderedRemotionVideo = useCallback(async () => {
-        const outputPath = packageState?.remotion?.render?.outputPath;
+        const outputPath = packageState?.videoProject?.renderOutput || packageState?.remotion?.render?.outputPath;
         if (!outputPath) return;
         try {
             await window.ipcRenderer.invoke('app:open-path', { path: outputPath });
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '打开导出文件失败');
         }
-    }, [packageState?.remotion?.render?.outputPath]);
+    }, [packageState?.remotion?.render?.outputPath, packageState?.videoProject?.renderOutput]);
 
     const handleUpgradeDraftPackage = useCallback(async (targetKind: 'article' | 'post') => {
         if (!editorFile) return;
@@ -1449,11 +1474,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     useEffect(() => {
         if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
-        const nextScriptBody = packageState?.editorProject?.script?.body;
+        const nextScriptBody = packageState?.videoProject?.scriptBody
+            ?? packageState?.editorProject?.script?.body;
         if (typeof nextScriptBody !== 'string' || nextScriptBody === editorBody) return;
         setEditorBody(nextScriptBody);
         setEditorBodyDirty(false);
-    }, [editorBody, editorBodyDirty, editorFile, mode, packageState?.editorProject?.script?.body]);
+    }, [
+        editorBody,
+        editorBodyDirty,
+        editorFile,
+        mode,
+        packageState?.editorProject?.script?.body,
+        packageState?.videoProject?.scriptBody,
+    ]);
 
     useEffect(() => {
         if (!editorFile || !editorBodyDirty) return;
@@ -1525,7 +1558,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
                 associatedPackageAssetCount: packageAssets.length,
                 associatedPackageClipCount: Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0),
-                associatedPackageScriptApprovalStatus: packageState?.editorProject?.ai?.scriptApproval?.status || 'pending',
+                associatedPackageScriptApprovalStatus:
+                    packageState?.videoProject?.scriptApproval?.status
+                    || packageState?.editorProject?.ai?.scriptApproval?.status
+                    || 'pending',
                 associatedPackageTrackNames: timelineTrackNames,
                 associatedPackageClips: timelineClips.slice(0, 12).map((item) => ({
                     assetId: item?.assetId,
@@ -1840,7 +1876,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const isPostPackage = editorFile.endsWith(POST_DRAFT_EXTENSION);
         const isVideoPackage = editorFile.endsWith(VIDEO_DRAFT_EXTENSION);
         const isAudioPackage = editorFile.endsWith(AUDIO_DRAFT_EXTENSION);
-        const isScriptConfirmed = packageState?.editorProject?.ai?.scriptApproval?.status === 'confirmed';
+        const isScriptConfirmed = (
+            packageState?.videoProject?.scriptApproval?.status
+            || packageState?.editorProject?.ai?.scriptApproval?.status
+        ) === 'confirmed';
         const packageCoverId = String(packageState?.cover?.assetId || '').trim();
         const packageImages = Array.isArray(packageState?.images?.items) ? packageState?.images?.items : [];
         const packageAssets = Array.isArray(packageState?.assets?.items) ? packageState?.assets?.items : [];
@@ -1958,7 +1997,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        {isImmersiveWorkbench && (
+                        {isAudioDraft && (
                             <>
                                 <EditorLayoutToggleButton
                                     kind="timeline"

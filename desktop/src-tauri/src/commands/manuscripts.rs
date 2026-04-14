@@ -1,7 +1,10 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::manuscript_package::{
-    animation_layers_from_remotion_scene, hydrate_editor_project_motion_from_remotion,
+    animation_layers_from_remotion_scene, build_default_remotion_scene,
+    hydrate_editor_project_motion_from_remotion,
+    default_video_script_approval, ensure_manifest_video_ai_state, get_video_project_state,
     normalized_remotion_render_config, persist_remotion_composition_artifacts,
+    video_script_state_from_manifest,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
@@ -92,6 +95,58 @@ fn package_script_state_value(project: &Value) -> Value {
             .unwrap_or(""),
         "approval": approval
     })
+}
+
+fn package_video_script_state_value(
+    package_path: &std::path::Path,
+    file_name: &str,
+    manifest: &Value,
+) -> Value {
+    let script_body =
+        fs::read_to_string(package_entry_path(package_path, file_name, Some(manifest)))
+            .unwrap_or_default();
+    video_script_state_from_manifest(manifest, &script_body)
+}
+
+fn mark_manifest_video_script_pending(manifest: &mut Value, source: &str) -> Result<(), String> {
+    let video_ai = ensure_manifest_video_ai_state(manifest)?;
+    let approval = video_ai
+        .get_mut("scriptApproval")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Manifest videoAi.scriptApproval must be an object".to_string())?;
+    approval.insert("status".to_string(), json!("pending"));
+    approval.insert("lastScriptUpdateAt".to_string(), json!(now_i64()));
+    approval.insert(
+        "lastScriptUpdateSource".to_string(),
+        if source.trim().is_empty() {
+            Value::Null
+        } else {
+            json!(source)
+        },
+    );
+    approval.insert("confirmedAt".to_string(), Value::Null);
+    Ok(())
+}
+
+fn confirm_manifest_video_script(manifest: &mut Value) -> Result<Value, String> {
+    let video_ai = ensure_manifest_video_ai_state(manifest)?;
+    let approval = video_ai
+        .get_mut("scriptApproval")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Manifest videoAi.scriptApproval must be an object".to_string())?;
+    if approval
+        .get("lastScriptUpdateAt")
+        .map(Value::is_null)
+        .unwrap_or(true)
+    {
+        approval.insert("lastScriptUpdateAt".to_string(), json!(now_i64()));
+    }
+    approval.insert("status".to_string(), json!("confirmed"));
+    approval.insert("confirmedAt".to_string(), json!(now_i64()));
+    Ok(manifest
+        .pointer("/videoAi/scriptApproval")
+        .cloned()
+        .unwrap_or_else(|| default_video_script_approval("system")))
 }
 
 fn mark_editor_project_script_pending(
@@ -293,10 +348,16 @@ fn persist_package_script_body(
         content,
     )?;
 
-    if matches!(
-        get_package_kind_from_file_name(file_name),
-        Some("video" | "audio")
-    ) {
+    if matches!(get_package_kind_from_file_name(file_name), Some("video")) {
+        mark_manifest_video_script_pending(&mut manifest, source)?;
+        write_json_value(&package_manifest_path(package_path), &manifest)?;
+        return Ok((
+            get_manuscript_package_state(package_path)?,
+            package_video_script_state_value(package_path, file_name, &manifest),
+        ));
+    }
+
+    if matches!(get_package_kind_from_file_name(file_name), Some("audio")) {
         let mut project = ensure_editor_project(package_path)?;
         mark_editor_project_script_pending(&mut project, content, source)?;
         write_json_value(&package_editor_project_path(package_path), &project)?;
@@ -649,9 +710,23 @@ fn remotion_context_value(
     package_path: &std::path::Path,
     file_path: &str,
 ) -> Result<Value, String> {
-    let project = ensure_editor_project(package_path)?;
-    let fallback = build_remotion_config_from_editor_project(&project);
-    let composition = read_json_value_or(package_remotion_path(package_path).as_path(), fallback);
+    let package_state = get_manuscript_package_state(package_path)?;
+    let composition = package_state
+        .get("remotion")
+        .cloned()
+        .unwrap_or_else(|| build_default_remotion_scene("RedBox Motion", &[]));
+    let asset_container = package_state
+        .pointer("/videoProject/assets")
+        .cloned()
+        .map(|items| json!({ "assets": items }))
+        .or_else(|| {
+            package_state
+                .get("editorProject")
+                .and_then(|project| project.get("assets"))
+                .cloned()
+                .map(|items| json!({ "assets": items }))
+        })
+        .unwrap_or_else(|| json!({ "assets": [] }));
     let runtime_state = editor_runtime_state_record(state, file_path)?;
     let fps = composition
         .get("fps")
@@ -743,7 +818,7 @@ fn remotion_context_value(
         "scenes": remotion_scene_summary_items(&composition),
         "transitions": transitions,
         "activeScene": active_scene,
-        "assetMetadata": remotion_asset_metadata(&project),
+        "assetMetadata": remotion_asset_metadata(&asset_container),
         "selectionMapping": {
             "selectedClipId": runtime_state.as_ref().and_then(|record| record.selected_clip_id.clone()),
             "selectedSceneId": runtime_state.as_ref().and_then(|record| record.selected_scene_id.clone()).or_else(|| active_scene.get("id").and_then(Value::as_str).map(ToString::to_string)),
@@ -756,6 +831,7 @@ fn remotion_context_value(
     }))
 }
 
+#[allow(dead_code)]
 fn sync_project_transitions_from_remotion_scene(
     project: &mut Value,
     composition: &Value,
@@ -1348,6 +1424,7 @@ fn normalize_motion_item(raw: &Value, fallback: &Value) -> Value {
     })
 }
 
+#[allow(dead_code)]
 fn sync_project_motion_items_from_remotion_scene(
     project: &mut Value,
     composition: &Value,
@@ -2321,6 +2398,98 @@ fn ensure_package_asset_entry(
             write_json_value(&editor_project_path, &editor_project)?;
         }
     }
+    let file_name = package_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Untitled");
+    if get_package_kind_from_file_name(file_name) == Some("video") {
+        let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+        let title = manifest
+            .get("title")
+            .and_then(|value| value.as_str())
+            .unwrap_or("RedBox Motion");
+        let mut remotion = read_json_value_or(
+            &package_remotion_path(package_path),
+            build_default_remotion_scene(title, &[]),
+        );
+        let asset_src = asset.absolute_path.clone()
+            .or(asset.relative_path.clone())
+            .unwrap_or_default();
+        let asset_kind = infer_editor_asset_kind(
+            asset.mime_type.as_deref(),
+            Some(&asset_src),
+        );
+        let can_seed_base_media = matches!(asset_kind, "video" | "image");
+        let has_base_media = remotion
+            .pointer("/baseMedia/outputPath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+        if can_seed_base_media && !has_base_media {
+            if let Some(object) = remotion.as_object_mut() {
+                let fallback_duration_in_frames = object
+                    .get("durationInFrames")
+                    .cloned()
+                    .unwrap_or(json!(90));
+                object.insert("version".to_string(), json!(2));
+                object.insert("renderMode".to_string(), json!("full"));
+                object.insert(
+                    "baseMedia".to_string(),
+                    json!({
+                        "sourceAssetIds": [asset.id.clone()],
+                        "outputPath": asset_src,
+                        "durationMs": object
+                            .get("baseMedia")
+                            .and_then(|value| value.get("durationMs"))
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                        "status": "ready",
+                        "updatedAt": now_i64()
+                    }),
+                );
+                let scenes = object
+                    .entry("scenes".to_string())
+                    .or_insert_with(|| json!([]));
+                if !scenes.is_array() {
+                    *scenes = json!([]);
+                }
+                let scenes_array = scenes.as_array_mut().ok_or_else(|| "Remotion scenes must be an array".to_string())?;
+                if scenes_array.is_empty() {
+                    scenes_array.push(json!({
+                        "id": "scene-1",
+                        "clipId": Value::Null,
+                        "assetId": asset.id,
+                        "assetKind": asset_kind,
+                        "src": asset.absolute_path.clone().or(asset.relative_path.clone()).unwrap_or_default(),
+                        "startFrame": 0,
+                        "durationInFrames": fallback_duration_in_frames,
+                        "trimInFrames": 0,
+                        "motionPreset": "static",
+                        "overlayTitle": Value::Null,
+                        "overlayBody": Value::Null,
+                        "overlays": [],
+                        "entities": []
+                    }));
+                } else if let Some(primary_scene) = scenes_array.first_mut().and_then(Value::as_object_mut) {
+                    let current_src = primary_scene
+                        .get("src")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if current_src.is_empty() {
+                        primary_scene.insert(
+                            "src".to_string(),
+                            json!(asset.absolute_path.clone().or(asset.relative_path.clone()).unwrap_or_default()),
+                        );
+                        primary_scene.insert("assetKind".to_string(), json!(asset_kind));
+                        primary_scene.insert("assetId".to_string(), json!(asset.id.clone()));
+                    }
+                }
+            }
+            persist_remotion_composition_artifacts(package_path, &remotion)?;
+        }
+    }
     Ok(())
 }
 
@@ -2355,6 +2524,407 @@ fn split_timeline_clip_value(clip: &Value, clip_id: &str, split_ratio: f64) -> (
     }
 
     (first_clip, second_clip)
+}
+
+fn ffmpeg_seconds(ms: i64) -> String {
+    format!("{:.3}", (ms.max(0) as f64) / 1000.0)
+}
+
+fn ffmpeg_asset_items(package_state: &Value) -> Vec<Value> {
+    package_state
+        .pointer("/assets/items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn ffmpeg_asset_id(asset: &Value) -> Option<String> {
+    asset.get("assetId")
+        .or_else(|| asset.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn ffmpeg_asset_path(asset: &Value) -> Option<String> {
+    for key in ["absolutePath", "mediaPath", "previewUrl", "relativePath", "src"] {
+        if let Some(value) = asset.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_ffmpeg_asset_path(assets: &[Value], asset_id: &str) -> Result<String, String> {
+    assets
+        .iter()
+        .find(|asset| {
+            ffmpeg_asset_id(asset)
+                .map(|candidate| candidate == asset_id)
+                .unwrap_or(false)
+        })
+        .and_then(ffmpeg_asset_path)
+        .ok_or_else(|| format!("未找到素材 `{asset_id}` 的可用路径"))
+}
+
+fn ffmpeg_output_path(
+    package_path: &std::path::Path,
+    step_index: usize,
+    op_name: &str,
+    extension: &str,
+) -> Result<std::path::PathBuf, String> {
+    let dir = package_path.join("cache").join("ai-edits");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir.join(format!(
+        "{:02}-{}-{}.{}",
+        step_index + 1,
+        op_name,
+        now_ms(),
+        extension
+    )))
+}
+
+fn run_ffmpeg_args(args: &[String]) -> Result<(), String> {
+    let output = std::process::Command::new("ffmpeg")
+        .args(args)
+        .output()
+        .map_err(|error| format!("执行 ffmpeg 失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("ffmpeg 执行失败，退出码 {}", output.status)
+    } else {
+        stderr
+    })
+}
+
+fn ffmpeg_operation_input_path(
+    operation: &Value,
+    current_path: Option<&std::path::PathBuf>,
+    assets: &[Value],
+) -> Result<String, String> {
+    if let Some(input_path) = operation.get("inputPath").and_then(Value::as_str) {
+        let trimmed = input_path.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if let Some(asset_id) = operation.get("assetId").and_then(Value::as_str) {
+        let trimmed = asset_id.trim();
+        if !trimmed.is_empty() {
+            return resolve_ffmpeg_asset_path(assets, trimmed);
+        }
+    }
+    current_path
+        .map(|path| path.display().to_string())
+        .ok_or_else(|| "当前操作缺少输入视频，请提供 assetId 或 inputPath".to_string())
+}
+
+fn ffmpeg_recipe_source_asset_ids(operations: &[Value]) -> Vec<String> {
+    let mut ids = Vec::<String>::new();
+    let push_id = |ids: &mut Vec<String>, candidate: Option<&str>| {
+        let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if !ids.iter().any(|value| value == candidate) {
+            ids.push(candidate.to_string());
+        }
+    };
+    for operation in operations {
+        push_id(&mut ids, operation.get("assetId").and_then(Value::as_str));
+        if let Some(asset_ids) = operation.get("assetIds").and_then(Value::as_array) {
+            for asset_id in asset_ids {
+                push_id(&mut ids, asset_id.as_str());
+            }
+        }
+        push_id(&mut ids, operation.get("audioAssetId").and_then(Value::as_str));
+    }
+    ids
+}
+
+fn ffmpeg_recipe_duration_ms(operations: &[Value], fallback_duration_ms: i64) -> i64 {
+    let trimmed_sum = operations
+        .iter()
+        .filter(|operation| operation.get("type").and_then(Value::as_str) == Some("trim"))
+        .filter_map(|operation| operation.get("durationMs").and_then(Value::as_i64))
+        .sum::<i64>();
+    if trimmed_sum > 0 {
+        return trimmed_sum;
+    }
+    operations
+        .iter()
+        .rev()
+        .find_map(|operation| operation.get("durationMs").and_then(Value::as_i64))
+        .unwrap_or(fallback_duration_ms.max(0))
+}
+
+fn execute_ffmpeg_edit_recipe(
+    package_path: &std::path::Path,
+    assets: &[Value],
+    operations: &[Value],
+) -> Result<(std::path::PathBuf, Vec<Value>), String> {
+    let mut current_path: Option<std::path::PathBuf> = None;
+    let mut segment_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut artifacts = Vec::<Value>::new();
+
+    for (index, operation) in operations.iter().enumerate() {
+        let op_name = operation
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "ffmpeg operation 缺少 type".to_string())?;
+        match op_name {
+            "trim" => {
+                let input_path = ffmpeg_operation_input_path(operation, current_path.as_ref(), assets)?;
+                let output_path = ffmpeg_output_path(package_path, index, "trim", "mp4")?;
+                let mut args = vec!["-y".to_string()];
+                let start_ms = operation
+                    .get("startMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(|| operation.get("trimInMs").and_then(Value::as_i64).unwrap_or(0));
+                if start_ms > 0 {
+                    args.push("-ss".to_string());
+                    args.push(ffmpeg_seconds(start_ms));
+                }
+                args.push("-i".to_string());
+                args.push(input_path.clone());
+                if let Some(duration_ms) = operation.get("durationMs").and_then(Value::as_i64) {
+                    if duration_ms > 0 {
+                        args.push("-t".to_string());
+                        args.push(ffmpeg_seconds(duration_ms));
+                    }
+                }
+                args.extend([
+                    "-c:v".to_string(),
+                    "libx264".to_string(),
+                    "-preset".to_string(),
+                    "veryfast".to_string(),
+                    "-c:a".to_string(),
+                    "aac".to_string(),
+                    output_path.display().to_string(),
+                ]);
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                segment_paths.push(output_path.clone());
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "sourcePath": input_path
+                }));
+            }
+            "concat" => {
+                let mut inputs = operation
+                    .get("assetIds")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|asset_id| resolve_ffmpeg_asset_path(assets, asset_id))
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>();
+                if inputs.is_empty() {
+                    inputs = segment_paths.clone();
+                }
+                if inputs.is_empty() {
+                    if let Some(path) = current_path.clone() {
+                        inputs.push(path);
+                    }
+                }
+                if inputs.is_empty() {
+                    return Err("concat 操作缺少可拼接的输入片段".to_string());
+                }
+                if inputs.len() == 1 {
+                    current_path = inputs.first().cloned();
+                    continue;
+                }
+                let output_path = ffmpeg_output_path(package_path, index, "concat", "mp4")?;
+                let mut args = vec!["-y".to_string()];
+                for input in &inputs {
+                    args.push("-i".to_string());
+                    args.push(input.display().to_string());
+                }
+                let mut filter = String::new();
+                for input_index in 0..inputs.len() {
+                    filter.push_str(&format!("[{input_index}:v:0]"));
+                }
+                filter.push_str(&format!("concat=n={}:v=1:a=0[v]", inputs.len()));
+                args.extend([
+                    "-filter_complex".to_string(),
+                    filter,
+                    "-map".to_string(),
+                    "[v]".to_string(),
+                    "-pix_fmt".to_string(),
+                    "yuv420p".to_string(),
+                    "-c:v".to_string(),
+                    "libx264".to_string(),
+                    output_path.display().to_string(),
+                ]);
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                segment_paths = vec![output_path.clone()];
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "inputs": inputs.iter().map(|input| input.display().to_string()).collect::<Vec<_>>()
+                }));
+            }
+            "crop_scale" => {
+                let input_path = ffmpeg_operation_input_path(operation, current_path.as_ref(), assets)?;
+                let output_path = ffmpeg_output_path(package_path, index, "crop-scale", "mp4")?;
+                let crop_width = operation.get("width").and_then(Value::as_i64).unwrap_or(0);
+                let crop_height = operation.get("height").and_then(Value::as_i64).unwrap_or(0);
+                let crop_x = operation.get("x").and_then(Value::as_i64).unwrap_or(0);
+                let crop_y = operation.get("y").and_then(Value::as_i64).unwrap_or(0);
+                let target_width = operation
+                    .get("targetWidth")
+                    .or_else(|| operation.get("outputWidth"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let target_height = operation
+                    .get("targetHeight")
+                    .or_else(|| operation.get("outputHeight"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let mut filters = Vec::<String>::new();
+                if crop_width > 0 && crop_height > 0 {
+                    filters.push(format!("crop={crop_width}:{crop_height}:{crop_x}:{crop_y}"));
+                }
+                if target_width > 0 && target_height > 0 {
+                    filters.push(format!("scale={target_width}:{target_height}"));
+                }
+                if filters.is_empty() {
+                    return Err("crop_scale 至少需要裁剪参数或目标尺寸".to_string());
+                }
+                let args = vec![
+                    "-y".to_string(),
+                    "-i".to_string(),
+                    input_path.clone(),
+                    "-vf".to_string(),
+                    filters.join(","),
+                    "-c:v".to_string(),
+                    "libx264".to_string(),
+                    "-preset".to_string(),
+                    "veryfast".to_string(),
+                    "-c:a".to_string(),
+                    "aac".to_string(),
+                    output_path.display().to_string(),
+                ];
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "sourcePath": input_path
+                }));
+            }
+            "speed" => {
+                let input_path = ffmpeg_operation_input_path(operation, current_path.as_ref(), assets)?;
+                let output_path = ffmpeg_output_path(package_path, index, "speed", "mp4")?;
+                let speed = operation.get("speed").and_then(Value::as_f64).unwrap_or(1.0);
+                if speed <= 0.0 {
+                    return Err("speed 必须大于 0".to_string());
+                }
+                let setpts = 1.0 / speed;
+                let args = vec![
+                    "-y".to_string(),
+                    "-i".to_string(),
+                    input_path.clone(),
+                    "-filter:v".to_string(),
+                    format!("setpts={setpts:.6}*PTS"),
+                    "-an".to_string(),
+                    "-c:v".to_string(),
+                    "libx264".to_string(),
+                    output_path.display().to_string(),
+                ];
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "sourcePath": input_path,
+                    "speed": speed
+                }));
+            }
+            "mute" => {
+                let input_path = ffmpeg_operation_input_path(operation, current_path.as_ref(), assets)?;
+                let output_path = ffmpeg_output_path(package_path, index, "mute", "mp4")?;
+                let args = vec![
+                    "-y".to_string(),
+                    "-i".to_string(),
+                    input_path.clone(),
+                    "-an".to_string(),
+                    "-c:v".to_string(),
+                    "libx264".to_string(),
+                    output_path.display().to_string(),
+                ];
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "sourcePath": input_path
+                }));
+            }
+            "replace_audio" => {
+                let input_path = ffmpeg_operation_input_path(operation, current_path.as_ref(), assets)?;
+                let audio_asset_id = operation
+                    .get("audioAssetId")
+                    .or_else(|| operation.get("assetId"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "replace_audio 缺少 audioAssetId".to_string())?;
+                let audio_path = resolve_ffmpeg_asset_path(assets, audio_asset_id)?;
+                let output_path = ffmpeg_output_path(package_path, index, "replace-audio", "mp4")?;
+                let args = vec![
+                    "-y".to_string(),
+                    "-i".to_string(),
+                    input_path.clone(),
+                    "-i".to_string(),
+                    audio_path.clone(),
+                    "-map".to_string(),
+                    "0:v:0".to_string(),
+                    "-map".to_string(),
+                    "1:a:0".to_string(),
+                    "-c:v".to_string(),
+                    "copy".to_string(),
+                    "-c:a".to_string(),
+                    "aac".to_string(),
+                    "-shortest".to_string(),
+                    output_path.display().to_string(),
+                ];
+                run_ffmpeg_args(&args)?;
+                current_path = Some(output_path.clone());
+                artifacts.push(json!({
+                    "type": op_name,
+                    "path": output_path.display().to_string(),
+                    "sourcePath": input_path,
+                    "audioPath": audio_path
+                }));
+            }
+            _ => {
+                return Err(format!("暂不支持的 ffmpeg operation: {op_name}"));
+            }
+        }
+    }
+
+    let final_path = current_path.ok_or_else(|| "ffmpeg_edit 没有生成任何输出".to_string())?;
+    Ok((final_path, artifacts))
 }
 
 pub fn handle_manuscripts_channel(
@@ -2593,6 +3163,163 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:get-video-project-state" => {
+                let file_path = payload_value_as_string(&payload)
+                    .or_else(|| payload_string(&payload, "filePath"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("video") {
+                    return Ok(json!({ "success": false, "error": "Not a video manuscript package" }));
+                }
+                let package_state = get_manuscript_package_state(&full_path)?;
+                let manifest = package_state.get("manifest").cloned().unwrap_or_else(|| json!({}));
+                let assets = package_state.get("assets").cloned().unwrap_or_else(|| json!({ "items": [] }));
+                let remotion = package_state.get("remotion").cloned().unwrap_or_else(|| json!({}));
+                let timeline_summary = package_state
+                    .get("timelineSummary")
+                    .cloned()
+                    .unwrap_or_else(|| json!({
+                        "trackCount": 0,
+                        "clipCount": 0,
+                        "sourceRefs": [],
+                        "clips": [],
+                        "trackNames": [],
+                        "trackUi": {}
+                    }));
+                let project = read_json_value_or(&package_editor_project_path(&full_path), Value::Null);
+                let editor_project = if project.is_object() { Some(&project) } else { None };
+                Ok(json!({
+                    "success": true,
+                    "project": get_video_project_state(
+                        &full_path,
+                        file_name,
+                        &manifest,
+                        &assets,
+                        &remotion,
+                        editor_project,
+                        &timeline_summary,
+                    )
+                }))
+            }
+            "manuscripts:ffmpeg-edit" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("video") {
+                    return Ok(json!({ "success": false, "error": "ffmpeg_edit 仅支持视频稿件" }));
+                }
+                let operations = payload
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if operations.is_empty() {
+                    return Ok(json!({ "success": false, "error": "operations 不能为空" }));
+                }
+                let intent_summary = payload_string(&payload, "intentSummary")
+                    .unwrap_or_else(|| "AI video edit".to_string());
+                let package_state = get_manuscript_package_state(&full_path)?;
+                let assets = ffmpeg_asset_items(&package_state);
+                let remotion = package_state
+                    .get("remotion")
+                    .cloned()
+                    .unwrap_or_else(|| build_default_remotion_scene(
+                        package_state
+                            .pointer("/manifest/title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("RedBox Motion"),
+                        &[],
+                    ));
+                let (output_path, artifacts) =
+                    execute_ffmpeg_edit_recipe(&full_path, &assets, &operations)?;
+                let fallback_duration_ms = remotion
+                    .pointer("/baseMedia/durationMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let duration_ms = ffmpeg_recipe_duration_ms(&operations, fallback_duration_ms);
+                let source_asset_ids = ffmpeg_recipe_source_asset_ids(&operations);
+                let mut next_remotion = remotion.clone();
+                if let Some(object) = next_remotion.as_object_mut() {
+                    object.insert("version".to_string(), json!(2));
+                    object.insert("renderMode".to_string(), json!("full"));
+                    object.insert(
+                        "baseMedia".to_string(),
+                        json!({
+                            "sourceAssetIds": source_asset_ids,
+                            "outputPath": output_path.display().to_string(),
+                            "durationMs": duration_ms,
+                            "status": "ready",
+                            "updatedAt": now_i64()
+                        }),
+                    );
+                    object.insert(
+                        "ffmpegRecipe".to_string(),
+                        json!({
+                            "operations": operations,
+                            "artifacts": artifacts,
+                            "summary": intent_summary,
+                            "updatedAt": now_i64()
+                        }),
+                    );
+                    if !object.contains_key("scenes") {
+                        object.insert("scenes".to_string(), json!([]));
+                    }
+                    if !object.contains_key("transitions") {
+                        object.insert("transitions".to_string(), json!([]));
+                    }
+                    let fps = object
+                        .get("fps")
+                        .and_then(Value::as_i64)
+                        .filter(|value| *value > 0)
+                        .unwrap_or(30);
+                    if duration_ms > 0 {
+                        object.insert(
+                            "durationInFrames".to_string(),
+                            json!(((duration_ms as f64 / 1000.0) * fps as f64).round() as i64),
+                        );
+                    }
+                    if let Some(scene) = object
+                        .get_mut("scenes")
+                        .and_then(Value::as_array_mut)
+                        .and_then(|items| items.first_mut())
+                        .and_then(Value::as_object_mut)
+                    {
+                        scene.insert("src".to_string(), json!(output_path.display().to_string()));
+                        scene.insert("assetKind".to_string(), json!("video"));
+                        if duration_ms > 0 {
+                            scene.insert(
+                                "durationInFrames".to_string(),
+                                json!(((duration_ms as f64 / 1000.0) * fps as f64).round() as i64),
+                            );
+                        }
+                    }
+                }
+                persist_remotion_composition_artifacts(&full_path, &next_remotion)?;
+                Ok(json!({
+                    "success": true,
+                    "outputPath": output_path.display().to_string(),
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
             }
             "manuscripts:get-editor-project" => {
                 let file_path = payload_value_as_string(&payload)
@@ -2969,6 +3696,18 @@ pub fn handle_manuscripts_channel(
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) == Some("video") {
+                    let manifest =
+                        read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                    return Ok(json!({
+                        "success": true,
+                        "script": package_video_script_state_value(&full_path, file_name, &manifest)
+                    }));
+                }
                 let project = ensure_editor_project(&full_path)?;
                 Ok(json!({
                     "success": true,
@@ -3008,6 +3747,22 @@ pub fn handle_manuscripts_channel(
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) == Some("video") {
+                    let mut manifest =
+                        read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                    let approval = confirm_manifest_video_script(&mut manifest)?;
+                    write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                    return Ok(json!({
+                        "success": true,
+                        "script": package_video_script_state_value(&full_path, file_name, &manifest),
+                        "approval": approval,
+                        "state": get_manuscript_package_state(&full_path)?
+                    }));
                 }
                 let mut project = ensure_editor_project(&full_path)?;
                 let approval = confirm_editor_project_script(&mut project)?;
@@ -3995,6 +4750,11 @@ pub fn handle_manuscripts_channel(
                 {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
+                let package_kind = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .and_then(get_package_kind_from_file_name)
+                    .unwrap_or("article");
                 let picked = pick_files_native("选择要导入的素材文件", false, true)?;
                 if picked.is_empty() {
                     return Ok(json!({ "success": true, "canceled": true, "imported": [] }));
@@ -4040,16 +4800,18 @@ pub fn handle_manuscripts_channel(
                     } else {
                         "V1"
                     };
-                    let _ = handle_manuscripts_channel(
-                        app,
-                        state,
-                        "manuscripts:add-package-clip",
-                        &json!({
-                            "filePath": file_path,
-                            "assetId": asset.id,
-                            "track": track,
-                        }),
-                    );
+                    if package_kind != "video" {
+                        let _ = handle_manuscripts_channel(
+                            app,
+                            state,
+                            "manuscripts:add-package-clip",
+                            &json!({
+                                "filePath": file_path,
+                                "assetId": asset.id,
+                                "track": track,
+                            }),
+                        );
+                    }
                     imported.push(json!({
                         "absolutePath": target.display().to_string(),
                         "title": asset.title,
@@ -4310,20 +5072,16 @@ pub fn handle_manuscripts_channel(
                     .and_then(|value| value.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let existing_scene = read_json_value_or(
-                    package_remotion_path(&full_path).as_path(),
-                    build_default_remotion_scene(&title, &clips),
-                );
+                let existing_scene = package_state
+                    .get("remotion")
+                    .cloned()
+                    .unwrap_or_else(|| build_default_remotion_scene(&title, &clips));
                 let raw_scene = payload_field(&payload, "scene")
                     .cloned()
                     .unwrap_or(Value::Null);
                 let merged_scene = merge_remotion_scene_patch(&existing_scene, &raw_scene);
                 let normalized =
                     normalize_ai_remotion_scene(&merged_scene, &existing_scene, &clips, &title);
-                let mut project = ensure_editor_project(&full_path)?;
-                sync_project_motion_items_from_remotion_scene(&mut project, &normalized)?;
-                sync_project_transitions_from_remotion_scene(&mut project, &normalized)?;
-                write_json_value(&package_editor_project_path(&full_path), &project)?;
                 persist_remotion_composition_artifacts(&full_path, &normalized)?;
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
             }
@@ -4346,10 +5104,10 @@ pub fn handle_manuscripts_channel(
                     .cloned()
                     .unwrap_or_default();
                 let remotion_context = remotion_context_value(state, &full_path, &file_path)?;
-                let fallback = read_json_value_or(
-                    package_remotion_path(&full_path).as_path(),
-                    build_default_remotion_scene(&title, &clips),
-                );
+                let fallback = package_state
+                    .get("remotion")
+                    .cloned()
+                    .unwrap_or_else(|| build_default_remotion_scene(&title, &clips));
                 let prompt = format!(
                 "请基于当前视频脚本、时间线和当前 Remotion 工程状态，为 RedBox 设计一份 Remotion JSON 动画方案。\n\
 要求：\n\
@@ -4441,17 +5199,6 @@ Remotion 读取结果 JSON：{}\n\
                 eprintln!("{}", raw_log);
                 append_debug_log_state(state, raw_log);
                 let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &clips, &title);
-                let mut project = ensure_editor_project(&full_path)?;
-                sync_project_motion_items_from_remotion_scene(&mut project, &normalized)?;
-                sync_project_transitions_from_remotion_scene(&mut project, &normalized)?;
-                if let Some(ai) = project.get_mut("ai").and_then(Value::as_object_mut) {
-                    ai.insert(
-                        "lastMotionBrief".to_string(),
-                        json!(subagent_summary.clone()),
-                    );
-                    ai.insert("motionPrompt".to_string(), json!(instructions));
-                }
-                write_json_value(&package_editor_project_path(&full_path), &project)?;
                 let normalized_scene_count = normalized
                     .get("scenes")
                     .and_then(Value::as_array)
@@ -4480,20 +5227,30 @@ Remotion 读取结果 JSON：{}\n\
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let project = ensure_editor_project(&full_path)?;
-                let mut scene = read_json_value_or(
-                    package_remotion_path(&full_path).as_path(),
-                    build_remotion_config_from_editor_project(&project),
-                );
+                let package_state = get_manuscript_package_state(&full_path)?;
+                let mut scene = package_state
+                    .get("remotion")
+                    .cloned()
+                    .unwrap_or_else(|| build_default_remotion_scene("RedBox Motion", &[]));
                 let render_mode = payload_string(&payload, "renderMode")
                     .filter(|value| value == "full" || value == "motion-layer")
                     .unwrap_or_else(|| {
-                        scene
-                            .get("renderMode")
+                        if scene
+                            .pointer("/baseMedia/outputPath")
                             .and_then(Value::as_str)
-                            .filter(|value| *value == "full" || *value == "motion-layer")
-                            .unwrap_or("motion-layer")
-                            .to_string()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some()
+                        {
+                            "full".to_string()
+                        } else {
+                            scene
+                                .get("renderMode")
+                                .and_then(Value::as_str)
+                                .filter(|value| *value == "full" || *value == "motion-layer")
+                                .unwrap_or("motion-layer")
+                                .to_string()
+                        }
                     });
                 if let Some(object) = scene.as_object_mut() {
                     object.insert("renderMode".to_string(), json!(render_mode.clone()));

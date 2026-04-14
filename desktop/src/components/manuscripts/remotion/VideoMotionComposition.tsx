@@ -2,6 +2,7 @@ import React from 'react';
 import {
     AbsoluteFill,
     Audio,
+    Html5Video,
     Img,
     OffthreadVideo,
     interpolate,
@@ -11,10 +12,10 @@ import {
     useVideoConfig,
 } from 'remotion';
 import {
-    coerceToRedboxAssetUrl,
     extractLocalAssetPathCandidate,
     isLocalAssetSource,
 } from '../../../../shared/localAsset';
+import { resolveAssetUrl } from '../../../utils/pathManager';
 import type {
     RemotionCompositionConfig,
     RemotionEntityAnimation,
@@ -72,7 +73,7 @@ function resolveSceneSource(source: string, runtime: RuntimeMode) {
     if (!raw) return '';
     if (!isLocalAssetSource(raw)) return raw;
     if (runtime === 'render') return toFileUrl(raw);
-    return coerceToRedboxAssetUrl(raw);
+    return resolveAssetUrl(raw);
 }
 
 function getMotionValues(frame: number, durationInFrames: number, preset: MotionPreset) {
@@ -308,12 +309,21 @@ function renderAppleShape(fill: string, stroke: string | undefined, strokeWidth:
     );
 }
 
-function buildSceneOverlays(scene: RemotionScene, fps: number): RemotionOverlay[] {
+function buildSceneOverlays(
+    scene: RemotionScene,
+    fps: number,
+    compositionTitle?: string,
+): RemotionOverlay[] {
     const overlayItems: RemotionOverlay[] = [...(scene.overlays || [])];
-    if (scene.overlayTitle) {
+    const overlayTitle = String(scene.overlayTitle || '').trim();
+    const normalizedCompositionTitle = String(compositionTitle || '').trim();
+    const shouldRenderOverlayTitle = overlayTitle
+        && overlayTitle !== normalizedCompositionTitle
+        && overlayTitle !== '未命名';
+    if (shouldRenderOverlayTitle) {
         overlayItems.push({
             id: `${scene.id}-title`,
-            text: scene.overlayTitle,
+            text: overlayTitle,
             startFrame: 0,
             durationInFrames: Math.min(scene.durationInFrames, Math.max(40, Math.round(fps * 2.8))),
             position: 'top',
@@ -619,13 +629,16 @@ function isFrameCoveredByTransition(absoluteFrame: number, windows: SceneTransit
 function SceneEntity({
     entity,
     sceneFrame,
+    runtime,
 }: {
     entity: RemotionSceneEntity;
     sceneFrame: number;
+    runtime: RuntimeMode;
 }) {
     const { fps } = useVideoConfig();
     const entityFrame = normalizeEntityFrame(sceneFrame, entity.startFrame, entity.durationInFrames);
     const animationStyle = mergeAnimationStyles(entityFrame, fps, entity.animations);
+    const mediaSource = resolveSceneSource(entity.src || '', runtime);
     const opacity = typeof entity.opacity === 'number' ? entity.opacity : 1;
     const scale = typeof entity.scale === 'number' ? entity.scale : 1;
     const rotation = typeof entity.rotation === 'number' ? entity.rotation : 0;
@@ -647,7 +660,7 @@ function SceneEntity({
         return (
             <div style={baseStyle}>
                 {(entity.children || []).map((child) => (
-                    <SceneEntity key={child.id} entity={child} sceneFrame={sceneFrame} />
+                    <SceneEntity key={child.id} entity={child} sceneFrame={sceneFrame} runtime={runtime} />
                 ))}
             </div>
         );
@@ -698,12 +711,15 @@ function SceneEntity({
         );
     }
 
-    if (entity.type === 'image' && entity.src) {
-        return <Img src={entity.src} style={{ ...baseStyle, objectFit: 'contain' }} />;
+    if (entity.type === 'image' && mediaSource) {
+        return <Img src={mediaSource} style={{ ...baseStyle, objectFit: 'contain' }} />;
     }
 
-    if (entity.type === 'video' && entity.src) {
-        return <OffthreadVideo src={entity.src} style={{ ...baseStyle, objectFit: 'contain' }} muted />;
+    if (entity.type === 'video' && mediaSource) {
+        if (runtime === 'preview') {
+            return <Html5Video src={mediaSource} style={{ ...baseStyle, objectFit: 'contain' }} muted />;
+        }
+        return <OffthreadVideo src={mediaSource} style={{ ...baseStyle, objectFit: 'contain' }} muted />;
     }
 
     if (entity.type === 'svg' && entity.svgMarkup) {
@@ -768,16 +784,18 @@ function SceneLayerContent({
     sceneFrame,
     runtime,
     renderMode,
+    compositionTitle,
 }: {
     scene: RemotionScene;
     sceneFrame: number;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
+    compositionTitle?: string;
 }) {
     const { fps } = useVideoConfig();
     const source = resolveSceneSource(scene.src, runtime);
     const showBaseMedia = renderMode !== 'motion-layer';
-    const enableMediaAudio = renderMode === 'full' && runtime === 'render';
+    const enableMediaAudio = renderMode === 'full';
     const localFrame = clampFrame(sceneFrame, scene.durationInFrames);
     const motion = getMotionValues(
         localFrame,
@@ -793,7 +811,7 @@ function SceneLayerContent({
             extrapolateRight: 'clamp',
         },
     );
-    const overlayItems = buildSceneOverlays(scene, fps);
+    const overlayItems = buildSceneOverlays(scene, fps, compositionTitle);
     const entities = Array.isArray(scene.entities) ? scene.entities : [];
 
     const contentStyle: React.CSSProperties = {
@@ -817,13 +835,23 @@ function SceneLayerContent({
             {showBaseMedia && scene.assetKind === 'image' ? (
                 <Img src={source} style={contentStyle} />
             ) : showBaseMedia && scene.assetKind === 'video' ? (
-                <OffthreadVideo
-                    src={source}
-                    style={contentStyle}
-                    muted={!enableMediaAudio}
-                    startFrom={scene.trimInFrames || 0}
-                    endAt={(scene.trimInFrames || 0) + scene.durationInFrames}
-                />
+                runtime === 'preview' ? (
+                    <Html5Video
+                        src={source}
+                        style={contentStyle}
+                        muted={!enableMediaAudio}
+                        startFrom={scene.trimInFrames || 0}
+                        endAt={(scene.trimInFrames || 0) + scene.durationInFrames}
+                    />
+                ) : (
+                    <OffthreadVideo
+                        src={source}
+                        style={contentStyle}
+                        muted={!enableMediaAudio}
+                        startFrom={scene.trimInFrames || 0}
+                        endAt={(scene.trimInFrames || 0) + scene.durationInFrames}
+                    />
+                )
             ) : showBaseMedia ? (
                 <AbsoluteFill
                     style={{
@@ -840,7 +868,7 @@ function SceneLayerContent({
                 </AbsoluteFill>
             ) : null}
             {entities.map((entity) => (
-                <SceneEntity key={entity.id} entity={entity} sceneFrame={localFrame} />
+                <SceneEntity key={entity.id} entity={entity} sceneFrame={localFrame} runtime={runtime} />
             ))}
             {overlayItems.map((overlay) => (
                 <SceneOverlay key={overlay.id} overlay={overlay} sceneFrame={localFrame} />
@@ -854,11 +882,13 @@ function MotionSceneLayer({
     runtime,
     renderMode,
     transitionWindows,
+    compositionTitle,
 }: {
     scene: RemotionScene;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
     transitionWindows?: SceneTransitionWindow[];
+    compositionTitle?: string;
 }) {
     const frame = useCurrentFrame();
     const sceneFrame = clampFrame(frame, scene.durationInFrames);
@@ -872,6 +902,7 @@ function MotionSceneLayer({
             sceneFrame={sceneFrame}
             runtime={runtime}
             renderMode={renderMode}
+            compositionTitle={compositionTitle}
         />
     );
 }
@@ -882,12 +913,14 @@ function TransitionSequenceLayer({
     renderMode,
     width,
     height,
+    compositionTitle,
 }: {
     window: SceneTransitionWindow;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
     width: number;
     height: number;
+    compositionTitle?: string;
 }) {
     const frame = useCurrentFrame();
     const absoluteFrame = window.startFrame + frame;
@@ -915,6 +948,7 @@ function TransitionSequenceLayer({
                     sceneFrame={outgoingFrame}
                     runtime={runtime}
                     renderMode={renderMode}
+                    compositionTitle={compositionTitle}
                 />
             </div>
             <div
@@ -930,6 +964,7 @@ function TransitionSequenceLayer({
                     sceneFrame={incomingFrame}
                     runtime={runtime}
                     renderMode={renderMode}
+                    compositionTitle={compositionTitle}
                 />
             </div>
         </AbsoluteFill>
@@ -971,6 +1006,7 @@ export function VideoMotionComposition({
                         runtime={runtime}
                         renderMode={renderMode}
                         transitionWindows={transitionLookup.get(scene.id)}
+                        compositionTitle={composition.title}
                     />
                 </Sequence>
             ))}
@@ -986,6 +1022,7 @@ export function VideoMotionComposition({
                         renderMode={renderMode}
                         width={width}
                         height={height}
+                        compositionTitle={composition.title}
                     />
                 </Sequence>
             ))}
