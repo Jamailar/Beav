@@ -1433,24 +1433,6 @@ fn sync_project_motion_items_from_remotion_scene(
     Ok(())
 }
 
-fn project_payload_has_motion_projection(project: &Value) -> bool {
-    let has_layers = project
-        .get("animationLayers")
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
-    let has_motion_items = project
-        .get("items")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .any(|item| item.get("type").and_then(Value::as_str) == Some("motion"))
-        })
-        .unwrap_or(false);
-    has_layers || has_motion_items
-}
-
 fn generate_motion_items_for_project(
     state: &State<'_, AppState>,
     project: &Value,
@@ -2657,9 +2639,7 @@ pub fn handle_manuscripts_channel(
                         let _ = ensure_editor_project_ai_state(&mut project)?;
                     }
                 }
-                if !project_payload_has_motion_projection(&project) {
-                    let _ = hydrate_editor_project_motion_from_remotion(&mut project, &full_path)?;
-                }
+                let _ = hydrate_editor_project_motion_from_remotion(&mut project, &full_path)?;
                 if existing_project != project {
                     push_editor_project_undo_snapshot(state, &file_path, &existing_project)?;
                 }
@@ -4678,6 +4658,7 @@ mod tests {
                     "id": "apple-1",
                     "type": "shape",
                     "shape": "apple",
+                    "color": "#FF0000",
                     "x": 100,
                     "y": 0,
                     "width": 120,
@@ -4706,6 +4687,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("apple")
         );
+        assert_eq!(
+            layers[0]
+                .pointer("/entities/0/color")
+                .and_then(Value::as_str),
+            Some("#FF0000")
+        );
 
         let motion_items = project
             .get("items")
@@ -4725,6 +4712,12 @@ mod tests {
                 .pointer("/props/entities/0/animations/0/kind")
                 .and_then(Value::as_str),
             Some("fall-bounce")
+        );
+        assert_eq!(
+            motion_items[0]
+                .pointer("/props/entities/0/color")
+                .and_then(Value::as_str),
+            Some("#FF0000")
         );
     }
 

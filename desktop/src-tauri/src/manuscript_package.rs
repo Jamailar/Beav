@@ -2565,6 +2565,7 @@ mod tests {
                         "id": "apple-1",
                         "type": "shape",
                         "shape": "apple",
+                        "color": "#FF0000",
                         "x": 540,
                         "y": -300,
                         "width": 200,
@@ -2602,6 +2603,18 @@ mod tests {
                 .pointer("/items/0/props/entities/0/shape")
                 .and_then(Value::as_str),
             Some("apple")
+        );
+        assert_eq!(
+            repaired
+                .pointer("/animationLayers/0/entities/0/color")
+                .and_then(Value::as_str),
+            Some("#FF0000")
+        );
+        assert_eq!(
+            repaired
+                .pointer("/items/0/props/entities/0/color")
+                .and_then(Value::as_str),
+            Some("#FF0000")
         );
 
         let _ = fs::remove_dir_all(&package_path);
