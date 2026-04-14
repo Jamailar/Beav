@@ -136,7 +136,7 @@ function inferAssetKindFromEditorAsset(asset: EditorAsset): 'video' | 'audio' | 
 }
 
 function projectDurationMs(project: EditorProjectFile): number {
-    return project.items.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 6000);
+    return deriveProjectedEditorItems(project).reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 0);
 }
 
 function inferSceneFromMotion(project: EditorProjectFile, motionItem: EditorMotionItem | null) {
@@ -313,14 +313,21 @@ export function ExperimentalVideoWorkbench({
 
     useEffect(() => {
         if (!isPlaying || !localProject) return;
+        const durationSeconds = projectDurationMs(localProject) / 1000;
+        const frameStep = 1 / Math.max(1, localProject.project.fps);
         const timer = window.setInterval(() => {
-            editorStore.setState((state) => ({
-                player: {
-                    ...state.player,
-                    currentTime: Math.min(projectDurationMs(localProject) / 1000, state.player.currentTime + 1 / Math.max(1, localProject.project.fps)),
-                    currentFrame: Math.round(Math.min(projectDurationMs(localProject) / 1000, state.player.currentTime + 1 / Math.max(1, localProject.project.fps)) * localProject.project.fps),
-                },
-            }));
+            editorStore.setState((state) => {
+                const nextTime = Math.min(durationSeconds, state.player.currentTime + frameStep);
+                const reachedEnd = nextTime >= durationSeconds;
+                return {
+                    player: {
+                        ...state.player,
+                        currentTime: nextTime,
+                        currentFrame: Math.round(nextTime * localProject.project.fps),
+                        isPlaying: reachedEnd ? false : state.player.isPlaying,
+                    },
+                };
+            });
         }, 1000 / Math.max(1, localProject.project.fps));
         return () => window.clearInterval(timer);
     }, [editorStore, isPlaying, localProject]);
@@ -733,6 +740,33 @@ export function ExperimentalVideoWorkbench({
         stage: { itemTransforms: {}, itemVisibility: {}, itemLocks: {}, itemOrder: [], itemGroups: {}, focusedGroupId: null },
         ai: { motionPrompt: '' },
     } as EditorProjectFile) / 1000) * (localProject?.project.fps || 30)));
+    const handleTogglePlayback = () => {
+        const durationSeconds = Math.max(0, projectDurationMs(localProject) / 1000);
+        const fps = Math.max(1, localProject.project.fps || 30);
+        const endEpsilon = 1 / fps;
+
+        editorStore.setState((state) => {
+            if (state.player.isPlaying) {
+                return {
+                    player: {
+                        ...state.player,
+                        isPlaying: false,
+                    },
+                };
+            }
+
+            const shouldRestartFromBeginning = durationSeconds > 0 && state.player.currentTime >= durationSeconds - endEpsilon;
+            const nextTime = shouldRestartFromBeginning ? 0 : state.player.currentTime;
+            return {
+                player: {
+                    ...state.player,
+                    currentTime: nextTime,
+                    currentFrame: Math.round(nextTime * fps),
+                    isPlaying: true,
+                },
+            };
+        });
+    };
 
     if (!localProject) {
         return (
@@ -1102,7 +1136,7 @@ export function ExperimentalVideoWorkbench({
                         itemLocks={localProject.stage.itemLocks}
                         itemGroups={localProject.stage.itemGroups}
                         focusedGroupId={localProject.stage.focusedGroupId}
-                        onTogglePlayback={() => editorStore.setState((state) => ({ player: { ...state.player, isPlaying: !state.player.isPlaying } }))}
+                        onTogglePlayback={handleTogglePlayback}
                         onSeekFrame={(frame) => seekTimeMs((frame / localProject.project.fps) * 1000)}
                         onStepFrame={(deltaFrames) => seekTimeMs(((Math.round(currentTime * localProject.project.fps) + deltaFrames) / localProject.project.fps) * 1000)}
                         onChangeRatioPreset={handleChangeRatioPreset}
@@ -1140,7 +1174,7 @@ export function ExperimentalVideoWorkbench({
                                     durationInFrames={currentDurationFrames}
                                     currentFrame={Math.round(currentTime * localProject.project.fps)}
                                     playing={isPlaying}
-                                    onTogglePlayback={() => editorStore.setState((state) => ({ player: { ...state.player, isPlaying: !state.player.isPlaying } }))}
+                                    onTogglePlayback={handleTogglePlayback}
                                     onSeekFrame={(frame) => seekTimeMs((frame / localProject.project.fps) * 1000)}
                                     onStepFrame={(deltaFrames) => seekTimeMs(((Math.round(currentTime * localProject.project.fps) + deltaFrames) / localProject.project.fps) * 1000)}
                                 />
@@ -1345,7 +1379,7 @@ export function ExperimentalVideoWorkbench({
                         void dispatchEditorCommands(commands);
                     }}
                     onSeekTimeMs={seekTimeMs}
-                    onTogglePlayback={() => editorStore.setState((state) => ({ player: { ...state.player, isPlaying: !state.player.isPlaying } }))}
+                    onTogglePlayback={handleTogglePlayback}
                     onSelectionChange={setSelection}
                     onZoomPercentChange={(nextZoom) => editorStore.setState((state) => ({ timeline: { ...state.timeline, zoomPercent: nextZoom } }))}
                 />

@@ -33,11 +33,24 @@ type DragState = {
     itemId?: string;
     pointerId: number;
     startClientX: number;
-    initialItems: Array<{ id: string; fromMs: number; durationMs: number; trimInMs?: number }>;
+    startClientY: number;
+    initialItems: Array<{
+        id: string;
+        fromMs: number;
+        durationMs: number;
+        trimInMs?: number;
+        trackId: string;
+        kind: EditorTrackKind;
+    }>;
     targetTrackId?: string;
 };
 
-type DragPreviewMap = Record<string, { fromMs: number; durationMs: number; trimInMs?: number }>;
+type DragPreviewMap = Record<string, {
+    fromMs: number;
+    durationMs: number;
+    trimInMs?: number;
+    trackId?: string;
+}>;
 
 const RAIL_WIDTH = 184;
 const RULER_HEIGHT = 38;
@@ -112,6 +125,14 @@ function itemToneClass(item: EditorItem, assetMap: Record<string, EditorAsset>) 
     return 'border-emerald-300/40 bg-emerald-500/22';
 }
 
+function itemTrackKind(item: EditorItem, assetMap: Record<string, EditorAsset>): EditorTrackKind {
+    if (item.type === 'media') {
+        const asset = assetMap[item.assetId];
+        return asset ? assetTrackKind(asset) : 'video';
+    }
+    return item.type;
+}
+
 function audioWaveHeights(seed: string, count: number): number[] {
     const base = Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) || 37;
     return Array.from({ length: count }, (_, index) => {
@@ -159,7 +180,7 @@ export function ExperimentalTimeline({
     const projectedItems = useMemo(() => deriveProjectedEditorItems(project), [project]);
     const assetMap = useMemo(() => buildAssetMap(project), [project]);
     const pixelsPerSecond = 72 * (zoomPercent / 100);
-    const totalDurationMs = useMemo(() => projectedItems.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 6000), [projectedItems]);
+    const totalDurationMs = useMemo(() => projectedItems.reduce((max, item) => Math.max(max, item.fromMs + item.durationMs), 0), [projectedItems]);
     const contentWidth = RAIL_WIDTH + Math.max(12_000, totalDurationMs) / 1000 * pixelsPerSecond + 120;
     const playheadLeft = RAIL_WIDTH + (currentTimeMs / 1000) * pixelsPerSecond;
     const rowOffsets = useMemo(() => {
@@ -170,6 +191,10 @@ export function ExperimentalTimeline({
             return current;
         });
     }, [tracks]);
+    const rowTopByTrackId = useMemo(
+        () => new Map(rowOffsets.map((row) => [row.track.id, row.top])),
+        [rowOffsets],
+    );
 
     const clientXToTimelineMs = (clientX: number) => {
         const rect = bodyRef.current?.getBoundingClientRect();
@@ -177,6 +202,23 @@ export function ExperimentalTimeline({
         if (!rect) return 0;
         const contentX = clamp(clientX - rect.left - RAIL_WIDTH + scrollLeft, 0, Math.max(0, contentWidth - RAIL_WIDTH));
         return (contentX / pixelsPerSecond) * 1000;
+    };
+
+    const clientYToTrack = (clientY: number) => {
+        const rect = bodyRef.current?.getBoundingClientRect();
+        const scrollTop = bodyRef.current?.scrollTop || 0;
+        if (!rect) return null;
+        const contentY = clientY - rect.top - RULER_HEIGHT + scrollTop;
+        return rowOffsets.find((row) => contentY >= row.top && contentY < row.top + row.height)?.track || null;
+    };
+
+    const resolveMoveTargetTrackId = (kind: EditorTrackKind, hoveredTrackId: string | null | undefined, fallbackTrackId: string) => {
+        if (!hoveredTrackId) return fallbackTrackId;
+        const hoveredTrack = tracks.find((track) => track.id === hoveredTrackId) || null;
+        if (!hoveredTrack || hoveredTrack.ui.locked || hoveredTrack.kind !== kind) {
+            return fallbackTrackId;
+        }
+        return hoveredTrack.id;
     };
 
     useEffect(() => {
@@ -189,6 +231,7 @@ export function ExperimentalTimeline({
             }
             const deltaMs = Math.round(((event.clientX - dragState.startClientX) / pixelsPerSecond) * 1000);
             if (dragState.mode === 'move') {
+                const hoveredTrack = clientYToTrack(event.clientY);
                 setDragPreview(Object.fromEntries(
                     dragState.initialItems.map((item) => [
                         item.id,
@@ -196,6 +239,9 @@ export function ExperimentalTimeline({
                             fromMs: Math.max(0, item.fromMs + deltaMs),
                             durationMs: item.durationMs,
                             trimInMs: item.trimInMs,
+                            trackId: dragState.initialItems.length === 1
+                                ? resolveMoveTargetTrackId(item.kind, hoveredTrack?.id, item.trackId)
+                                : item.trackId,
                         },
                     ])
                 ));
@@ -234,6 +280,7 @@ export function ExperimentalTimeline({
                             itemId: initial.id,
                             patch: {
                                 fromMs: preview.fromMs,
+                                ...(preview.trackId && preview.trackId !== initial.trackId ? { trackId: preview.trackId } : {}),
                             } as Partial<EditorItem>,
                         });
                     }
@@ -266,7 +313,7 @@ export function ExperimentalTimeline({
             window.removeEventListener('pointerup', handlePointerUp);
             window.removeEventListener('pointercancel', handlePointerUp);
         };
-    }, [clientXToTimelineMs, contentWidth, dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond]);
+    }, [clientXToTimelineMs, contentWidth, dragPreview, dragState, onApplyCommands, onSeekTimeMs, pixelsPerSecond, rowOffsets, tracks]);
 
     const selectedItems = projectedItems.filter((item) => selectedItemIds.includes(item.id));
     const primaryItem = primaryItemId ? projectedItems.find((item) => item.id === primaryItemId) || null : null;
@@ -282,6 +329,9 @@ export function ExperimentalTimeline({
     const contextSplitMs = contextMenuItem ? splitPointForItem(contextMenuItem, currentTimeMs) : null;
     const canSplitPrimary = primarySplitMs !== null;
     const canSplitContextItem = contextSplitMs !== null;
+    const activeDragTrackId = dragState?.mode === 'move' && dragState.itemId
+        ? dragPreview?.[dragState.itemId]?.trackId || null
+        : null;
 
     const addTrack = (kind: EditorTrackKind) => {
         onApplyCommands([{ type: 'add_track', kind, trackId: nextTrackId(project, kind) }]);
@@ -476,6 +526,7 @@ export function ExperimentalTimeline({
                                     mode: 'playhead',
                                     pointerId: event.pointerId,
                                     startClientX: event.clientX,
+                                    startClientY: event.clientY,
                                     initialItems: [],
                                 });
                             }}
@@ -531,7 +582,11 @@ export function ExperimentalTimeline({
                                     </div>
                                 </div>
                                 <div
-                                    className={clsx('relative flex-1', selectedTrackIds.includes(track.id) && 'bg-cyan-400/[0.04]')}
+                                    className={clsx(
+                                        'relative flex-1',
+                                        selectedTrackIds.includes(track.id) && 'bg-cyan-400/[0.04]',
+                                        activeDragTrackId === track.id && 'bg-cyan-300/[0.08]',
+                                    )}
                                     onPointerDown={(event) => {
                                         if (event.target !== event.currentTarget) return;
                                         seekFromPointer(event.clientX);
@@ -547,6 +602,9 @@ export function ExperimentalTimeline({
                                         const left = rawLeft + 1;
                                         const width = Math.max(24, rawWidth - 2);
                                         const selected = selectedItemIds.includes(item.id);
+                                        const previewTrackId = preview?.trackId || item.trackId;
+                                        const previewTrackTop = rowTopByTrackId.get(previewTrackId) ?? top;
+                                        const translateY = previewTrackTop - top;
                                         return (
                                             <div
                                                 key={item.id}
@@ -556,7 +614,11 @@ export function ExperimentalTimeline({
                                                     dragPreview?.[item.id] && 'z-10 shadow-[0_10px_28px_rgba(0,0,0,0.26)]',
                                                     selected && 'ring-1 ring-white/70'
                                                 )}
-                                                style={{ left, width }}
+                                                style={{
+                                                    left,
+                                                    width,
+                                                    transform: translateY !== 0 ? `translateY(${translateY}px)` : undefined,
+                                                }}
                                                 onContextMenu={(event) => {
                                                     event.preventDefault();
                                                     event.stopPropagation();
@@ -580,6 +642,7 @@ export function ExperimentalTimeline({
                                                         itemId: item.id,
                                                         pointerId: event.pointerId,
                                                         startClientX: event.clientX,
+                                                        startClientY: event.clientY,
                                                         initialItems: projectedItems
                                                             .filter((candidate) => nextSelection.includes(candidate.id))
                                                             .map((candidate) => ({
@@ -587,6 +650,8 @@ export function ExperimentalTimeline({
                                                                 fromMs: candidate.fromMs,
                                                                 durationMs: candidate.durationMs,
                                                                 trimInMs: candidate.type === 'media' ? candidate.trimInMs : 0,
+                                                                trackId: candidate.trackId,
+                                                                kind: itemTrackKind(candidate, assetMap),
                                                             })),
                                                     });
                                                 }}
@@ -616,11 +681,14 @@ export function ExperimentalTimeline({
                                                                     itemId: item.id,
                                                                     pointerId: event.pointerId,
                                                                     startClientX: event.clientX,
+                                                                    startClientY: event.clientY,
                                                                     initialItems: [{
                                                                         id: item.id,
                                                                         fromMs: item.fromMs,
                                                                         durationMs: item.durationMs,
                                                                         trimInMs: isMediaItem(item) ? item.trimInMs : 0,
+                                                                        trackId: item.trackId,
+                                                                        kind: itemTrackKind(item, assetMap),
                                                                     }],
                                                                 });
                                                             }}
@@ -636,11 +704,14 @@ export function ExperimentalTimeline({
                                                                     itemId: item.id,
                                                                     pointerId: event.pointerId,
                                                                     startClientX: event.clientX,
+                                                                    startClientY: event.clientY,
                                                                     initialItems: [{
                                                                         id: item.id,
                                                                         fromMs: item.fromMs,
                                                                         durationMs: item.durationMs,
                                                                         trimInMs: isMediaItem(item) ? item.trimInMs : 0,
+                                                                        trackId: item.trackId,
+                                                                        kind: itemTrackKind(item, assetMap),
                                                                     }],
                                                                 });
                                                             }}
