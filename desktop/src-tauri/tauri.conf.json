@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.redconvert.redbox",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm tauri:before-dev",
     "beforeBuildCommand": "pnpm build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"

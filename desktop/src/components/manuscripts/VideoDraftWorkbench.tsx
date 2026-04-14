@@ -36,7 +36,11 @@ import { RemotionTransportBar } from './remotion/RemotionTransportBar';
 import { SUBTITLE_PRESETS, resolveSubtitlePreset } from './subtitles/subtitlePresets';
 import { TEXT_PRESETS, resolveTextPreset } from './texts/textPresets';
 import { TRANSITION_PRESETS, resolveTransitionPreset } from './transitions/transitionPresets';
-import { createVideoEditorStore, useVideoEditorStore } from '../../features/video-editor/store/useVideoEditorStore';
+import {
+  createVideoEditorStore,
+  useVideoEditorStore,
+  type VideoEditorStore,
+} from '../../features/video-editor/store/useVideoEditorStore';
 import type {
   SceneItemTransform,
   VideoEditorLeftPanel,
@@ -44,6 +48,14 @@ import type {
   VideoEditorState,
   VideoEditorViewportMetrics,
 } from '../../features/video-editor/store/useVideoEditorStore';
+import {
+  deriveProjectedEditorItems,
+  deriveTrackNames,
+  deriveTrackUiMap,
+  isMotionItem,
+  projectDurationMs,
+  type EditorProjectFile,
+} from './editorProject';
 import type {
   MotionPreset,
   OverlayAnimation,
@@ -72,11 +84,7 @@ type ScriptApprovalLike = {
 };
 
 type PackageStateLike = Record<string, unknown> & {
-  editorProject?: {
-    ai?: {
-      scriptApproval?: ScriptApprovalLike;
-    };
-  };
+  editorProject?: EditorProjectFile | null;
 };
 
 type VideoClipLike = {
@@ -174,6 +182,64 @@ const RATIO_PRESET_SIZE: Record<VideoEditorRatioPreset, { width: number; height:
   '4:3': { width: 1440, height: 1080 },
   '3:4': { width: 1080, height: 1440 },
 };
+
+function syncEditorProjectSnapshot(
+  editorStore: VideoEditorStore,
+  project: EditorProjectFile | null,
+) {
+  const projectedItems = project ? deriveProjectedEditorItems(project) : [];
+  const tracksById = new Map(project?.tracks.map((track) => [track.id, track]) || []);
+  const nextTrackUi = project ? deriveTrackUiMap(project) : null;
+
+  editorStore.setState((state) => ({
+    ...(nextTrackUi && Object.keys(nextTrackUi).length > 0
+      ? {
+          timeline: {
+            ...state.timeline,
+            trackUi: nextTrackUi,
+          },
+        }
+      : {}),
+    editor: {
+      ...state.editor,
+      projectFile: project,
+      derived: {
+        ...state.editor.derived,
+        durationMs: project ? projectDurationMs(project) : 0,
+        visibleItems: projectedItems.filter((item) => {
+          const track = tracksById.get(item.trackId);
+          return item.enabled && !track?.ui.hidden;
+        }),
+        audibleItems: projectedItems.filter((item) => {
+          const track = tracksById.get(item.trackId);
+          return item.enabled
+            && !track?.ui.muted
+            && (track?.kind === 'audio' || (item.type === 'media' && track?.kind === 'video'));
+        }),
+        activeMotionItems: projectedItems.filter(isMotionItem),
+      },
+    },
+  }));
+}
+
+function syncEditorSelectionSnapshot(
+  editorStore: VideoEditorStore,
+  selection: {
+    selectedClipId: string | null;
+    activeTrackId: string | null;
+  },
+) {
+  editorStore.setState((state) => ({
+    editor: {
+      ...state.editor,
+      selection: {
+        itemIds: selection.selectedClipId ? [selection.selectedClipId] : [],
+        primaryItemId: selection.selectedClipId,
+        trackIds: selection.activeTrackId ? [selection.activeTrackId] : [],
+      },
+    },
+  }));
+}
 
 function inferAssetKind(asset: MediaAssetLike): 'image' | 'video' | 'audio' | 'unknown' {
   const mimeType = String(asset.mimeType || '').toLowerCase();
@@ -669,6 +735,16 @@ export function VideoDraftWorkbench({
   const sceneItemGroups = useVideoEditorStore(editorStore, (state) => state.scene.itemGroups);
   const focusedGroupId = useVideoEditorStore(editorStore, (state) => state.scene.focusedGroupId);
   const activeSidebarTab = leftPanel;
+  const packageEditorProject = useMemo(() => {
+    if (!packageState?.editorProject || typeof packageState.editorProject !== 'object') {
+      return null;
+    }
+    return packageState.editorProject as EditorProjectFile;
+  }, [packageState?.editorProject]);
+  const effectiveTimelineTrackNames = useMemo(
+    () => packageEditorProject ? deriveTrackNames(packageEditorProject, false) : timelineTrackNames,
+    [packageEditorProject, timelineTrackNames]
+  );
   const effectiveFps = editableComposition?.fps || 30;
   const timelineDurationSeconds = useMemo(
     () => Math.max(0.1, computeTimelineDurationSeconds(timelineClips)),
@@ -823,14 +899,27 @@ export function VideoDraftWorkbench({
   }, [currentPreviewAssetId, displayAssets, editorStore, primaryVideoAsset]);
 
   useEffect(() => {
+    syncEditorProjectSnapshot(editorStore, packageEditorProject);
+  }, [editorStore, packageEditorProject]);
+
+  useEffect(() => {
+    syncEditorSelectionSnapshot(editorStore, {
+      selectedClipId,
+      activeTrackId,
+    });
+  }, [activeTrackId, editorStore, selectedClipId]);
+
+  useEffect(() => {
     editorStore.setState((state) => {
       const nextComposition = remotionComposition || null;
       const nextSelectedSceneId = nextComposition?.scenes?.some((scene) => scene.id === state.scene.selectedSceneId)
         ? state.scene.selectedSceneId
         : nextComposition?.scenes?.[0]?.id || null;
       const inferredRatioPreset: VideoEditorRatioPreset = (nextComposition?.width || state.project.width) >= (nextComposition?.height || state.project.height) ? '16:9' : '9:16';
-      const packageTrackUi = packageState?.timelineSummary && typeof (packageState.timelineSummary as { trackUi?: unknown }).trackUi === 'object'
-        ? ((packageState.timelineSummary as { trackUi?: VideoEditorState['timeline']['trackUi'] }).trackUi || {})
+      const packageTrackUi = packageEditorProject
+        ? deriveTrackUiMap(packageEditorProject)
+        : packageState?.timelineSummary && typeof (packageState.timelineSummary as { trackUi?: unknown }).trackUi === 'object'
+          ? ((packageState.timelineSummary as { trackUi?: VideoEditorState['timeline']['trackUi'] }).trackUi || {})
         : state.timeline.trackUi;
       const packageSceneUi = packageState && typeof (packageState as { sceneUi?: unknown }).sceneUi === 'object'
         ? ((packageState as { sceneUi?: {
@@ -879,7 +968,7 @@ export function VideoDraftWorkbench({
         },
       };
     });
-  }, [editorBodyDirty, editorFile, editorStore, isRenderingRemotion, packageState, remotionComposition, remotionRenderPath, title]);
+  }, [editorBodyDirty, editorFile, editorStore, isRenderingRemotion, packageEditorProject, packageState, remotionComposition, remotionRenderPath, title]);
 
   useEffect(() => {
     if (!editorFile) return;
@@ -1152,8 +1241,8 @@ export function VideoDraftWorkbench({
     [currentPreviewAssetId, displayAssets, primaryVideoAsset]
   );
   const timelineTrackOrder = useMemo(
-    () => buildTimelineTrackOrder(timelineTrackNames, timelineClips),
-    [timelineClips, timelineTrackNames]
+    () => buildTimelineTrackOrder(effectiveTimelineTrackNames, timelineClips),
+    [effectiveTimelineTrackNames, timelineClips]
   );
   const timelineTrackOrderIndex = useMemo(
     () => new Map(timelineTrackOrder.map((trackId, index) => [trackId, index])),
@@ -6116,7 +6205,7 @@ export function VideoDraftWorkbench({
             <VendoredFreecutTimeline
               filePath={editorFile}
               packageState={packageState as PackageStateLike}
-              fallbackTracks={timelineTrackNames}
+              fallbackTracks={effectiveTimelineTrackNames}
               onPackageStateChange={onPackageStateChange}
               controlledCursorTime={previewCurrentTime}
               controlledSelectedClipId={selectedClipId}

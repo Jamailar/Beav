@@ -702,7 +702,12 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
 
   return (
 
-      <div className="timeline-bg h-full border-t border-border flex flex-col overflow-hidden" role="region" aria-label="Timeline">
+      <div
+        className="timeline-bg h-full border-t border-border flex flex-col overflow-hidden"
+        role="region"
+        aria-label="Timeline"
+        data-lexbox-timeline
+      >
         {/* Timeline Header */}
         <TimelineHeader
           onZoomChange={zoomHandlers?.handleZoomChange}
@@ -722,22 +727,30 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
         <div
           className="border-r border-border panel-bg flex-shrink-0 flex flex-col overflow-x-hidden"
           style={{ width: EDITOR_LAYOUT_CSS_VALUES.timelineSidebarWidth }}
+          data-track-sidebar
         >
           {/* Tracks label with controls */}
           <div
-            className="flex items-center justify-between px-3 border-b border-border bg-secondary/20 flex-shrink-0"
+            className="flex items-center justify-between gap-3 px-3 border-b border-border bg-secondary/20 flex-shrink-0"
             style={{ height: EDITOR_LAYOUT_CSS_VALUES.timelineTracksHeaderHeight }}
+            data-track-sidebar-header
           >
-            <span className="text-xs text-muted-foreground font-mono uppercase tracking-wider">
-              Tracks
-            </span>
-            <div className="flex items-center gap-1">
+            <div className="min-w-0">
+              <span className="block text-[11px] text-muted-foreground font-mono uppercase tracking-[0.24em]">
+                Tracks
+              </span>
+              <span className="block text-[10px] text-muted-foreground/80">
+                {tracks.length} lanes ready for edit
+              </span>
+            </div>
+            <div className="flex items-center gap-1 rounded-full border border-border/70 bg-background/40 p-1" data-track-sidebar-actions>
               {/* Add track button */}
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
                 onClick={handleAddTrack}
+                aria-label="Add track"
                 title={nextTrackKind === 'audio'
                   ? 'Add audio track to audio section'
                   : 'Add video track at top'}
@@ -751,6 +764,7 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
                 className="h-6 w-6"
                 onClick={handleRemoveTracks}
                 disabled={tracks.length === 0 || (!activeTrackId && selectedTrackIds.length === 0)}
+                aria-label="Remove selected track"
                 title={
                   tracks.length === 0
                     ? 'No tracks to remove'
@@ -823,8 +837,9 @@ export const Timeline = memo(function Timeline({ duration }: TimelineProps) {
         <div
           className="border-r border-border panel-bg flex-shrink-0"
           style={{ width: EDITOR_LAYOUT_CSS_VALUES.timelineSidebarWidth }}
+          data-track-sidebar-spacer
         />
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0" data-timeline-navigator-shell>
           <TimelineNavigator
             actualDuration={timelineMetrics.actualDuration}
             timelineWidth={timelineMetrics.timelineWidth}

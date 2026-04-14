@@ -279,6 +279,114 @@
   contain-intrinsic-size: var(--editor-timeline-sidebar-width, 176px) var(--editor-timeline-track-height, 72px);
 }
 
+.freecut-timeline-theme [data-lexbox-timeline] {
+  background:
+    radial-gradient(circle at top, rgba(255, 140, 58, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(16, 17, 20, 1) 0%, rgba(11, 12, 16, 1) 100%);
+  border-top-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.freecut-timeline-theme [role='toolbar'][aria-label='Timeline controls'] {
+  background:
+    linear-gradient(180deg, rgba(26, 27, 31, 0.96) 0%, rgba(20, 21, 25, 0.98) 100%);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 24px rgba(0, 0, 0, 0.16);
+}
+
+.freecut-timeline-theme [data-track-sidebar],
+.freecut-timeline-theme [data-track-sidebar-spacer] {
+  background:
+    linear-gradient(180deg, rgba(21, 22, 26, 1) 0%, rgba(16, 17, 21, 1) 100%);
+}
+
+.freecut-timeline-theme [data-track-sidebar-header] {
+  background:
+    linear-gradient(180deg, rgba(34, 35, 40, 0.94) 0%, rgba(24, 25, 29, 0.98) 100%) !important;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.freecut-timeline-theme [data-track-sidebar-actions] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.freecut-timeline-theme [data-track-sidebar-actions] button {
+  border-radius: 999px;
+}
+
+.freecut-timeline-theme [data-timeline-navigator-shell] {
+  background:
+    linear-gradient(180deg, rgba(20, 21, 24, 0.98) 0%, rgba(15, 16, 19, 0.98) 100%);
+}
+
+.freecut-timeline-theme [data-track-header] {
+  background:
+    linear-gradient(180deg, rgba(35, 36, 40, 0.9) 0%, rgba(26, 27, 31, 0.95) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 8px 16px rgba(0, 0, 0, 0.18);
+}
+
+.freecut-timeline-theme [data-track-header='true'] {
+  isolation: isolate;
+}
+
+.freecut-timeline-theme [data-track-header][data-selected='true'] {
+  background:
+    linear-gradient(180deg, rgba(72, 50, 33, 0.94) 0%, rgba(38, 31, 28, 0.98) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 228, 206, 0.06),
+    0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.freecut-timeline-theme [data-track-header][data-active='true'] {
+  border-color: rgba(255, 140, 58, 0.42) !important;
+}
+
+.freecut-timeline-theme [data-track-header-controls] {
+  backdrop-filter: blur(8px);
+}
+
+.freecut-timeline-theme [data-track-kind-icon] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.freecut-timeline-theme [data-track-kind-badge] {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.freecut-timeline-theme [data-track-header][data-track-kind='video'] [data-track-kind-icon],
+.freecut-timeline-theme [data-track-header][data-track-kind='video'] [data-track-kind-badge] {
+  color: rgba(171, 196, 255, 0.92);
+  border-color: rgba(124, 150, 209, 0.45);
+  background: rgba(75, 96, 140, 0.22);
+}
+
+.freecut-timeline-theme [data-track-header][data-track-kind='audio'] [data-track-kind-icon],
+.freecut-timeline-theme [data-track-header][data-track-kind='audio'] [data-track-kind-badge] {
+  color: rgba(218, 194, 255, 0.92);
+  border-color: rgba(127, 102, 171, 0.44);
+  background: rgba(79, 62, 108, 0.24);
+}
+
+.freecut-timeline-theme [data-track-header][data-track-kind='text'] [data-track-kind-icon],
+.freecut-timeline-theme [data-track-header][data-track-kind='text'] [data-track-kind-badge],
+.freecut-timeline-theme [data-track-header][data-track-kind='subtitle'] [data-track-kind-icon],
+.freecut-timeline-theme [data-track-header][data-track-kind='subtitle'] [data-track-kind-badge] {
+  color: rgba(255, 222, 166, 0.92);
+  border-color: rgba(183, 136, 71, 0.45);
+  background: rgba(100, 73, 34, 0.24);
+}
+
+.freecut-timeline-theme [data-track-header][data-track-kind='motion'] [data-track-kind-icon],
+.freecut-timeline-theme [data-track-header][data-track-kind='motion'] [data-track-kind-badge] {
+  color: rgba(201, 214, 255, 0.92);
+  border-color: rgba(105, 129, 190, 0.45);
+  background: rgba(51, 67, 112, 0.24);
+}
+
 .cursor-scissors {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg transform='rotate(-90 12 12)'%3E%3Ccircle cx='6' cy='6' r='3'/%3E%3Cpath d='M8.12 8.12 12 12'/%3E%3Cpath d='M20 4 8.12 15.88'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M14.8 14.8 20 20'/%3E%3C/g%3E%3C/svg%3E") 12 12, crosshair !important;
 }

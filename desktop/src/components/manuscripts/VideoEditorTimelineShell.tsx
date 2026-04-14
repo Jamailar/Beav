@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import clsx from 'clsx';
 
 type VideoEditorTimelineShellProps = {
     children: ReactNode;
@@ -16,12 +17,27 @@ export function VideoEditorTimelineShell({
     return (
         <>
             <div
-                className={`${barClassName} flex items-center justify-center border-y border-white/10 bg-[#0f1012] transition-colors hover:bg-cyan-400/10`}
+                className={clsx(
+                    'flex items-center justify-center border-y border-white/10 bg-[#0b0c0f] transition-colors',
+                    'hover:border-cyan-300/20 hover:bg-cyan-400/10',
+                    barClassName,
+                )}
                 onPointerDown={onResizeStart}
+                data-editor-timeline-resize-bar
             >
-                <div className="h-[3px] w-20 rounded-full bg-white/14" />
+                <div className="flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1">
+                    <div className="h-[3px] w-10 rounded-full bg-white/12" />
+                    <div className="h-[3px] w-10 rounded-full bg-white/12" />
+                </div>
             </div>
-            <section className={`${sectionClassName} min-h-0 overflow-hidden rounded-[20px] bg-[#121315] px-5 py-4 shadow-[0_12px_32px_rgba(0,0,0,0.22)]`}>
+            <section
+                className={clsx(
+                    'min-h-0 overflow-hidden rounded-[22px] border border-white/10 bg-[#0f1014]',
+                    'shadow-[0_16px_44px_rgba(0,0,0,0.28)]',
+                    sectionClassName,
+                )}
+                data-editor-timeline-shell
+            >
                 {children}
             </section>
         </>

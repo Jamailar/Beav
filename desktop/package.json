@@ -7,6 +7,7 @@
     "dev": "vite --port 1420",
     "build": "tsc && vite build",
     "preview": "vite preview --port 1420",
+    "tauri:before-dev": "node ./scripts/tauri-before-dev.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "ipc:inventory": "node ./scripts/extract-ipc-inventory.mjs",
