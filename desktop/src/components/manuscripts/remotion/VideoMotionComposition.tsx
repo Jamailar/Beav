@@ -675,7 +675,7 @@ function SceneEntity({
     }
 
     if (entity.type === 'shape') {
-        const fill = entity.fill || '#ffffff';
+        const fill = entity.fill || entity.color || '#ffffff';
         const strokeWidth = entity.strokeWidth || 0;
         if (entity.shape === 'apple') {
             return <div style={baseStyle}>{renderAppleShape(fill, entity.stroke, strokeWidth)}</div>;

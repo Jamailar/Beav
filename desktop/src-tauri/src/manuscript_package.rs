@@ -2031,7 +2031,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             "trackUi": track_ui
         })
     };
-    let remotion = if let Some(project) = editor_project.as_ref() {
+    let remotion_fallback = if let Some(project) = editor_project.as_ref() {
         build_remotion_config_from_editor_project(project)
     } else {
         let clips = timeline_summary
@@ -2039,11 +2039,12 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        read_json_value_or(
-            package_remotion_path(package_path).as_path(),
-            build_default_remotion_scene(&title, &clips),
-        )
+        build_default_remotion_scene(&title, &clips)
     };
+    let remotion = read_json_value_or(
+        package_remotion_path(package_path).as_path(),
+        remotion_fallback,
+    );
     let scene_ui = if let Some(project) = editor_project.as_ref() {
         project
             .get("stage")
