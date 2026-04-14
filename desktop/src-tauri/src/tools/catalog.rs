@@ -357,6 +357,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "text": { "type": "string" },
                         "name": { "type": "string" },
                         "previewTab": { "type": "string", "enum": ["preview", "motion", "script"] },
+                        "renderMode": { "type": "string", "enum": ["full", "motion-layer"] },
                         "activePanel": { "type": "string" },
                         "drawerPanel": { "type": "string" },
                         "seconds": { "type": "number", "minimum": 0 },

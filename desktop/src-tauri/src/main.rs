@@ -2880,10 +2880,15 @@ fn execute_interactive_tool_call(
                     })
                 }
                 "clip_duplicate" | "clip-duplicate" => {
-                    let result = call_manuscript_channel("manuscripts:duplicate-editor-project-clip", {
-                        ensure_script_confirmed("clip_duplicate")?;
-                        editor_tool_payload(file_path.clone(), arguments, &["clipId", "trackId", "fromMs"])
-                    })?;
+                    let result =
+                        call_manuscript_channel("manuscripts:duplicate-editor-project-clip", {
+                            ensure_script_confirmed("clip_duplicate")?;
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["clipId", "trackId", "fromMs"],
+                            )
+                        })?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -2900,10 +2905,17 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "clip_replace_asset" | "clip-replace-asset" => {
-                    let result = call_manuscript_channel("manuscripts:replace-editor-project-clip-asset", {
-                        ensure_script_confirmed("clip_replace_asset")?;
-                        editor_tool_payload(file_path.clone(), arguments, &["clipId", "assetId"])
-                    })?;
+                    let result = call_manuscript_channel(
+                        "manuscripts:replace-editor-project-clip-asset",
+                        {
+                            ensure_script_confirmed("clip_replace_asset")?;
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["clipId", "assetId"],
+                            )
+                        },
+                    )?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -2921,10 +2933,15 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "marker_add" | "marker-add" => {
-                    let result = call_manuscript_channel("manuscripts:add-editor-project-marker", {
-                        ensure_script_confirmed("marker_add")?;
-                        editor_tool_payload(file_path.clone(), arguments, &["frame", "color", "label"])
-                    })?;
+                    let result =
+                        call_manuscript_channel("manuscripts:add-editor-project-marker", {
+                            ensure_script_confirmed("marker_add")?;
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["frame", "color", "label"],
+                            )
+                        })?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -2941,10 +2958,15 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "marker_update" | "marker-update" => {
-                    let result = call_manuscript_channel("manuscripts:update-editor-project-marker", {
-                        ensure_script_confirmed("marker_update")?;
-                        editor_tool_payload(file_path.clone(), arguments, &["markerId", "frame", "color", "label"])
-                    })?;
+                    let result =
+                        call_manuscript_channel("manuscripts:update-editor-project-marker", {
+                            ensure_script_confirmed("marker_update")?;
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["markerId", "frame", "color", "label"],
+                            )
+                        })?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -2961,10 +2983,11 @@ fn execute_interactive_tool_call(
                     Ok(result)
                 }
                 "marker_delete" | "marker-delete" => {
-                    let result = call_manuscript_channel("manuscripts:delete-editor-project-marker", {
-                        ensure_script_confirmed("marker_delete")?;
-                        editor_tool_payload(file_path.clone(), arguments, &["markerId"])
-                    })?;
+                    let result =
+                        call_manuscript_channel("manuscripts:delete-editor-project-marker", {
+                            ensure_script_confirmed("marker_delete")?;
+                            editor_tool_payload(file_path.clone(), arguments, &["markerId"])
+                        })?;
                     if let Some(active_session_id) = session_id {
                         emit_runtime_task_checkpoint_saved(
                             app,

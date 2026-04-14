@@ -120,6 +120,10 @@ pub(crate) fn package_remotion_path(package_path: &Path) -> PathBuf {
     package_path.join("remotion.scene.json")
 }
 
+pub(crate) fn package_remotion_input_props_path(package_path: &Path) -> PathBuf {
+    package_path.join("remotion.input-props.json")
+}
+
 pub(crate) fn package_editor_project_path(package_path: &Path) -> PathBuf {
     package_path.join("editor.project.json")
 }

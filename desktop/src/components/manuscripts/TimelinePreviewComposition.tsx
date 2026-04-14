@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Thumbnail } from '@remotion/player';
 import clsx from 'clsx';
 import { AudioLines, Clapperboard, Image as ImageIcon, Pause, Play, Type } from 'lucide-react';
 import { resolveSubtitlePreset } from './subtitles/subtitlePresets';
 import { resolveTextPreset } from './texts/textPresets';
 import { resolveTransitionPreset } from './transitions/transitionPresets';
 import { resolveAssetUrl } from '../../utils/pathManager';
-import type { RemotionScene } from './remotion/types';
+import { VideoMotionComposition } from './remotion/VideoMotionComposition';
+import type { RemotionCompositionConfig, RemotionScene } from './remotion/types';
 import type { SceneItemTransform, VideoEditorRatioPreset } from '../../features/video-editor/store/useVideoEditorStore';
 
 type MediaAssetLike = {
@@ -88,6 +90,7 @@ type TimelinePreviewCompositionProps = {
     trackOrder: string[];
     trackUi: Record<string, TrackUiStateLike>;
     assetsById: Record<string, MediaAssetLike>;
+    motionComposition: RemotionCompositionConfig | null;
     selectedScene: RemotionScene | null;
     selectedSceneItemId: string | null;
     selectedSceneItemIds: string[];
@@ -543,6 +546,7 @@ export function TimelinePreviewComposition({
     trackOrder,
     trackUi,
     assetsById,
+    motionComposition,
     selectedScene,
     selectedSceneItemId,
     selectedSceneItemIds,
@@ -725,6 +729,18 @@ export function TimelinePreviewComposition({
             durationMs,
         };
     }, [activeVisualClip, currentTime, previousVisualClip]);
+    const previewMotionComposition = useMemo<RemotionCompositionConfig | null>(() => {
+        if (!motionComposition?.scenes?.length) return null;
+        return {
+            ...motionComposition,
+            renderMode: 'motion-layer',
+        };
+    }, [motionComposition]);
+    const hasMotionPreviewLayer = !!previewMotionComposition?.scenes?.length;
+    const remotionFrame = Math.max(
+        0,
+        Math.min(currentFrame, Math.max(0, (previewMotionComposition?.durationInFrames || 1) - 1))
+    );
 
     const subtitleLayers = useMemo(() => {
         return activeSubtitleClips
@@ -837,7 +853,7 @@ export function TimelinePreviewComposition({
                 }),
             });
         }
-        if (selectedScene?.overlayTitle && titleId) {
+        if (selectedScene?.overlayTitle && titleId && !hasMotionPreviewLayer) {
             items.push({
                 id: titleId,
                 kind: 'title',
@@ -852,7 +868,7 @@ export function TimelinePreviewComposition({
                 }),
             });
         }
-        if (overlayText && overlayId) {
+        if (overlayText && overlayId && !hasMotionPreviewLayer) {
             items.push({
                 id: overlayId,
                 kind: 'overlay',
@@ -929,7 +945,7 @@ export function TimelinePreviewComposition({
             });
         });
         return items;
-    }, [activeAudioClip, activeClipId, activeTextClips, activeVisualClip, audioAssetUrl, currentTime, itemTransforms, overlayId, overlayText, safeStageHeight, safeStageWidth, selectedScene, subtitleLayers, titleId, visualAsset, visualAssetUrl, visualKind]);
+    }, [activeAudioClip, activeClipId, activeTextClips, activeVisualClip, audioAssetUrl, currentTime, hasMotionPreviewLayer, itemTransforms, overlayId, overlayText, safeStageHeight, safeStageWidth, selectedScene, subtitleLayers, titleId, visualAsset, visualAssetUrl, visualKind]);
 
     const selectedStageItem = useMemo(
         () => stageItems.find((item) => item.id === selectedSceneItemId) || null,
@@ -1468,7 +1484,28 @@ export function TimelinePreviewComposition({
                             />
                         ))}
 
-                        {visibleStageItems.length === 0 ? (
+                        {previewMotionComposition ? (
+                            <div className="pointer-events-none absolute inset-0 z-[25] overflow-hidden">
+                                <Thumbnail
+                                    component={VideoMotionComposition as unknown as React.ComponentType<Record<string, unknown>>}
+                                    frameToDisplay={remotionFrame}
+                                    durationInFrames={previewMotionComposition.durationInFrames}
+                                    compositionWidth={previewMotionComposition.width}
+                                    compositionHeight={previewMotionComposition.height}
+                                    fps={previewMotionComposition.fps}
+                                    style={{
+                                        width: '100%',
+                                        height: '100%',
+                                    }}
+                                    inputProps={{
+                                        composition: previewMotionComposition,
+                                        runtime: 'preview',
+                                    }}
+                                />
+                            </div>
+                        ) : null}
+
+                        {visibleStageItems.length === 0 && !hasMotionPreviewLayer ? (
                             <div className="absolute inset-0 z-20 flex items-center justify-center text-center text-white/55">
                                 <div>
                                     <Clapperboard className="mx-auto h-10 w-10 text-white/35" />

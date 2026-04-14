@@ -17,6 +17,10 @@ async function main() {
   const raw = await fs.readFile(configPath, 'utf8');
   const compositionConfig = JSON.parse(raw);
   const entryPoint = path.join(projectRoot, 'src', 'remotion', 'index.ts');
+  const compositionId = typeof compositionConfig.entryCompositionId === 'string'
+    && compositionConfig.entryCompositionId.trim()
+    ? compositionConfig.entryCompositionId.trim()
+    : 'RedBoxVideoMotion';
   const bundled = await bundle({
     entryPoint,
     webpackOverride: (config) => config,
@@ -29,22 +33,27 @@ async function main() {
 
   const composition = await selectComposition({
     serveUrl: bundled,
-    id: 'RedBoxVideoMotion',
+    id: compositionId,
     inputProps,
   });
 
   const renderMode = compositionConfig.renderMode === 'full' ? 'full' : 'motion-layer';
-  const renderOptions = renderMode === 'motion-layer'
-    ? {
-        codec: 'prores',
-        proResProfile: '4444',
-        pixelFormat: 'yuva444p10le',
-        muted: true,
-        enforceAudioTrack: false,
-      }
-    : {
-        codec: 'h264',
-      };
+  const codec = composition.defaultCodec || (renderMode === 'motion-layer' ? 'prores' : 'h264');
+  const imageFormat = composition.defaultVideoImageFormat || (codec === 'prores' ? 'png' : 'jpeg');
+  const pixelFormat = composition.defaultPixelFormat || (codec === 'prores' ? 'yuva444p10le' : undefined);
+  const proResProfile = composition.defaultProResProfile || (codec === 'prores' ? '4444' : undefined);
+  const renderOptions = {
+    codec,
+    imageFormat,
+    ...(pixelFormat ? { pixelFormat } : {}),
+    ...(proResProfile ? { proResProfile } : {}),
+    ...(renderMode === 'motion-layer'
+      ? {
+          muted: true,
+          enforceAudioTrack: false,
+        }
+      : {}),
+  };
 
   await renderMedia({
     serveUrl: bundled,
@@ -60,9 +69,15 @@ async function main() {
 
   process.stdout.write(JSON.stringify({
     success: true,
+    compositionId,
     outputLocation: outputPath,
     durationInFrames: composition.durationInFrames,
     renderMode,
+    defaultOutName: composition.defaultOutName || null,
+    codec,
+    imageFormat,
+    pixelFormat: pixelFormat || null,
+    proResProfile: proResProfile || null,
   }));
 }
 

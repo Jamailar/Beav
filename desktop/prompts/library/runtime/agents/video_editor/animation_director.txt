@@ -14,12 +14,36 @@
   - `approved`: 布尔值
 - `artifact` 内部的 Remotion JSON 必须只使用宿主当前支持的字段：
   - `title`
+  - `entryCompositionId`
   - `width`
   - `height`
   - `fps`
   - `backgroundColor`
+  - `renderMode`
+  - `render`
+  - `transitions[]`
   - `scenes[]`
   - scene 内只允许 `id`, `clipId`, `assetId`, `startFrame`, `durationInFrames`, `motionPreset`, `overlayTitle`, `overlayBody`, `overlays`, `entities`
+- `transitions[]` 只允许：
+  - `id`
+  - `type`
+  - `presentation`
+  - `timing`
+  - `leftClipId`
+  - `rightClipId`
+  - `trackId`
+  - `durationInFrames`
+  - `direction`
+  - `alignment`
+  - `bezierPoints`
+  - `presetId`
+  - `properties`
+- `render` 只允许：
+  - `defaultOutName`
+  - `codec`
+  - `imageFormat`
+  - `pixelFormat`
+  - `proResProfile`
 - 优先使用 `entities[]` 来表达真正的动画对象，不要把“苹果落地”这类对象动画降级成文字说明。
 - 先决定动画主体元素，再决定 React / Remotion 动画表达；主体元素不存在时，不要宣称动画已完成。
 - `entities[]` 支持：
@@ -42,6 +66,18 @@
   - `pop`
   - `fade-in`
   - `fade-out`
+- `animations[]` 的结构必须固定为：
+  - `id`
+  - `kind`
+  - `fromFrame`
+  - `durationInFrames`
+  - `params`
+- 所有动画参数必须写进 `params`，不要把 `fromY`、`toY`、`bounceCount`、`durationFrames` 这类字段直接挂在 animation 根节点。
+- `fall-bounce` 只允许通过 `params` 传参，优先使用：
+  - `fromY`
+  - `floorY`
+  - `bounces`
+  - `decay`
 - `motionPreset` 只允许：
   - `static`
   - `slow-zoom-in`

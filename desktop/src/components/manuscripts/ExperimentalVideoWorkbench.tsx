@@ -1089,6 +1089,7 @@ export function ExperimentalVideoWorkbench({
                             relativePath: String(value.metadata?.relativePath || ''),
                             mimeType: value.mimeType,
                         }]))}
+                        motionComposition={remotionComposition}
                         selectedScene={selectedScene}
                         selectedSceneItemId={stageSelection.primaryId}
                         selectedSceneItemIds={stageSelection.ids}

@@ -4,8 +4,8 @@ import {
     Audio,
     Img,
     OffthreadVideo,
-    Sequence,
     interpolate,
+    Sequence,
     spring,
     useCurrentFrame,
     useVideoConfig,
@@ -16,17 +16,37 @@ import {
     isLocalAssetSource,
 } from '../../../../shared/localAsset';
 import type {
+    RemotionCompositionConfig,
     RemotionEntityAnimation,
     MotionPreset,
     OverlayAnimation,
     OverlayPosition,
-    RemotionCompositionConfig,
-    RemotionSceneEntity,
     RemotionOverlay,
     RemotionScene,
+    RemotionSceneEntity,
+    RemotionTransition,
 } from './types';
 
 type RuntimeMode = 'preview' | 'render';
+
+type SceneClip = {
+    id: string;
+    from: number;
+    durationInFrames: number;
+    scene: RemotionScene;
+};
+
+type SceneTransitionWindow = {
+    transition: RemotionTransition;
+    leftClip: SceneClip;
+    rightClip: SceneClip;
+    cutPoint: number;
+    startFrame: number;
+    endFrame: number;
+    durationInFrames: number;
+    leftPortion: number;
+    rightPortion: number;
+};
 
 export interface VideoMotionCompositionProps {
     composition: RemotionCompositionConfig;
@@ -137,7 +157,7 @@ function overlayAnimationStyles(
     frame: number,
     fps: number,
     durationInFrames: number,
-    animation: OverlayAnimation | undefined
+    animation: OverlayAnimation | undefined,
 ): React.CSSProperties {
     const inSpring = spring({
         fps,
@@ -186,7 +206,7 @@ function normalizeEntityFrame(frame: number, startFrame: number | undefined, dur
 function mergeAnimationStyles(
     frame: number,
     fps: number,
-    animations: RemotionEntityAnimation[] | undefined
+    animations: RemotionEntityAnimation[] | undefined,
 ): React.CSSProperties {
     if (!animations?.length) return {};
     return animations.reduce<React.CSSProperties>((style, animation) => {
@@ -288,6 +308,314 @@ function renderAppleShape(fill: string, stroke: string | undefined, strokeWidth:
     );
 }
 
+function buildSceneOverlays(scene: RemotionScene, fps: number): RemotionOverlay[] {
+    const overlayItems: RemotionOverlay[] = [...(scene.overlays || [])];
+    if (scene.overlayTitle) {
+        overlayItems.push({
+            id: `${scene.id}-title`,
+            text: scene.overlayTitle,
+            startFrame: 0,
+            durationInFrames: Math.min(scene.durationInFrames, Math.max(40, Math.round(fps * 2.8))),
+            position: 'top',
+            animation: 'fade-up',
+            fontSize: 54,
+        });
+    }
+    if (scene.overlayBody) {
+        overlayItems.push({
+            id: `${scene.id}-body`,
+            text: scene.overlayBody,
+            startFrame: Math.min(scene.durationInFrames - 1, Math.round(fps * 0.5)),
+            durationInFrames: Math.max(24, scene.durationInFrames - Math.round(fps * 0.6)),
+            position: 'bottom',
+            animation: 'fade-up',
+            fontSize: 36,
+            backgroundColor: 'rgba(3, 7, 18, 0.62)',
+        });
+    }
+    return overlayItems;
+}
+
+function calculateTransitionPortions(durationInFrames: number, alignment: number | undefined) {
+    const safeDuration = Math.max(1, Math.floor(durationInFrames));
+    const clampedAlignment = Math.max(0, Math.min(1, alignment ?? 0.5));
+    const leftPortion = Math.floor(safeDuration * clampedAlignment);
+    const rightPortion = safeDuration - leftPortion;
+    return { leftPortion, rightPortion };
+}
+
+function solveClipTransitionPressure(clipDuration: number, incomingPortion: number, outgoingPortion: number) {
+    const available = Math.max(0, Math.floor(clipDuration));
+    const startUse = Math.max(0, Math.floor(incomingPortion));
+    const endUse = Math.max(0, Math.floor(outgoingPortion));
+    const totalUse = startUse + endUse;
+
+    if (totalUse <= available) {
+        return { incomingPortion: startUse, outgoingPortion: endUse };
+    }
+    if (available === 0) {
+        return { incomingPortion: 0, outgoingPortion: 0 };
+    }
+
+    const scale = available / totalUse;
+    let nextIncoming = Math.floor(startUse * scale);
+    let nextOutgoing = Math.floor(endUse * scale);
+    let remaining = available - (nextIncoming + nextOutgoing);
+    while (remaining > 0) {
+        const incomingGain = startUse - nextIncoming;
+        const outgoingGain = endUse - nextOutgoing;
+        if (incomingGain === 0 && outgoingGain === 0) {
+            break;
+        }
+        if (incomingGain >= outgoingGain && incomingGain > 0) {
+            nextIncoming += 1;
+        } else if (outgoingGain > 0) {
+            nextOutgoing += 1;
+        } else if (incomingGain > 0) {
+            nextIncoming += 1;
+        }
+        remaining -= 1;
+    }
+    return { incomingPortion: nextIncoming, outgoingPortion: nextOutgoing };
+}
+
+function resolveSceneTransitionWindows(
+    transitions: RemotionTransition[],
+    clipsById: Map<string, SceneClip>,
+): SceneTransitionWindow[] {
+    const resolvedByTransitionId = new Map<string, SceneTransitionWindow>();
+    const incomingTransitionByClipId = new Map<string, string>();
+    const outgoingTransitionByClipId = new Map<string, string>();
+
+    for (const transition of transitions) {
+        const leftClip = clipsById.get(transition.leftClipId);
+        const rightClip = clipsById.get(transition.rightClipId);
+        if (!leftClip || !rightClip) {
+            continue;
+        }
+        const leftEnd = leftClip.from + leftClip.durationInFrames;
+        const cutPoint = rightClip.from;
+        const { leftPortion, rightPortion } = calculateTransitionPortions(
+            transition.durationInFrames,
+            transition.alignment,
+        );
+        resolvedByTransitionId.set(transition.id, {
+            transition,
+            leftClip,
+            rightClip,
+            cutPoint,
+            startFrame: cutPoint - Math.max(0, leftPortion),
+            endFrame: cutPoint + Math.max(0, rightPortion),
+            durationInFrames: Math.max(1, leftPortion + rightPortion),
+            leftPortion,
+            rightPortion,
+        });
+        outgoingTransitionByClipId.set(leftClip.id, transition.id);
+        incomingTransitionByClipId.set(rightClip.id, transition.id);
+        if (Math.abs(leftEnd - rightClip.from) > 1) {
+            const overlapDuration = Math.max(1, leftEnd - rightClip.from);
+            resolvedByTransitionId.set(transition.id, {
+                transition,
+                leftClip,
+                rightClip,
+                cutPoint: leftEnd,
+                startFrame: rightClip.from,
+                endFrame: leftEnd,
+                durationInFrames: overlapDuration,
+                leftPortion: overlapDuration,
+                rightPortion: overlapDuration,
+            });
+        }
+    }
+
+    for (const [clipId, incomingTransitionId] of incomingTransitionByClipId.entries()) {
+        const outgoingTransitionId = outgoingTransitionByClipId.get(clipId);
+        if (!outgoingTransitionId) {
+            continue;
+        }
+        const incomingTransition = resolvedByTransitionId.get(incomingTransitionId);
+        const outgoingTransition = resolvedByTransitionId.get(outgoingTransitionId);
+        const clip = clipsById.get(clipId);
+        if (!incomingTransition || !outgoingTransition || !clip) {
+            continue;
+        }
+        const adjusted = solveClipTransitionPressure(
+            clip.durationInFrames,
+            incomingTransition.rightPortion,
+            outgoingTransition.leftPortion,
+        );
+        incomingTransition.rightPortion = adjusted.incomingPortion;
+        outgoingTransition.leftPortion = adjusted.outgoingPortion;
+        incomingTransition.durationInFrames = Math.max(1, incomingTransition.leftPortion + incomingTransition.rightPortion);
+        outgoingTransition.durationInFrames = Math.max(1, outgoingTransition.leftPortion + outgoingTransition.rightPortion);
+        incomingTransition.startFrame = incomingTransition.cutPoint - incomingTransition.leftPortion;
+        incomingTransition.endFrame = incomingTransition.cutPoint + incomingTransition.rightPortion;
+        outgoingTransition.startFrame = outgoingTransition.cutPoint - outgoingTransition.leftPortion;
+        outgoingTransition.endFrame = outgoingTransition.cutPoint + outgoingTransition.rightPortion;
+    }
+
+    return [...resolvedByTransitionId.values()].sort((left, right) => {
+        if (left.startFrame !== right.startFrame) return left.startFrame - right.startFrame;
+        if (left.cutPoint !== right.cutPoint) return left.cutPoint - right.cutPoint;
+        return left.transition.id.localeCompare(right.transition.id);
+    });
+}
+
+function applyTransitionTiming(progress: number, transition: RemotionTransition) {
+    const clamped = Math.max(0, Math.min(1, progress));
+    switch (transition.timing) {
+        case 'spring':
+            return Math.max(0, Math.min(1, 1 - Math.exp(-6 * clamped) * Math.cos(clamped * 4.5 * Math.PI)));
+        case 'ease-in':
+            return clamped * clamped;
+        case 'ease-out':
+            return 1 - Math.pow(1 - clamped, 2);
+        case 'ease-in-out':
+            return clamped < 0.5
+                ? 2 * clamped * clamped
+                : 1 - Math.pow(-2 * clamped + 2, 2) / 2;
+        case 'cubic-bezier': {
+            const points = transition.bezierPoints;
+            if (!points) {
+                return clamped;
+            }
+            const t = clamped;
+            const mt = 1 - t;
+            return (
+                3 * mt * mt * t * points.y1
+                + 3 * mt * t * t * points.y2
+                + t * t * t
+            );
+        }
+        default:
+            return clamped;
+    }
+}
+
+function calculateTransitionStylesForScene(
+    transition: RemotionTransition,
+    progress: number,
+    isOutgoing: boolean,
+    canvasWidth: number,
+    canvasHeight: number,
+): React.CSSProperties {
+    const timedProgress = applyTransitionTiming(progress, transition);
+    switch (transition.presentation) {
+        case 'wipe': {
+            const p = Math.max(0, Math.min(1, timedProgress));
+            const inverse = 1 - p;
+            const direction = transition.direction || 'from-left';
+            const clipPath = direction === 'from-right'
+                ? (isOutgoing ? `inset(0 ${p * 100}% 0 0)` : `inset(0 0 0 ${inverse * 100}%)`)
+                : direction === 'from-top'
+                    ? (isOutgoing ? `inset(${p * 100}% 0 0 0)` : `inset(0 0 ${inverse * 100}% 0)`)
+                    : direction === 'from-bottom'
+                        ? (isOutgoing ? `inset(0 0 ${p * 100}% 0)` : `inset(${inverse * 100}% 0 0 0)`)
+                        : (isOutgoing ? `inset(0 0 0 ${p * 100}%)` : `inset(0 ${inverse * 100}% 0 0)`);
+            return { clipPath, WebkitClipPath: clipPath } as React.CSSProperties;
+        }
+        case 'slide': {
+            const direction = transition.direction || 'from-left';
+            const slideProgress = isOutgoing ? timedProgress : timedProgress - 1;
+            const transform = direction === 'from-right'
+                ? `translateX(${-slideProgress * canvasWidth}px)`
+                : direction === 'from-top'
+                    ? `translateY(${slideProgress * canvasHeight}px)`
+                    : direction === 'from-bottom'
+                        ? `translateY(${-slideProgress * canvasHeight}px)`
+                        : `translateX(${slideProgress * canvasWidth}px)`;
+            return { transform };
+        }
+        case 'flip': {
+            const direction = transition.direction || 'from-left';
+            const axis = direction === 'from-left' || direction === 'from-right' ? 'Y' : 'X';
+            const sign = direction === 'from-right' || direction === 'from-bottom' ? -1 : 1;
+            const midpoint = 0.5;
+            const rotation = isOutgoing
+                ? Math.min(timedProgress / midpoint, 1) * 90
+                : -90 + Math.max((timedProgress - midpoint) / midpoint, 0) * 90;
+            return {
+                transform: `perspective(1000px) rotate${axis}(${sign * rotation}deg)`,
+                opacity: isOutgoing ? (timedProgress < midpoint ? 1 : 0) : (timedProgress >= midpoint ? 1 : 0),
+            };
+        }
+        case 'clockWipe': {
+            if (!isOutgoing) {
+                return {};
+            }
+            const degrees = timedProgress * 360;
+            const maskImage = `conic-gradient(from 0deg, transparent ${degrees}deg, black ${degrees}deg)`;
+            return {
+                maskImage,
+                WebkitMaskImage: maskImage,
+                maskSize: '100% 100%',
+                WebkitMaskSize: '100% 100%',
+            } as React.CSSProperties;
+        }
+        case 'iris': {
+            if (!isOutgoing) {
+                return {};
+            }
+            const radius = timedProgress * 120;
+            const maskImage = `radial-gradient(circle, transparent ${radius}%, black ${radius}%)`;
+            return {
+                maskImage,
+                WebkitMaskImage: maskImage,
+                maskSize: '100% 100%',
+                WebkitMaskSize: '100% 100%',
+            } as React.CSSProperties;
+        }
+        case 'fade':
+        default:
+            return {
+                opacity: isOutgoing
+                    ? Math.cos((timedProgress * Math.PI) / 2)
+                    : Math.sin((timedProgress * Math.PI) / 2),
+            };
+    }
+}
+
+function buildSceneTransitionWindows(
+    scenes: RemotionScene[],
+    transitions: RemotionTransition[] | undefined,
+): SceneTransitionWindow[] {
+    if (!transitions?.length) return [];
+    const clipsById = new Map<string, SceneClip>();
+    for (const scene of scenes) {
+        const clipId = scene.clipId?.trim();
+        if (!clipId || scene.assetKind === 'audio') continue;
+        clipsById.set(clipId, {
+            id: clipId,
+            from: scene.startFrame,
+            durationInFrames: scene.durationInFrames,
+            scene,
+        });
+    }
+    const supportedTransitions = transitions.filter((transition) => (
+        transition.leftClipId?.trim()
+        && transition.rightClipId?.trim()
+        && clipsById.has(transition.leftClipId)
+        && clipsById.has(transition.rightClipId)
+        && Number(transition.durationInFrames) > 0
+    ));
+    return resolveSceneTransitionWindows(supportedTransitions, clipsById);
+}
+
+function buildTransitionWindowLookup(windows: SceneTransitionWindow[]) {
+    const lookup = new Map<string, SceneTransitionWindow[]>();
+    for (const window of windows) {
+        const leftSceneId = window.leftClip.scene.id;
+        const rightSceneId = window.rightClip.scene.id;
+        lookup.set(leftSceneId, [...(lookup.get(leftSceneId) || []), window]);
+        lookup.set(rightSceneId, [...(lookup.get(rightSceneId) || []), window]);
+    }
+    return lookup;
+}
+
+function isFrameCoveredByTransition(absoluteFrame: number, windows: SceneTransitionWindow[] | undefined) {
+    return (windows || []).some((window) => absoluteFrame >= window.startFrame && absoluteFrame < window.endFrame);
+}
+
 function SceneEntity({
     entity,
     sceneFrame,
@@ -387,17 +715,21 @@ function SceneEntity({
 
 function SceneOverlay({
     overlay,
+    sceneFrame,
 }: {
     overlay: RemotionOverlay;
+    sceneFrame: number;
 }) {
-    const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
-    const overlayFrame = clampFrame(frame - overlay.startFrame, overlay.durationInFrames);
+    const overlayFrame = sceneFrame - overlay.startFrame;
+    if (overlayFrame < 0 || overlayFrame >= overlay.durationInFrames) {
+        return null;
+    }
     const style = overlayAnimationStyles(
-        overlayFrame,
+        clampFrame(overlayFrame, overlay.durationInFrames),
         fps,
         overlay.durationInFrames,
-        overlay.animation
+        overlay.animation,
     );
 
     return (
@@ -431,24 +763,26 @@ function SceneOverlay({
     );
 }
 
-function MotionSceneLayer({
+function SceneLayerContent({
     scene,
+    sceneFrame,
     runtime,
     renderMode,
 }: {
     scene: RemotionScene;
+    sceneFrame: number;
     runtime: RuntimeMode;
     renderMode: 'full' | 'motion-layer';
 }) {
-    const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
     const source = resolveSceneSource(scene.src, runtime);
     const showBaseMedia = renderMode !== 'motion-layer';
-    const localFrame = clampFrame(frame, scene.durationInFrames);
+    const enableMediaAudio = renderMode === 'full' && runtime === 'render';
+    const localFrame = clampFrame(sceneFrame, scene.durationInFrames);
     const motion = getMotionValues(
         localFrame,
         scene.durationInFrames,
-        scene.motionPreset || 'static'
+        scene.motionPreset || 'static',
     );
     const baseOpacity = interpolate(
         localFrame,
@@ -457,8 +791,10 @@ function MotionSceneLayer({
         {
             extrapolateLeft: 'clamp',
             extrapolateRight: 'clamp',
-        }
+        },
     );
+    const overlayItems = buildSceneOverlays(scene, fps);
+    const entities = Array.isArray(scene.entities) ? scene.entities : [];
 
     const contentStyle: React.CSSProperties = {
         width: '100%',
@@ -467,32 +803,6 @@ function MotionSceneLayer({
         transform: `translate3d(${motion.translateX}px, ${motion.translateY}px, 0) scale(${motion.scale})`,
         opacity: baseOpacity,
     };
-
-    const overlayItems: RemotionOverlay[] = [...(scene.overlays || [])];
-    const entities = Array.isArray(scene.entities) ? scene.entities : [];
-    if (scene.overlayTitle) {
-        overlayItems.push({
-            id: `${scene.id}-title`,
-            text: scene.overlayTitle,
-            startFrame: 0,
-            durationInFrames: Math.min(scene.durationInFrames, Math.max(40, Math.round(fps * 2.8))),
-            position: 'top',
-            animation: 'fade-up',
-            fontSize: 54,
-        });
-    }
-    if (scene.overlayBody) {
-        overlayItems.push({
-            id: `${scene.id}-body`,
-            text: scene.overlayBody,
-            startFrame: Math.min(scene.durationInFrames - 1, Math.round(fps * 0.5)),
-            durationInFrames: Math.max(24, scene.durationInFrames - Math.round(fps * 0.6)),
-            position: 'bottom',
-            animation: 'fade-up',
-            fontSize: 36,
-            backgroundColor: 'rgba(3, 7, 18, 0.62)',
-        });
-    }
 
     return (
         <AbsoluteFill
@@ -510,7 +820,7 @@ function MotionSceneLayer({
                 <OffthreadVideo
                     src={source}
                     style={contentStyle}
-                    muted
+                    muted={!enableMediaAudio}
                     startFrom={scene.trimInFrames || 0}
                     endAt={(scene.trimInFrames || 0) + scene.durationInFrames}
                 />
@@ -533,14 +843,95 @@ function MotionSceneLayer({
                 <SceneEntity key={entity.id} entity={entity} sceneFrame={localFrame} />
             ))}
             {overlayItems.map((overlay) => (
-                <Sequence
-                    key={overlay.id}
-                    from={overlay.startFrame}
-                    durationInFrames={overlay.durationInFrames}
-                >
-                    <SceneOverlay overlay={overlay} />
-                </Sequence>
+                <SceneOverlay key={overlay.id} overlay={overlay} sceneFrame={localFrame} />
             ))}
+        </AbsoluteFill>
+    );
+}
+
+function MotionSceneLayer({
+    scene,
+    runtime,
+    renderMode,
+    transitionWindows,
+}: {
+    scene: RemotionScene;
+    runtime: RuntimeMode;
+    renderMode: 'full' | 'motion-layer';
+    transitionWindows?: SceneTransitionWindow[];
+}) {
+    const frame = useCurrentFrame();
+    const sceneFrame = clampFrame(frame, scene.durationInFrames);
+    const absoluteFrame = scene.startFrame + sceneFrame;
+    if (isFrameCoveredByTransition(absoluteFrame, transitionWindows)) {
+        return null;
+    }
+    return (
+        <SceneLayerContent
+            scene={scene}
+            sceneFrame={sceneFrame}
+            runtime={runtime}
+            renderMode={renderMode}
+        />
+    );
+}
+
+function TransitionSequenceLayer({
+    window,
+    runtime,
+    renderMode,
+    width,
+    height,
+}: {
+    window: SceneTransitionWindow;
+    runtime: RuntimeMode;
+    renderMode: 'full' | 'motion-layer';
+    width: number;
+    height: number;
+}) {
+    const frame = useCurrentFrame();
+    const absoluteFrame = window.startFrame + frame;
+    const progress = interpolate(frame, [0, Math.max(1, window.durationInFrames - 1)], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+    });
+    const outgoingStyle = calculateTransitionStylesForScene(window.transition, progress, true, width, height);
+    const incomingStyle = calculateTransitionStylesForScene(window.transition, progress, false, width, height);
+    const outgoingFrame = clampFrame(absoluteFrame - window.leftClip.scene.startFrame, window.leftClip.scene.durationInFrames);
+    const incomingFrame = clampFrame(absoluteFrame - window.rightClip.scene.startFrame, window.rightClip.scene.durationInFrames);
+
+    return (
+        <AbsoluteFill style={{ overflow: 'hidden' }}>
+            <div
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    willChange: 'transform, opacity, clip-path, mask-image',
+                    ...outgoingStyle,
+                }}
+            >
+                <SceneLayerContent
+                    scene={window.leftClip.scene}
+                    sceneFrame={outgoingFrame}
+                    runtime={runtime}
+                    renderMode={renderMode}
+                />
+            </div>
+            <div
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    willChange: 'transform, opacity, clip-path, mask-image',
+                    ...incomingStyle,
+                }}
+            >
+                <SceneLayerContent
+                    scene={window.rightClip.scene}
+                    sceneFrame={incomingFrame}
+                    runtime={runtime}
+                    renderMode={renderMode}
+                />
+            </div>
         </AbsoluteFill>
     );
 }
@@ -549,7 +940,16 @@ export function VideoMotionComposition({
     composition,
     runtime = 'preview',
 }: VideoMotionCompositionProps) {
-    const { width, height, backgroundColor, scenes, renderMode = 'full' } = composition;
+    const {
+        width,
+        height,
+        backgroundColor,
+        scenes,
+        transitions,
+        renderMode = 'full',
+    } = composition;
+    const transitionWindows = buildSceneTransitionWindows(scenes, transitions);
+    const transitionLookup = buildTransitionWindowLookup(transitionWindows);
 
     return (
         <AbsoluteFill
@@ -566,7 +966,27 @@ export function VideoMotionComposition({
                     from={scene.startFrame}
                     durationInFrames={scene.durationInFrames}
                 >
-                    <MotionSceneLayer scene={scene} runtime={runtime} renderMode={renderMode} />
+                    <MotionSceneLayer
+                        scene={scene}
+                        runtime={runtime}
+                        renderMode={renderMode}
+                        transitionWindows={transitionLookup.get(scene.id)}
+                    />
+                </Sequence>
+            ))}
+            {transitionWindows.map((window) => (
+                <Sequence
+                    key={window.transition.id}
+                    from={window.startFrame}
+                    durationInFrames={window.durationInFrames}
+                >
+                    <TransitionSequenceLayer
+                        window={window}
+                        runtime={runtime}
+                        renderMode={renderMode}
+                        width={width}
+                        height={height}
+                    />
                 </Sequence>
             ))}
         </AbsoluteFill>

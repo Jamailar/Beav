@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -251,7 +251,9 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
 }
 
 fn builtin_skill_root(skill_name: &str) -> PathBuf {
-    lexbox_project_root().join("builtin-skills").join(skill_name)
+    lexbox_project_root()
+        .join("builtin-skills")
+        .join(skill_name)
 }
 
 pub fn load_skill_bundle_sections_from_sources(
@@ -337,6 +339,7 @@ mod tests {
     fn load_skill_bundle_sections_prefers_builtin_skill_root() {
         let loaded = load_skill_bundle_sections_from_sources("remotion-best-practices", None);
         assert!(!loaded.body.trim().is_empty());
+        assert!(loaded.rules.contains_key("calculate-metadata.md"));
         assert!(loaded.rules.contains_key("compositions.md"));
         assert!(loaded.rules.contains_key("timing.md"));
     }

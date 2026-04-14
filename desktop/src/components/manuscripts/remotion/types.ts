@@ -13,6 +13,9 @@ export type OverlayPosition = 'top' | 'center' | 'bottom';
 export type RemotionRenderMode = 'full' | 'motion-layer';
 export type RemotionEntityType = 'text' | 'shape' | 'image' | 'svg' | 'video' | 'group';
 export type RemotionShapeKind = 'rect' | 'circle' | 'apple';
+export type RemotionTransitionPresentation = 'fade' | 'wipe' | 'slide' | 'flip' | 'clockWipe' | 'iris' | string;
+export type RemotionTransitionTiming = 'linear' | 'spring' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier';
+export type RemotionTransitionDirection = 'from-left' | 'from-right' | 'from-top' | 'from-bottom';
 export type RemotionEntityAnimationKind =
     | 'fade-in'
     | 'fade-out'
@@ -92,6 +95,27 @@ export interface RemotionScene {
     entities?: RemotionSceneEntity[];
 }
 
+export interface RemotionTransition {
+    id: string;
+    type?: 'crossfade';
+    presentation: RemotionTransitionPresentation;
+    timing?: RemotionTransitionTiming;
+    leftClipId: string;
+    rightClipId: string;
+    trackId?: string;
+    durationInFrames: number;
+    direction?: RemotionTransitionDirection;
+    alignment?: number;
+    bezierPoints?: {
+        x1: number;
+        y1: number;
+        x2: number;
+        y2: number;
+    };
+    presetId?: string;
+    properties?: Record<string, unknown>;
+}
+
 export interface RemotionSceneItemTransform {
     x: number;
     y: number;
@@ -103,15 +127,23 @@ export interface RemotionSceneItemTransform {
 }
 
 export interface RemotionRenderResult {
+    defaultOutName?: string;
     outputPath?: string;
     renderedAt?: number;
     durationInFrames?: number;
     renderMode?: RemotionRenderMode;
+    compositionId?: string;
+    codec?: string;
+    imageFormat?: 'jpeg' | 'png';
+    pixelFormat?: string;
+    proResProfile?: string;
+    sampleRate?: number;
 }
 
 export interface RemotionCompositionConfig {
     version?: number;
     title?: string;
+    entryCompositionId?: string;
     width: number;
     height: number;
     fps: number;
@@ -119,6 +151,7 @@ export interface RemotionCompositionConfig {
     backgroundColor?: string;
     renderMode?: RemotionRenderMode;
     scenes: RemotionScene[];
+    transitions?: RemotionTransition[];
     sceneItemTransforms?: Record<string, RemotionSceneItemTransform>;
     render?: RemotionRenderResult;
 }

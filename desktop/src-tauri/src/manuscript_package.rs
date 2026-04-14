@@ -9,9 +9,10 @@ use crate::{
     get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative,
     lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
     package_assets_path, package_cover_path, package_editor_project_path, package_entry_path,
-    package_images_path, package_manifest_path, package_remotion_path, package_scene_ui_path,
-    package_timeline_path, package_track_ui_path, parse_json_value_from_text, read_json_value_or,
-    resolve_manuscript_path, title_from_relative_path, write_json_value, write_text_file, AppState,
+    package_images_path, package_manifest_path, package_remotion_input_props_path,
+    package_remotion_path, package_scene_ui_path, package_timeline_path, package_track_ui_path,
+    parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
+    title_from_relative_path, write_json_value, write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -20,6 +21,27 @@ pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> St
         | "slide-down" => value.unwrap().trim().to_string(),
         _ => fallback.to_string(),
     }
+}
+
+fn normalized_optional_id(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| json!(value))
+        .unwrap_or(Value::Null)
+}
+
+fn clamp_start_and_duration(
+    start_frame: i64,
+    duration_in_frames: i64,
+    parent_duration_in_frames: i64,
+) -> (i64, i64) {
+    let safe_parent = parent_duration_in_frames.max(1);
+    let safe_start = start_frame.max(0).min(safe_parent - 1);
+    let max_duration = (safe_parent - safe_start).max(1);
+    let safe_duration = duration_in_frames.max(1).min(max_duration);
+    (safe_start, safe_duration)
 }
 
 pub(crate) fn remotion_scene_duration_frames(clip: &Value, fps: i64) -> i64 {
@@ -46,8 +68,94 @@ pub(crate) fn fallback_motion_preset(index: usize, asset_kind: &str) -> &'static
     }
 }
 
+fn sanitized_remotion_out_name(title: &str) -> String {
+    let mut value = String::new();
+    let mut last_was_dash = false;
+    for ch in title.trim().chars() {
+        let keep =
+            ch.is_ascii_alphanumeric() || ch == '-' || ('\u{4e00}'..='\u{9fa5}').contains(&ch);
+        if keep {
+            value.push(ch);
+            last_was_dash = false;
+            continue;
+        }
+        if !last_was_dash {
+            value.push('-');
+            last_was_dash = true;
+        }
+    }
+    let normalized = value.trim_matches('-').to_string();
+    if normalized.is_empty() {
+        "redbox-motion".to_string()
+    } else {
+        normalized
+    }
+}
+
+pub(crate) fn default_remotion_render_config(title: &str, render_mode: &str) -> Value {
+    let motion_layer = render_mode == "motion-layer";
+    json!({
+        "defaultOutName": sanitized_remotion_out_name(title),
+        "codec": if motion_layer { "prores" } else { "h264" },
+        "imageFormat": if motion_layer { "png" } else { "jpeg" },
+        "pixelFormat": if motion_layer { Value::String("yuva444p10le".to_string()) } else { Value::Null },
+        "proResProfile": if motion_layer { Value::String("4444".to_string()) } else { Value::Null }
+    })
+}
+
+pub(crate) fn normalized_remotion_render_config(
+    render: Option<&Value>,
+    title: &str,
+    render_mode: &str,
+) -> Value {
+    let mut normalized = default_remotion_render_config(title, render_mode);
+    let Some(source) = render.and_then(Value::as_object) else {
+        return normalized;
+    };
+    let Some(target) = normalized.as_object_mut() else {
+        return normalized;
+    };
+    for key in [
+        "codec",
+        "imageFormat",
+        "pixelFormat",
+        "proResProfile",
+        "sampleRate",
+        "outputPath",
+        "renderedAt",
+        "durationInFrames",
+        "renderMode",
+        "compositionId",
+    ] {
+        if let Some(value) = source.get(key) {
+            target.insert(key.to_string(), value.clone());
+        }
+    }
+    target.insert("renderMode".to_string(), json!(render_mode));
+    normalized
+}
+
+pub(crate) fn build_remotion_input_props(composition: &Value) -> Value {
+    json!({
+        "composition": composition
+    })
+}
+
+pub(crate) fn persist_remotion_composition_artifacts(
+    package_path: &Path,
+    composition: &Value,
+) -> Result<(), String> {
+    write_json_value(&package_remotion_path(package_path), composition)?;
+    write_json_value(
+        &package_remotion_input_props_path(package_path),
+        &build_remotion_input_props(composition),
+    )?;
+    Ok(())
+}
+
 pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Value {
     let fps = 30_i64;
+    let render_mode = "motion-layer";
     let duration_in_frames = clips
         .iter()
         .filter(|clip| {
@@ -61,12 +169,14 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
     json!({
         "version": 1,
         "title": title,
+        "entryCompositionId": "RedBoxVideoMotion",
         "width": 1080,
         "height": 1920,
         "fps": fps,
         "durationInFrames": duration_in_frames,
         "backgroundColor": "#05070b",
-        "renderMode": "motion-layer",
+        "renderMode": render_mode,
+        "transitions": [],
         "scenes": [{
             "id": "scene-1",
             "clipId": Value::Null,
@@ -81,7 +191,9 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
             "overlayBody": Value::Null,
             "overlays": [],
             "entities": []
-        }]
+        }],
+        "sceneItemTransforms": {},
+        "render": default_remotion_render_config(title, render_mode)
     })
 }
 
@@ -423,7 +535,10 @@ pub(crate) fn build_editor_project_from_legacy(
         object.insert("assets".to_string(), Value::Array(assets));
         object.insert("tracks".to_string(), Value::Array(tracks));
         object.insert("items".to_string(), Value::Array(items));
-        object.insert("animationLayers".to_string(), Value::Array(animation_layers));
+        object.insert(
+            "animationLayers".to_string(),
+            Value::Array(animation_layers),
+        );
         object.insert(
             "stage".to_string(),
             json!({
@@ -496,6 +611,9 @@ pub(crate) fn ensure_editor_project(package_path: &Path) -> Result<Value, String
                 }
             }
         }
+        if !project_has_motion_projection(&project) {
+            let _ = hydrate_editor_project_motion_from_remotion(&mut project, package_path)?;
+        }
         if project != original {
             write_json_value(&path, &project)?;
         }
@@ -514,6 +632,77 @@ fn item_enabled(item: &Value) -> bool {
     item.get("enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(true)
+}
+
+fn project_has_motion_projection(project: &Value) -> bool {
+    let has_layers = project
+        .get("animationLayers")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    let has_motion_items = project
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("motion"))
+        })
+        .unwrap_or(false);
+    has_layers || has_motion_items
+}
+
+fn composition_has_motion_scenes(composition: &Value) -> bool {
+    composition
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
+}
+
+pub(crate) fn hydrate_editor_project_motion_from_remotion(
+    project: &mut Value,
+    package_path: &Path,
+) -> Result<bool, String> {
+    let composition =
+        read_json_value_or(package_remotion_path(package_path).as_path(), Value::Null);
+    if !composition_has_motion_scenes(&composition) {
+        return Ok(false);
+    }
+    let fps = composition
+        .get("fps")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(30);
+    let animation_layers = animation_layers_from_remotion_scene(&composition, fps);
+    if animation_layers.is_empty() {
+        return Ok(false);
+    }
+    let project_object = project
+        .as_object_mut()
+        .ok_or_else(|| "Editor project must be an object".to_string())?;
+    project_object.insert("animationLayers".to_string(), json!(animation_layers));
+    project_object.insert(
+        "transitions".to_string(),
+        composition
+            .get("transitions")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    );
+    let current_project = Value::Object(project_object.clone());
+    let motion_items = projected_motion_items_from_animation_layers(&current_project);
+    let items = project_object
+        .entry("items".to_string())
+        .or_insert_with(|| json!([]));
+    if !items.is_array() {
+        *items = json!([]);
+    }
+    let items_array = items
+        .as_array_mut()
+        .ok_or_else(|| "Editor project items must be an array".to_string())?;
+    items_array.retain(|item| item.get("type").and_then(Value::as_str) != Some("motion"));
+    items_array.extend(motion_items);
+    Ok(true)
 }
 
 pub(crate) fn animation_layers_from_remotion_scene(remotion: &Value, fps: i64) -> Vec<Value> {
@@ -785,6 +974,19 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         .and_then(|value| value.as_str())
         .unwrap_or("RedBox Motion")
         .to_string();
+    let render_mode = project
+        .get("animationLayers")
+        .and_then(Value::as_array)
+        .and_then(|layers| {
+            layers.iter().find_map(|layer| {
+                layer
+                    .get("renderMode")
+                    .and_then(Value::as_str)
+                    .filter(|value| *value == "full" || *value == "motion-layer")
+                    .map(ToString::to_string)
+            })
+        })
+        .unwrap_or_else(|| "motion-layer".to_string());
     let background_color = project_meta
         .get("backgroundColor")
         .and_then(|value| value.as_str())
@@ -956,18 +1158,67 @@ pub(crate) fn build_remotion_config_from_editor_project(project: &Value) -> Valu
         }));
     }
     scenes.sort_by_key(|scene| scene.get("startFrame").and_then(Value::as_i64).unwrap_or(0));
+    let bound_clip_ids = scenes
+        .iter()
+        .filter_map(|scene| {
+            scene
+                .get("clipId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .collect::<BTreeSet<_>>();
+    let transitions = project
+        .get("transitions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|transition| {
+            let left_clip_id = transition
+                .get("leftClipId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let right_clip_id = transition
+                .get("rightClipId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            !left_clip_id.trim().is_empty()
+                && !right_clip_id.trim().is_empty()
+                && bound_clip_ids.contains(left_clip_id)
+                && bound_clip_ids.contains(right_clip_id)
+        })
+        .map(|transition| {
+            json!({
+                "id": transition.get("id").cloned().unwrap_or_else(|| json!(make_id("transition"))),
+                "type": transition.get("type").cloned().unwrap_or_else(|| json!("crossfade")),
+                "presentation": transition.get("presentation").cloned().unwrap_or_else(|| json!("fade")),
+                "timing": transition.get("timing").cloned().unwrap_or_else(|| json!("linear")),
+                "leftClipId": transition.get("leftClipId").cloned().unwrap_or(Value::Null),
+                "rightClipId": transition.get("rightClipId").cloned().unwrap_or(Value::Null),
+                "trackId": transition.get("trackId").cloned().unwrap_or(Value::Null),
+                "durationInFrames": transition.get("durationInFrames").cloned().unwrap_or_else(|| json!(30)),
+                "direction": transition.get("direction").cloned().unwrap_or(Value::Null),
+                "alignment": transition.get("alignment").cloned().unwrap_or(Value::Null),
+                "bezierPoints": transition.get("bezierPoints").cloned().unwrap_or(Value::Null),
+                "presetId": transition.get("presetId").cloned().unwrap_or(Value::Null),
+                "properties": transition.get("properties").cloned().unwrap_or_else(|| json!({}))
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "version": 1,
         "title": title,
+        "entryCompositionId": "RedBoxVideoMotion",
         "width": width,
         "height": height,
         "fps": fps,
         "durationInFrames": duration_in_frames.max(90),
         "backgroundColor": background_color,
-        "renderMode": "motion-layer",
+        "renderMode": render_mode,
         "scenes": scenes,
+        "transitions": transitions,
         "sceneItemTransforms": project.pointer("/stage/itemTransforms").cloned().unwrap_or_else(|| json!({})),
-        "render": Value::Null
+        "render": normalized_remotion_render_config(project.get("render"), &title, &render_mode)
     })
 }
 
@@ -996,10 +1247,14 @@ fn normalize_entity_animation_kind(value: Option<&str>) -> &'static str {
     }
 }
 
-fn normalize_entity_animations(
-    entity: &Value,
-    duration_in_frames: i64,
-) -> Vec<Value> {
+fn normalize_entity_animations(entity: &Value, duration_in_frames: i64) -> Vec<Value> {
+    let entity_y = entity.get("y").and_then(Value::as_f64).or_else(|| {
+        entity
+            .get("style")
+            .and_then(Value::as_object)
+            .and_then(|style| style.get("y"))
+            .and_then(Value::as_f64)
+    });
     entity
         .get("animations")
         .and_then(Value::as_array)
@@ -1007,18 +1262,182 @@ fn normalize_entity_animations(
         .unwrap_or_default()
         .into_iter()
         .map(|animation| {
-            let params = animation.get("params").cloned().unwrap_or_else(|| json!({}));
+            let kind = normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str));
+            let mut params = animation.get("params").cloned().unwrap_or_else(|| json!({}));
+            if !params.is_object() {
+                params = json!({});
+            }
+            if let Some(object) = params.as_object_mut() {
+                if object.get("fromX").is_none() {
+                    if let Some(value) = animation.get("fromX").cloned() {
+                        object.insert("fromX".to_string(), value);
+                    }
+                }
+                if object.get("fromScale").is_none() {
+                    if let Some(value) = animation.get("fromScale").cloned() {
+                        object.insert("fromScale".to_string(), value);
+                    }
+                }
+                if object.get("amplitude").is_none() {
+                    if let Some(value) = animation.get("amplitude").cloned() {
+                        object.insert("amplitude".to_string(), value);
+                    }
+                }
+                if object.get("decay").is_none() {
+                    if let Some(value) = animation.get("decay").cloned() {
+                        object.insert("decay".to_string(), value);
+                    }
+                }
+                if object.get("bounces").is_none() {
+                    if let Some(value) = animation
+                        .get("bounces")
+                        .cloned()
+                        .or_else(|| animation.get("bounceCount").cloned())
+                    {
+                        object.insert("bounces".to_string(), value);
+                    }
+                }
+                if kind == "slide-up" || kind == "slide-down" {
+                    if object.get("fromY").is_none() {
+                        if let Some(value) = animation.get("fromY").cloned() {
+                            object.insert("fromY".to_string(), value);
+                        }
+                    }
+                }
+                if kind == "fall-bounce" {
+                    let absolute_from_y = animation
+                        .get("fromY")
+                        .and_then(Value::as_f64)
+                        .or_else(|| object.get("fromY").and_then(Value::as_f64));
+                    let absolute_to_y = animation
+                        .get("toY")
+                        .and_then(Value::as_f64)
+                        .or_else(|| animation.get("floorY").and_then(Value::as_f64))
+                        .or_else(|| object.get("toY").and_then(Value::as_f64))
+                        .or_else(|| object.get("floorY").and_then(Value::as_f64));
+                    let relative_from_y = match (absolute_from_y, entity_y) {
+                        (Some(from_y), Some(entity_y)) => Some(from_y - entity_y),
+                        (Some(from_y), None) => Some(from_y),
+                        _ => None,
+                    };
+                    let relative_floor_y = match (absolute_to_y, entity_y) {
+                        (Some(to_y), Some(entity_y)) => Some(to_y - entity_y),
+                        (Some(to_y), None) => Some(to_y),
+                        _ => None,
+                    };
+                    if object.get("fromY").is_none() {
+                        if let Some(value) = relative_from_y {
+                            object.insert("fromY".to_string(), json!(value));
+                        }
+                    }
+                    if object.get("floorY").is_none() {
+                        if let Some(value) = relative_floor_y {
+                            object.insert("floorY".to_string(), json!(value));
+                        }
+                    }
+                }
+            }
+            let from_frame = animation
+                .get("fromFrame")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let requested_duration = animation
+                .get("durationInFrames")
+                .and_then(Value::as_i64)
+                .or_else(|| animation.get("frames").and_then(Value::as_i64))
+                .or_else(|| animation.get("durationFrames").and_then(Value::as_i64))
+                .unwrap_or(duration_in_frames.max(12));
+            let (safe_from_frame, safe_duration) =
+                clamp_start_and_duration(from_frame, requested_duration, duration_in_frames);
             json!({
                 "id": animation.get("id").cloned().unwrap_or_else(|| json!(make_id("entity-animation"))),
-                "kind": normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str)),
-                "fromFrame": animation.get("fromFrame").cloned().unwrap_or_else(|| json!(0)),
-                "durationInFrames": animation
-                    .get("durationInFrames")
-                    .cloned()
-                    .or_else(|| animation.get("frames").cloned())
-                    .unwrap_or_else(|| json!(duration_in_frames.max(12))),
+                "kind": kind,
+                "fromFrame": safe_from_frame,
+                "durationInFrames": safe_duration,
                 "params": params
             })
+        })
+        .collect()
+}
+
+fn normalize_transition_presentation(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim() {
+        "fade" | "dissolve" => "fade",
+        "wipe" => "wipe",
+        "slide" => "slide",
+        "flip" => "flip",
+        "clockWipe" => "clockWipe",
+        "iris" => "iris",
+        _ => "fade",
+    }
+}
+
+fn normalize_transition_timing(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim() {
+        "linear" => "linear",
+        "spring" => "spring",
+        "ease-in" => "ease-in",
+        "ease-out" => "ease-out",
+        "ease-in-out" => "ease-in-out",
+        "cubic-bezier" => "cubic-bezier",
+        _ => "linear",
+    }
+}
+
+fn normalize_transition_direction(value: Option<&str>) -> Value {
+    match value.unwrap_or("").trim() {
+        "from-left" => json!("from-left"),
+        "from-right" => json!("from-right"),
+        "from-top" => json!("from-top"),
+        "from-bottom" => json!("from-bottom"),
+        _ => Value::Null,
+    }
+}
+
+fn normalize_remotion_transitions(candidate: &Value, fallback: &Value) -> Vec<Value> {
+    candidate
+        .get("transitions")
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| fallback.get("transitions").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|transition| {
+            let left_clip_id = transition
+                .get("leftClipId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let right_clip_id = transition
+                .get("rightClipId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if left_clip_id.is_empty() || right_clip_id.is_empty() {
+                return None;
+            }
+            let duration_in_frames = transition
+                .get("durationInFrames")
+                .and_then(Value::as_i64)
+                .unwrap_or(30)
+                .max(1);
+            Some(json!({
+                "id": transition.get("id").cloned().unwrap_or_else(|| json!(make_id("transition"))),
+                "type": transition.get("type").cloned().unwrap_or_else(|| json!("crossfade")),
+                "presentation": normalize_transition_presentation(transition.get("presentation").and_then(Value::as_str)),
+                "timing": normalize_transition_timing(transition.get("timing").and_then(Value::as_str)),
+                "leftClipId": left_clip_id,
+                "rightClipId": right_clip_id,
+                "trackId": transition.get("trackId").cloned().unwrap_or(Value::Null),
+                "durationInFrames": duration_in_frames,
+                "direction": normalize_transition_direction(transition.get("direction").and_then(Value::as_str)),
+                "alignment": transition.get("alignment").cloned().unwrap_or(Value::Null),
+                "bezierPoints": transition.get("bezierPoints").cloned().unwrap_or(Value::Null),
+                "presetId": transition.get("presetId").cloned().unwrap_or(Value::Null),
+                "properties": transition.get("properties").cloned().unwrap_or_else(|| json!({}))
+            }))
         })
         .collect()
 }
@@ -1148,11 +1567,18 @@ pub(crate) fn normalize_ai_remotion_scene(
             .into_iter()
             .map(|item| {
                 let style = item.get("style").cloned().unwrap_or_else(|| json!({}));
+                let requested_start = item.get("startFrame").and_then(Value::as_i64).unwrap_or(0);
+                let requested_duration = item
+                    .get("durationInFrames")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(duration_in_frames);
+                let (safe_start, safe_duration) =
+                    clamp_start_and_duration(requested_start, requested_duration, duration_in_frames);
                 json!({
                     "id": item.get("id").cloned().unwrap_or_else(|| json!(make_id("overlay"))),
                     "text": item.get("text").cloned().or_else(|| item.get("content").cloned()).unwrap_or_else(|| json!("")),
-                    "startFrame": item.get("startFrame").cloned().unwrap_or_else(|| json!(0)),
-                    "durationInFrames": item.get("durationInFrames").cloned().unwrap_or_else(|| json!(duration_in_frames)),
+                    "startFrame": safe_start,
+                    "durationInFrames": safe_duration,
                     "position": item.get("position").cloned().unwrap_or_else(|| json!("center")),
                     "animation": json!(normalize_overlay_animation(item.get("animation").and_then(Value::as_str))),
                     "fontSize": item.get("fontSize").cloned().or_else(|| style.get("fontSize").cloned()).unwrap_or_else(|| json!(42)),
@@ -1170,11 +1596,21 @@ pub(crate) fn normalize_ai_remotion_scene(
             .into_iter()
             .map(|entity| {
                 let style = entity.get("style").cloned().unwrap_or_else(|| json!({}));
+                let requested_start = entity
+                    .get("startFrame")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let requested_duration = entity
+                    .get("durationInFrames")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(duration_in_frames);
+                let (entity_start_frame, entity_duration_in_frames) =
+                    clamp_start_and_duration(requested_start, requested_duration, duration_in_frames);
                 json!({
                     "id": entity.get("id").cloned().unwrap_or_else(|| json!(make_id("entity"))),
                     "type": entity.get("type").cloned().unwrap_or_else(|| json!("text")),
-                    "startFrame": entity.get("startFrame").cloned().unwrap_or_else(|| json!(0)),
-                    "durationInFrames": entity.get("durationInFrames").cloned().unwrap_or_else(|| json!(duration_in_frames)),
+                    "startFrame": entity_start_frame,
+                    "durationInFrames": entity_duration_in_frames,
                     "x": entity.get("x").cloned().or_else(|| style.get("x").cloned()).unwrap_or_else(|| json!(0)),
                     "y": entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0)),
                     "width": entity.get("width").cloned().or_else(|| style.get("width").cloned()).unwrap_or_else(|| json!(320)),
@@ -1197,17 +1633,27 @@ pub(crate) fn normalize_ai_remotion_scene(
                     "src": entity.get("src").cloned().unwrap_or(Value::Null),
                     "svgMarkup": entity.get("svgMarkup").cloned().or_else(|| entity.get("svg").cloned()).unwrap_or(Value::Null),
                     "borderRadius": entity.get("borderRadius").cloned().or_else(|| style.get("borderRadius").cloned()).unwrap_or(Value::Null),
-                    "animations": normalize_entity_animations(&entity, duration_in_frames),
+                    "animations": normalize_entity_animations(&entity, entity_duration_in_frames),
                     "children": entity.get("children").cloned().unwrap_or_else(|| json!([]))
                 })
             })
             .collect::<Vec<_>>();
+        let normalized_clip_id =
+            normalized_optional_id(raw_scene.get("clipId").or_else(|| fallback_scene.get("clipId")));
+        let normalized_asset_id = normalized_optional_id(
+            raw_scene.get("assetId").or_else(|| fallback_scene.get("assetId")),
+        );
+        let has_scene_binding = !normalized_clip_id.is_null() || !normalized_asset_id.is_null();
         normalized_scenes.push(json!({
             "id": raw_scene.get("id").cloned().unwrap_or_else(|| fallback_scene.get("id").cloned().unwrap_or(json!(format!("scene-{}", index + 1)))),
-            "clipId": raw_scene.get("clipId").cloned().or_else(|| fallback_scene.get("clipId").cloned()).unwrap_or(Value::Null),
-            "assetId": raw_scene.get("assetId").cloned().or_else(|| fallback_scene.get("assetId").cloned()).unwrap_or(Value::Null),
-            "assetKind": asset_kind,
-            "src": raw_scene.get("src").cloned().or_else(|| fallback_scene.get("src").cloned()).unwrap_or(json!("")),
+            "clipId": normalized_clip_id,
+            "assetId": normalized_asset_id,
+            "assetKind": if has_scene_binding { json!(asset_kind) } else { json!("unknown") },
+            "src": if has_scene_binding {
+                raw_scene.get("src").cloned().or_else(|| fallback_scene.get("src").cloned()).unwrap_or(json!(""))
+            } else {
+                json!("")
+            },
             "startFrame": start_frame,
             "durationInFrames": duration_in_frames,
             "trimInFrames": raw_scene.get("trimInFrames").cloned().or_else(|| fallback_scene.get("trimInFrames").cloned()).unwrap_or(json!(0)),
@@ -1220,26 +1666,45 @@ pub(crate) fn normalize_ai_remotion_scene(
         current_frame = (start_frame + duration_in_frames).max(current_frame + duration_in_frames);
     }
 
+    let normalized_title = candidate
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or(title)
+        .to_string();
+    let normalized_render_mode = candidate
+        .get("renderMode")
+        .and_then(Value::as_str)
+        .or_else(|| fallback.get("renderMode").and_then(Value::as_str))
+        .filter(|value| *value == "full" || *value == "motion-layer")
+        .unwrap_or("motion-layer")
+        .to_string();
+
     json!({
         "version": 1,
-        "title": candidate.get("title").cloned().unwrap_or(json!(title)),
+        "title": normalized_title,
+        "entryCompositionId": candidate
+            .get("entryCompositionId")
+            .cloned()
+            .or_else(|| fallback.get("entryCompositionId").cloned())
+            .unwrap_or_else(|| json!("RedBoxVideoMotion")),
         "width": width,
         "height": height,
         "fps": fps,
-        "durationInFrames": current_frame.max(90),
+        "durationInFrames": current_frame.max(1),
         "backgroundColor": background_color,
-        "renderMode": candidate
-            .get("renderMode")
-            .cloned()
-            .or_else(|| fallback.get("renderMode").cloned())
-            .unwrap_or_else(|| json!("motion-layer")),
+        "renderMode": normalized_render_mode,
         "scenes": normalized_scenes,
+        "transitions": normalize_remotion_transitions(candidate, fallback),
         "sceneItemTransforms": candidate
             .get("sceneItemTransforms")
             .cloned()
             .or_else(|| fallback.get("sceneItemTransforms").cloned())
             .unwrap_or_else(|| json!({})),
-        "render": candidate.get("render").cloned().unwrap_or(Value::Null)
+        "render": normalized_remotion_render_config(
+            candidate.get("render").or_else(|| fallback.get("render")),
+            &normalized_title,
+            &normalized_render_mode,
+        )
     })
 }
 
@@ -1649,15 +2114,13 @@ pub(crate) fn create_manuscript_package(
         content,
     )?;
     if package_kind == "video" || package_kind == "audio" {
+        let default_remotion = build_default_remotion_scene(title, &[]);
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
         write_json_value(
             &package_timeline_path(package_path),
             &create_empty_otio_timeline(title),
         )?;
-        write_json_value(
-            &package_remotion_path(package_path),
-            &build_default_remotion_scene(title, &[]),
-        )?;
+        persist_remotion_composition_artifacts(package_path, &default_remotion)?;
         write_json_value(&package_track_ui_path(package_path), &json!({}))?;
         write_json_value(
             &package_scene_ui_path(package_path),
@@ -1740,15 +2203,18 @@ mod tests {
     fn build_default_remotion_scene_creates_single_default_scene() {
         let scene = build_default_remotion_scene(
             "苹果动画",
-            &[json!({
-                "clipId": "clip-1",
-                "durationMs": 1500,
-                "enabled": true
-            }), json!({
-                "clipId": "clip-2",
-                "durationMs": 2500,
-                "enabled": true
-            })],
+            &[
+                json!({
+                    "clipId": "clip-1",
+                    "durationMs": 1500,
+                    "enabled": true
+                }),
+                json!({
+                    "clipId": "clip-2",
+                    "durationMs": 2500,
+                    "enabled": true
+                }),
+            ],
         );
 
         let scenes = scene
@@ -1758,7 +2224,35 @@ mod tests {
         assert_eq!(scenes.len(), 1);
         assert_eq!(scenes[0].get("id").and_then(Value::as_str), Some("scene-1"));
         assert!(scenes[0].get("clipId").map(Value::is_null).unwrap_or(false));
-        assert_eq!(scene.get("renderMode").and_then(Value::as_str), Some("motion-layer"));
+        assert_eq!(
+            scene.get("entryCompositionId").and_then(Value::as_str),
+            Some("RedBoxVideoMotion")
+        );
+        assert_eq!(
+            scene.get("renderMode").and_then(Value::as_str),
+            Some("motion-layer")
+        );
+        assert_eq!(
+            scene
+                .pointer("/render/defaultOutName")
+                .and_then(Value::as_str),
+            Some("苹果动画")
+        );
+        assert_eq!(
+            scene.pointer("/render/codec").and_then(Value::as_str),
+            Some("prores")
+        );
+        assert_eq!(
+            scene.pointer("/render/imageFormat").and_then(Value::as_str),
+            Some("png")
+        );
+        assert_eq!(
+            scene
+                .get("transitions")
+                .and_then(Value::as_array)
+                .map(|items| items.len()),
+            Some(0)
+        );
         assert_eq!(
             scenes[0]
                 .get("durationInFrames")
@@ -1766,6 +2260,20 @@ mod tests {
                 .unwrap_or_default(),
             120
         );
+    }
+
+    #[test]
+    fn build_remotion_input_props_wraps_composition_in_standard_input_props_shape() {
+        let composition = build_default_remotion_scene("苹果动画", &[]);
+        let input_props = build_remotion_input_props(&composition);
+        assert!(input_props.get("composition").is_some());
+        assert_eq!(
+            input_props
+                .pointer("/composition/entryCompositionId")
+                .and_then(Value::as_str),
+            Some("RedBoxVideoMotion")
+        );
+        assert!(input_props.get("runtime").is_none());
     }
 
     #[test]
@@ -1841,5 +2349,260 @@ mod tests {
                 .and_then(Value::as_str),
             Some("apple")
         );
+    }
+
+    #[test]
+    fn normalize_ai_remotion_scene_preserves_supported_top_level_transitions() {
+        let fallback = build_default_remotion_scene("测试", &[]);
+        let candidate = json!({
+            "title": "测试",
+            "fps": 30,
+            "scenes": [{
+                "id": "scene-a",
+                "clipId": "clip-a",
+                "startFrame": 0,
+                "durationInFrames": 45,
+                "src": "",
+                "assetKind": "video",
+                "entities": []
+            }, {
+                "id": "scene-b",
+                "clipId": "clip-b",
+                "startFrame": 45,
+                "durationInFrames": 45,
+                "src": "",
+                "assetKind": "video",
+                "entities": []
+            }],
+            "transitions": [{
+                "id": "transition-1",
+                "presentation": "slide",
+                "timing": "ease-in-out",
+                "leftClipId": "clip-a",
+                "rightClipId": "clip-b",
+                "direction": "from-left",
+                "durationInFrames": 18
+            }]
+        });
+
+        let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &[], "测试");
+        assert_eq!(
+            normalized
+                .pointer("/transitions/0/presentation")
+                .and_then(Value::as_str),
+            Some("slide")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/transitions/0/timing")
+                .and_then(Value::as_str),
+            Some("ease-in-out")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/transitions/0/direction")
+                .and_then(Value::as_str),
+            Some("from-left")
+        );
+    }
+
+    #[test]
+    fn normalize_ai_remotion_scene_hoists_fall_bounce_root_fields_into_params() {
+        let fallback = build_default_remotion_scene("苹果下落", &[]);
+        let candidate = json!({
+            "title": "苹果下落动画",
+            "fps": 30,
+            "scenes": [{
+                "id": "scene-1",
+                "startFrame": 0,
+                "durationInFrames": 60,
+                "entities": [{
+                    "id": "apple-1",
+                    "type": "shape",
+                    "shape": "apple",
+                    "x": 540,
+                    "y": -300,
+                    "width": 200,
+                    "height": 200,
+                    "animations": [{
+                        "kind": "fall-bounce",
+                        "fromY": -300,
+                        "toY": 1650,
+                        "durationFrames": 60,
+                        "bounceCount": 1
+                    }]
+                }]
+            }]
+        });
+
+        let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &[], "苹果下落");
+        assert_eq!(
+            normalized.get("durationInFrames").and_then(Value::as_i64),
+            Some(60)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/animations/0/durationInFrames")
+                .and_then(Value::as_i64),
+            Some(60)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/animations/0/params/bounces")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/animations/0/params/fromY")
+                .and_then(Value::as_f64),
+            Some(0.0)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/entities/0/animations/0/params/floorY")
+                .and_then(Value::as_f64),
+            Some(1950.0)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/render/defaultOutName")
+                .and_then(Value::as_str),
+            Some("苹果下落动画")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/scenes/0/assetKind")
+                .and_then(Value::as_str),
+            Some("unknown")
+        );
+        assert_eq!(
+            normalized.pointer("/scenes/0/src").and_then(Value::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn ensure_editor_project_rehydrates_motion_projection_from_remotion_scene() {
+        let package_path = std::env::temp_dir().join(format!("lexbox-remotion-heal-{}", now_ms()));
+        fs::create_dir_all(&package_path).expect("create package dir");
+        write_json_value(
+            &package_editor_project_path(&package_path),
+            &json!({
+                "version": 1,
+                "project": {
+                    "id": "project-1",
+                    "title": "苹果动画",
+                    "width": 1080,
+                    "height": 1920,
+                    "fps": 30,
+                    "ratioPreset": "9:16"
+                },
+                "script": { "body": "test" },
+                "assets": [],
+                "tracks": [{
+                    "id": "M1",
+                    "kind": "motion",
+                    "name": "M1",
+                    "order": 0,
+                    "ui": {
+                        "hidden": false,
+                        "locked": false,
+                        "muted": false,
+                        "solo": false,
+                        "collapsed": false,
+                        "volume": 1.0
+                    }
+                }],
+                "items": [],
+                "animationLayers": [],
+                "stage": {
+                    "itemTransforms": {},
+                    "itemVisibility": {},
+                    "itemLocks": {},
+                    "itemOrder": [],
+                    "itemGroups": {},
+                    "focusedGroupId": Value::Null
+                },
+                "ai": { "motionPrompt": "test" }
+            }),
+        )
+        .expect("write project");
+        write_json_value(
+            &package_remotion_path(&package_path),
+            &json!({
+                "title": "苹果下落动画",
+                "entryCompositionId": "RedBoxVideoMotion",
+                "width": 1080,
+                "height": 1920,
+                "fps": 30,
+                "durationInFrames": 60,
+                "backgroundColor": "#000000",
+                "renderMode": "motion-layer",
+                "render": {
+                    "defaultOutName": "苹果下落动画",
+                    "codec": "prores",
+                    "imageFormat": "png",
+                    "pixelFormat": "yuva444p10le",
+                    "proResProfile": "4444"
+                },
+                "transitions": [],
+                "scenes": [{
+                    "id": "scene-1",
+                    "clipId": Value::Null,
+                    "assetId": Value::Null,
+                    "assetKind": "unknown",
+                    "src": "",
+                    "startFrame": 0,
+                    "durationInFrames": 60,
+                    "trimInFrames": 0,
+                    "motionPreset": "static",
+                    "overlayTitle": "苹果下落",
+                    "overlayBody": Value::Null,
+                    "overlays": [],
+                    "entities": [{
+                        "id": "apple-1",
+                        "type": "shape",
+                        "shape": "apple",
+                        "x": 540,
+                        "y": -300,
+                        "width": 200,
+                        "height": 200,
+                        "animations": [{
+                            "id": "fall-1",
+                            "kind": "fall-bounce",
+                            "fromFrame": 0,
+                            "durationInFrames": 60,
+                            "params": {
+                                "fromY": -300,
+                                "floorY": 1650,
+                                "bounces": 1
+                            }
+                        }]
+                    }]
+                }]
+            }),
+        )
+        .expect("write remotion");
+
+        let repaired = ensure_editor_project(&package_path).expect("rehydrate project");
+        assert_eq!(
+            repaired
+                .pointer("/animationLayers/0/id")
+                .and_then(Value::as_str),
+            Some("scene-1")
+        );
+        assert_eq!(
+            repaired.pointer("/items/0/type").and_then(Value::as_str),
+            Some("motion")
+        );
+        assert_eq!(
+            repaired
+                .pointer("/items/0/props/entities/0/shape")
+                .and_then(Value::as_str),
+            Some("apple")
+        );
+
+        let _ = fs::remove_dir_all(&package_path);
     }
 }

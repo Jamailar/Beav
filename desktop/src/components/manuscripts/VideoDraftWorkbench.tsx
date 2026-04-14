@@ -1728,6 +1728,29 @@ export function VideoDraftWorkbench({
     };
   }, [editableComposition?.durationInFrames, editableComposition?.scenes?.length, editorStore, effectiveFps, previewTab, quantizePreviewTime]);
 
+  useEffect(() => {
+    const player = remotionPlayerRef.current;
+    if (!player || previewTab !== 'motion') return;
+    const playerFrame = player.getCurrentFrame();
+    if (Math.abs(playerFrame - currentFrame) > 0) {
+      player.seekTo(currentFrame);
+    }
+  }, [currentFrame, previewTab]);
+
+  useEffect(() => {
+    const player = remotionPlayerRef.current;
+    if (!player || previewTab !== 'motion') return;
+    if (isPreviewPlaying) {
+      if (!player.isPlaying()) {
+        player.play();
+      }
+      return;
+    }
+    if (player.isPlaying()) {
+      player.pause();
+    }
+  }, [isPreviewPlaying, previewTab]);
+
   const seekPreviewFrame = (frame: number) => {
     const boundedFrame = clamp(frame, 0, Math.max(0, effectiveDurationInFrames - 1));
     const nextTime = quantizePreviewTime(boundedFrame / effectiveFps);
@@ -5944,6 +5967,7 @@ export function VideoDraftWorkbench({
                     trackOrder={timelineTrackOrder}
                     trackUi={timelineTrackUi}
                     assetsById={assetsById}
+                    motionComposition={editableComposition}
                     selectedScene={selectedScene}
                     selectedSceneItemId={selectedSceneItemId}
                     selectedSceneItemIds={selectedSceneItemIds}

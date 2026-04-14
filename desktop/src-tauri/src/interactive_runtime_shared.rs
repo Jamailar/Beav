@@ -11,9 +11,8 @@ use crate::tools::registry::{
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
 };
 use crate::{
-    lexbox_project_root,
-    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, render_redbox_prompt,
-    truncate_chars, workspace_root, AppState,
+    lexbox_project_root, load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso,
+    render_redbox_prompt, truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(

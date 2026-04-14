@@ -4,6 +4,7 @@ import type {
     RemotionRenderMode,
     RemotionScene,
     RemotionSceneEntity,
+    RemotionTransition,
 } from './remotion/types';
 import type { ItemKeyframes } from '@/types/keyframe';
 import type { ProjectMarker } from '@/types/timeline';
@@ -223,6 +224,26 @@ export function isMotionItem(item: EditorItem): item is EditorMotionItem {
     return item.type === 'motion';
 }
 
+function sanitizeRemotionOutName(title: string): string {
+    const normalized = title
+        .trim()
+        .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return normalized || 'redbox-motion';
+}
+
+function defaultRemotionRenderConfig(title: string, renderMode: RemotionRenderMode) {
+    return {
+        defaultOutName: sanitizeRemotionOutName(title),
+        codec: renderMode === 'motion-layer' ? 'prores' : 'h264',
+        imageFormat: renderMode === 'motion-layer' ? 'png' as const : 'jpeg' as const,
+        pixelFormat: renderMode === 'motion-layer' ? 'yuva444p10le' : undefined,
+        proResProfile: renderMode === 'motion-layer' ? '4444' : undefined,
+        renderMode,
+    };
+}
+
 export function isAnimationLayerBoundToClip(layer: EditorAnimationLayer) {
     return layer.bindings.some((binding) => binding.type === 'clip' && binding.targetId.trim() !== '');
 }
@@ -421,6 +442,9 @@ export function buildRemotionCompositionFromEditorProject(project: EditorProject
     const assetMap = buildAssetMap(project);
     const projectedItems = deriveProjectedEditorItems(project);
     const animationLayers = deriveAnimationLayers(project).filter((layer) => layer.enabled);
+    const renderMode: RemotionRenderMode =
+        animationLayers.find((layer) => layer.renderMode === 'full' || layer.renderMode === 'motion-layer')?.renderMode
+        || 'motion-layer';
     const standaloneScenes: RemotionScene[] = animationLayers
         .filter((layer) => !isAnimationLayerBoundToClip(layer))
         .map((layer) => {
@@ -474,18 +498,43 @@ export function buildRemotionCompositionFromEditorProject(project: EditorProject
             }];
         });
     const scenes: RemotionScene[] = [...standaloneScenes, ...boundScenes].sort((left, right) => left.startFrame - right.startFrame);
+    const sceneByClipId = new Map(
+        scenes
+            .filter((scene) => typeof scene.clipId === 'string' && scene.clipId.trim() !== '')
+            .map((scene) => [String(scene.clipId), scene]),
+    );
+    const transitions: RemotionTransition[] = (project.transitions || [])
+        .filter((transition) => sceneByClipId.has(transition.leftClipId) && sceneByClipId.has(transition.rightClipId))
+        .map((transition) => ({
+            id: transition.id,
+            type: transition.type || 'crossfade',
+            presentation: transition.presentation,
+            timing: transition.timing,
+            leftClipId: transition.leftClipId,
+            rightClipId: transition.rightClipId,
+            trackId: transition.trackId,
+            durationInFrames: Math.max(1, transition.durationInFrames || 1),
+            direction: transition.direction,
+            alignment: typeof transition.alignment === 'number' ? transition.alignment : undefined,
+            bezierPoints: transition.bezierPoints,
+            presetId: transition.presetId,
+            properties: transition.properties,
+        }));
     const durationInFrames = scenes.reduce((max, scene) => Math.max(max, scene.startFrame + scene.durationInFrames), 90);
     return {
         version: 1,
         title: project.project.title,
+        entryCompositionId: 'RedBoxVideoMotion',
         width: project.project.width,
         height: project.project.height,
         fps: project.project.fps,
         durationInFrames,
         backgroundColor: project.project.backgroundColor,
-        renderMode: 'motion-layer',
+        renderMode,
         scenes,
+        transitions,
         sceneItemTransforms: project.stage.itemTransforms,
+        render: defaultRemotionRenderConfig(project.project.title, renderMode),
     };
 }
 

@@ -28,10 +28,7 @@ promptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落
 ## 工作流
 
 1. 先 `redbox_editor(action=remotion_read)` 读取当前 Composition、scene、selection 与 asset metadata。
-2. 再根据任务加载对应 rules：
-   - 默认：compositions / animations / sequencing / timing / assets
-   - 文字/字幕：text-animations / subtitles
-   - 场景切换：transitions
+2. 运行时会自动加载内置 `rules/*.md`，覆盖 compositions / animations / sequencing / timing / assets / text-animations / subtitles / transitions / calculate-metadata。
 3. 设计 scene patch 时，优先保留现有 Composition 元数据与未触及 entities。
 4. 生成后通过 `remotion_generate` / `remotion_save` 回写宿主工程。
 
@@ -40,3 +37,4 @@ promptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落
 - 禁止用普通文字轨冒充对象动画。
 - 禁止在 Remotion 层使用 CSS transition、CSS animation 或 Tailwind animate 类名。
 - 若需要切换、字幕、素材测长等能力，必须先映射到宿主当前支持的数据结构。
+- 导出相关默认项必须通过 Composition 顶层字段与 `render` 配置表达，保持预览与导出一致。

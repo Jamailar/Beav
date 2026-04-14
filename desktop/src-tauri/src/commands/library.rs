@@ -8,45 +8,43 @@ use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
 fn builtin_animation_elements() -> Vec<Value> {
-    vec![
-        json!({
-            "id": "builtin:apple-drop",
-            "name": "苹果落地",
-            "storageKey": "builtin:apple-drop",
-            "source": "builtin",
-            "componentType": "apple-drop",
-            "durationMs": 1000,
-            "renderMode": "motion-layer",
-            "props": {
-                "templateId": "static",
-                "overlayTitle": "苹果落地",
-                "overlayBody": Value::Null,
-                "overlays": []
-            },
-            "entities": [{
-                "id": "apple",
-                "type": "shape",
-                "shape": "apple",
-                "x": 430,
-                "y": 220,
-                "width": 220,
-                "height": 260,
-                "fill": "#d91f26",
-                "animations": [{
-                    "id": "apple-fall",
-                    "kind": "fall-bounce",
-                    "fromFrame": 0,
-                    "durationInFrames": 30,
-                    "params": {
-                        "fromY": -420,
-                        "floorY": 760,
-                        "bounces": 3,
-                        "decay": 0.35
-                    }
-                }]
+    vec![json!({
+        "id": "builtin:apple-drop",
+        "name": "苹果落地",
+        "storageKey": "builtin:apple-drop",
+        "source": "builtin",
+        "componentType": "apple-drop",
+        "durationMs": 1000,
+        "renderMode": "motion-layer",
+        "props": {
+            "templateId": "static",
+            "overlayTitle": "苹果落地",
+            "overlayBody": Value::Null,
+            "overlays": []
+        },
+        "entities": [{
+            "id": "apple",
+            "type": "shape",
+            "shape": "apple",
+            "x": 430,
+            "y": 220,
+            "width": 220,
+            "height": 260,
+            "fill": "#d91f26",
+            "animations": [{
+                "id": "apple-fall",
+                "kind": "fall-bounce",
+                "fromFrame": 0,
+                "durationInFrames": 30,
+                "params": {
+                    "fromY": -420,
+                    "floorY": 760,
+                    "bounces": 3,
+                    "decay": 0.35
+                }
             }]
-        }),
-    ]
+        }]
+    })]
 }
 
 fn animation_element_public_value(value: &Value) -> Value {
@@ -604,7 +602,9 @@ pub fn handle_library_channel(
                 if let Ok(entries) = fs::read_dir(&root) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+                        if !path.is_file()
+                            || path.extension().and_then(|value| value.to_str()) != Some("json")
+                        {
                             continue;
                         }
                         if let Ok(raw) = fs::read_to_string(&path) {
@@ -623,9 +623,14 @@ pub fn handle_library_channel(
             }
             "animation-elements:save" => {
                 let root = remotion_elements_root(state)?;
-                let name = payload_string(payload, "name").unwrap_or_else(|| "未命名动画元素".to_string());
+                let name =
+                    payload_string(payload, "name").unwrap_or_else(|| "未命名动画元素".to_string());
                 let layer = payload.get("layer").cloned().unwrap_or_else(|| json!({}));
-                let entities = layer.get("entities").and_then(Value::as_array).cloned().unwrap_or_default();
+                let entities = layer
+                    .get("entities")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 let has_non_text_entity = entities.iter().any(|entity| {
                     entity
                         .get("type")
@@ -634,7 +639,9 @@ pub fn handle_library_channel(
                         .unwrap_or(false)
                 });
                 if !has_non_text_entity {
-                    return Ok(json!({ "success": false, "error": "纯文字动画不应保存到共享动画元素库" }));
+                    return Ok(
+                        json!({ "success": false, "error": "纯文字动画不应保存到共享动画元素库" }),
+                    );
                 }
                 let file_name = format!("{}.json", slug_from_relative_path(&name));
                 let file_path = root.join(file_name);
@@ -650,7 +657,9 @@ pub fn handle_library_channel(
                     "entities": layer.get("entities").cloned().unwrap_or_else(|| json!([]))
                 });
                 write_json_value(&file_path, &saved)?;
-                Ok(json!({ "success": true, "item": animation_element_public_value(&saved), "path": file_path.display().to_string() }))
+                Ok(
+                    json!({ "success": true, "item": animation_element_public_value(&saved), "path": file_path.display().to_string() }),
+                )
             }
             "animation-elements:delete" => {
                 let root = remotion_elements_root(state)?;

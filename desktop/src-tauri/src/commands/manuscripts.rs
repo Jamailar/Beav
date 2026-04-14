@@ -1,5 +1,8 @@
 use crate::commands::library::persist_media_workspace_catalog;
-use crate::manuscript_package::animation_layers_from_remotion_scene;
+use crate::manuscript_package::{
+    animation_layers_from_remotion_scene, hydrate_editor_project_motion_from_remotion,
+    normalized_remotion_render_config, persist_remotion_composition_artifacts,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
@@ -225,70 +228,26 @@ fn run_animation_director_subagent(
     Ok((parsed, summary))
 }
 
-fn prompt_mentions_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
-fn selected_remotion_rule_names(user_input: &str) -> Vec<&'static str> {
-    let lowered = user_input.trim().to_lowercase();
-    let mut rules = vec![
-        "compositions.md",
-        "animations.md",
-        "sequencing.md",
-        "timing.md",
-        "assets.md",
-    ];
-    if prompt_mentions_any(
-        &lowered,
-        &[
-            "text",
-            "title",
-            "caption",
-            "subtitle",
-            "字幕",
-            "标题",
-            "文案",
-            "打字",
-            "逐字",
-        ],
-    ) {
-        rules.push("text-animations.md");
-        rules.push("subtitles.md");
-    }
-    if prompt_mentions_any(
-        &lowered,
-        &[
-            "transition",
-            "scene cut",
-            "crossfade",
-            "wipe",
-            "切换",
-            "转场",
-            "衔接",
-            "淡入淡出",
-        ],
-    ) {
-        rules.push("transitions.md");
-    }
+fn selected_remotion_rule_names(bundle: &crate::skills::SkillBundleSections) -> Vec<String> {
+    let mut rules = bundle.rules.keys().cloned().collect::<Vec<_>>();
+    rules.sort();
     rules
 }
 
 fn build_remotion_best_practices_prompt_patch(
     state: &State<'_, AppState>,
-    user_input: &str,
+    _user_input: &str,
 ) -> String {
     let workspace = workspace_root(state).ok();
-    let bundle = load_skill_bundle_sections_from_sources(
-        "remotion-best-practices",
-        workspace.as_deref(),
-    );
+    let bundle =
+        load_skill_bundle_sections_from_sources("remotion-best-practices", workspace.as_deref());
     let (_, skill_body) = split_skill_body(&bundle.body);
     let mut sections = Vec::<String>::new();
     if !skill_body.trim().is_empty() {
         sections.push(skill_body);
     }
-    for rule_name in selected_remotion_rule_names(user_input) {
-        let Some(rule_body) = bundle.rules.get(rule_name) else {
+    for rule_name in selected_remotion_rule_names(&bundle) {
+        let Some(rule_body) = bundle.rules.get(&rule_name) else {
             continue;
         };
         let (_, rule_content) = split_skill_body(rule_body);
@@ -607,7 +566,8 @@ fn merge_remotion_scene_patch(existing: &Value, patch: &Value) -> Value {
             .and_then(Value::as_str)
             .and_then(|scene_id| {
                 existing_scenes.iter().position(|scene| {
-                    scene.get("id")
+                    scene
+                        .get("id")
                         .and_then(Value::as_str)
                         .map(|value| value == scene_id)
                         .unwrap_or(false)
@@ -709,12 +669,18 @@ fn remotion_context_value(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let transitions = composition
+        .get("transitions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let active_scene = runtime_state
         .as_ref()
         .and_then(|record| record.selected_scene_id.as_deref())
         .and_then(|scene_id| {
             scenes.iter().find(|scene| {
-                scene.get("id")
+                scene
+                    .get("id")
                     .and_then(Value::as_str)
                     .map(|value| value == scene_id)
                     .unwrap_or(false)
@@ -722,28 +688,26 @@ fn remotion_context_value(
         })
         .cloned()
         .or_else(|| {
-            scenes.iter().find(|scene| {
-                let start_frame = scene
-                    .get("startFrame")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let duration_in_frames = scene
-                    .get("durationInFrames")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-                    .max(1);
-                playhead_frame >= start_frame && playhead_frame < start_frame + duration_in_frames
-            }).cloned()
+            scenes
+                .iter()
+                .find(|scene| {
+                    let start_frame = scene.get("startFrame").and_then(Value::as_i64).unwrap_or(0);
+                    let duration_in_frames = scene
+                        .get("durationInFrames")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                        .max(1);
+                    playhead_frame >= start_frame
+                        && playhead_frame < start_frame + duration_in_frames
+                })
+                .cloned()
         })
         .or_else(|| scenes.first().cloned())
         .unwrap_or(Value::Null);
     let scene_ids_at_playhead = scenes
         .iter()
         .filter(|scene| {
-            let start_frame = scene
-                .get("startFrame")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
+            let start_frame = scene.get("startFrame").and_then(Value::as_i64).unwrap_or(0);
             let duration_in_frames = scene
                 .get("durationInFrames")
                 .and_then(Value::as_i64)
@@ -751,20 +715,33 @@ fn remotion_context_value(
                 .max(1);
             playhead_frame >= start_frame && playhead_frame < start_frame + duration_in_frames
         })
-        .filter_map(|scene| scene.get("id").and_then(Value::as_str).map(ToString::to_string))
+        .filter_map(|scene| {
+            scene
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
         .collect::<Vec<_>>();
     Ok(json!({
         "composition": {
             "title": composition.get("title").cloned().unwrap_or(Value::Null),
+            "entryCompositionId": composition.get("entryCompositionId").cloned().unwrap_or_else(|| json!("RedBoxVideoMotion")),
             "width": composition.get("width").cloned().unwrap_or_else(|| json!(1080)),
             "height": composition.get("height").cloned().unwrap_or_else(|| json!(1920)),
             "fps": composition.get("fps").cloned().unwrap_or_else(|| json!(30)),
             "durationInFrames": composition.get("durationInFrames").cloned().unwrap_or_else(|| json!(90)),
             "renderMode": composition.get("renderMode").cloned().unwrap_or_else(|| json!("motion-layer")),
             "backgroundColor": composition.get("backgroundColor").cloned().unwrap_or(Value::Null),
-            "sceneCount": scenes.len()
+            "sceneCount": scenes.len(),
+            "transitionCount": transitions.len(),
+            "render": normalized_remotion_render_config(
+                composition.get("render"),
+                composition.get("title").and_then(Value::as_str).unwrap_or("RedBox Motion"),
+                composition.get("renderMode").and_then(Value::as_str).unwrap_or("motion-layer"),
+            )
         },
         "scenes": remotion_scene_summary_items(&composition),
+        "transitions": transitions,
         "activeScene": active_scene,
         "assetMetadata": remotion_asset_metadata(&project),
         "selectionMapping": {
@@ -777,6 +754,23 @@ fn remotion_context_value(
             "activeSceneClipId": active_scene.get("clipId").cloned().unwrap_or(Value::Null),
         }
     }))
+}
+
+fn sync_project_transitions_from_remotion_scene(
+    project: &mut Value,
+    composition: &Value,
+) -> Result<(), String> {
+    let project_object = project
+        .as_object_mut()
+        .ok_or_else(|| "Editor project must be an object".to_string())?;
+    project_object.insert(
+        "transitions".to_string(),
+        composition
+            .get("transitions")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    );
+    Ok(())
 }
 
 pub(crate) fn timeline_clip_duration_ms(clip: &Value) -> i64 {
@@ -1439,6 +1433,24 @@ fn sync_project_motion_items_from_remotion_scene(
     Ok(())
 }
 
+fn project_payload_has_motion_projection(project: &Value) -> bool {
+    let has_layers = project
+        .get("animationLayers")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    let has_motion_items = project
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("motion"))
+        })
+        .unwrap_or(false);
+    has_layers || has_motion_items
+}
+
 fn generate_motion_items_for_project(
     state: &State<'_, AppState>,
     project: &Value,
@@ -2038,16 +2050,14 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 editor_project_animation_layers_mut(project)?.push(layer);
             }
             "animation_layer_update" => {
-                let layer_id = command
-                    .get("layerId")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let layer_id = command.get("layerId").and_then(Value::as_str).unwrap_or("");
                 let patch = command.get("patch").cloned().unwrap_or_else(|| json!({}));
                 if let Some(layer) = editor_project_animation_layers_mut(project)?
                     .iter_mut()
                     .find(|item| item.get("id").and_then(Value::as_str) == Some(layer_id))
                 {
-                    if let (Some(target), Some(source)) = (layer.as_object_mut(), patch.as_object()) {
+                    if let (Some(target), Some(source)) = (layer.as_object_mut(), patch.as_object())
+                    {
                         for (key, value) in source {
                             target.insert(key.to_string(), value.clone());
                         }
@@ -2055,10 +2065,7 @@ fn apply_editor_commands(project: &mut Value, commands: &[Value]) -> Result<(), 
                 }
             }
             "animation_layer_delete" => {
-                let layer_id = command
-                    .get("layerId")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let layer_id = command.get("layerId").and_then(Value::as_str).unwrap_or("");
                 editor_project_animation_layers_mut(project)?
                     .retain(|item| item.get("id").and_then(Value::as_str) != Some(layer_id));
             }
@@ -2090,20 +2097,32 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
     let motion_track_ids = ordered_tracks
         .iter()
         .filter(|track| track.get("kind").and_then(Value::as_str) == Some("motion"))
-        .filter_map(|track| track.get("id").and_then(Value::as_str).map(ToString::to_string))
+        .filter_map(|track| {
+            track
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
         .collect::<Vec<_>>();
     if !motion_track_ids.is_empty() {
         let layers = editor_project_animation_layers_mut(project)?;
         let original_order = layers
             .iter()
             .enumerate()
-            .filter_map(|(index, layer)| layer.get("id").and_then(Value::as_str).map(|id| (id.to_string(), index)))
+            .filter_map(|(index, layer)| {
+                layer
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| (id.to_string(), index))
+            })
             .collect::<BTreeMap<_, _>>();
         let mut rebuilt_layers = Vec::new();
         for track_id in &motion_track_ids {
             let mut track_layers = layers
                 .iter()
-                .filter(|layer| layer.get("trackId").and_then(Value::as_str) == Some(track_id.as_str()))
+                .filter(|layer| {
+                    layer.get("trackId").and_then(Value::as_str) == Some(track_id.as_str())
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             track_layers.sort_by(|left, right| {
@@ -2114,12 +2133,23 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
                 }
                 let left_id = left.get("id").and_then(Value::as_str).unwrap_or("");
                 let right_id = right.get("id").and_then(Value::as_str).unwrap_or("");
-                original_order.get(left_id).unwrap_or(&0usize).cmp(original_order.get(right_id).unwrap_or(&0usize))
+                original_order
+                    .get(left_id)
+                    .unwrap_or(&0usize)
+                    .cmp(original_order.get(right_id).unwrap_or(&0usize))
             });
             let mut cursor = 0_i64;
             for (z_index, mut layer) in track_layers.into_iter().enumerate() {
-                let from_ms = layer.get("fromMs").and_then(Value::as_i64).unwrap_or(0).max(cursor);
-                let duration_ms = layer.get("durationMs").and_then(Value::as_i64).unwrap_or(0).max(300);
+                let from_ms = layer
+                    .get("fromMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    .max(cursor);
+                let duration_ms = layer
+                    .get("durationMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    .max(300);
                 if let Some(object) = layer.as_object_mut() {
                     object.insert("trackId".to_string(), json!(track_id));
                     object.insert("fromMs".to_string(), json!(from_ms));
@@ -2135,7 +2165,8 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
             layers
                 .iter()
                 .filter(|layer| {
-                    layer.get("trackId")
+                    layer
+                        .get("trackId")
                         .and_then(Value::as_str)
                         .map(|track_id| !known_motion_tracks.contains(track_id))
                         .unwrap_or(true)
@@ -2626,6 +2657,9 @@ pub fn handle_manuscripts_channel(
                         let _ = ensure_editor_project_ai_state(&mut project)?;
                     }
                 }
+                if !project_payload_has_motion_projection(&project) {
+                    let _ = hydrate_editor_project_motion_from_remotion(&mut project, &full_path)?;
+                }
                 if existing_project != project {
                     push_editor_project_undo_snapshot(state, &file_path, &existing_project)?;
                 }
@@ -2642,7 +2676,9 @@ pub fn handle_manuscripts_channel(
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
                 if file_path.is_empty() || clip_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath and clipId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and clipId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 if !full_path.is_dir() {
@@ -2654,17 +2690,24 @@ pub fn handle_manuscripts_channel(
                     .pointer_mut("/items")
                     .and_then(Value::as_array_mut)
                     .ok_or_else(|| "Editor project items missing".to_string())?;
-                let Some(source_item) = items.iter().find(|item| {
-                    item.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
-                }).cloned() else {
-                    return Ok(json!({ "success": false, "error": "Clip not found in editor project" }));
+                let Some(source_item) = items
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+                    .cloned()
+                else {
+                    return Ok(
+                        json!({ "success": false, "error": "Clip not found in editor project" }),
+                    );
                 };
                 let mut duplicate = source_item;
                 let from_ms = payload_field(&payload, "fromMs")
                     .and_then(Value::as_i64)
                     .unwrap_or_else(|| {
                         duplicate.get("fromMs").and_then(Value::as_i64).unwrap_or(0)
-                            + duplicate.get("durationMs").and_then(Value::as_i64).unwrap_or(0)
+                            + duplicate
+                                .get("durationMs")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0)
                     });
                 if let Some(object) = duplicate.as_object_mut() {
                     object.insert("id".to_string(), json!(create_timeline_clip_id()));
@@ -2682,7 +2725,9 @@ pub fn handle_manuscripts_channel(
                 let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
                 let asset_id = payload_string(&payload, "assetId").unwrap_or_default();
                 if file_path.is_empty() || clip_id.is_empty() || asset_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath, clipId, and assetId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath, clipId, and assetId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 if !full_path.is_dir() {
@@ -2694,10 +2739,13 @@ pub fn handle_manuscripts_channel(
                     .pointer_mut("/items")
                     .and_then(Value::as_array_mut)
                     .ok_or_else(|| "Editor project items missing".to_string())?;
-                let Some(target_item) = items.iter_mut().find(|item| {
-                    item.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
-                }) else {
-                    return Ok(json!({ "success": false, "error": "Clip not found in editor project" }));
+                let Some(target_item) = items
+                    .iter_mut()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+                else {
+                    return Ok(
+                        json!({ "success": false, "error": "Clip not found in editor project" }),
+                    );
                 };
                 if let Some(object) = target_item.as_object_mut() {
                     object.insert("assetId".to_string(), json!(asset_id));
@@ -2734,7 +2782,9 @@ pub fn handle_manuscripts_channel(
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let marker_id = payload_string(&payload, "markerId").unwrap_or_default();
                 if file_path.is_empty() || marker_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath and markerId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and markerId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 let mut project = ensure_editor_project(&full_path)?;
@@ -2747,7 +2797,9 @@ pub fn handle_manuscripts_channel(
                 let Some(marker) = markers.iter_mut().find(|item| {
                     item.get("id").and_then(Value::as_str) == Some(marker_id.as_str())
                 }) else {
-                    return Ok(json!({ "success": false, "error": "Marker not found in editor project" }));
+                    return Ok(
+                        json!({ "success": false, "error": "Marker not found in editor project" }),
+                    );
                 };
                 if let Some(object) = marker.as_object_mut() {
                     if let Some(frame) = payload_field(&payload, "frame").and_then(Value::as_i64) {
@@ -2767,7 +2819,9 @@ pub fn handle_manuscripts_channel(
                 let file_path = payload_string(&payload, "filePath").unwrap_or_default();
                 let marker_id = payload_string(&payload, "markerId").unwrap_or_default();
                 if file_path.is_empty() || marker_id.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath and markerId are required" }));
+                    return Ok(
+                        json!({ "success": false, "error": "filePath and markerId are required" }),
+                    );
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
                 let mut project = ensure_editor_project(&full_path)?;
@@ -2778,9 +2832,13 @@ pub fn handle_manuscripts_channel(
                     .and_then(Value::as_array_mut)
                     .ok_or_else(|| "Editor project markers missing".to_string())?;
                 let before = markers.len();
-                markers.retain(|marker| marker.get("id").and_then(Value::as_str) != Some(marker_id.as_str()));
+                markers.retain(|marker| {
+                    marker.get("id").and_then(Value::as_str) != Some(marker_id.as_str())
+                });
                 if before == markers.len() {
-                    return Ok(json!({ "success": false, "error": "Marker not found in editor project" }));
+                    return Ok(
+                        json!({ "success": false, "error": "Marker not found in editor project" }),
+                    );
                 }
                 write_json_value(&package_editor_project_path(&full_path), &project)?;
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
@@ -3302,11 +3360,19 @@ pub fn handle_manuscripts_channel(
                         selected_clip_id: payload_string(&payload, "selectedClipId"),
                         selected_clip_ids: payload_field(&payload, "selectedClipIds")
                             .cloned()
-                            .or_else(|| previous.as_ref().and_then(|record| record.selected_clip_ids.clone())),
+                            .or_else(|| {
+                                previous
+                                    .as_ref()
+                                    .and_then(|record| record.selected_clip_ids.clone())
+                            }),
                         active_track_id: payload_string(&payload, "activeTrackId"),
                         selected_track_ids: payload_field(&payload, "selectedTrackIds")
                             .cloned()
-                            .or_else(|| previous.as_ref().and_then(|record| record.selected_track_ids.clone())),
+                            .or_else(|| {
+                                previous
+                                    .as_ref()
+                                    .and_then(|record| record.selected_track_ids.clone())
+                            }),
                         selected_scene_id: payload_string(&payload, "selectedSceneId"),
                         preview_tab: payload_string(&payload, "previewTab"),
                         canvas_ratio_preset: payload_string(&payload, "canvasRatioPreset"),
@@ -4272,16 +4338,13 @@ pub fn handle_manuscripts_channel(
                     .cloned()
                     .unwrap_or(Value::Null);
                 let merged_scene = merge_remotion_scene_patch(&existing_scene, &raw_scene);
-                let normalized = normalize_ai_remotion_scene(
-                    &merged_scene,
-                    &existing_scene,
-                    &clips,
-                    &title,
-                );
+                let normalized =
+                    normalize_ai_remotion_scene(&merged_scene, &existing_scene, &clips, &title);
                 let mut project = ensure_editor_project(&full_path)?;
                 sync_project_motion_items_from_remotion_scene(&mut project, &normalized)?;
+                sync_project_transitions_from_remotion_scene(&mut project, &normalized)?;
                 write_json_value(&package_editor_project_path(&full_path), &project)?;
-                write_json_value(&package_remotion_path(&full_path), &normalized)?;
+                persist_remotion_composition_artifacts(&full_path, &normalized)?;
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
             }
             "manuscripts:generate-remotion-scene" => {
@@ -4321,6 +4384,7 @@ pub fn handle_manuscripts_channel(
 9. 不要通过文字轨道片段模拟动画；动画只能体现在 Remotion scene / M1 动画轨道。\n\
 10. 不要修改 src / assetKind / trimInFrames，这些字段由宿主兜底；如果是独立动画层，src 可以为空。\n\
 11. overlayTitle 用场景标题，overlayBody 用屏幕文案或强调点；主体动画本身必须在 entities 里。\n\
+12. 如果任务涉及镜头切换，可以使用顶层 transitions[]，字段必须遵守 leftClipId / rightClipId / presentation / timing / durationInFrames；不要把转场偷偷降级成说明文字。\n\
 \n\
 工程标题：{}\n\
 脚本：{}\n\
@@ -4399,6 +4463,7 @@ Remotion 读取结果 JSON：{}\n\
                 let normalized = normalize_ai_remotion_scene(&candidate, &fallback, &clips, &title);
                 let mut project = ensure_editor_project(&full_path)?;
                 sync_project_motion_items_from_remotion_scene(&mut project, &normalized)?;
+                sync_project_transitions_from_remotion_scene(&mut project, &normalized)?;
                 if let Some(ai) = project.get_mut("ai").and_then(Value::as_object_mut) {
                     ai.insert(
                         "lastMotionBrief".to_string(),
@@ -4422,7 +4487,7 @@ Remotion 读取结果 JSON：{}\n\
                 );
                 eprintln!("{}", normalized_log);
                 append_debug_log_state(state, normalized_log);
-                write_json_value(&package_remotion_path(&full_path), &normalized)?;
+                persist_remotion_composition_artifacts(&full_path, &normalized)?;
                 Ok(json!({
                     "success": true,
                     "state": get_manuscript_package_state(&full_path)?,
@@ -4468,18 +4533,33 @@ Remotion 读取结果 JSON：{}\n\
                 let output_path =
                     export_dir.join(format!("{file_stem}-remotion-{}.{extension}", now_ms()));
                 let render_result = render_remotion_video(&scene, &output_path)?;
+                let scene_title = scene
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("RedBox Motion")
+                    .to_string();
                 if let Some(object) = scene.as_object_mut() {
                     object.insert(
-                    "render".to_string(),
-                    json!({
-                        "outputPath": output_path.display().to_string(),
-                        "renderedAt": now_i64(),
-                        "durationInFrames": render_result.get("durationInFrames").cloned().unwrap_or(Value::Null),
-                        "renderMode": render_mode
-                    }),
-                );
+                        "render".to_string(),
+                        normalized_remotion_render_config(
+                            Some(&json!({
+                                "defaultOutName": render_result.get("defaultOutName").cloned().unwrap_or(Value::Null),
+                                "codec": render_result.get("codec").cloned().unwrap_or(Value::Null),
+                                "imageFormat": render_result.get("imageFormat").cloned().unwrap_or(Value::Null),
+                                "pixelFormat": render_result.get("pixelFormat").cloned().unwrap_or(Value::Null),
+                                "proResProfile": render_result.get("proResProfile").cloned().unwrap_or(Value::Null),
+                                "outputPath": output_path.display().to_string(),
+                                "renderedAt": now_i64(),
+                                "durationInFrames": render_result.get("durationInFrames").cloned().unwrap_or(Value::Null),
+                                "renderMode": render_mode,
+                                "compositionId": render_result.get("compositionId").cloned().unwrap_or_else(|| json!("RedBoxVideoMotion"))
+                            })),
+                            &scene_title,
+                            &render_mode,
+                        ),
+                    );
                 }
-                write_json_value(&package_remotion_path(&full_path), &scene)?;
+                persist_remotion_composition_artifacts(&full_path, &scene)?;
                 Ok(json!({
                     "success": true,
                     "outputPath": output_path.display().to_string(),
@@ -4636,7 +4716,10 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(motion_items.len(), 1);
-        assert_eq!(motion_items[0].get("id").and_then(Value::as_str), Some("scene-1"));
+        assert_eq!(
+            motion_items[0].get("id").and_then(Value::as_str),
+            Some("scene-1")
+        );
         assert_eq!(
             motion_items[0]
                 .pointer("/props/entities/0/animations/0/kind")
@@ -4646,13 +4729,18 @@ mod tests {
     }
 
     #[test]
-    fn selected_remotion_rule_names_adds_text_and_transition_rules_when_requested() {
-        let text_rules = selected_remotion_rule_names("给标题做逐字动画并加字幕");
-        assert!(text_rules.contains(&"text-animations.md"));
-        assert!(text_rules.contains(&"subtitles.md"));
-
-        let transition_rules = selected_remotion_rule_names("两个场景之间加一个淡入淡出的转场");
-        assert!(transition_rules.contains(&"transitions.md"));
+    fn selected_remotion_rule_names_loads_all_builtin_remotion_rules() {
+        let bundle = load_skill_bundle_sections_from_sources("remotion-best-practices", None);
+        let rules = selected_remotion_rule_names(&bundle);
+        assert!(rules.contains(&"animations.md".to_string()));
+        assert!(rules.contains(&"assets.md".to_string()));
+        assert!(rules.contains(&"calculate-metadata.md".to_string()));
+        assert!(rules.contains(&"compositions.md".to_string()));
+        assert!(rules.contains(&"sequencing.md".to_string()));
+        assert!(rules.contains(&"subtitles.md".to_string()));
+        assert!(rules.contains(&"text-animations.md".to_string()));
+        assert!(rules.contains(&"timing.md".to_string()));
+        assert!(rules.contains(&"transitions.md".to_string()));
     }
 
     #[test]
