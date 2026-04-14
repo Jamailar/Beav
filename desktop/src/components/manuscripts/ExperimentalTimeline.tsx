@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import { AudioLines, Eye, EyeOff, GripVertical, Lock, Minus, Orbit, Pause, Play, Plus, Rows, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
+import { AudioLines, Eye, EyeOff, GripVertical, Lock, Minus, Orbit, Pause, Play, Plus, Scissors, Trash2, Type, Unlock, Video } from 'lucide-react';
 import {
     buildAssetMap,
     deriveProjectedEditorItems,
@@ -50,6 +50,7 @@ type DragPreviewMap = Record<string, {
     durationMs: number;
     trimInMs?: number;
     trackId?: string;
+    virtualTrackPlacement?: 'above' | 'below';
 }>;
 
 type TrackReorderState = {
@@ -60,6 +61,7 @@ type TrackReorderState = {
 
 const RAIL_WIDTH = 160;
 const RULER_HEIGHT = 38;
+const PRIMARY_TRACK_ID = 'V1';
 const ROW_HEIGHT: Record<EditorTrackKind, number> = {
     video: 54,
     audio: 48,
@@ -113,6 +115,10 @@ function compatibleTrackId(project: EditorProjectFile, kind: EditorTrackKind, pr
 
 function rowHeight(track: { kind: EditorTrackKind; ui: { collapsed: boolean } }) {
     return track.ui.collapsed ? 34 : ROW_HEIGHT[track.kind];
+}
+
+function isProtectedTrackId(trackId: string) {
+    return trackId === PRIMARY_TRACK_ID;
 }
 
 function itemLabel(item: EditorItem, assetMap: Record<string, EditorAsset>) {
@@ -179,6 +185,8 @@ export function ExperimentalTimeline({
 }: ExperimentalTimelineProps) {
     const rootRef = useRef<HTMLDivElement | null>(null);
     const bodyRef = useRef<HTMLDivElement | null>(null);
+    const contextMenuRef = useRef<HTMLDivElement | null>(null);
+    const trackContextMenuRef = useRef<HTMLDivElement | null>(null);
     const [dragState, setDragState] = useState<DragState | null>(null);
     const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
     const [trackReorderState, setTrackReorderState] = useState<TrackReorderState | null>(null);
@@ -222,6 +230,18 @@ export function ExperimentalTimeline({
         return rowOffsets.find((row) => contentY >= row.top && contentY < row.top + row.height)?.track || null;
     };
 
+    const clientYToTrackBounds = (clientY: number) => {
+        const rect = bodyRef.current?.getBoundingClientRect();
+        const scrollTop = bodyRef.current?.scrollTop || 0;
+        if (!rect) return null;
+        const contentY = clientY - rect.top - RULER_HEIGHT + scrollTop;
+        return {
+            contentY,
+            isAbove: contentY < 0,
+            isBelow: contentY > trackContentHeight,
+        };
+    };
+
     const clientYToTrackInsertIndex = (clientY: number) => {
         const rect = bodyRef.current?.getBoundingClientRect();
         const scrollTop = bodyRef.current?.scrollTop || 0;
@@ -238,13 +258,31 @@ export function ExperimentalTimeline({
         return rowOffsets.length;
     };
 
-    const resolveMoveTargetTrackId = (kind: EditorTrackKind, hoveredTrackId: string | null | undefined, fallbackTrackId: string) => {
-        if (!hoveredTrackId) return fallbackTrackId;
-        const hoveredTrack = tracks.find((track) => track.id === hoveredTrackId) || null;
-        if (!hoveredTrack || hoveredTrack.ui.locked || hoveredTrack.kind !== kind) {
-            return fallbackTrackId;
+    const resolveMoveTargetTrack = (kind: EditorTrackKind, clientY: number, fallbackTrackId: string) => {
+        const hoveredTrack = clientYToTrack(clientY);
+        if (hoveredTrack) {
+            if (hoveredTrack.ui.locked || hoveredTrack.kind !== kind) {
+                return { trackId: fallbackTrackId } as const;
+            }
+            return { trackId: hoveredTrack.id } as const;
         }
-        return hoveredTrack.id;
+
+        const bounds = clientYToTrackBounds(clientY);
+        if (!bounds) return { trackId: fallbackTrackId } as const;
+        if (bounds.isAbove) {
+            return {
+                trackId: nextTrackId(project, kind),
+                virtualTrackPlacement: 'above' as const,
+            };
+        }
+        if (bounds.isBelow) {
+            return {
+                trackId: nextTrackId(project, kind),
+                virtualTrackPlacement: 'below' as const,
+            };
+        }
+
+        return { trackId: fallbackTrackId } as const;
     };
 
     useEffect(() => {
@@ -257,19 +295,22 @@ export function ExperimentalTimeline({
             }
             const deltaMs = Math.round(((event.clientX - dragState.startClientX) / pixelsPerSecond) * 1000);
             if (dragState.mode === 'move') {
-                const hoveredTrack = clientYToTrack(event.clientY);
                 setDragPreview(Object.fromEntries(
-                    dragState.initialItems.map((item) => [
-                        item.id,
-                        {
-                            fromMs: Math.max(0, item.fromMs + deltaMs),
-                            durationMs: item.durationMs,
-                            trimInMs: item.trimInMs,
-                            trackId: dragState.initialItems.length === 1
-                                ? resolveMoveTargetTrackId(item.kind, hoveredTrack?.id, item.trackId)
-                                : item.trackId,
-                        },
-                    ])
+                    dragState.initialItems.map((item) => {
+                        const moveTarget = dragState.initialItems.length === 1
+                            ? resolveMoveTargetTrack(item.kind, event.clientY, item.trackId)
+                            : { trackId: item.trackId };
+                        return [
+                            item.id,
+                            {
+                                fromMs: Math.max(0, item.fromMs + deltaMs),
+                                durationMs: item.durationMs,
+                                trimInMs: item.trimInMs,
+                                trackId: moveTarget.trackId,
+                                virtualTrackPlacement: moveTarget.virtualTrackPlacement,
+                            },
+                        ];
+                    })
                 ));
                 return;
             }
@@ -301,6 +342,25 @@ export function ExperimentalTimeline({
                     for (const initial of dragState.initialItems) {
                         const preview = dragPreview[initial.id];
                         if (!preview) continue;
+                        const shouldCreateTrack = Boolean(
+                            preview.trackId
+                            && preview.trackId !== initial.trackId
+                            && !project.tracks.some((track) => track.id === preview.trackId)
+                        );
+                        if (shouldCreateTrack) {
+                            commands.push({
+                                type: 'add_track',
+                                kind: initial.kind,
+                                trackId: preview.trackId,
+                            });
+                            if (preview.virtualTrackPlacement === 'above') {
+                                commands.push(...Array.from({ length: tracks.length }, () => ({
+                                    type: 'reorder_tracks' as const,
+                                    trackId: preview.trackId!,
+                                    direction: 'up' as const,
+                                })));
+                            }
+                        }
                         commands.push({
                             type: 'update_item',
                             itemId: initial.id,
@@ -413,10 +473,8 @@ export function ExperimentalTimeline({
         : trackReorderInsertIndex >= rowOffsets.length
             ? trackContentHeight
             : rowOffsets[trackReorderInsertIndex]?.top ?? 0;
-
-    const addTrack = (kind: EditorTrackKind) => {
-        onApplyCommands([{ type: 'add_track', kind, trackId: nextTrackId(project, kind) }]);
-    };
+    const deletableSelectedTrackIds = selectedTrackIds.filter((trackId) => !isProtectedTrackId(trackId));
+    const canDeleteSelection = selectedItemIds.length > 0 || deletableSelectedTrackIds.length > 0;
 
     const deleteSelected = () => {
         if (selectedItemIds.length > 0) {
@@ -429,8 +487,8 @@ export function ExperimentalTimeline({
             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
             return;
         }
-        if (selectedTrackIds.length > 0) {
-            onApplyCommands([{ type: 'delete_tracks', trackIds: selectedTrackIds }]);
+        if (deletableSelectedTrackIds.length > 0) {
+            onApplyCommands([{ type: 'delete_tracks', trackIds: deletableSelectedTrackIds }]);
             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
         }
     };
@@ -448,7 +506,7 @@ export function ExperimentalTimeline({
             const isEditable = target.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
             if (isEditable) return;
         }
-        if (selectedItemIds.length === 0 && selectedTrackIds.length === 0) return;
+        if (!canDeleteSelection) return;
         event.preventDefault();
         event.stopPropagation();
         deleteSelected();
@@ -465,7 +523,14 @@ export function ExperimentalTimeline({
 
     useEffect(() => {
         if (!contextMenu && !trackContextMenu) return;
-        const closeMenu = () => {
+        const closeMenu = (event: Event) => {
+            const target = event.target as Node | null;
+            if (
+                (contextMenuRef.current && target && contextMenuRef.current.contains(target))
+                || (trackContextMenuRef.current && target && trackContextMenuRef.current.contains(target))
+            ) {
+                return;
+            }
             setContextMenu(null);
             setTrackContextMenu(null);
         };
@@ -579,18 +644,13 @@ export function ExperimentalTimeline({
                 <button
                     type="button"
                     onClick={deleteSelected}
-                    disabled={selectedItemIds.length === 0 && selectedTrackIds.length === 0}
+                    disabled={!canDeleteSelection}
                     className={clsx(toolbarIconButtonClass, 'text-red-200/80 hover:bg-red-400/10 hover:text-red-100 disabled:opacity-40')}
                     title="删除"
                     aria-label="删除"
                 >
                     <Trash2 className="h-3.5 w-3.5" />
                 </button>
-                <span className="mx-1 h-4 w-px bg-white/10" />
-                <button type="button" onClick={() => addTrack('video')} className={toolbarIconButtonClass} title="新增视频轨" aria-label="新增视频轨"><Video className="h-3.5 w-3.5" /></button>
-                <button type="button" onClick={() => addTrack('audio')} className={toolbarIconButtonClass} title="新增音频轨" aria-label="新增音频轨"><AudioLines className="h-3.5 w-3.5" /></button>
-                <button type="button" onClick={() => addTrack('subtitle')} className={toolbarIconButtonClass} title="新增字幕轨" aria-label="新增字幕轨"><Type className="h-3.5 w-3.5" /></button>
-                <button type="button" onClick={() => addTrack('text')} className={toolbarIconButtonClass} title="新增文本轨" aria-label="新增文本轨"><Rows className="h-3.5 w-3.5" /></button>
             </div>
 
             <div
@@ -729,7 +789,12 @@ export function ExperimentalTimeline({
                                         const width = Math.max(24, rawWidth - 2);
                                         const selected = selectedItemIds.includes(item.id);
                                         const previewTrackId = preview?.trackId || item.trackId;
-                                        const previewTrackTop = rowTopByTrackId.get(previewTrackId) ?? top;
+                                        const previewTrackTop = rowTopByTrackId.get(previewTrackId)
+                                            ?? (preview?.virtualTrackPlacement === 'above'
+                                                ? 0
+                                                : preview?.virtualTrackPlacement === 'below'
+                                                    ? trackContentHeight
+                                                    : top);
                                         const translateY = previewTrackTop - top;
                                         return (
                                             <div
@@ -864,6 +929,7 @@ export function ExperimentalTimeline({
             ) : null}
             {trackContextMenu && trackContextMenuTrack ? (
                 <div
+                    ref={trackContextMenuRef}
                     className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
                     style={{ left: trackContextMenu.x, top: trackContextMenu.y }}
                 >
@@ -879,19 +945,22 @@ export function ExperimentalTimeline({
                     </button>
                     <button
                         type="button"
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
+                        disabled={isProtectedTrackId(trackContextMenuTrack.id)}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10 disabled:cursor-not-allowed disabled:text-red-200/40 disabled:hover:bg-transparent"
                         onClick={() => {
+                            if (isProtectedTrackId(trackContextMenuTrack.id)) return;
                             onApplyCommands([{ type: 'delete_tracks', trackIds: [trackContextMenuTrack.id] }]);
                             onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [] });
                             setTrackContextMenu(null);
                         }}
                     >
-                        删除轨道
+                        {isProtectedTrackId(trackContextMenuTrack.id) ? '主轨不可删除' : '删除轨道'}
                     </button>
                 </div>
             ) : null}
             {contextMenu && contextMenuItem ? (
                 <div
+                    ref={contextMenuRef}
                     className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                 >

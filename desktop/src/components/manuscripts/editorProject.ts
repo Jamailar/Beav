@@ -205,6 +205,8 @@ export type ScriptBriefSection = {
     linkedItemId: string | null;
 };
 
+const PRIMARY_TRACK_ID = 'V1';
+
 export function defaultTrackUi(): EditorTrackUi {
     return {
         hidden: false,
@@ -712,7 +714,8 @@ export function applyEditorCommandLocal(project: EditorProjectFile, command: Edi
             return normalizeAnimationLayers(next);
         }
         case 'delete_tracks': {
-            const trackIdSet = new Set(command.trackIds);
+            const trackIdSet = new Set(command.trackIds.filter((trackId) => trackId !== PRIMARY_TRACK_ID));
+            if (trackIdSet.size === 0) return next;
             next.tracks = next.tracks.filter((track) => !trackIdSet.has(track.id)).map((track, order) => ({ ...track, order }));
             next.items = next.items.filter((item) => !trackIdSet.has(item.trackId));
             next.animationLayers = next.animationLayers.filter((layer) => !trackIdSet.has(layer.trackId));
