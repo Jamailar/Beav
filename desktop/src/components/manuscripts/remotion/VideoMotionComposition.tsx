@@ -636,6 +636,11 @@ function SceneEntity({
     runtime: RuntimeMode;
 }) {
     const { fps } = useVideoConfig();
+    const entityStartFrame = Math.max(0, entity.startFrame || 0);
+    const entityDurationInFrames = Math.max(1, entity.durationInFrames || Number.MAX_SAFE_INTEGER);
+    if (sceneFrame < entityStartFrame || sceneFrame >= entityStartFrame + entityDurationInFrames) {
+        return null;
+    }
     const entityFrame = normalizeEntityFrame(sceneFrame, entity.startFrame, entity.durationInFrames);
     const animationStyle = mergeAnimationStyles(entityFrame, fps, entity.animations);
     const mediaSource = resolveSceneSource(entity.src || '', runtime);
