@@ -14,6 +14,7 @@ pub struct PreparedRuntimeQueryTurn<'a> {
     pub route: RuntimeRouteRecord,
     pub route_value: Value,
     pub orchestration: Option<Value>,
+    pub context_bundle_snapshot: Option<Value>,
     pub request: ChatExchangeRequest<'a>,
 }
 
@@ -21,6 +22,7 @@ pub struct RuntimeQueryCheckpointBundle {
     pub route_reasoning: String,
     pub route_value: Value,
     pub orchestration: Option<Value>,
+    pub context_bundle_snapshot: Option<Value>,
 }
 
 pub fn prepare_runtime_query_execution(
@@ -59,6 +61,7 @@ pub fn build_runtime_query_turn<'a>(
     session_id: Option<String>,
     route: RuntimeRouteRecord,
     orchestration: Option<Value>,
+    context_bundle_snapshot: Option<Value>,
     display_content: &str,
     model_config: Option<&'a Value>,
 ) -> PreparedRuntimeQueryTurn<'a> {
@@ -74,6 +77,7 @@ pub fn build_runtime_query_turn<'a>(
         route: prepared.route,
         route_value,
         orchestration: prepared.orchestration,
+        context_bundle_snapshot,
         request,
     }
 }
@@ -85,6 +89,7 @@ pub fn build_runtime_query_checkpoint_bundle(
         route_reasoning: turn.route.reasoning.clone(),
         route_value: turn.route_value.clone(),
         orchestration: turn.orchestration.clone(),
+        context_bundle_snapshot: turn.context_bundle_snapshot.clone(),
     }
 }
 
@@ -136,6 +141,7 @@ mod tests {
             Some(json!({
                 "outputs": [{ "roleId": "planner", "summary": "break into steps" }]
             })),
+            Some(json!({ "fingerprint": "abc" })),
             "help me",
             None,
         );
@@ -165,6 +171,7 @@ mod tests {
             Some(json!({
                 "outputs": [{ "roleId": "planner", "summary": "break into steps" }]
             })),
+            Some(json!({ "fingerprint": "abc" })),
             "help me",
             None,
         );
@@ -176,5 +183,13 @@ mod tests {
             turn.route_value.get("intent").and_then(Value::as_str)
         );
         assert!(bundle.orchestration.is_some());
+        assert_eq!(
+            bundle
+                .context_bundle_snapshot
+                .as_ref()
+                .and_then(|value| value.get("fingerprint"))
+                .and_then(Value::as_str),
+            Some("abc")
+        );
     }
 }

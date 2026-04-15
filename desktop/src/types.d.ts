@@ -339,11 +339,45 @@ declare global {
     updatedAt?: string | null;
   }
 
+  interface RuntimeContextScanWarning {
+    kind: string;
+    severity: string;
+    message: string;
+  }
+
+  interface RuntimeContextBundleSectionSummary {
+    id: string;
+    title: string;
+    source: string;
+    priority: number;
+    maxChars: number;
+    rawChars: number;
+    finalChars: number;
+    truncated: boolean;
+    scanWarnings: RuntimeContextScanWarning[];
+    contentPreview?: string;
+  }
+
+  interface RuntimeContextBundleSummary {
+    fingerprint?: string | null;
+    sessionId?: string | null;
+    runtimeMode?: string | null;
+    generatedAt?: string | null;
+    totalRawChars: number;
+    totalFinalChars: number;
+    renderedPromptChars: number;
+    truncatedSections: string[];
+    scanWarnings: RuntimeContextScanWarning[];
+    sections: RuntimeContextBundleSectionSummary[];
+  }
+
   interface RuntimeWarmSummaryEntry {
     mode: string;
     warmedAt: number;
     systemPromptChars: number;
     estimatedPromptTokens: number;
+    legacySystemPromptChars?: number;
+    charReductionRatio?: number;
     longTermContextChars: number;
     activeSkillCount: number;
     activeSkills: string[];
@@ -354,6 +388,7 @@ declare global {
     modelName?: string | null;
     baseUrl?: string | null;
     protocol?: string | null;
+    contextBundleSummary?: RuntimeContextBundleSummary | null;
   }
 
   interface RuntimeDebugSummary {
@@ -389,6 +424,12 @@ declare global {
       averageCheckpointsPerSession: number;
       averageTaskTraceRowsPerTask: number;
     };
+    latestContextSnapshots: Array<{
+      sessionId: string;
+      createdAt: number;
+      summary: string;
+      payload?: RuntimeContextBundleSummary | null;
+    }>;
     runtimeWarm: {
       lastWarmedAt: number;
       settingsFingerprint: string;

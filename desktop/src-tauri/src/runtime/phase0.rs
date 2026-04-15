@@ -1,6 +1,7 @@
 use serde_json::{json, Map, Value};
 use tauri::State;
 
+use crate::interactive_runtime_shared::legacy_interactive_runtime_system_prompt;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::store_runtime_task;
 use crate::scheduler::derived_background_tasks;
@@ -19,7 +20,7 @@ const SMOKE_RUNTIME_MODES: [&str; 3] = ["chatroom", "wander", "redclaw"];
 pub fn default_feature_flags() -> Value {
     json!({
         "vectorRecommendation": false,
-        "runtimeContextBundleV2": false,
+        "runtimeContextBundleV2": true,
         "runtimeMemoryRecallV2": false,
         "runtimeSubagentRuntimeV2": false,
         "runtimeExecuteScriptV1": false,
@@ -139,59 +140,82 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
     let _ = ensure_phase0_settings_defaults(state)?;
     let _ = refresh_runtime_warm_state(state, &SMOKE_RUNTIME_MODES);
     let workspace = workspace_root(state).ok();
-    let (settings_snapshot, skills, store_counts, memory_overview, derived_metrics) = with_store(
-        state,
-        |store| {
-            let settings_snapshot = store.settings.clone();
-            let skills = store.skills.clone();
-            let feature_flags = settings_snapshot
-                .get(FEATURE_FLAGS_KEY)
-                .cloned()
-                .unwrap_or_else(default_feature_flags);
-            let metrics = settings_snapshot
-                .get(PHASE0_METRICS_KEY)
-                .cloned()
-                .unwrap_or_else(default_phase0_runtime_metrics);
-            let counts = json!({
-                "sessions": store.chat_sessions.len(),
-                "transcripts": store.session_transcript_records.len(),
-                "checkpoints": store.session_checkpoints.len(),
-                "toolResults": store.session_tool_results.len(),
-                "runtimeTasks": store.runtime_tasks.len(),
-                "runtimeTaskTraces": store.runtime_task_traces.len(),
-                "backgroundTasks": derived_background_tasks(&store).len(),
-                "hooks": store.runtime_hooks.len(),
-                "mcpServers": store.mcp_servers.len(),
-                "skills": store.skills.len(),
-                "debugLogs": store.debug_logs.len(),
-                "memories": store.memories.len(),
-                "memoryHistory": store.memory_history.len(),
-            });
-            let session_count = store.chat_sessions.len().max(1) as f64;
-            let task_count = store.runtime_tasks.len().max(1) as f64;
-            Ok((
-                json!({
-                    "featureFlags": feature_flags,
-                    "metrics": metrics,
-                    "settings": settings_snapshot,
-                }),
-                skills,
-                counts,
-                json!({
-                    "memoryCount": store.memories.len(),
-                    "historyCount": store.memory_history.len(),
-                    "latestMemoryUpdatedAt": store.memories.iter().filter_map(|item| item.updated_at.or(Some(item.created_at))).max(),
-                    "latestHistoryAt": store.memory_history.iter().map(|item| item.timestamp).max(),
-                }),
-                json!({
-                    "averageToolCallsPerSession": store.session_tool_results.len() as f64 / session_count,
-                    "averageTraceRecordsPerSession": store.session_transcript_records.len() as f64 / session_count,
-                    "averageCheckpointsPerSession": store.session_checkpoints.len() as f64 / session_count,
-                    "averageTaskTraceRowsPerTask": store.runtime_task_traces.len() as f64 / task_count,
-                }),
-            ))
-        },
-    )?;
+    let (
+        settings_snapshot,
+        skills,
+        store_counts,
+        memory_overview,
+        derived_metrics,
+        latest_context_snapshots,
+    ) = with_store(state, |store| {
+        let settings_snapshot = store.settings.clone();
+        let skills = store.skills.clone();
+        let feature_flags = settings_snapshot
+            .get(FEATURE_FLAGS_KEY)
+            .cloned()
+            .unwrap_or_else(default_feature_flags);
+        let metrics = settings_snapshot
+            .get(PHASE0_METRICS_KEY)
+            .cloned()
+            .unwrap_or_else(default_phase0_runtime_metrics);
+        let counts = json!({
+            "sessions": store.chat_sessions.len(),
+            "transcripts": store.session_transcript_records.len(),
+            "checkpoints": store.session_checkpoints.len(),
+            "toolResults": store.session_tool_results.len(),
+            "runtimeTasks": store.runtime_tasks.len(),
+            "runtimeTaskTraces": store.runtime_task_traces.len(),
+            "backgroundTasks": derived_background_tasks(&store).len(),
+            "hooks": store.runtime_hooks.len(),
+            "mcpServers": store.mcp_servers.len(),
+            "skills": store.skills.len(),
+            "debugLogs": store.debug_logs.len(),
+            "memories": store.memories.len(),
+            "memoryHistory": store.memory_history.len(),
+        });
+        let session_count = store.chat_sessions.len().max(1) as f64;
+        let task_count = store.runtime_tasks.len().max(1) as f64;
+        let mut latest_context_snapshots = store
+            .session_checkpoints
+            .iter()
+            .filter(|item| item.checkpoint_type == "runtime.context_bundle")
+            .cloned()
+            .collect::<Vec<_>>();
+        latest_context_snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok((
+            json!({
+                "featureFlags": feature_flags,
+                "metrics": metrics,
+                "settings": settings_snapshot,
+            }),
+            skills,
+            counts,
+            json!({
+                "memoryCount": store.memories.len(),
+                "historyCount": store.memory_history.len(),
+                "latestMemoryUpdatedAt": store.memories.iter().filter_map(|item| item.updated_at.or(Some(item.created_at))).max(),
+                "latestHistoryAt": store.memory_history.iter().map(|item| item.timestamp).max(),
+            }),
+            json!({
+                "averageToolCallsPerSession": store.session_tool_results.len() as f64 / session_count,
+                "averageTraceRecordsPerSession": store.session_transcript_records.len() as f64 / session_count,
+                "averageCheckpointsPerSession": store.session_checkpoints.len() as f64 / session_count,
+                "averageTaskTraceRowsPerTask": store.runtime_task_traces.len() as f64 / task_count,
+            }),
+            latest_context_snapshots
+                .into_iter()
+                .take(8)
+                .map(|item| {
+                    json!({
+                        "sessionId": item.session_id,
+                        "createdAt": item.created_at,
+                        "summary": item.summary,
+                        "payload": item.payload,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ))
+    })?;
 
     let feature_flags = settings_snapshot
         .get("featureFlags")
@@ -218,6 +242,10 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             let skill_state = build_skill_runtime_state(&skills, &entry.mode, None, &base_tools);
             let model_config = resolve_chat_config(&settings_only, entry.model_config.as_ref());
             let prompt_chars = entry.system_prompt.chars().count();
+            let legacy_prompt_chars =
+                legacy_interactive_runtime_system_prompt(state, &entry.mode, None)
+                    .chars()
+                    .count();
             let long_term_chars = entry
                 .long_term_context
                 .as_ref()
@@ -228,6 +256,12 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                 "warmedAt": entry.warmed_at,
                 "systemPromptChars": prompt_chars,
                 "estimatedPromptTokens": estimated_prompt_tokens(prompt_chars),
+                "legacySystemPromptChars": legacy_prompt_chars,
+                "charReductionRatio": if legacy_prompt_chars == 0 {
+                    0.0
+                } else {
+                    1.0 - (prompt_chars as f64 / legacy_prompt_chars as f64)
+                },
                 "longTermContextChars": long_term_chars,
                 "activeSkillCount": skill_state.active_skills.len(),
                 "activeSkills": skill_state
@@ -242,6 +276,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                 "modelName": model_config.as_ref().map(|config| config.model_name.clone()),
                 "baseUrl": model_config.as_ref().map(|config| config.base_url.clone()),
                 "protocol": model_config.as_ref().map(|config| config.protocol.clone()),
+                "contextBundleSummary": entry.context_bundle_summary,
             })
         })
         .collect::<Vec<_>>();
@@ -258,6 +293,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         "storeCounts": store_counts,
         "memoryOverview": memory_overview,
         "derivedMetrics": derived_metrics,
+        "latestContextSnapshots": latest_context_snapshots,
         "runtimeWarm": {
             "lastWarmedAt": last_warmed_at,
             "settingsFingerprint": settings_fingerprint,

@@ -52,6 +52,82 @@ type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } 
 type RuntimeDebugSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type Phase0SmokeResult = Awaited<ReturnType<typeof window.ipcRenderer.debug.runPhase0Smoke>>;
 
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+};
+
+const asString = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim();
+    return normalized ? normalized : null;
+};
+
+const asNumber = (value: unknown): number => {
+    const normalized = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(normalized) ? normalized : 0;
+};
+
+const parseContextScanWarnings = (value: unknown): RuntimeContextScanWarning[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item) => {
+            const record = asRecord(item);
+            if (!record) return null;
+            const kind = asString(record.kind);
+            const severity = asString(record.severity);
+            const message = asString(record.message);
+            if (!kind || !severity || !message) return null;
+            return { kind, severity, message };
+        })
+        .filter((item): item is RuntimeContextScanWarning => Boolean(item));
+};
+
+const parseContextBundleSectionSummary = (value: unknown): RuntimeContextBundleSectionSummary | null => {
+    const record = asRecord(value);
+    if (!record) return null;
+    const id = asString(record.id);
+    const title = asString(record.title);
+    const source = asString(record.source);
+    if (!id || !title || !source) return null;
+    return {
+        id,
+        title,
+        source,
+        priority: asNumber(record.priority),
+        maxChars: asNumber(record.maxChars),
+        rawChars: asNumber(record.rawChars),
+        finalChars: asNumber(record.finalChars),
+        truncated: Boolean(record.truncated),
+        scanWarnings: parseContextScanWarnings(record.scanWarnings),
+        contentPreview: asString(record.contentPreview) || undefined,
+    };
+};
+
+const parseContextBundleSummary = (value: unknown): RuntimeContextBundleSummary | null => {
+    const record = asRecord(value);
+    if (!record) return null;
+    const sections = Array.isArray(record.sections)
+        ? record.sections
+            .map((item) => parseContextBundleSectionSummary(item))
+            .filter((item): item is RuntimeContextBundleSectionSummary => Boolean(item))
+        : [];
+    return {
+        fingerprint: asString(record.fingerprint),
+        sessionId: asString(record.sessionId),
+        runtimeMode: asString(record.runtimeMode),
+        generatedAt: asString(record.generatedAt),
+        totalRawChars: asNumber(record.totalRawChars),
+        totalFinalChars: asNumber(record.totalFinalChars),
+        renderedPromptChars: asNumber(record.renderedPromptChars),
+        truncatedSections: Array.isArray(record.truncatedSections)
+            ? record.truncatedSections.map((item) => String(item || '')).filter(Boolean)
+            : [],
+        scanWarnings: parseContextScanWarnings(record.scanWarnings),
+        sections,
+    };
+};
+
 type AssistantDaemonStatus = {
     enabled: boolean;
     autoStart: boolean;
@@ -1589,6 +1665,100 @@ export function ToolsSettingsSection({
 
     const formatPercent = (value?: number) => `${((value || 0) * 100).toFixed(0)}%`;
 
+    const summarizeContextBundle = (bundle: RuntimeContextBundleSummary) => ({
+        sectionCount: bundle.sections.length,
+        sourceCount: new Set(bundle.sections.map((section) => section.source).filter(Boolean)).size,
+        maxCharsBudget: bundle.sections.reduce((sum, section) => sum + section.maxChars, 0),
+        warningCount: bundle.scanWarnings.length,
+        truncatedCount: bundle.truncatedSections.length,
+    });
+
+    const renderContextBundleSummary = (
+        bundle: RuntimeContextBundleSummary,
+        options?: {
+            showContentPreview?: boolean;
+            emptyText?: string;
+            title?: string;
+        },
+    ) => {
+        const metrics = summarizeContextBundle(bundle);
+        return (
+            <div className="space-y-3">
+                <div className="grid grid-cols-2 xl:grid-cols-3 gap-2 text-[11px] text-text-secondary">
+                    <div>sections: {metrics.sectionCount}</div>
+                    <div>sources: {metrics.sourceCount}</div>
+                    <div>budget: {metrics.maxCharsBudget}</div>
+                    <div>raw chars: {bundle.totalRawChars}</div>
+                    <div>final chars: {bundle.totalFinalChars}</div>
+                    <div>rendered chars: {bundle.renderedPromptChars}</div>
+                    <div>truncated: {metrics.truncatedCount}</div>
+                    <div>warnings: {metrics.warningCount}</div>
+                    {bundle.generatedAt ? <div>generated: {formatTimestamp(bundle.generatedAt)}</div> : null}
+                </div>
+
+                {bundle.scanWarnings.length > 0 ? (
+                    <div className="space-y-2">
+                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Warnings</div>
+                        <div className="space-y-2">
+                            {bundle.scanWarnings.map((warning, index) => (
+                                <div key={`${warning.kind}-${index}`} className="rounded border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-[11px] text-amber-800">
+                                    <div className="font-medium">{warning.kind} · {warning.severity}</div>
+                                    <div className="mt-1">{warning.message}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : null}
+
+                <div className="space-y-2">
+                    <div className="text-[10px] uppercase tracking-wide text-text-tertiary">{options?.title || 'Sections'}</div>
+                    {bundle.sections.length === 0 ? (
+                        <div className="text-[11px] text-text-tertiary">{options?.emptyText || '暂无 section。'}</div>
+                    ) : (
+                        <div className="space-y-2">
+                            {bundle.sections.map((section) => (
+                                <details key={`${section.id}-${section.source}`} className="rounded border border-border bg-surface-primary/60 p-2">
+                                    <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                        <span className="font-medium text-text-primary">{section.title}</span>
+                                        <span className="text-text-tertiary">{section.finalChars}/{section.maxChars} chars</span>
+                                    </summary>
+                                    <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                        <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                            <span className="font-mono break-all">id: {section.id}</span>
+                                            <span className="font-mono break-all">source: {section.source}</span>
+                                            <span>priority: {section.priority}</span>
+                                            <span>budget: {section.rawChars} → {section.finalChars} / {section.maxChars}</span>
+                                            <span>{section.truncated ? 'truncated' : 'full'}</span>
+                                            <span>warnings: {section.scanWarnings.length}</span>
+                                        </div>
+                                        {section.scanWarnings.length > 0 ? (
+                                            <div className="space-y-1">
+                                                {section.scanWarnings.map((warning, index) => (
+                                                    <div key={`${section.id}-${warning.kind}-${index}`} className="rounded border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-amber-800">
+                                                        <div className="font-medium">{warning.kind} · {warning.severity}</div>
+                                                        <div className="mt-1">{warning.message}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                        {options?.showContentPreview && section.contentPreview ? (
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary mb-1">content preview</div>
+                                                <pre className="whitespace-pre-wrap break-all leading-5 text-text-secondary">
+                                                    {section.contentPreview}
+                                                </pre>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                </details>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     const taskStatusTone = (status: AgentTaskSnapshot['status']) => {
         switch (status) {
             case 'completed':
@@ -2101,12 +2271,37 @@ export function ToolsSettingsSection({
                                                             <div>skills: {entry.activeSkillCount}</div>
                                                             <div>tools: {entry.allowedToolCount}/{entry.baseToolCount}</div>
                                                         </div>
+                                                        {typeof entry.charReductionRatio === 'number' ? (
+                                                            <div className="text-[11px] text-text-tertiary">
+                                                                prompt reduction vs legacy: {formatPercent(entry.charReductionRatio)}
+                                                                {typeof entry.legacySystemPromptChars === 'number' ? ` (${entry.systemPromptChars} / ${entry.legacySystemPromptChars})` : ''}
+                                                            </div>
+                                                        ) : null}
                                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-text-tertiary">
                                                             <div>context chars: {entry.longTermContextChars}</div>
                                                             <div>warmed: {formatTimestamp(entry.warmedAt)}</div>
                                                             <div className="break-all">model: {entry.modelName || '未配置'}</div>
                                                             <div className="break-all">protocol: {entry.protocol || 'n/a'}</div>
                                                         </div>
+                                                        {parseContextBundleSummary(entry.contextBundleSummary) ? (
+                                                            <details className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                    <span className="font-medium text-text-primary">Context Bundle Summary</span>
+                                                                    <span className="text-text-tertiary">
+                                                                        final {parseContextBundleSummary(entry.contextBundleSummary)?.totalFinalChars || 0} chars
+                                                                    </span>
+                                                                </summary>
+                                                                <div className="mt-2">
+                                                                    {renderContextBundleSummary(parseContextBundleSummary(entry.contextBundleSummary)!, {
+                                                                        showContentPreview: true,
+                                                                    })}
+                                                                </div>
+                                                            </details>
+                                                        ) : (
+                                                            <div className="text-[11px] text-text-tertiary rounded border border-dashed border-border px-2 py-2">
+                                                                当前 warm entry 还没有 context bundle summary。
+                                                            </div>
+                                                        )}
                                                         {entry.activeSkills.length > 0 ? (
                                                             <div className="text-[11px] text-text-tertiary">
                                                                 skills: {entry.activeSkills.join(', ')}
@@ -2178,6 +2373,46 @@ export function ToolsSettingsSection({
                                                     </div>
                                                 ))}
                                             </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Recent Context Snapshots</div>
+                                                <span className="text-[11px] text-text-tertiary">{runtimeDebugSummary.latestContextSnapshots.length} items</span>
+                                            </div>
+                                            {runtimeDebugSummary.latestContextSnapshots.length === 0 ? (
+                                                <div className="text-[11px] text-text-tertiary">暂无 context bundle snapshot。发起一次 runtime query 后会写入 checkpoint。</div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                    {runtimeDebugSummary.latestContextSnapshots.map((snapshot, index) => {
+                                                        const payload = parseContextBundleSummary(snapshot.payload);
+                                                        return (
+                                                            <details key={`${snapshot.sessionId}_${snapshot.createdAt}_${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                                <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                    <span className="font-medium text-text-primary truncate">
+                                                                        {payload?.runtimeMode || 'runtime'} · {snapshot.summary}
+                                                                    </span>
+                                                                    <span className="text-text-tertiary">{formatTimestamp(snapshot.createdAt)}</span>
+                                                                </summary>
+                                                                <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                                                    <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                        <span className="font-mono break-all">session: {snapshot.sessionId}</span>
+                                                                        {payload?.fingerprint ? (
+                                                                            <span className="font-mono break-all">fingerprint: {payload.fingerprint}</span>
+                                                                        ) : null}
+                                                                        {payload?.runtimeMode ? <span>mode: {payload.runtimeMode}</span> : null}
+                                                                    </div>
+                                                                    {payload ? (
+                                                                        renderContextBundleSummary(payload, {
+                                                                            showContentPreview: true,
+                                                                        })
+                                                                    ) : null}
+                                                                </div>
+                                                            </details>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -2790,17 +3025,46 @@ export function ToolsSettingsSection({
                                                 <div className="mt-2 space-y-2">
                                                     {runtimeSessionCheckpoints.length === 0 ? (
                                                         <div className="text-[11px] text-text-tertiary">暂无 checkpoint。</div>
-                                                    ) : runtimeSessionCheckpoints.map((checkpoint) => (
-                                                        <div key={checkpoint.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <span className="text-[11px] font-medium text-text-primary">{checkpoint.summary}</span>
-                                                                <span className="text-[10px] text-text-tertiary">{checkpoint.checkpointType}</span>
-                                                            </div>
-                                                            <div className="text-[10px] text-text-tertiary mt-1">
-                                                                {new Date(checkpoint.createdAt).toLocaleString()}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                    ) : runtimeSessionCheckpoints.map((checkpoint) => {
+                                                        const contextBundle = checkpoint.checkpointType === 'runtime.context_bundle'
+                                                            ? parseContextBundleSummary(checkpoint.payload)
+                                                            : null;
+                                                        if (!contextBundle) {
+                                                            return (
+                                                                <div key={checkpoint.id} className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        <span className="text-[11px] font-medium text-text-primary">{checkpoint.summary}</span>
+                                                                        <span className="text-[10px] text-text-tertiary">{checkpoint.checkpointType}</span>
+                                                                    </div>
+                                                                    <div className="text-[10px] text-text-tertiary mt-1">
+                                                                        {new Date(checkpoint.createdAt).toLocaleString()}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        }
+                                                        return (
+                                                            <details key={checkpoint.id} className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                    <span className="font-medium text-text-primary">
+                                                                        {checkpoint.summary} · {contextBundle.runtimeMode || 'unknown'}
+                                                                    </span>
+                                                                    <span className="text-text-tertiary">{new Date(checkpoint.createdAt).toLocaleString()}</span>
+                                                                </summary>
+                                                                <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                                                    <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                        <span className="font-mono break-all">type: {checkpoint.checkpointType}</span>
+                                                                        <span className="font-mono break-all">session: {checkpoint.sessionId}</span>
+                                                                        {contextBundle.fingerprint ? (
+                                                                            <span className="font-mono break-all">fingerprint: {contextBundle.fingerprint}</span>
+                                                                        ) : null}
+                                                                    </div>
+                                                                    {renderContextBundleSummary(contextBundle, {
+                                                                        showContentPreview: true,
+                                                                    })}
+                                                                </div>
+                                                            </details>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
 

@@ -758,6 +758,10 @@ fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Re
         let entry = RuntimeWarmEntry {
             mode: (*mode).to_string(),
             system_prompt: interactive_runtime_system_prompt(state, mode, None),
+            context_bundle_summary:
+                crate::interactive_runtime_shared::interactive_runtime_context_snapshot(
+                    state, mode, None,
+                ),
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
             } else {
@@ -3716,7 +3720,7 @@ fn execute_interactive_tool_call(
     }
 }
 
-fn editor_session_prompt_context(
+pub(crate) fn editor_session_prompt_context(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     runtime_mode: &str,

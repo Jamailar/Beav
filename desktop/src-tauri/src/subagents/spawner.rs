@@ -511,6 +511,7 @@ fn execute_subagent_config(
         Some(spawn.child_session_id.clone()),
         route.clone(),
         None,
+        None,
         &child_prompt,
         config.model_config.as_ref(),
     ));

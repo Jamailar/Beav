@@ -2407,6 +2407,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         if (formData.developer_mode_enabled) {
           await loadToolDiagnostics();
           await loadRuntimeRoles();
+          await loadRuntimeDebugSummary();
           await Promise.all([
             loadRuntimeTasks(),
             loadRuntimeSessions(),
@@ -2443,6 +2444,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBrowserPluginStatus,
     loadMcpRuntimeData,
     loadRecentDebugLogs,
+    loadRuntimeDebugSummary,
     loadRuntimeHooks,
     loadRuntimeRoles,
     loadRuntimeSessions,

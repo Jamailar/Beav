@@ -14,7 +14,7 @@ const UPDATE_EVENT = 'featureflags:updated';
 
 export const DEFAULT_FLAGS: FeatureFlags = {
   vectorRecommendation: false,
-  runtimeContextBundleV2: false,
+  runtimeContextBundleV2: true,
   runtimeMemoryRecallV2: false,
   runtimeSubagentRuntimeV2: false,
   runtimeExecuteScriptV1: false,

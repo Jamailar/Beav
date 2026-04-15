@@ -391,6 +391,7 @@ mod tests {
             route: crate::runtime::runtime_direct_route_record("default", "draft", None),
             route_value: serde_json::json!({ "intent": "direct_answer" }),
             orchestration: Some(serde_json::json!({ "outputs": [] })),
+            context_bundle_snapshot: Some(serde_json::json!({ "fingerprint": "ctx-1" })),
             request: ChatExchangeRequest::runtime_query(
                 Some("session-1".to_string()),
                 "effective".to_string(),

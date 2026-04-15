@@ -8,6 +8,7 @@ use crate::agent::{
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::emit_runtime_task_checkpoint_saved;
+use crate::interactive_runtime_shared::interactive_runtime_context_snapshot;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::skills::active_skill_activation_items;
@@ -67,10 +68,13 @@ pub fn handle_runtime_query(
     } else {
         None
     };
+    let context_bundle_snapshot =
+        interactive_runtime_context_snapshot(state, &runtime_mode, session_id.as_deref());
     let prepared = build_runtime_query_turn(
         session_id,
         route,
         orchestration,
+        context_bundle_snapshot,
         &message,
         payload_field(payload, "modelConfig"),
     );
@@ -116,6 +120,9 @@ pub fn handle_runtime_query(
             checkpoint_bundle
                 .as_ref()
                 .and_then(|bundle| bundle.orchestration.clone()),
+            checkpoint_bundle
+                .as_ref()
+                .and_then(|bundle| bundle.context_bundle_snapshot.clone()),
         );
         Ok(())
     });
@@ -131,6 +138,9 @@ pub fn handle_runtime_query(
         checkpoint_bundle
             .as_ref()
             .and_then(|bundle| bundle.orchestration.clone()),
+        checkpoint_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.context_bundle_snapshot.clone()),
     ) {
         emit_runtime_task_checkpoint_saved(
             app,
