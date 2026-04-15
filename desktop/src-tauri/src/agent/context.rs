@@ -6,7 +6,6 @@ use tauri::State;
 use crate::agent::{
     apply_section_budget, budget_for_section, scan_context_text, ContextBundle, ContextSection,
 };
-use crate::memory_maintenance::memory_root;
 use crate::persistence::with_store;
 use crate::redclaw_profile::load_redclaw_profile_prompt_bundle;
 use crate::skills::build_skill_runtime_state;
@@ -15,15 +14,16 @@ use crate::tools::registry::{
     base_tool_names_for_session_metadata, prompt_tool_lines_for_tool_names,
 };
 use crate::{
-    editor_session_prompt_context, lexbox_project_root, load_redbox_prompt, now_iso,
-    workspace_root, AppState, SkillRecord,
+    build_prompt_memory_snapshot, editor_session_prompt_context, lexbox_project_root,
+    load_redbox_prompt, now_iso, workspace_root, AppState, SkillRecord,
 };
 
 #[derive(Clone)]
 struct ContextAssemblyInputs {
+    settings: Value,
     metadata: Option<Value>,
     skills: Vec<SkillRecord>,
-    session_resume_summary: Option<String>,
+    structured_memory_snapshot: String,
 }
 
 pub fn runtime_context_bundle_enabled(settings: &Value) -> bool {
@@ -98,17 +98,11 @@ fn collect_context_inputs(
                 .find(|item| item.id == id)
                 .and_then(|item| item.metadata.clone())
         });
-        let session_resume_summary = session_id.and_then(|id| {
-            store
-                .session_context_records
-                .iter()
-                .find(|item| item.session_id == id && item.compacted_message_count > 0)
-                .map(|item| item.summary.clone())
-        });
         Ok(ContextAssemblyInputs {
+            settings: store.settings.clone(),
             metadata,
             skills: store.skills.clone(),
-            session_resume_summary,
+            structured_memory_snapshot: build_prompt_memory_snapshot(&store, 2_000),
         })
     })
 }
@@ -248,25 +242,30 @@ fn build_skill_overlay_section(
     parts.join("\n\n")
 }
 
-fn build_memory_summary_section(
-    workspace_memory_summary: Option<String>,
-    session_resume_summary: Option<String>,
-) -> String {
-    let mut parts = Vec::new();
-    if let Some(summary) = workspace_memory_summary {
-        parts.push(format!("[MEMORY.md]\n{}", summary));
+fn runtime_memory_recall_v2_enabled(settings: &Value) -> bool {
+    settings
+        .get("feature_flags")
+        .and_then(|value| value.get("runtimeMemoryRecallV2"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn build_memory_summary_section(structured_memory_snapshot: &str, recall_enabled: bool) -> String {
+    if !recall_enabled {
+        return String::new();
     }
-    if let Some(summary) = session_resume_summary.filter(|item| !item.trim().is_empty()) {
-        parts.push(format!(
-            "[sessionResumeSummary]\n{}",
-            [
-                "Use this archived summary as historical context, not as a replacement for fresh tool reads.",
-                summary.trim(),
-            ]
-            .join("\n")
-        ));
-    }
-    parts.join("\n\n")
+    [
+        "[structuredMemory]".to_string(),
+        structured_memory_snapshot.trim().to_string(),
+        "[recallContract]".to_string(),
+        [
+            "- Treat memory as conclusions, not as raw transcript evidence.",
+            "- Use redbox_runtime_control(action=runtime_recall) when you need transcript/checkpoint/tool-result evidence.",
+            "- Do not ask for large history dumps unless the current task actually depends on them.",
+        ]
+        .join("\n"),
+    ]
+    .join("\n")
 }
 
 fn build_profile_docs_section(
@@ -367,11 +366,6 @@ pub fn build_runtime_context_bundle(
     } else {
         None
     };
-    let workspace_memory_summary = memory_root(state)
-        .ok()
-        .map(|root| root.join("MEMORY.md"))
-        .and_then(|path| read_optional_text(&path));
-
     let sections = vec![
         assemble_section(
             "identity_section",
@@ -415,11 +409,11 @@ pub fn build_runtime_context_bundle(
         assemble_section(
             "memory_summary_section",
             "Memory Summary",
-            "workspace://memory/MEMORY.md".to_string(),
+            "workspace://memory/structured".to_string(),
             60,
             build_memory_summary_section(
-                workspace_memory_summary,
-                inputs.session_resume_summary.clone(),
+                &inputs.structured_memory_snapshot,
+                runtime_memory_recall_v2_enabled(&inputs.settings),
             ),
         ),
         assemble_section(

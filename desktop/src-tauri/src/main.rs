@@ -15,6 +15,7 @@ mod legacy_import;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
+mod memory;
 mod memory_maintenance;
 mod official_support;
 mod persistence;
@@ -75,6 +76,7 @@ pub(crate) use http_utils::*;
 pub(crate) use legacy_import::*;
 pub(crate) use manuscript_package::*;
 pub(crate) use media_generation::*;
+pub(crate) use memory::*;
 pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
 pub(crate) use redclaw_profile::*;
@@ -447,6 +449,14 @@ struct UserMemoryRecord {
     canonical_key: Option<String>,
     revision: Option<i64>,
     last_conflict_at: Option<i64>,
+    summary: Option<String>,
+    scope_key: Option<String>,
+    source_session_id: Option<String>,
+    source_checkpoint_id: Option<String>,
+    source_tool_result_id: Option<String>,
+    confidence: Option<f64>,
+    expires_at: Option<i64>,
+    last_maintained_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3367,6 +3377,20 @@ fn execute_interactive_tool_call(
                         "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(50)),
                     }),
                 ),
+                "runtime_recall" => call_runtime_channel(
+                    "runtime:recall",
+                    json!({
+                        "query": payload_string(arguments, "query").unwrap_or_default(),
+                        "sessionId": payload_string(arguments, "sessionId"),
+                        "runtimeId": payload_string(arguments, "runtimeId"),
+                        "sources": payload_field(arguments, "sources").cloned().unwrap_or_else(|| json!([])),
+                        "memoryTypes": payload_field(arguments, "memoryTypes").cloned().unwrap_or_else(|| json!([])),
+                        "includeArchived": payload_field(arguments, "includeArchived").cloned().unwrap_or_else(|| json!(false)),
+                        "includeChildSessions": payload_field(arguments, "includeChildSessions").cloned().unwrap_or_else(|| json!(false)),
+                        "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(8)),
+                        "maxChars": payload_field(arguments, "maxChars").cloned().unwrap_or_else(|| json!(4000)),
+                    }),
+                ),
                 "tasks_create" => call_runtime_channel(
                     "tasks:create",
                     payload_field(arguments, "payload")
@@ -3535,22 +3559,24 @@ fn execute_interactive_tool_call(
                         }))
                     })
                 }
-                "memory.search" => with_store(state, |store| {
+                "memory.search" => {
+                    let response = crate::runtime_recall_value(
+                        state,
+                        &json!({
+                            "query": query,
+                            "sources": ["memory"],
+                            "limit": limit,
+                            "maxChars": 5000,
+                        }),
+                    )?;
                     Ok(json!({
-                        "memories": store.memories
-                            .iter()
-                            .filter(|item| item.content.to_lowercase().contains(&query))
-                            .take(limit)
-                            .map(|item| json!({
-                                "id": item.id,
-                                "type": item.r#type,
-                                "content": text_snippet(&item.content, 220),
-                                "tags": item.tags,
-                                "updatedAt": item.updated_at
-                            }))
-                            .collect::<Vec<_>>()
+                        "memories": response
+                            .get("hits")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default()
                     }))
-                }),
+                }
                 "chat.sessions.list" => with_store(state, |store| {
                     let mut items = store.chat_sessions.clone();
                     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));

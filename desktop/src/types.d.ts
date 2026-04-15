@@ -180,6 +180,62 @@ export interface SessionToolResultItem {
   updatedAt: number;
 }
 
+export interface SessionLineageSummary {
+  sessionId: string;
+  parentSessionId?: string | null;
+  rootSessionId?: string | null;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  sourceTaskId?: string | null;
+  forkedFromCheckpointId?: string | null;
+  resumedFromCheckpointId?: string | null;
+  compactedCheckpointId?: string | null;
+  compactRounds: number;
+  compactedMessageCount: number;
+  lastCompactedAt?: string | null;
+  lineagePath: string[];
+}
+
+export interface RuntimeRecallHit {
+  id: string;
+  sourceKind: 'memory' | 'session' | 'checkpoint' | 'tool_result' | string;
+  sourceLabel: string;
+  title?: string | null;
+  summary: string;
+  excerpt?: string | null;
+  score: number;
+  matchReasons: string[];
+  sessionId?: string | null;
+  runtimeId?: string | null;
+  sourceTaskId?: string | null;
+  memoryType?: string | null;
+  createdAt: string | number;
+  updatedAt?: string | number | null;
+  lineage?: SessionLineageSummary | null;
+  payload?: unknown;
+}
+
+export interface RuntimeRecallResponse {
+  success: boolean;
+  query: string;
+  sources: string[];
+  memoryTypes: string[];
+  limit: number;
+  maxChars: number;
+  usedChars: number;
+  truncated: boolean;
+  totalHits: number;
+  hits: RuntimeRecallHit[];
+  sessionLineage?: SessionLineageSummary | null;
+  lastCheckpoint?: SessionCheckpointRecord | null;
+  evidenceCounts?: {
+    memories: number;
+    sessions: number;
+    checkpoints: number;
+    toolResults: number;
+  };
+}
+
 export interface SessionBridgeSessionSummary {
   id: string;
   title: string;
@@ -415,8 +471,19 @@ declare global {
     memoryOverview: {
       memoryCount: number;
       historyCount: number;
+      byType?: {
+        userProfile: number;
+        workspaceFacts: number;
+        taskLearnings: number;
+        archived: number;
+        legacyOther: number;
+      };
       latestMemoryUpdatedAt?: number | null;
       latestHistoryAt?: number | null;
+    };
+    recallReadiness?: {
+      enabled: boolean;
+      structuredMemoryTypes?: Record<string, number>;
     };
     derivedMetrics: {
       averageToolCallsPerSession: number;
@@ -429,6 +496,12 @@ declare global {
       createdAt: number;
       summary: string;
       payload?: RuntimeContextBundleSummary | null;
+    }>;
+    recentSessionLineage?: Array<{
+      sessionId: string;
+      title: string;
+      updatedAt: string;
+      lineage: SessionLineageSummary;
     }>;
     runtimeWarm: {
       lastWarmedAt: number;
@@ -563,16 +636,19 @@ declare global {
           id: string;
           transcriptCount: number;
           checkpointCount: number;
+          lineage?: SessionLineageSummary | null;
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
         }>>;
         get: (sessionId: string) => Promise<{
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
+          lineage?: SessionLineageSummary | null;
           transcript?: SessionRuntimeRecord[];
           checkpoints?: SessionCheckpointRecord[];
           toolResults?: SessionToolResultItem[];
         } | null>;
         resume: (sessionId: string) => Promise<{
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
+          lineage?: SessionLineageSummary | null;
           lastCheckpoint?: SessionCheckpointRecord | null;
         } | null>;
         fork: (sessionId: string) => Promise<{ success: boolean; session?: { id: string; transcriptCount: number; checkpointCount: number }; error?: string }>;
@@ -595,11 +671,22 @@ declare global {
       };
       runtime: {
         query: (payload: { sessionId?: string; message: string; modelConfig?: unknown }) => Promise<{ success: boolean; sessionId: string; response?: string; error?: string }>;
-        resume: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId: string }>;
+        resume: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId: string; lastCheckpoint?: SessionCheckpointRecord | null; lineage?: SessionLineageSummary | null }>;
         forkSession: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId?: string; forkedSessionId?: string }>;
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
+        recall: (payload: {
+          query?: string;
+          sessionId?: string;
+          runtimeId?: string;
+          sources?: string[];
+          memoryTypes?: string[];
+          includeArchived?: boolean;
+          includeChildSessions?: boolean;
+          limit?: number;
+          maxChars?: number;
+        }) => Promise<RuntimeRecallResponse>;
       };
       toolHooks: {
         list: () => Promise<unknown[]>;

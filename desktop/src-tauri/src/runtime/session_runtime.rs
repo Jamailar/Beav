@@ -4,8 +4,8 @@ use crate::runtime::{
     SessionToolResultRecord, SessionTranscriptRecord,
 };
 use crate::{
-    make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
-    ChatSessionContextRecord, ChatSessionRecord,
+    make_id, now_iso, session_lineage_summary_value, slug_from_relative_path, store_root, AppState,
+    AppStore, ChatMessageRecord, ChatSessionContextRecord, ChatSessionRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -284,6 +284,7 @@ pub fn session_list_item_value(store: &AppStore, session: &ChatSessionRecord) ->
         "transcriptCount": transcript_count_for_session(store, &session.id),
         "checkpointCount": checkpoint_count_for_session(store, &session.id),
         "context": session_context_value_for_session(store, &session.id),
+        "lineage": session_lineage_summary_value(store, &session.id),
         "chatSession": chat_session_summary_value(session)
     })
 }
@@ -299,6 +300,7 @@ pub fn session_detail_value(store: &AppStore, session_id: &str) -> Value {
     json!({
         "chatSession": chat_session_summary_value(session),
         "context": session_context_value_for_session(store, session_id),
+        "lineage": session_lineage_summary_value(store, session_id),
         "transcript": trace_for_session(store, session_id),
         "checkpoints": checkpoints_for_session(store, session_id),
         "toolResults": tool_results_for_session(store, session_id),
@@ -322,6 +324,7 @@ pub fn session_resume_value(
         "summary": session_summary_text_for_session(store, session_id),
         "messageCount": session_message_count_for_session(store, session_id),
         "context": session_context_value_for_session(store, session_id),
+        "lineage": session_lineage_summary_value(store, session_id),
         "resumeMessages": resume_messages.unwrap_or_else(|| {
             runtime_context_messages_for_session(None, store, session_id, SESSION_CONTEXT_TAIL_MESSAGES)
         }),

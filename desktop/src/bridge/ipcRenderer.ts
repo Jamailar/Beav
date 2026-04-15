@@ -64,6 +64,20 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:pick-attachment') {
     return { success: true, canceled: true };
   }
+  if (channel === 'runtime:recall' || channel === 'memory:recall') {
+    return {
+      success: false,
+      query: '',
+      sources: [],
+      memoryTypes: [],
+      limit: 0,
+      maxChars: 0,
+      usedChars: 0,
+      truncated: false,
+      totalHits: 0,
+      hits: [],
+    };
+  }
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
@@ -214,7 +228,18 @@ function createIpcRenderer() {
       forkSession: (payload: { sessionId: string }) => invokeChannel('runtime:fork-session', payload),
       getTrace: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-trace', payload),
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
-      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload)
+      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
+      recall: (payload: {
+        query?: string;
+        sessionId?: string;
+        runtimeId?: string;
+        sources?: string[];
+        memoryTypes?: string[];
+        includeArchived?: boolean;
+        includeChildSessions?: boolean;
+        limit?: number;
+        maxChars?: number;
+      }) => invokeChannel('runtime:recall', payload)
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),

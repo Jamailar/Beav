@@ -37,9 +37,16 @@ pub fn runtime_state_value(state: &State<'_, AppState>, payload: &Value) -> Resu
     }
 }
 
-pub fn runtime_resume_value(payload: &Value) -> Value {
+pub fn runtime_resume_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
-    json!({ "success": true, "sessionId": session_id })
+    with_store(state, |store| {
+        Ok(json!({
+            "success": true,
+            "sessionId": session_id,
+            "lastCheckpoint": crate::runtime::last_checkpoint_for_session(&store, &session_id),
+            "lineage": crate::session_lineage_summary_value(&store, &session_id),
+        }))
+    })
 }
 
 pub fn runtime_trace_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
@@ -97,6 +104,10 @@ pub fn runtime_tool_results_value(
     })
 }
 
+pub fn runtime_recall_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    crate::runtime_recall_value(state, payload)
+}
+
 pub fn fork_runtime_session(
     _app: &AppHandle,
     state: &State<'_, AppState>,
@@ -114,12 +125,34 @@ pub fn fork_runtime_session(
         };
         let new_id = make_id("session");
         let timestamp = now_iso();
+        let mut metadata = source
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        metadata.insert("parentSessionId".to_string(), json!(source.id.clone()));
+        metadata.insert(
+            "rootSessionId".to_string(),
+            json!(source
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("rootSessionId"))
+                .and_then(Value::as_str)
+                .unwrap_or(source.id.as_str())),
+        );
+        metadata.insert(
+            "forkedFromCheckpointId".to_string(),
+            json!(
+                crate::runtime::last_checkpoint_for_session(store, &source.id).map(|item| item.id)
+            ),
+        );
         let forked = ChatSessionRecord {
             id: new_id.clone(),
             title: format!("{} (Fork)", source.title),
             created_at: timestamp.clone(),
             updated_at: timestamp,
-            metadata: source.metadata.clone(),
+            metadata: Some(Value::Object(metadata)),
         };
         store.chat_sessions.push(forked);
         Ok(json!({ "success": true, "sessionId": session_id, "forkedSessionId": new_id }))

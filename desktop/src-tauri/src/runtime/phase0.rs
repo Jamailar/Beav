@@ -8,9 +8,9 @@ use crate::scheduler::derived_background_tasks;
 use crate::skills::build_skill_runtime_state;
 use crate::tools::registry::base_tool_names_for_session_metadata;
 use crate::{
-    commands::runtime_routing::route_runtime_intent_with_settings, now_iso,
-    refresh_runtime_warm_state, resolve_chat_config, runtime_warm_settings_fingerprint,
-    workspace_root, AppState,
+    commands::runtime_routing::route_runtime_intent_with_settings, memory_type_counts_value,
+    now_iso, recall_query_enabled, refresh_runtime_warm_state, resolve_chat_config,
+    runtime_warm_settings_fingerprint, session_lineage_summary_value, workspace_root, AppState,
 };
 
 const FEATURE_FLAGS_KEY: &str = "feature_flags";
@@ -21,7 +21,7 @@ pub fn default_feature_flags() -> Value {
     json!({
         "vectorRecommendation": false,
         "runtimeContextBundleV2": true,
-        "runtimeMemoryRecallV2": false,
+        "runtimeMemoryRecallV2": true,
         "runtimeSubagentRuntimeV2": false,
         "runtimeExecuteScriptV1": false,
         "runtimeAgentJobV1": false,
@@ -147,6 +147,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         memory_overview,
         derived_metrics,
         latest_context_snapshots,
+        recent_session_lineage,
     ) = with_store(state, |store| {
         let settings_snapshot = store.settings.clone();
         let skills = store.skills.clone();
@@ -193,6 +194,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             json!({
                 "memoryCount": store.memories.len(),
                 "historyCount": store.memory_history.len(),
+                "byType": memory_type_counts_value(&store),
                 "latestMemoryUpdatedAt": store.memories.iter().filter_map(|item| item.updated_at.or(Some(item.created_at))).max(),
                 "latestHistoryAt": store.memory_history.iter().map(|item| item.timestamp).max(),
             }),
@@ -214,6 +216,22 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                     })
                 })
                 .collect::<Vec<_>>(),
+            {
+                let mut sessions = store.chat_sessions.clone();
+                sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                sessions
+                    .into_iter()
+                    .take(8)
+                    .map(|item| {
+                    json!({
+                        "sessionId": item.id,
+                        "title": item.title,
+                        "updatedAt": item.updated_at,
+                        "lineage": session_lineage_summary_value(&store, &item.id),
+                    })
+                    })
+                    .collect::<Vec<_>>()
+            },
         ))
     })?;
 
@@ -292,8 +310,13 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         "sessionResumeSuccessRate": session_resume_success_rate(&metrics),
         "storeCounts": store_counts,
         "memoryOverview": memory_overview,
+        "recallReadiness": {
+            "enabled": recall_query_enabled(&settings_only),
+            "structuredMemoryTypes": memory_overview.get("byType").cloned().unwrap_or_else(|| json!({})),
+        },
         "derivedMetrics": derived_metrics,
         "latestContextSnapshots": latest_context_snapshots,
+        "recentSessionLineage": recent_session_lineage,
         "runtimeWarm": {
             "lastWarmedAt": last_warmed_at,
             "settingsFingerprint": settings_fingerprint,

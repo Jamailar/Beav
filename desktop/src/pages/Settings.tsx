@@ -207,6 +207,7 @@ type RuntimeSessionListItem = {
   id: string;
   transcriptCount: number;
   checkpointCount: number;
+  lineage?: Awaited<ReturnType<typeof window.ipcRenderer.runtime.resume>>['lineage'];
   chatSession?: {
     id: string;
     title?: string;
@@ -250,6 +251,8 @@ type RuntimeSessionToolResultItem = {
   createdAt: number;
   updatedAt: number;
 };
+
+type RuntimeRecallResponse = Awaited<ReturnType<typeof window.ipcRenderer.runtime.recall>>;
 
 type RuntimeHookDefinition = {
   id: string;
@@ -349,6 +352,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [runtimeSessionTranscript, setRuntimeSessionTranscript] = useState<RuntimeSessionTranscriptItem[]>([]);
   const [runtimeSessionCheckpoints, setRuntimeSessionCheckpoints] = useState<RuntimeSessionCheckpointItem[]>([]);
   const [runtimeSessionToolResults, setRuntimeSessionToolResults] = useState<RuntimeSessionToolResultItem[]>([]);
+  const [runtimeRecallQuery, setRuntimeRecallQuery] = useState('');
+  const [runtimeRecallResults, setRuntimeRecallResults] = useState<RuntimeRecallResponse | null>(null);
+  const [isRuntimeRecallLoading, setIsRuntimeRecallLoading] = useState(false);
   const [runtimeHooks, setRuntimeHooks] = useState<RuntimeHookDefinition[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskItem[]>([]);
   const [backgroundWorkerPool, setBackgroundWorkerPool] = useState<BackgroundWorkerPoolState>({ json: [], runtime: [] });
@@ -1721,6 +1727,24 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setIsRuntimeDebugSummaryLoading(false);
     }
   }, []);
+
+  const handleRunRuntimeRecall = useCallback(async () => {
+    setIsRuntimeRecallLoading(true);
+    try {
+      const result = await window.ipcRenderer.runtime.recall({
+        query: runtimeRecallQuery.trim(),
+        sessionId: selectedRuntimeSessionId || undefined,
+        sources: ['memory', 'session', 'checkpoint', 'tool_result'],
+        limit: 8,
+        maxChars: 4000,
+      });
+      setRuntimeRecallResults(result || null);
+    } catch (error) {
+      console.error('Failed to run runtime recall', error);
+    } finally {
+      setIsRuntimeRecallLoading(false);
+    }
+  }, [runtimeRecallQuery, selectedRuntimeSessionId]);
 
   const runPhase0Smoke = useCallback(async () => {
     setIsPhase0SmokeRunning(true);
@@ -3632,6 +3656,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 runtimeSessionTranscript={runtimeSessionTranscript}
                 runtimeSessionCheckpoints={runtimeSessionCheckpoints}
                 runtimeSessionToolResults={runtimeSessionToolResults}
+                runtimeRecallQuery={runtimeRecallQuery}
+                setRuntimeRecallQuery={setRuntimeRecallQuery}
+                runtimeRecallResults={runtimeRecallResults}
+                isRuntimeRecallLoading={isRuntimeRecallLoading}
                 runtimeHooks={runtimeHooks}
                 runtimeDraftInput={runtimeDraftInput}
                 setRuntimeDraftInput={setRuntimeDraftInput}
@@ -3650,6 +3678,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
+                handleRunRuntimeRecall={handleRunRuntimeRecall}
               />
             )}
 

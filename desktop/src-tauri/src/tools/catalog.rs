@@ -239,6 +239,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "runtime_get_trace",
                                 "runtime_get_checkpoints",
                                 "runtime_get_tool_results",
+                                "runtime_recall",
                                 "tasks_create",
                                 "tasks_list",
                                 "tasks_get",
@@ -254,9 +255,28 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         },
                         "sessionId": { "type": "string" },
                         "message": { "type": "string" },
+                        "query": { "type": "string" },
+                        "sources": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["memory", "session", "checkpoint", "tool_result"]
+                            }
+                        },
+                        "memoryTypes": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["user_profile", "workspace_fact", "task_learning"]
+                            }
+                        },
                         "modelConfig": { "type": "object" },
                         "taskId": { "type": "string" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+                        "maxChars": { "type": "integer", "minimum": 400, "maximum": 10000 },
+                        "includeArchived": { "type": "boolean" },
+                        "includeChildSessions": { "type": "boolean" },
+                        "runtimeId": { "type": "string" },
                         "payload": { "type": "object" }
                     },
                     "required": ["action"],

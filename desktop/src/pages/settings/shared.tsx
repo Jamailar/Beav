@@ -23,7 +23,7 @@ const REDBOX_OFFICIAL_LOGO_URL = new URL('../../../redbox.png', import.meta.url)
 export interface UserMemory {
   id: string;
   content: string;
-  type: 'general' | 'preference' | 'fact';
+  type: 'user_profile' | 'workspace_fact' | 'task_learning' | 'general' | 'preference' | 'fact';
   tags: string[];
   created_at: number;
   updated_at?: number;
@@ -35,13 +35,21 @@ export interface UserMemory {
   canonical_key?: string;
   revision?: number;
   last_conflict_at?: number;
+  summary?: string;
+  scope_key?: string;
+  source_session_id?: string;
+  source_checkpoint_id?: string;
+  source_tool_result_id?: string;
+  confidence?: number;
+  expires_at?: number;
+  last_maintained_at?: number;
 }
 
 export interface MemoryHistoryEntry {
   id: string;
   memory_id: string;
   origin_id: string;
-  action: 'create' | 'update' | 'dedupe' | 'archive' | 'delete' | 'access';
+  action: 'create' | 'update' | 'dedupe' | 'archive' | 'delete' | 'access' | 'compress';
   reason?: string;
   timestamp: number;
   before?: Partial<UserMemory>;

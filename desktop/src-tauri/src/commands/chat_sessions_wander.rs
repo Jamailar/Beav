@@ -1,11 +1,11 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, checkpoint_count_for_session, record_phase0_metric,
-    runtime_direct_route_record, session_context_usage_value, session_detail_value,
-    session_list_item_value, session_resume_value, tool_results_for_session, trace_for_session,
-    transcript_count_for_session, transcript_resume_messages, transcript_session_list_value,
-    transcript_session_meta_by_id, update_session_context_record, RuntimeArtifact,
-    RuntimeCheckpointRecord, RuntimeRouteRecord,
+    append_compact_boundary_entry, append_session_checkpoint, checkpoint_count_for_session,
+    record_phase0_metric, runtime_direct_route_record, session_context_usage_value,
+    session_detail_value, session_list_item_value, session_resume_value, tool_results_for_session,
+    trace_for_session, transcript_count_for_session, transcript_resume_messages,
+    transcript_session_list_value, transcript_session_meta_by_id, update_session_context_record,
+    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -183,6 +183,7 @@ pub fn handle_chat_sessions_wander_channel(
                         "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
                         "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
                         "context": Value::Null,
+                        "lineage": Value::Null,
                         "resumeMessages": resume_messages.unwrap_or_default(),
                         "lastCheckpoint": Value::Null,
                     }))
@@ -209,12 +210,35 @@ pub fn handle_chat_sessions_wander_channel(
                     };
                     let new_id = make_id("session");
                     let timestamp = now_iso();
+                    let mut metadata = source
+                        .metadata
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    metadata.insert("parentSessionId".to_string(), json!(source.id.clone()));
+                    metadata.insert(
+                        "rootSessionId".to_string(),
+                        json!(source
+                            .metadata
+                            .as_ref()
+                            .and_then(|value| value.get("rootSessionId"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(source.id.as_str())),
+                    );
+                    metadata.insert(
+                        "forkedFromCheckpointId".to_string(),
+                        json!(
+                            crate::runtime::last_checkpoint_for_session(store, &source.id)
+                                .map(|item| item.id)
+                        ),
+                    );
                     let new_session = ChatSessionRecord {
                         id: new_id.clone(),
                         title: format!("{} (Fork)", source.title),
                         created_at: timestamp.clone(),
                         updated_at: timestamp.clone(),
-                        metadata: source.metadata.clone(),
+                        metadata: Some(Value::Object(metadata)),
                     };
                     store.chat_sessions.push(new_session.clone());
                     for item in store
@@ -350,17 +374,62 @@ pub fn handle_chat_sessions_wander_channel(
                     let snapshot =
                         update_session_context_record(store, &session_id, "manual", true);
                     Ok(match snapshot {
-                        Some(record) => json!({
-                            "success": true,
-                            "compacted": true,
-                            "message": format!(
-                                "已归档 {} 条历史消息，保留最近 {} 条用于继续对话",
-                                record.compacted_message_count,
-                                record.tail_message_count
-                            ),
-                            "context": crate::runtime::session_context_value_for_session(store, &session_id),
-                            "totalMessages": total_messages,
-                        }),
+                        Some(record) => {
+                            append_session_checkpoint(
+                                store,
+                                &session_id,
+                                "chat.context_compacted",
+                                format!(
+                                    "context compacted {} messages",
+                                    record.compacted_message_count
+                                ),
+                                Some(json!({
+                                    "sessionId": session_id,
+                                    "compactedMessageCount": record.compacted_message_count,
+                                    "tailMessageCount": record.tail_message_count,
+                                    "compactRounds": record.compact_rounds,
+                                    "updatedAt": record.updated_at,
+                                })),
+                            );
+                            let checkpoint_id =
+                                crate::runtime::last_checkpoint_for_session(store, &session_id)
+                                    .map(|item| item.id)
+                                    .unwrap_or_default();
+                            if let Some(session) = store
+                                .chat_sessions
+                                .iter_mut()
+                                .find(|item| item.id == session_id)
+                            {
+                                let mut metadata = session
+                                    .metadata
+                                    .as_ref()
+                                    .and_then(Value::as_object)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                metadata.insert(
+                                    "compactedCheckpointId".to_string(),
+                                    json!(checkpoint_id.clone()),
+                                );
+                                metadata.insert(
+                                    "lastCompactedAt".to_string(),
+                                    json!(record.updated_at.clone()),
+                                );
+                                session.metadata = Some(Value::Object(metadata));
+                                session.updated_at = now_iso();
+                            }
+                            json!({
+                                "success": true,
+                                "compacted": true,
+                                "message": format!(
+                                    "已归档 {} 条历史消息，保留最近 {} 条用于继续对话",
+                                    record.compacted_message_count,
+                                    record.tail_message_count
+                                ),
+                                "context": crate::runtime::session_context_value_for_session(store, &session_id),
+                                "totalMessages": total_messages,
+                                "compactedCheckpointId": checkpoint_id,
+                            })
+                        }
                         None => json!({
                             "success": true,
                             "compacted": false,

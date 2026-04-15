@@ -51,6 +51,8 @@ type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } 
 
 type RuntimeDebugSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type Phase0SmokeResult = Awaited<ReturnType<typeof window.ipcRenderer.debug.runPhase0Smoke>>;
+type RuntimeRecallResponse = Awaited<ReturnType<typeof window.ipcRenderer.runtime.recall>>;
+type SessionLineageSummary = NonNullable<Awaited<ReturnType<typeof window.ipcRenderer.runtime.resume>>['lineage']>;
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -975,13 +977,20 @@ interface MemorySettingsSectionProps {
 }
 
 const memoryTypeTone = (type: UserMemory['type']) => (
-    type === 'preference' ? 'bg-purple-500/10 text-purple-500'
-        : type === 'fact' ? 'bg-blue-500/10 text-blue-500'
-            : 'bg-gray-500/10 text-text-tertiary'
+    type === 'user_profile' || type === 'preference' ? 'bg-purple-500/10 text-purple-500'
+        : type === 'workspace_fact' || type === 'fact' ? 'bg-blue-500/10 text-blue-500'
+            : type === 'task_learning' ? 'bg-emerald-500/10 text-emerald-600'
+                : 'bg-gray-500/10 text-text-tertiary'
 );
 
 const memoryTypeLabel = (type: UserMemory['type']) => (
-    type === 'preference' ? '偏好' : type === 'fact' ? '事实' : '一般'
+    type === 'user_profile' || type === 'preference'
+        ? '用户画像'
+        : type === 'workspace_fact' || type === 'fact'
+            ? '工作区事实'
+            : type === 'task_learning'
+                ? '任务经验'
+                : '一般'
 );
 
 const historyActionLabel = (action: MemoryHistoryEntry['action']) => {
@@ -992,6 +1001,7 @@ const historyActionLabel = (action: MemoryHistoryEntry['action']) => {
         case 'archive': return '归档';
         case 'delete': return '删除';
         case 'access': return '访问';
+        case 'compress': return '压缩';
         default: return action;
     }
 };
@@ -1033,9 +1043,9 @@ export function MemorySettingsSection({
                         onChange={(e) => setNewMemoryType(e.target.value as UserMemory['type'])}
                         className="bg-surface-secondary/50 border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:border-accent-primary"
                     >
-                        <option value="general">一般</option>
-                        <option value="preference">偏好</option>
-                        <option value="fact">事实</option>
+                        <option value="user_profile">用户画像</option>
+                        <option value="workspace_fact">工作区事实</option>
+                        <option value="task_learning">任务经验</option>
                     </select>
                     <input
                         type="text"
@@ -1464,6 +1474,7 @@ interface ToolsSettingsSectionProps {
         id: string;
         transcriptCount: number;
         checkpointCount: number;
+        lineage?: SessionLineageSummary | null;
         chatSession?: { id: string; title?: string; updatedAt?: string } | null;
     }>;
     backgroundTasks: BackgroundTaskItem[];
@@ -1493,6 +1504,10 @@ interface ToolsSettingsSectionProps {
         createdAt: number;
     }>;
     runtimeSessionToolResults: RuntimeToolResultItem[];
+    runtimeRecallQuery: string;
+    setRuntimeRecallQuery: Dispatch<SetStateAction<string>>;
+    runtimeRecallResults: RuntimeRecallResponse | null;
+    isRuntimeRecallLoading: boolean;
     runtimeHooks: Array<{
         id: string;
         event: string;
@@ -1517,6 +1532,7 @@ interface ToolsSettingsSectionProps {
     handleResumeRuntimeTask: (taskId: string) => Promise<void>;
     handleCancelRuntimeTask: (taskId: string) => Promise<void>;
     handleCancelBackgroundTask: (taskId: string) => Promise<void>;
+    handleRunRuntimeRecall: () => Promise<void>;
 }
 
 export function ToolsSettingsSection({
@@ -1576,6 +1592,10 @@ export function ToolsSettingsSection({
     runtimeSessionTranscript,
     runtimeSessionCheckpoints,
     runtimeSessionToolResults,
+    runtimeRecallQuery,
+    setRuntimeRecallQuery,
+    runtimeRecallResults,
+    isRuntimeRecallLoading,
     runtimeHooks,
     runtimeDraftInput,
     setRuntimeDraftInput,
@@ -1594,6 +1614,7 @@ export function ToolsSettingsSection({
     handleResumeRuntimeTask,
     handleCancelRuntimeTask,
     handleCancelBackgroundTask,
+    handleRunRuntimeRecall,
 }: ToolsSettingsSectionProps) {
     const mcpRuntimeMap = useMemo(
         () =>
@@ -2348,8 +2369,13 @@ export function ToolsSettingsSection({
                                             <div className="space-y-2 text-[11px] text-text-secondary">
                                                 <div>memories: {runtimeDebugSummary.memoryOverview.memoryCount}</div>
                                                 <div>history rows: {runtimeDebugSummary.memoryOverview.historyCount}</div>
+                                                <div>user profile: {runtimeDebugSummary.memoryOverview.byType?.userProfile ?? 0}</div>
+                                                <div>workspace facts: {runtimeDebugSummary.memoryOverview.byType?.workspaceFacts ?? 0}</div>
+                                                <div>task learnings: {runtimeDebugSummary.memoryOverview.byType?.taskLearnings ?? 0}</div>
+                                                <div>archived: {runtimeDebugSummary.memoryOverview.byType?.archived ?? 0}</div>
                                                 <div>latest memory: {formatTimestamp(runtimeDebugSummary.memoryOverview.latestMemoryUpdatedAt)}</div>
                                                 <div>latest history: {formatTimestamp(runtimeDebugSummary.memoryOverview.latestHistoryAt)}</div>
+                                                <div>recall v2: {runtimeDebugSummary.recallReadiness?.enabled ? 'enabled' : 'disabled'}</div>
                                             </div>
                                         </div>
 
@@ -2411,6 +2437,106 @@ export function ToolsSettingsSection({
                                                             </details>
                                                         );
                                                     })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Recent Session Lineage</div>
+                                                <span className="text-[11px] text-text-tertiary">{runtimeDebugSummary.recentSessionLineage?.length || 0} items</span>
+                                            </div>
+                                            {!runtimeDebugSummary.recentSessionLineage || runtimeDebugSummary.recentSessionLineage.length === 0 ? (
+                                                <div className="text-[11px] text-text-tertiary">暂无 lineage 记录。</div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                                                    {runtimeDebugSummary.recentSessionLineage.map((entry) => (
+                                                        <div key={`${entry.sessionId}_${entry.updatedAt}`} className="rounded border border-border bg-surface-secondary/20 p-2 text-[11px] text-text-secondary space-y-1">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className="font-medium text-text-primary truncate">{entry.title || entry.sessionId}</span>
+                                                                <span className="text-text-tertiary">{formatTimestamp(entry.updatedAt)}</span>
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                <span className="font-mono break-all">session: {entry.sessionId}</span>
+                                                                {entry.lineage.parentSessionId ? <span className="font-mono break-all">parent: {entry.lineage.parentSessionId}</span> : null}
+                                                                {entry.lineage.forkedFromCheckpointId ? <span className="font-mono break-all">fork checkpoint: {entry.lineage.forkedFromCheckpointId}</span> : null}
+                                                                {entry.lineage.compactedCheckpointId ? <span className="font-mono break-all">compact checkpoint: {entry.lineage.compactedCheckpointId}</span> : null}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Runtime Recall</div>
+                                                <span className="text-[11px] text-text-tertiary">统一检索 memories / sessions / checkpoints / tool results</span>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <input
+                                                    value={runtimeRecallQuery}
+                                                    onChange={(event) => setRuntimeRecallQuery(event.target.value)}
+                                                    placeholder={selectedRuntimeSessionId ? `当前会话 ${selectedRuntimeSessionId} 的 recall` : '输入 recall query，留空则返回最近证据'}
+                                                    className="flex-1 rounded border border-border bg-surface-secondary px-3 py-2 text-sm text-text-primary"
+                                                />
+                                                <button
+                                                    onClick={() => void handleRunRuntimeRecall()}
+                                                    className="px-3 py-2 rounded bg-surface-secondary text-text-primary border border-border text-sm"
+                                                    disabled={isRuntimeRecallLoading}
+                                                >
+                                                    {isRuntimeRecallLoading ? '检索中…' : '执行 Recall'}
+                                                </button>
+                                            </div>
+                                            {!runtimeRecallResults ? (
+                                                <div className="text-[11px] text-text-tertiary">尚未执行 recall。</div>
+                                            ) : runtimeRecallResults.hits.length === 0 ? (
+                                                <div className="text-[11px] text-text-tertiary">没有命中结果。当前 query: {runtimeRecallResults.query || 'recent'}</div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <div className="flex flex-wrap gap-3 text-[11px] text-text-tertiary">
+                                                        <span>hits: {runtimeRecallResults.totalHits}</span>
+                                                        <span>budget: {runtimeRecallResults.usedChars} / {runtimeRecallResults.maxChars}</span>
+                                                        <span>truncated: {runtimeRecallResults.truncated ? 'yes' : 'no'}</span>
+                                                    </div>
+                                                    <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                        {runtimeRecallResults.hits.map((hit) => (
+                                                            <details key={`${hit.sourceKind}_${hit.id}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                                <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                    <span className="font-medium text-text-primary truncate">
+                                                                        [{hit.sourceKind}] {hit.title || hit.summary}
+                                                                    </span>
+                                                                    <span className="text-text-tertiary">score {hit.score.toFixed(2)}</span>
+                                                                </summary>
+                                                                <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                                                    <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                        <span className="font-mono break-all">id: {hit.id}</span>
+                                                                        {hit.sessionId ? <span className="font-mono break-all">session: {hit.sessionId}</span> : null}
+                                                                        {hit.memoryType ? <span>memory: {hit.memoryType}</span> : null}
+                                                                        <span>created: {formatTimestamp(hit.createdAt)}</span>
+                                                                    </div>
+                                                                    <div className="text-text-primary">{hit.summary}</div>
+                                                                    {hit.excerpt ? <div className="whitespace-pre-wrap break-words text-text-secondary">{hit.excerpt}</div> : null}
+                                                                    {hit.matchReasons.length > 0 ? (
+                                                                        <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                            {hit.matchReasons.map((reason) => (
+                                                                                <span key={reason} className="rounded border border-border px-1.5 py-0.5">{reason}</span>
+                                                                            ))}
+                                                                        </div>
+                                                                    ) : null}
+                                                                    {hit.lineage ? (
+                                                                        <div className="rounded border border-border bg-surface-primary/40 p-2 text-text-tertiary">
+                                                                            <div>lineage path: {hit.lineage.lineagePath.join(' -> ')}</div>
+                                                                            {hit.lineage.parentSessionId ? <div>parent session: {hit.lineage.parentSessionId}</div> : null}
+                                                                            {hit.lineage.forkedFromCheckpointId ? <div>forked from checkpoint: {hit.lineage.forkedFromCheckpointId}</div> : null}
+                                                                            {hit.lineage.resumedFromCheckpointId ? <div>resumed from checkpoint: {hit.lineage.resumedFromCheckpointId}</div> : null}
+                                                                            {hit.lineage.compactedCheckpointId ? <div>compacted checkpoint: {hit.lineage.compactedCheckpointId}</div> : null}
+                                                                        </div>
+                                                                    ) : null}
+                                                                </div>
+                                                            </details>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>
@@ -2970,6 +3096,8 @@ export function ToolsSettingsSection({
                                                     <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-text-tertiary">
                                                         <span>transcript: {session.transcriptCount}</span>
                                                         <span>checkpoint: {session.checkpointCount}</span>
+                                                        {session.lineage?.parentSessionId ? <span>parent: {session.lineage.parentSessionId}</span> : null}
+                                                        {session.lineage?.compactRounds ? <span>compact: {session.lineage.compactRounds}</span> : null}
                                                     </div>
                                                 </button>
                                             ))}
@@ -3020,6 +3148,18 @@ export function ToolsSettingsSection({
                                         <div className="text-[11px] text-text-tertiary">加载中...</div>
                                     ) : (
                                         <div className="space-y-3">
+                                            {selectedRuntimeSession.lineage ? (
+                                                <div className="rounded border border-border bg-surface-secondary/20 p-3 text-[11px] text-text-secondary space-y-1">
+                                                    <div className="text-[11px] font-medium text-text-primary">Session Lineage</div>
+                                                    <div className="flex flex-wrap gap-3 text-text-tertiary">
+                                                        <span className="font-mono break-all">path: {selectedRuntimeSession.lineage.lineagePath.join(' -> ')}</span>
+                                                        {selectedRuntimeSession.lineage.parentSessionId ? <span>parent: {selectedRuntimeSession.lineage.parentSessionId}</span> : null}
+                                                        {selectedRuntimeSession.lineage.forkedFromCheckpointId ? <span>fork checkpoint: {selectedRuntimeSession.lineage.forkedFromCheckpointId}</span> : null}
+                                                        {selectedRuntimeSession.lineage.resumedFromCheckpointId ? <span>resume checkpoint: {selectedRuntimeSession.lineage.resumedFromCheckpointId}</span> : null}
+                                                        {selectedRuntimeSession.lineage.compactedCheckpointId ? <span>compact checkpoint: {selectedRuntimeSession.lineage.compactedCheckpointId}</span> : null}
+                                                    </div>
+                                                </div>
+                                            ) : null}
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
                                                 <div className="text-[11px] font-medium text-text-primary">最近 Checkpoints</div>
                                                 <div className="mt-2 space-y-2">
