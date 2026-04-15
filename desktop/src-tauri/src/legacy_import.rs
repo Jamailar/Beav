@@ -90,13 +90,7 @@ pub(crate) fn detect_best_legacy_db() -> Option<PathBuf> {
 }
 
 pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) -> Option<PathBuf> {
-    let direct = store
-        .settings
-        .get("workspace_dir")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
+    let direct = configured_workspace_dir(&store.settings);
     if direct.as_ref().is_some_and(|path| path.exists()) {
         return direct;
     }
@@ -107,15 +101,7 @@ pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) 
     .ok()?;
     rows.into_iter()
         .next()
-        .and_then(|value| {
-            value
-                .get("workspace_dir")
-                .and_then(|item| item.as_str())
-                .map(str::trim)
-                .map(ToString::to_string)
-        })
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .and_then(|value| configured_workspace_dir(&value))
         .filter(|path| path.exists())
 }
 

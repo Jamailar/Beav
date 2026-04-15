@@ -894,13 +894,33 @@ fn is_same_path(left: &Path, right: &Path) -> bool {
     left == right
 }
 
+fn normalize_workspace_dir_candidate(raw: &str) -> Option<PathBuf> {
+    let candidate = raw.trim();
+    if candidate.is_empty() || candidate.len() > 512 {
+        return None;
+    }
+    if candidate.contains('\0') || candidate.contains('\n') || candidate.contains('\r') {
+        return None;
+    }
+    let path = PathBuf::from(candidate);
+    let component_count = path.components().count();
+    if component_count == 0 || component_count > 32 {
+        return None;
+    }
+    if path
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy().len() > 255)
+    {
+        return None;
+    }
+    Some(path)
+}
+
 fn configured_workspace_dir(settings: &Value) -> Option<PathBuf> {
     settings
         .get("workspace_dir")
         .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .and_then(normalize_workspace_dir_candidate)
 }
 
 fn should_force_preferred_workspace_dir(configured: Option<&Path>, store_path: &Path) -> bool {

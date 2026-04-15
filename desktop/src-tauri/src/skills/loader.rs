@@ -16,6 +16,7 @@ pub struct SkillMetadataRecord {
     pub allowed_tool_pack: Option<String>,
     pub allowed_tools: Vec<String>,
     pub blocked_tools: Vec<String>,
+    pub auto_activate_when_intents: Vec<String>,
     pub hook_mode: Option<String>,
     pub auto_activate: bool,
     pub prompt_prefix: Option<String>,
@@ -101,6 +102,11 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
             "blockedtools" | "blocked_tools" | "blocked-tools" => {
                 metadata.blocked_tools = parse_string_list(value);
             }
+            "autoactivatewhenintents"
+            | "auto_activate_when_intents"
+            | "auto-activate-when-intents" => {
+                metadata.auto_activate_when_intents = parse_string_list(value);
+            }
             "hookmode" | "hook_mode" | "hook-mode" => {
                 let normalized = normalize_string(value);
                 metadata.hook_mode = (!normalized.is_empty()).then_some(normalized);
@@ -160,6 +166,7 @@ fn fingerprint_for_loaded_skill(
     metadata.allowed_tool_pack.hash(&mut hasher);
     metadata.allowed_tools.hash(&mut hasher);
     metadata.blocked_tools.hash(&mut hasher);
+    metadata.auto_activate_when_intents.hash(&mut hasher);
     metadata.hook_mode.hash(&mut hasher);
     metadata.auto_activate.hash(&mut hasher);
     metadata.prompt_prefix.hash(&mut hasher);
