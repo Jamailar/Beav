@@ -113,6 +113,7 @@ fn approval_level_for_action(
                 "runtime_query"
                 | "runtime_resume"
                 | "runtime_fork_session"
+                | "runtime_execute_script"
                 | "tasks_create"
                 | "tasks_resume"
                 | "tasks_cancel"
@@ -360,6 +361,18 @@ fn validate_tool_arguments(
                     .unwrap_or(true)
                 {
                     return Err("taskId is required for task control actions".to_string());
+                }
+            }
+            "runtime_execute_script" => {
+                let runtime_mode = payload_string(arguments, "runtimeMode").unwrap_or_default();
+                if !matches!(
+                    runtime_mode.as_str(),
+                    "knowledge" | "diagnostics" | "video-editor"
+                ) {
+                    return Err("runtime_execute_script only supports knowledge, diagnostics, and video-editor runtime modes".to_string());
+                }
+                if payload_field(arguments, "program").is_none() {
+                    return Err("program is required for runtime_execute_script".to_string());
                 }
             }
             "runtime_recall"

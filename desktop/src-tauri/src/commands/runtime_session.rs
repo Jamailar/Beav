@@ -3,6 +3,8 @@ use tauri::{AppHandle, State};
 
 #[path = "runtime_query.rs"]
 mod runtime_query;
+#[path = "runtime_script.rs"]
+mod runtime_script;
 #[path = "runtime_session_ops.rs"]
 mod runtime_session_ops;
 
@@ -25,6 +27,9 @@ pub fn handle_runtime_session_channel(
             runtime_session_ops::runtime_tool_results_value(state, payload)
         }
         "runtime:recall" => runtime_session_ops::runtime_recall_value(state, payload),
+        "runtime:execute-script" => {
+            runtime_script::runtime_execute_script_value(app, state, payload)
+        }
         _ => return None,
     })
 }

@@ -78,6 +78,24 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       hits: [],
     };
   }
+  if (channel === 'runtime:execute-script') {
+    return {
+      success: false,
+      executionId: '',
+      runtimeMode: '',
+      stdout: '',
+      stdoutTruncated: false,
+      artifactPaths: [],
+      toolCallCount: 0,
+      stepCount: 0,
+      tempWorkspace: '',
+      errorSummary: `RedBox scripted execution failed: ${message}`,
+      estimatedPromptReductionChars: 0,
+      executedTools: [],
+      stepSummaries: [],
+      limitSummary: {},
+    };
+  }
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
@@ -240,6 +258,16 @@ function createIpcRenderer() {
         limit?: number;
         maxChars?: number;
       }) => invokeChannel('runtime:recall', payload)
+      ,
+      executeScript: (payload: {
+        sessionId?: string;
+        taskId?: string;
+        runtimeMode?: 'knowledge' | 'diagnostics' | 'video-editor';
+        inputs?: Record<string, unknown>;
+        program: Record<string, unknown> | string;
+        limits?: Record<string, unknown>;
+        reason?: string;
+      }) => invokeChannel('runtime:execute-script', payload)
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),

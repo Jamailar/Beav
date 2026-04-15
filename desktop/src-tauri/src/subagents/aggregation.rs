@@ -40,14 +40,19 @@ pub fn build_orchestration_value(store: &AppStore, outputs: Vec<SubAgentOutput>)
                 .unwrap_or_else(|| item.summary.clone());
             json!({
                 "roleId": item.role_id,
+                "childRuntimeType": item.child_runtime_type,
                 "summary": summary,
                 "artifact": item.artifact,
+                "artifactRefs": item.artifact_refs,
+                "findings": item.findings,
                 "handoff": item.handoff,
                 "risks": item.risks,
                 "issues": item.issues,
+                "approvalsRequested": item.approvals_requested,
                 "approved": item.approved,
                 "childTaskId": item.child_task_id,
                 "childSessionId": item.child_session_id,
+                "childRuntimeId": item.child_runtime_id,
                 "status": item.status,
             })
         })

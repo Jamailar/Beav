@@ -78,6 +78,12 @@ export interface IntentRouteInfo {
 
 export interface AgentTaskSnapshot {
   id: string;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  parentTaskId?: string | null;
+  rootTaskId?: string | null;
+  childTaskIds: string[];
+  aggregationStatus?: string | null;
   taskType: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   runtimeMode: string;
@@ -272,6 +278,9 @@ export interface SessionBridgeSnapshot {
   tasks: AgentTaskSnapshot[];
   backgroundTasks: Array<{
     id: string;
+    definitionId?: string;
+    executionId?: string;
+    sourceTaskId?: string;
     kind: string;
     title: string;
     status: string;
@@ -293,6 +302,11 @@ export interface SessionBridgeSnapshot {
     createdAt: string;
     updatedAt: string;
     completedAt?: string;
+    lineage?: Record<string, unknown>;
+    lastCheckpoint?: Record<string, unknown>;
+    lastArtifact?: Record<string, unknown>;
+    deliveryPolicy?: Record<string, unknown>;
+    retryPolicy?: Record<string, unknown>;
     turns: Array<{
       id: string;
       at: string;
@@ -513,6 +527,8 @@ declare global {
       runtimeTasks: number;
       runtimeTaskTraces: number;
       backgroundTasks: number;
+      agentJobDefinitions?: number;
+      agentJobExecutions?: number;
       hooks: number;
       mcpServers: number;
       skills: number;
@@ -520,6 +536,7 @@ declare global {
       memories: number;
       memoryHistory: number;
       capabilityAudits?: number;
+      scriptExecutions?: number;
     };
     memoryOverview: {
       memoryCount: number;
@@ -557,6 +574,48 @@ declare global {
       lineage: SessionLineageSummary;
     }>;
     recentCapabilityAudits?: RuntimeCapabilityAuditRecord[];
+    scriptRuntime?: {
+      enabled: boolean;
+      eligibleModes: string[];
+      executedCount: number;
+      recentExecutions: Array<{
+        sessionId: string;
+        createdAt: number;
+        summary: string;
+        payload?: {
+          executionId?: string;
+          runtimeMode?: string;
+          success?: boolean;
+          stdoutPreview?: string;
+          stdoutChars?: number;
+          stdoutTruncated?: boolean;
+          artifactPaths?: string[];
+          toolCallCount?: number;
+          stepCount?: number;
+          errorSummary?: string | null;
+          estimatedPromptReductionChars?: number;
+          executedTools?: string[];
+          tempWorkspace?: string;
+        } | null;
+      }>;
+    };
+    agentJobs?: {
+      enabled: boolean;
+      recentExecutions: Array<{
+        executionId: string;
+        definitionId: string;
+        status: string;
+        runtimeMode?: string | null;
+        sourceKind?: string | null;
+        title?: string | null;
+        updatedAt: string;
+        sessionId?: string | null;
+        runtimeTaskId?: string | null;
+        lastError?: string | null;
+        lastCheckpoint?: Record<string, unknown> | null;
+        lastArtifact?: Record<string, unknown> | null;
+      }>;
+    };
     runtimeWarm: {
       lastWarmedAt: number;
       settingsFingerprint: string;
@@ -580,6 +639,45 @@ declare global {
     passed: boolean;
     failedCount: number;
     checks: Phase0SmokeCheck[];
+  }
+
+  interface ScriptExecutionLimitOverrides {
+    timeoutMs?: number;
+    maxStdoutChars?: number;
+    maxToolCalls?: number;
+    maxArtifacts?: number;
+    maxArtifactChars?: number;
+    maxSteps?: number;
+    maxLoopItems?: number;
+    maxFsReadChars?: number;
+    maxFsListEntries?: number;
+    maxRecallChars?: number;
+    maxRecallHits?: number;
+  }
+
+  interface ScriptExecutionStepSummary {
+    id?: string | null;
+    op: string;
+    label: string;
+    status: string;
+    detail: string;
+  }
+
+  interface ScriptExecutionResult {
+    success: boolean;
+    executionId: string;
+    runtimeMode: string;
+    stdout: string;
+    stdoutTruncated: boolean;
+    artifactPaths: string[];
+    toolCallCount: number;
+    stepCount: number;
+    tempWorkspace: string;
+    errorSummary?: string | null;
+    estimatedPromptReductionChars: number;
+    executedTools: string[];
+    stepSummaries: ScriptExecutionStepSummary[];
+    limitSummary?: Record<string, unknown>;
   }
 
   interface Window {
@@ -741,6 +839,15 @@ declare global {
           limit?: number;
           maxChars?: number;
         }) => Promise<RuntimeRecallResponse>;
+        executeScript: (payload: {
+          sessionId?: string;
+          taskId?: string;
+          runtimeMode?: 'knowledge' | 'diagnostics' | 'video-editor';
+          inputs?: Record<string, unknown>;
+          program: Record<string, unknown> | string;
+          limits?: ScriptExecutionLimitOverrides;
+          reason?: string;
+        }) => Promise<ScriptExecutionResult>;
       };
       toolHooks: {
         list: () => Promise<unknown[]>;

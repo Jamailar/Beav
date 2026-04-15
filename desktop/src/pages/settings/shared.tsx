@@ -142,6 +142,12 @@ export interface IntentRouteInfo {
 
 export interface AgentTaskSnapshot {
   id: string;
+  runtimeId?: string | null;
+  parentRuntimeId?: string | null;
+  parentTaskId?: string | null;
+  rootTaskId?: string | null;
+  childTaskIds: string[];
+  aggregationStatus?: string | null;
   taskType: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   runtimeMode: string;
@@ -191,10 +197,13 @@ export interface BackgroundTaskTurn {
 
 export interface BackgroundTaskItem {
   id: string;
-  kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime';
+  definitionId?: string;
+  executionId?: string;
+  sourceTaskId?: string;
+  kind: 'redclaw-project' | 'scheduled-task' | 'long-cycle' | 'heartbeat' | 'memory-maintenance' | 'headless-runtime' | 'runtime-task' | 'assistant-daemon';
   title: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
-  phase: 'queued' | 'starting' | 'thinking' | 'tooling' | 'responding' | 'updating' | 'completed' | 'failed' | 'cancelled';
+  status: 'running' | 'completed' | 'held' | 'failed' | 'cancelled';
+  phase: 'queued' | 'starting' | 'thinking' | 'tooling' | 'responding' | 'updating' | 'held' | 'completed' | 'failed' | 'cancelled';
   sessionId?: string;
   contextId?: string;
   error?: string;
@@ -206,6 +215,7 @@ export interface BackgroundTaskItem {
     | 'queued'
     | 'leased'
     | 'running'
+    | 'held'
     | 'retrying'
     | 'succeeded'
     | 'failed'
@@ -225,6 +235,18 @@ export interface BackgroundTaskItem {
   updatedAt: string;
   completedAt?: string;
   turns: BackgroundTaskTurn[];
+  lineage?: {
+    sourceKind?: string;
+    sourceTaskId?: string;
+    ownerContextId?: string;
+    runtimeMode?: string;
+    triggerKind?: string;
+    progressionKind?: string;
+  };
+  lastCheckpoint?: Record<string, unknown>;
+  lastArtifact?: Record<string, unknown>;
+  deliveryPolicy?: Record<string, unknown>;
+  retryPolicy?: Record<string, unknown>;
 }
 
 export interface BackgroundWorkerPoolSlot {

@@ -3,11 +3,9 @@ use tauri::{AppHandle, State};
 
 #[path = "runtime_task_ops.rs"]
 mod runtime_task_ops;
-#[path = "runtime_task_resume.rs"]
-mod runtime_task_resume;
 
 use crate::AppState;
-use runtime_task_resume::handle_runtime_task_resume;
+use crate::commands::runtime_task_resume::handle_runtime_task_resume;
 
 pub fn handle_runtime_task_channel(
     app: &AppHandle,

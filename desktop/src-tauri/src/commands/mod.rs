@@ -18,6 +18,7 @@ pub mod redclaw_runtime;
 pub mod runtime;
 pub mod runtime_orchestration;
 pub mod runtime_routing;
+pub mod runtime_task_resume;
 pub mod skills_ai;
 pub mod spaces;
 pub mod subjects;

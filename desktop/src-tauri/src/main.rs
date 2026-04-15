@@ -22,6 +22,7 @@ mod persistence;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
+mod script_runtime;
 mod skills;
 mod subagents;
 mod tools;
@@ -3391,6 +3392,18 @@ fn execute_interactive_tool_call(
                         "includeChildSessions": payload_field(arguments, "includeChildSessions").cloned().unwrap_or_else(|| json!(false)),
                         "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(8)),
                         "maxChars": payload_field(arguments, "maxChars").cloned().unwrap_or_else(|| json!(4000)),
+                    }),
+                ),
+                "runtime_execute_script" => call_runtime_channel(
+                    "runtime:execute-script",
+                    json!({
+                        "sessionId": payload_string(arguments, "sessionId"),
+                        "taskId": payload_string(arguments, "taskId"),
+                        "runtimeMode": payload_string(arguments, "runtimeMode"),
+                        "inputs": payload_field(arguments, "inputs").cloned().unwrap_or_else(|| json!({})),
+                        "program": payload_field(arguments, "program").cloned().unwrap_or(Value::Null),
+                        "limits": payload_field(arguments, "limits").cloned().unwrap_or(Value::Null),
+                        "reason": payload_string(arguments, "reason"),
                     }),
                 ),
                 "tasks_create" => call_runtime_channel(

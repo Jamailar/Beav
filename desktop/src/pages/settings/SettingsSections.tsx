@@ -1,5 +1,5 @@
 import { memo, useMemo, type Dispatch, type SetStateAction } from 'react';
-import { Activity, AlertCircle, Database, Download, FolderOpen, Info, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, AlertCircle, Archive, Database, Download, FolderOpen, Info, RefreshCw, RotateCcw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import type { FeatureFlags } from '../../hooks/useFeatureFlags';
 import { PasswordInput } from './shared';
@@ -1570,13 +1570,15 @@ interface ToolsSettingsSectionProps {
     isBackgroundTasksLoading: boolean;
     isRuntimeCreating: boolean;
     runtimeTaskActionRunning: Record<string, 'resume' | 'cancel' | undefined>;
-    backgroundTaskActionRunning: Record<string, 'cancel' | undefined>;
+    backgroundTaskActionRunning: Record<string, 'cancel' | 'retry' | 'archive' | undefined>;
     handleRefreshRuntimeData: () => Promise<void>;
     handleRunPhase0Smoke: () => Promise<void>;
     handleCreateRuntimeTask: () => Promise<void>;
     handleResumeRuntimeTask: (taskId: string) => Promise<void>;
     handleCancelRuntimeTask: (taskId: string) => Promise<void>;
     handleCancelBackgroundTask: (taskId: string) => Promise<void>;
+    handleRetryBackgroundTask: (taskId: string) => Promise<void>;
+    handleArchiveBackgroundTask: (taskId: string) => Promise<void>;
     handleRunRuntimeRecall: () => Promise<void>;
 }
 
@@ -1659,6 +1661,8 @@ export function ToolsSettingsSection({
     handleResumeRuntimeTask,
     handleCancelRuntimeTask,
     handleCancelBackgroundTask,
+    handleRetryBackgroundTask,
+    handleArchiveBackgroundTask,
     handleRunRuntimeRecall,
 }: ToolsSettingsSectionProps) {
     const mcpRuntimeMap = useMemo(
@@ -1900,6 +1904,8 @@ export function ToolsSettingsSection({
                 return 'bg-green-500/10 text-green-600';
             case 'running':
                 return 'bg-blue-500/10 text-blue-600';
+            case 'held':
+                return 'bg-amber-500/10 text-amber-700';
             case 'failed':
                 return 'bg-red-500/10 text-red-600';
             case 'cancelled':
@@ -1919,6 +1925,8 @@ export function ToolsSettingsSection({
                 return 'bg-emerald-500/10 text-emerald-600';
             case 'updating':
                 return 'bg-amber-500/10 text-amber-600';
+            case 'held':
+                return 'bg-amber-500/10 text-amber-700';
             case 'completed':
                 return 'bg-green-500/10 text-green-600';
             case 'failed':
@@ -2457,6 +2465,8 @@ export function ToolsSettingsSection({
                                                 <div>runtime tasks: {runtimeDebugSummary.storeCounts.runtimeTasks}</div>
                                                 <div>task traces: {runtimeDebugSummary.storeCounts.runtimeTaskTraces}</div>
                                                 <div>background: {runtimeDebugSummary.storeCounts.backgroundTasks}</div>
+                                                <div>job definitions: {runtimeDebugSummary.storeCounts.agentJobDefinitions ?? 0}</div>
+                                                <div>job executions: {runtimeDebugSummary.storeCounts.agentJobExecutions ?? 0}</div>
                                                 <div>hooks: {runtimeDebugSummary.storeCounts.hooks}</div>
                                                 <div>mcp servers: {runtimeDebugSummary.storeCounts.mcpServers}</div>
                                                 <div>skills: {runtimeDebugSummary.storeCounts.skills}</div>
@@ -2490,6 +2500,63 @@ export function ToolsSettingsSection({
                                                 <div>latest history: {formatTimestamp(runtimeDebugSummary.memoryOverview.latestHistoryAt)}</div>
                                                 <div>recall v2: {runtimeDebugSummary.recallReadiness?.enabled ? 'enabled' : 'disabled'}</div>
                                             </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Script Runtime</div>
+                                                <span className={clsx(
+                                                    'px-1.5 py-0.5 rounded border text-[10px]',
+                                                    runtimeDebugSummary.scriptRuntime?.enabled
+                                                        ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                        : 'bg-surface-secondary text-text-tertiary border-border',
+                                                )}>
+                                                    {runtimeDebugSummary.scriptRuntime?.enabled ? 'enabled' : 'disabled'}
+                                                </span>
+                                            </div>
+                                            <div className="space-y-2 text-[11px] text-text-secondary">
+                                                <div>eligible modes: {runtimeDebugSummary.scriptRuntime?.eligibleModes.join(', ') || 'n/a'}</div>
+                                                <div>executions: {runtimeDebugSummary.scriptRuntime?.executedCount ?? 0}</div>
+                                            </div>
+                                            {!runtimeDebugSummary.scriptRuntime?.recentExecutions?.length ? (
+                                                <div className="text-[11px] text-text-tertiary">暂无 script runtime 执行记录。</div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                                                    {runtimeDebugSummary.scriptRuntime.recentExecutions.map((execution, index) => (
+                                                        <details key={`${execution.sessionId}_${execution.createdAt}_${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                <span className="font-medium text-text-primary truncate">
+                                                                    {execution.payload?.runtimeMode || 'script'} · {execution.summary}
+                                                                </span>
+                                                                <span className="text-text-tertiary">{formatTimestamp(execution.createdAt)}</span>
+                                                            </summary>
+                                                            <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                                                <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                    <span className="font-mono break-all">session: {execution.sessionId}</span>
+                                                                    {typeof execution.payload?.toolCallCount === 'number' ? <span>tool calls: {execution.payload.toolCallCount}</span> : null}
+                                                                    {typeof execution.payload?.stepCount === 'number' ? <span>steps: {execution.payload.stepCount}</span> : null}
+                                                                    {typeof execution.payload?.estimatedPromptReductionChars === 'number' ? <span>prompt reduction: {execution.payload.estimatedPromptReductionChars}</span> : null}
+                                                                </div>
+                                                                {execution.payload?.stdoutPreview ? (
+                                                                    <div className="whitespace-pre-wrap break-words rounded border border-border bg-surface-primary/40 p-2 text-text-primary">
+                                                                        {execution.payload.stdoutPreview}
+                                                                    </div>
+                                                                ) : null}
+                                                                {execution.payload?.artifactPaths?.length ? (
+                                                                    <div className="space-y-1 text-text-tertiary">
+                                                                        {execution.payload.artifactPaths.map((path) => (
+                                                                            <div key={path} className="font-mono break-all">{path}</div>
+                                                                        ))}
+                                                                    </div>
+                                                                ) : null}
+                                                                {execution.payload?.errorSummary ? (
+                                                                    <div className="text-red-500">{execution.payload.errorSummary}</div>
+                                                                ) : null}
+                                                            </div>
+                                                        </details>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
@@ -2842,6 +2909,8 @@ export function ToolsSettingsSection({
                                                         <span>mode: {task.runtimeMode}</span>
                                                         {task.roleId ? <span>role: {task.roleId}</span> : null}
                                                         {task.intent ? <span>intent: {task.intent}</span> : null}
+                                                        {task.parentTaskId ? <span>parent: {task.parentTaskId}</span> : null}
+                                                        {task.childTaskIds.length > 0 ? <span>children: {task.childTaskIds.length}</span> : null}
                                                     </div>
                                                 </button>
                                             ))}
@@ -2890,11 +2959,21 @@ export function ToolsSettingsSection({
                                                         </span>
                                                     ) : null}
                                                 </div>
-                                                <div className="mt-2 text-[11px] text-text-tertiary space-y-1">
-                                                    <div className="font-mono break-all">{selectedRuntimeTask.id}</div>
-                                                    {selectedRuntimeTask.route?.reasoning ? (
-                                                        <div>route: {selectedRuntimeTask.route.reasoning}</div>
-                                                    ) : null}
+                                                    <div className="mt-2 text-[11px] text-text-tertiary space-y-1">
+                                                        <div className="font-mono break-all">{selectedRuntimeTask.id}</div>
+                                                        <div className="flex flex-wrap gap-3">
+                                                            {selectedRuntimeTask.runtimeId ? <span className="font-mono break-all">runtime: {selectedRuntimeTask.runtimeId}</span> : null}
+                                                            {selectedRuntimeTask.parentRuntimeId ? <span className="font-mono break-all">parent runtime: {selectedRuntimeTask.parentRuntimeId}</span> : null}
+                                                            {selectedRuntimeTask.parentTaskId ? <span className="font-mono break-all">parent task: {selectedRuntimeTask.parentTaskId}</span> : null}
+                                                            {selectedRuntimeTask.rootTaskId ? <span className="font-mono break-all">root task: {selectedRuntimeTask.rootTaskId}</span> : null}
+                                                            {selectedRuntimeTask.aggregationStatus ? <span>aggregation: {selectedRuntimeTask.aggregationStatus}</span> : null}
+                                                        </div>
+                                                        {selectedRuntimeTask.childTaskIds.length > 0 ? (
+                                                            <div className="font-mono break-all">children: {selectedRuntimeTask.childTaskIds.join(', ')}</div>
+                                                        ) : null}
+                                                        {selectedRuntimeTask.route?.reasoning ? (
+                                                            <div>route: {selectedRuntimeTask.route.reasoning}</div>
+                                                        ) : null}
                                                     {selectedRuntimeTask.lastError ? (
                                                         <div className="text-red-600">error: {selectedRuntimeTask.lastError}</div>
                                                     ) : null}
@@ -3053,15 +3132,35 @@ export function ToolsSettingsSection({
                                 <div className="flex items-center justify-between gap-2">
                                     <div className="text-xs font-medium text-text-primary">后台任务详情</div>
                                     {selectedBackgroundTask ? (
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleCancelBackgroundTask(selectedBackgroundTask.id)}
-                                            disabled={!['queued', 'leased', 'running', 'retrying'].includes(selectedBackgroundTask.workerState) || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
-                                            className="inline-flex items-center gap-2 px-2.5 py-1.5 border border-red-300 text-red-600 rounded text-xs hover:bg-red-50/70 transition-colors disabled:opacity-50"
-                                        >
-                                            <Square className="w-3.5 h-3.5" />
-                                            {backgroundTaskActionRunning[selectedBackgroundTask.id] === 'cancel' ? '取消中...' : '停止任务'}
-                                        </button>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleRetryBackgroundTask(selectedBackgroundTask.id)}
+                                                disabled={!['failed', 'held', 'cancelled', 'dead_lettered'].includes(selectedBackgroundTask.workerState) || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
+                                                className="inline-flex items-center gap-2 px-2.5 py-1.5 border border-sky-300 text-sky-600 rounded text-xs hover:bg-sky-50/70 transition-colors disabled:opacity-50"
+                                            >
+                                                <RotateCcw className="w-3.5 h-3.5" />
+                                                {backgroundTaskActionRunning[selectedBackgroundTask.id] === 'retry' ? '重试中...' : '重试任务'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleArchiveBackgroundTask(selectedBackgroundTask.id)}
+                                                disabled={!['succeeded', 'failed', 'held', 'cancelled', 'dead_lettered'].includes(selectedBackgroundTask.workerState) || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
+                                                className="inline-flex items-center gap-2 px-2.5 py-1.5 border border-border text-text-secondary rounded text-xs hover:bg-surface-secondary/50 transition-colors disabled:opacity-50"
+                                            >
+                                                <Archive className="w-3.5 h-3.5" />
+                                                {backgroundTaskActionRunning[selectedBackgroundTask.id] === 'archive' ? '归档中...' : '归档'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleCancelBackgroundTask(selectedBackgroundTask.id)}
+                                                disabled={!['queued', 'leased', 'running', 'retrying'].includes(selectedBackgroundTask.workerState) || Boolean(backgroundTaskActionRunning[selectedBackgroundTask.id])}
+                                                className="inline-flex items-center gap-2 px-2.5 py-1.5 border border-red-300 text-red-600 rounded text-xs hover:bg-red-50/70 transition-colors disabled:opacity-50"
+                                            >
+                                                <Square className="w-3.5 h-3.5" />
+                                                {backgroundTaskActionRunning[selectedBackgroundTask.id] === 'cancel' ? '取消中...' : '停止任务'}
+                                            </button>
+                                        </div>
                                     ) : null}
                                 </div>
 
@@ -3084,6 +3183,9 @@ export function ToolsSettingsSection({
                                             </div>
                                             <div className="mt-2 text-[11px] text-text-tertiary space-y-1">
                                                 <div className="font-mono break-all">{selectedBackgroundTask.id}</div>
+                                                {selectedBackgroundTask.definitionId ? <div>definition: {selectedBackgroundTask.definitionId}</div> : null}
+                                                {selectedBackgroundTask.executionId ? <div>execution: {selectedBackgroundTask.executionId}</div> : null}
+                                                {selectedBackgroundTask.sourceTaskId ? <div>sourceTask: {selectedBackgroundTask.sourceTaskId}</div> : null}
                                                 {selectedBackgroundTask.sessionId ? <div>session: {selectedBackgroundTask.sessionId}</div> : null}
                                                 {selectedBackgroundTask.contextId ? <div>context: {selectedBackgroundTask.contextId}</div> : null}
                                                 <div>created: {new Date(selectedBackgroundTask.createdAt).toLocaleString()}</div>
@@ -3104,8 +3206,41 @@ export function ToolsSettingsSection({
                                                 {selectedBackgroundTask.error ? (
                                                     <div className="text-red-600">error: {selectedBackgroundTask.error}</div>
                                                 ) : null}
+                                                {selectedBackgroundTask.lineage ? (
+                                                    <details className="mt-2 rounded border border-border bg-surface-primary/40 p-2">
+                                                        <summary className="cursor-pointer text-[11px] font-medium text-text-primary">job lineage</summary>
+                                                        <pre className="mt-2 whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
+                                                            {JSON.stringify(selectedBackgroundTask.lineage, null, 2)}
+                                                        </pre>
+                                                    </details>
+                                                ) : null}
                                             </div>
                                         </div>
+
+                                        {(selectedBackgroundTask.lastCheckpoint || selectedBackgroundTask.lastArtifact) ? (
+                                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                                <div className="rounded border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Last Checkpoint</div>
+                                                    {selectedBackgroundTask.lastCheckpoint ? (
+                                                        <pre className="whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
+                                                            {JSON.stringify(selectedBackgroundTask.lastCheckpoint, null, 2)}
+                                                        </pre>
+                                                    ) : (
+                                                        <div className="text-[11px] text-text-tertiary">暂无 checkpoint。</div>
+                                                    )}
+                                                </div>
+                                                <div className="rounded border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Last Artifact</div>
+                                                    {selectedBackgroundTask.lastArtifact ? (
+                                                        <pre className="whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
+                                                            {JSON.stringify(selectedBackgroundTask.lastArtifact, null, 2)}
+                                                        </pre>
+                                                    ) : (
+                                                        <div className="text-[11px] text-text-tertiary">暂无 artifact。</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ) : null}
 
                                         <div className="rounded border border-border bg-surface-secondary/20 p-3 space-y-2">
                                             <div className="flex items-center gap-2 text-[11px] font-medium text-text-primary">
@@ -3282,12 +3417,62 @@ export function ToolsSettingsSection({
                                                     </div>
                                                 </div>
                                             ))}
+                                                </div>
+                                            )}
                                         </div>
-                                    )}
-                                </div>
-                            </div>
 
-                            <div className="space-y-4">
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Agent Jobs</div>
+                                                <span className={clsx(
+                                                    'px-1.5 py-0.5 rounded border text-[10px]',
+                                                    runtimeDebugSummary.agentJobs?.enabled
+                                                        ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                        : 'bg-surface-secondary text-text-tertiary border-border',
+                                                )}>
+                                                    {runtimeDebugSummary.agentJobs?.enabled ? 'enabled' : 'disabled'}
+                                                </span>
+                                            </div>
+                                            <div className="space-y-2 text-[11px] text-text-secondary">
+                                                <div>definitions: {runtimeDebugSummary.storeCounts.agentJobDefinitions ?? 0}</div>
+                                                <div>executions: {runtimeDebugSummary.storeCounts.agentJobExecutions ?? 0}</div>
+                                            </div>
+                                            {!runtimeDebugSummary.agentJobs?.recentExecutions?.length ? (
+                                                <div className="text-[11px] text-text-tertiary">暂无 agent job 执行记录。</div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                                                    {runtimeDebugSummary.agentJobs.recentExecutions.map((execution) => (
+                                                        <details key={execution.executionId} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                <span className="font-medium text-text-primary truncate">
+                                                                    {execution.title || execution.sourceKind || execution.executionId}
+                                                                </span>
+                                                                <span className="text-text-tertiary">{execution.status}</span>
+                                                            </summary>
+                                                            <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
+                                                                <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                    <span className="font-mono break-all">execution: {execution.executionId}</span>
+                                                                    <span className="font-mono break-all">definition: {execution.definitionId}</span>
+                                                                    {execution.runtimeMode ? <span>mode: {execution.runtimeMode}</span> : null}
+                                                                    {execution.sourceKind ? <span>source: {execution.sourceKind}</span> : null}
+                                                                </div>
+                                                                {execution.lastError ? (
+                                                                    <div className="text-red-600">{execution.lastError}</div>
+                                                                ) : null}
+                                                                {execution.lastCheckpoint ? (
+                                                                    <pre className="whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/40 p-2">
+                                                                        {JSON.stringify(execution.lastCheckpoint, null, 2)}
+                                                                    </pre>
+                                                                ) : null}
+                                                            </div>
+                                                        </details>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-4">
                                 <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
                                     <div className="flex items-center justify-between gap-2">
                                         <div className="text-xs font-medium text-text-primary">Session Transcript / Checkpoints</div>

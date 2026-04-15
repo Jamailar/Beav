@@ -1,10 +1,11 @@
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::commands::chat_state::request_chat_runtime_cancel;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace, cancel_runtime_task,
+    append_runtime_task_trace, cancel_runtime_task_tree,
     get_runtime_task_value as runtime_task_lookup_value,
     list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
     store_runtime_task,
@@ -75,13 +76,45 @@ pub fn cancel_runtime_task_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    with_store_mut(state, |store| {
-        if !cancel_runtime_task(store, &task_id) {
-            return Ok(json!({ "success": false, "error": "任务不存在" }));
+    let (cancelled_ids, session_ids) = with_store_mut(state, |store| {
+        let sessions = store
+            .runtime_tasks
+            .iter()
+            .filter(|item| {
+                item.id == task_id
+                    || item.parent_task_id.as_deref() == Some(task_id.as_str())
+                    || item.root_task_id.as_deref() == Some(task_id.as_str())
+            })
+            .filter_map(|item| item.owner_session_id.clone())
+            .collect::<Vec<_>>();
+        let cancelled = cancel_runtime_task_tree(store, &task_id);
+        if cancelled.is_empty() {
+            return Ok((Vec::<String>::new(), Vec::<String>::new()));
         }
-        append_runtime_task_trace(store, &task_id, "cancelled", None);
-        Ok(json!({ "success": true, "taskId": task_id }))
-    })
+        for cancelled_id in &cancelled {
+            append_runtime_task_trace(store, cancelled_id, "cancelled", None);
+        }
+        Ok((cancelled, sessions))
+    })?;
+    if cancelled_ids.is_empty() {
+        return Ok(json!({ "success": false, "error": "任务不存在" }));
+    }
+    for session_id in &session_ids {
+        let _ = request_chat_runtime_cancel(state, session_id);
+        if let Ok(guard) = state.active_chat_requests.lock() {
+            if let Some(child) = guard.get(session_id) {
+                if let Ok(mut child_guard) = child.lock() {
+                    let _ = child_guard.kill();
+                }
+            }
+        }
+    }
+    Ok(json!({
+        "success": true,
+        "taskId": task_id,
+        "cancelledTaskIds": cancelled_ids,
+        "cancelledSessionIds": session_ids,
+    }))
 }
 
 pub fn runtime_task_trace_value(

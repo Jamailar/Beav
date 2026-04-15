@@ -367,7 +367,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isBackgroundTasksLoading, setIsBackgroundTasksLoading] = useState(false);
   const [isRuntimeCreating, setIsRuntimeCreating] = useState(false);
   const [runtimeTaskActionRunning, setRuntimeTaskActionRunning] = useState<Record<string, 'resume' | 'cancel' | undefined>>({});
-  const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | undefined>>({});
+  const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | 'retry' | 'archive' | undefined>>({});
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -1844,6 +1844,30 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       await loadBackgroundTasks();
     } catch (e) {
       console.error('Failed to cancel background task', e);
+    } finally {
+      setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
+    }
+  };
+
+  const handleRetryBackgroundTask = async (taskId: string) => {
+    setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: 'retry' }));
+    try {
+      await window.ipcRenderer.backgroundTasks.retry(taskId);
+      await loadBackgroundTasks();
+    } catch (e) {
+      console.error('Failed to retry background task', e);
+    } finally {
+      setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
+    }
+  };
+
+  const handleArchiveBackgroundTask = async (taskId: string) => {
+    setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: 'archive' }));
+    try {
+      await window.ipcRenderer.backgroundTasks.archive(taskId);
+      await loadBackgroundTasks();
+    } catch (e) {
+      console.error('Failed to archive background task', e);
     } finally {
       setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
     }
@@ -3678,6 +3702,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
+                handleRetryBackgroundTask={handleRetryBackgroundTask}
+                handleArchiveBackgroundTask={handleArchiveBackgroundTask}
                 handleRunRuntimeRecall={handleRunRuntimeRecall}
               />
             )}

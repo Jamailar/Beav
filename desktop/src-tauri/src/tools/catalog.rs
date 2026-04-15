@@ -10,6 +10,12 @@ pub enum ApprovalLevel {
     AlwaysHold,
 }
 
+impl Default for ApprovalLevel {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 pub fn approval_level_max(left: ApprovalLevel, right: ApprovalLevel) -> ApprovalLevel {
     if left >= right {
         left
@@ -282,6 +288,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "runtime_get_checkpoints",
                                 "runtime_get_tool_results",
                                 "runtime_recall",
+                                "runtime_execute_script",
                                 "tasks_create",
                                 "tasks_list",
                                 "tasks_get",
@@ -298,6 +305,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "sessionId": { "type": "string" },
                         "message": { "type": "string" },
                         "query": { "type": "string" },
+                        "runtimeMode": { "type": "string", "enum": ["knowledge", "diagnostics", "video-editor"] },
                         "sources": {
                             "type": "array",
                             "items": {
@@ -319,7 +327,11 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "includeArchived": { "type": "boolean" },
                         "includeChildSessions": { "type": "boolean" },
                         "runtimeId": { "type": "string" },
-                        "payload": { "type": "object" }
+                        "payload": { "type": "object" },
+                        "inputs": { "type": "object" },
+                        "program": { "type": ["object", "string"] },
+                        "limits": { "type": "object" },
+                        "reason": { "type": "string" }
                     },
                     "required": ["action"],
                     "additionalProperties": false

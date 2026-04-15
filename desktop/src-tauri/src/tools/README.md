@@ -23,3 +23,20 @@
   - `redbox_mcp`
   - `redbox_skill`
   - `redbox_runtime_control`
+
+## Phase 5 补充
+
+- `redbox_runtime_control(action=runtime_execute_script)` 现在会进入受限 `script_runtime`。
+- `script_runtime` 只开放只读或低风险桥接能力：
+  - `app.query`
+  - `fs.list`
+  - `fs.read`
+  - `memory.recall`
+  - `editor.script_read`
+  - `editor.project_read`
+  - `editor.remotion_read`
+  - `mcp.list_servers`
+  - `mcp.list_tools`
+  - `mcp.list_resources`
+  - `mcp.list_resource_templates`
+- 脚本执行结果只返回 `stdout + artifactPaths + budget summary`，中间工具结果不会直接进入最终对话上下文。

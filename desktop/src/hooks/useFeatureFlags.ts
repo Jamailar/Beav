@@ -16,9 +16,9 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   vectorRecommendation: false,
   runtimeContextBundleV2: true,
   runtimeMemoryRecallV2: true,
-  runtimeSubagentRuntimeV2: false,
-  runtimeExecuteScriptV1: false,
-  runtimeAgentJobV1: false,
+  runtimeSubagentRuntimeV2: true,
+  runtimeExecuteScriptV1: true,
+  runtimeAgentJobV1: true,
 };
 
 const normalizeFeatureFlags = (value: unknown): FeatureFlags => {

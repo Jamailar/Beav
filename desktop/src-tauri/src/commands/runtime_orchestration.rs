@@ -32,6 +32,7 @@ fn run_prompt_subagent_orchestration_for_task(
     let role_sequence = role_sequence_for_route(&route_value);
     let mut outputs = Vec::<Value>::new();
     for role_id in role_sequence {
+        let role_spec = runtime_subagent_role_spec(&role_id);
         if let Some(handle) = app {
             emit_runtime_subagent_spawned(
                 handle,
@@ -39,13 +40,16 @@ fn run_prompt_subagent_orchestration_for_task(
                 session_id,
                 &role_id,
                 runtime_mode,
+                &role_spec.child_runtime_type,
                 None,
                 None,
                 None,
+                None,
+                "spawn",
+                "running",
                 None,
             );
         }
-        let role_spec = runtime_subagent_role_spec(&role_id);
         let system_prompt = render_redbox_prompt(
             &template,
             &[
@@ -84,11 +88,15 @@ fn run_prompt_subagent_orchestration_for_task(
         });
         outputs.push(json!({
             "roleId": role_spec.role_id,
+            "childRuntimeType": role_spec.child_runtime_type,
             "summary": payload_string(&parsed, "summary").unwrap_or_else(|| raw.clone()),
             "artifact": payload_string(&parsed, "artifact"),
+            "artifactRefs": parsed.get("artifactRefs").cloned().unwrap_or_else(|| json!([])),
+            "findings": parsed.get("findings").cloned().unwrap_or_else(|| json!([])),
             "handoff": payload_string(&parsed, "handoff"),
             "risks": parsed.get("risks").cloned().unwrap_or_else(|| json!([])),
             "issues": parsed.get("issues").cloned().unwrap_or_else(|| json!([])),
+            "approvalsRequested": parsed.get("approvalsRequested").cloned().unwrap_or_else(|| json!([])),
             "approved": parsed.get("approved").cloned().unwrap_or_else(|| json!(true)),
         }));
     }

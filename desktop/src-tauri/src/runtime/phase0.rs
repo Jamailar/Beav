@@ -4,7 +4,10 @@ use tauri::State;
 use crate::interactive_runtime_shared::legacy_interactive_runtime_system_prompt;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::store_runtime_task;
-use crate::scheduler::derived_background_tasks;
+use crate::scheduler::{
+    derived_background_tasks, enqueue_runtime_task_job_execution, ensure_runtime_task_job_definition,
+};
+use crate::script_runtime::{script_runtime_feature_enabled, SCRIPT_RUNTIME_ELIGIBLE_MODES};
 use crate::skills::build_skill_runtime_state;
 use crate::tools::capabilities::resolve_capability_set_for_store;
 use crate::tools::registry::base_tool_names_for_session_metadata;
@@ -23,9 +26,9 @@ pub fn default_feature_flags() -> Value {
         "vectorRecommendation": false,
         "runtimeContextBundleV2": true,
         "runtimeMemoryRecallV2": true,
-        "runtimeSubagentRuntimeV2": false,
-        "runtimeExecuteScriptV1": false,
-        "runtimeAgentJobV1": false,
+        "runtimeSubagentRuntimeV2": true,
+        "runtimeExecuteScriptV1": true,
+        "runtimeAgentJobV1": true,
     })
 }
 
@@ -150,6 +153,8 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         latest_context_snapshots,
         recent_session_lineage,
         recent_capability_audits,
+        recent_script_executions,
+        recent_agent_jobs,
     ) = with_store(state, |store| {
         let settings_snapshot = store.settings.clone();
         let skills = store.skills.clone();
@@ -169,6 +174,8 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             "runtimeTasks": store.runtime_tasks.len(),
             "runtimeTaskTraces": store.runtime_task_traces.len(),
             "backgroundTasks": derived_background_tasks(&store).len(),
+            "agentJobDefinitions": store.redclaw_job_definitions.len(),
+            "agentJobExecutions": store.redclaw_job_executions.len(),
             "hooks": store.runtime_hooks.len(),
             "mcpServers": store.mcp_servers.len(),
             "skills": store.skills.len(),
@@ -176,6 +183,11 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             "memories": store.memories.len(),
             "memoryHistory": store.memory_history.len(),
             "capabilityAudits": store.capability_audit_records.len(),
+            "scriptExecutions": store
+                .session_checkpoints
+                .iter()
+                .filter(|item| item.checkpoint_type == "runtime.script_execution")
+                .count(),
         });
         let session_count = store.chat_sessions.len().max(1) as f64;
         let task_count = store.runtime_tasks.len().max(1) as f64;
@@ -241,6 +253,55 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                 .take(16)
                 .map(|item| json!(item))
                 .collect::<Vec<_>>(),
+            {
+                let mut items = store
+                    .session_checkpoints
+                    .iter()
+                    .filter(|item| item.checkpoint_type == "runtime.script_execution")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                items
+                    .into_iter()
+                    .take(8)
+                    .map(|item| {
+                        json!({
+                            "sessionId": item.session_id,
+                            "createdAt": item.created_at,
+                            "summary": item.summary,
+                            "payload": item.payload,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            },
+            {
+                let mut items = store.redclaw_job_executions.clone();
+                items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                items
+                    .into_iter()
+                    .take(8)
+                    .map(|item| {
+                        let definition = store
+                            .redclaw_job_definitions
+                            .iter()
+                            .find(|definition| definition.id == item.definition_id);
+                        json!({
+                            "executionId": item.id,
+                            "definitionId": item.definition_id,
+                            "status": item.status,
+                            "runtimeMode": definition.map(|value| value.runtime_mode.clone()),
+                            "sourceKind": definition.and_then(|value| value.source_kind.clone()),
+                            "title": definition.map(|value| value.title.clone()),
+                            "updatedAt": item.updated_at,
+                            "sessionId": item.session_id,
+                            "runtimeTaskId": item.runtime_task_id,
+                            "lastError": item.last_error,
+                            "lastCheckpoint": item.checkpoints.last().cloned(),
+                            "lastArtifact": item.artifacts.last().cloned(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            },
         ))
     })?;
 
@@ -256,6 +317,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         .get("settings")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let script_runtime_enabled = script_runtime_feature_enabled(&settings_only);
 
     let runtime_warm = state
         .runtime_warm
@@ -331,6 +393,22 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         "latestContextSnapshots": latest_context_snapshots,
         "recentSessionLineage": recent_session_lineage,
         "recentCapabilityAudits": recent_capability_audits,
+        "scriptRuntime": {
+            "enabled": script_runtime_enabled,
+            "eligibleModes": SCRIPT_RUNTIME_ELIGIBLE_MODES,
+            "executedCount": store_counts
+                .get("scriptExecutions")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            "recentExecutions": recent_script_executions,
+        },
+        "agentJobs": {
+            "enabled": feature_flags
+                .get("runtimeAgentJobV1")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "recentExecutions": recent_agent_jobs,
+        },
         "runtimeWarm": {
             "lastWarmedAt": last_warmed_at,
             "settingsFingerprint": settings_fingerprint,
@@ -499,6 +577,51 @@ pub fn run_phase0_smoke(state: &State<'_, AppState>) -> Result<Value, String> {
         Err(error) => {
             failed += 1;
             checks.push(smoke_result("tasks-create", "failed", error));
+        }
+    }
+
+    match with_store_mut(state, |store| {
+        let route = route_runtime_intent_with_settings(
+            &store.settings,
+            "chatroom",
+            "phase0 smoke agent job",
+            None,
+        );
+        let task = store_runtime_task(
+            store,
+            "manual",
+            "pending",
+            "chatroom".to_string(),
+            Some("phase0-agent-job-session".to_string()),
+            Some("phase0 smoke agent job".to_string()),
+            route,
+            Some(json!({
+                "source": "phase0-agent-job-smoke"
+            })),
+        );
+        let definition_id = ensure_runtime_task_job_definition(store, &task.id)?;
+        let execution_id =
+            enqueue_runtime_task_job_execution(store, &task.id, "phase0-smoke-agent-job")?;
+        store.runtime_tasks.retain(|item| item.id != task.id);
+        store
+            .runtime_task_traces
+            .retain(|item| item.task_id != task.id);
+        store
+            .redclaw_job_executions
+            .retain(|item| item.id != execution_id);
+        store
+            .redclaw_job_definitions
+            .retain(|item| item.id != definition_id);
+        Ok((definition_id, execution_id))
+    }) {
+        Ok((definition_id, execution_id)) => checks.push(smoke_result(
+            "agent-job-preflight",
+            "passed",
+            format!("definition={definition_id}, execution={execution_id}"),
+        )),
+        Err(error) => {
+            failed += 1;
+            checks.push(smoke_result("agent-job-preflight", "failed", error));
         }
     }
 
