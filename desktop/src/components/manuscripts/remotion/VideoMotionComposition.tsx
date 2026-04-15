@@ -58,21 +58,17 @@ function clampFrame(frame: number, durationInFrames: number) {
     return Math.max(0, Math.min(frame, Math.max(0, durationInFrames - 1)));
 }
 
-function toFileUrl(source: string): string {
+function resolveLocalRenderSource(source: string): string {
     const candidate = extractLocalAssetPathCandidate(source);
     if (!candidate) return source;
-    const normalized = candidate.replace(/\\/g, '/');
-    if (/^[a-zA-Z]:\//.test(normalized)) {
-        return `file:///${encodeURI(normalized)}`;
-    }
-    return `file://${encodeURI(normalized)}`;
+    return candidate;
 }
 
 function resolveSceneSource(source: string, runtime: RuntimeMode) {
     const raw = String(source || '').trim();
     if (!raw) return '';
     if (!isLocalAssetSource(raw)) return raw;
-    if (runtime === 'render') return toFileUrl(raw);
+    if (runtime === 'render') return resolveLocalRenderSource(raw);
     return resolveAssetUrl(raw);
 }
 

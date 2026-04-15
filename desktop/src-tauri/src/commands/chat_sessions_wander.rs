@@ -1,8 +1,8 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, checkpoint_count_for_session, runtime_direct_route_record,
-    session_context_usage_value, session_detail_value, session_list_item_value,
-    session_resume_value, tool_results_for_session, trace_for_session,
+    append_compact_boundary_entry, checkpoint_count_for_session, record_phase0_metric,
+    runtime_direct_route_record, session_context_usage_value, session_detail_value,
+    session_list_item_value, session_resume_value, tool_results_for_session, trace_for_session,
     transcript_count_for_session, transcript_resume_messages, transcript_session_list_value,
     transcript_session_meta_by_id, update_session_context_record, RuntimeArtifact,
     RuntimeCheckpointRecord, RuntimeRouteRecord,
@@ -156,11 +156,12 @@ pub fn handle_chat_sessions_wander_channel(
                 with_store(state, |store| Ok(session_detail_value(&store, &session_id)))
             }
             "sessions:resume" => {
+                let _ = record_phase0_metric(state, "sessionResumeAttempts", 1);
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
                     .ok()
                     .flatten();
-                with_store(state, |store| {
+                let resumed = with_store(state, |store| {
                     let resume_messages = transcript_resume_messages(
                         state,
                         &store,
@@ -185,7 +186,15 @@ pub fn handle_chat_sessions_wander_channel(
                         "resumeMessages": resume_messages.unwrap_or_default(),
                         "lastCheckpoint": Value::Null,
                     }))
-                })
+                })?;
+                let success = resumed
+                    .get("chatSession")
+                    .map(|value| !value.is_null())
+                    .unwrap_or(false);
+                if success {
+                    let _ = record_phase0_metric(state, "sessionResumeSuccesses", 1);
+                }
+                Ok(resumed)
             }
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();

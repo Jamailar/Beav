@@ -336,6 +336,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [toolDiagnostics, setToolDiagnostics] = useState<ToolDiagnosticDescriptor[]>([]);
   const [toolDiagnosticResults, setToolDiagnosticResults] = useState<Record<string, ToolDiagnosticRunResult | undefined>>({});
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
+  const [runtimeDebugSummary, setRuntimeDebugSummary] = useState<RuntimeDebugSummary | null>(null);
+  const [isRuntimeDebugSummaryLoading, setIsRuntimeDebugSummaryLoading] = useState(false);
+  const [phase0SmokeResult, setPhase0SmokeResult] = useState<Phase0SmokeResult | null>(null);
+  const [isPhase0SmokeRunning, setIsPhase0SmokeRunning] = useState(false);
   const [runtimeTasks, setRuntimeTasks] = useState<AgentTaskSnapshot[]>([]);
   const [runtimeRoles, setRuntimeRoles] = useState<RoleSpec[]>([]);
   const [runtimeSessions, setRuntimeSessions] = useState<RuntimeSessionListItem[]>([]);
@@ -1706,10 +1710,36 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const loadRuntimeDebugSummary = useCallback(async () => {
+    setIsRuntimeDebugSummaryLoading(true);
+    try {
+      const summary = await window.ipcRenderer.debug.getRuntimeSummary();
+      setRuntimeDebugSummary(summary || null);
+    } catch (e) {
+      console.error('Failed to load runtime debug summary', e);
+    } finally {
+      setIsRuntimeDebugSummaryLoading(false);
+    }
+  }, []);
+
+  const runPhase0Smoke = useCallback(async () => {
+    setIsPhase0SmokeRunning(true);
+    try {
+      const result = await window.ipcRenderer.debug.runPhase0Smoke();
+      setPhase0SmokeResult(result || null);
+      await loadRuntimeDebugSummary();
+    } catch (e) {
+      console.error('Failed to run phase0 smoke', e);
+    } finally {
+      setIsPhase0SmokeRunning(false);
+    }
+  }, [loadRuntimeDebugSummary]);
+
   const loadRuntimeDeveloperData = useCallback(async () => {
     await Promise.all([
       loadRuntimeRoles(),
       loadToolDiagnostics(),
+      loadRuntimeDebugSummary(),
     ]);
     await Promise.all([
       loadRuntimeTasks(),
@@ -1723,6 +1753,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
+    loadRuntimeDebugSummary,
     loadRuntimeHooks,
     loadRuntimeRoles,
     loadRuntimeSessions,
@@ -3572,6 +3603,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isInstallingTool={isInstallingTool}
                 installProgress={installProgress}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}
+                runtimeDebugSummary={runtimeDebugSummary}
+                isRuntimeDebugSummaryLoading={isRuntimeDebugSummaryLoading}
+                phase0SmokeResult={phase0SmokeResult}
+                isPhase0SmokeRunning={isPhase0SmokeRunning}
                 toolDiagnostics={toolDiagnostics}
                 toolDiagnosticResults={toolDiagnosticResults}
                 toolDiagnosticRunning={toolDiagnosticRunning}
@@ -3608,6 +3643,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 runtimeTaskActionRunning={runtimeTaskActionRunning}
                 backgroundTaskActionRunning={backgroundTaskActionRunning}
                 handleRefreshRuntimeData={loadRuntimeDeveloperData}
+                handleRunPhase0Smoke={runPhase0Smoke}
                 handleCreateRuntimeTask={handleCreateRuntimeTask}
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}

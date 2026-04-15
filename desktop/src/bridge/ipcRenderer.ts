@@ -186,7 +186,9 @@ function createIpcRenderer() {
     getSettings: () => invokeChannel('db:get-settings'),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
+      getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
+      runPhase0Smoke: () => invokeChannel('debug:run-phase0-smoke'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
     },
     sessions: {

@@ -1,69 +1,173 @@
-/**
- * 功能开关管理 Hook
- * 使用 localStorage 持久化存储
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export interface FeatureFlags {
-  vectorRecommendation: boolean; // 向量推荐 - 分栏模式下知识库按相似度排序
+  vectorRecommendation: boolean;
+  runtimeContextBundleV2: boolean;
+  runtimeMemoryRecallV2: boolean;
+  runtimeSubagentRuntimeV2: boolean;
+  runtimeExecuteScriptV1: boolean;
+  runtimeAgentJobV1: boolean;
 }
 
 const STORAGE_KEY = 'redconvert:feature-flags';
+const UPDATE_EVENT = 'featureflags:updated';
 
-const DEFAULT_FLAGS: FeatureFlags = {
-  vectorRecommendation: false, // 默认关闭
+export const DEFAULT_FLAGS: FeatureFlags = {
+  vectorRecommendation: false,
+  runtimeContextBundleV2: false,
+  runtimeMemoryRecallV2: false,
+  runtimeSubagentRuntimeV2: false,
+  runtimeExecuteScriptV1: false,
+  runtimeAgentJobV1: false,
 };
 
-// 获取当前功能开关状态
-export const getFeatureFlags = (): FeatureFlags => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      return { ...DEFAULT_FLAGS, ...JSON.parse(stored) };
+const normalizeFeatureFlags = (value: unknown): FeatureFlags => {
+  if (!value || typeof value !== 'object') {
+    return { ...DEFAULT_FLAGS };
+  }
+  const candidate = value as Record<string, unknown>;
+  return {
+    vectorRecommendation: candidate.vectorRecommendation === true,
+    runtimeContextBundleV2: candidate.runtimeContextBundleV2 === true,
+    runtimeMemoryRecallV2: candidate.runtimeMemoryRecallV2 === true,
+    runtimeSubagentRuntimeV2: candidate.runtimeSubagentRuntimeV2 === true,
+    runtimeExecuteScriptV1: candidate.runtimeExecuteScriptV1 === true,
+    runtimeAgentJobV1: candidate.runtimeAgentJobV1 === true,
+  };
+};
+
+const normalizeFeatureFlagPatch = (value: Partial<FeatureFlags>): Partial<FeatureFlags> => {
+  const patch: Partial<FeatureFlags> = {};
+  for (const key of Object.keys(DEFAULT_FLAGS) as Array<keyof FeatureFlags>) {
+    if (typeof value[key] === 'boolean') {
+      patch[key] = value[key];
     }
-  } catch (e) {
-    console.error('Failed to load feature flags:', e);
   }
-  return DEFAULT_FLAGS;
+  return patch;
 };
 
-// 保存功能开关状态
-export const saveFeatureFlags = (flags: Partial<FeatureFlags>): FeatureFlags => {
-  const current = getFeatureFlags();
-  const updated = { ...current, ...flags };
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Failed to save feature flags:', e);
+const readStoredFeatureFlags = (): FeatureFlags => {
+  if (typeof window === 'undefined') {
+    return { ...DEFAULT_FLAGS };
   }
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (!stored) {
+      return { ...DEFAULT_FLAGS };
+    }
+    return normalizeFeatureFlags(JSON.parse(stored));
+  } catch (error) {
+    console.error('Failed to load feature flags:', error);
+    return { ...DEFAULT_FLAGS };
+  }
+};
+
+const persistLocalFeatureFlags = (flags: FeatureFlags): FeatureFlags => {
+  if (typeof window === 'undefined') {
+    return flags;
+  }
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(flags));
+  } catch (error) {
+    console.error('Failed to save feature flags:', error);
+  }
+  return flags;
+};
+
+const emitFeatureFlagsUpdated = (flags: FeatureFlags) => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(UPDATE_EVENT, { detail: flags }));
+};
+
+const syncHostFeatureFlags = async (flags: FeatureFlags) => {
+  if (typeof window === 'undefined' || !window.ipcRenderer?.saveSettings) {
+    return;
+  }
+  try {
+    await window.ipcRenderer.saveSettings({ feature_flags: flags });
+  } catch (error) {
+    console.error('Failed to sync feature flags to host settings:', error);
+  }
+};
+
+const loadHostFeatureFlags = async (): Promise<FeatureFlags | null> => {
+  if (typeof window === 'undefined' || !window.ipcRenderer?.getSettings) {
+    return null;
+  }
+  try {
+    const settings = await window.ipcRenderer.getSettings();
+    return normalizeFeatureFlags(settings?.feature_flags);
+  } catch (error) {
+    console.error('Failed to load host feature flags:', error);
+    return null;
+  }
+};
+
+export const getFeatureFlags = (): FeatureFlags => readStoredFeatureFlags();
+
+export const saveFeatureFlags = (flags: Partial<FeatureFlags>): FeatureFlags => {
+  const updated = {
+    ...readStoredFeatureFlags(),
+    ...normalizeFeatureFlagPatch(flags),
+  };
+  persistLocalFeatureFlags(updated);
+  emitFeatureFlagsUpdated(updated);
+  void syncHostFeatureFlags(updated);
   return updated;
 };
 
-// React Hook
 export function useFeatureFlags() {
   const [flags, setFlags] = useState<FeatureFlags>(getFeatureFlags);
 
-  // 监听其他 tab 的变化
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        setFlags(getFeatureFlags());
+    let cancelled = false;
+    void loadHostFeatureFlags().then((hostFlags) => {
+      if (cancelled || !hostFlags) return;
+      persistLocalFeatureFlags(hostFlags);
+      setFlags(hostFlags);
+      emitFeatureFlagsUpdated(hostFlags);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleStorage = (event?: Event) => {
+      if (event instanceof StorageEvent && event.key && event.key !== STORAGE_KEY) {
+        return;
       }
+      setFlags(readStoredFeatureFlags());
     };
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    window.addEventListener(UPDATE_EVENT, handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(UPDATE_EVENT, handleStorage);
+    };
   }, []);
 
   const updateFlag = useCallback(<K extends keyof FeatureFlags>(key: K, value: FeatureFlags[K]) => {
-    const updated = saveFeatureFlags({ [key]: value });
+    const updated = {
+      ...readStoredFeatureFlags(),
+      [key]: value,
+    };
+    persistLocalFeatureFlags(updated);
     setFlags(updated);
+    emitFeatureFlagsUpdated(updated);
+    void syncHostFeatureFlags(updated);
   }, []);
 
   const toggleFlag = useCallback(<K extends keyof FeatureFlags>(key: K) => {
-    const current = getFeatureFlags();
-    const updated = saveFeatureFlags({ [key]: !current[key] });
+    const current = readStoredFeatureFlags();
+    const updated = {
+      ...current,
+      [key]: !current[key],
+    };
+    persistLocalFeatureFlags(updated);
     setFlags(updated);
+    emitFeatureFlagsUpdated(updated);
+    void syncHostFeatureFlags(updated);
   }, []);
 
   return {
@@ -73,20 +177,21 @@ export function useFeatureFlags() {
   };
 }
 
-// 单个标志的快捷 Hook
 export function useFeatureFlag<K extends keyof FeatureFlags>(key: K): boolean {
   const [value, setValue] = useState(() => getFeatureFlags()[key]);
 
   useEffect(() => {
-    const handleStorage = () => {
-      setValue(getFeatureFlags()[key]);
+    const handleStorage = (event?: Event) => {
+      if (event instanceof StorageEvent && event.key && event.key !== STORAGE_KEY) {
+        return;
+      }
+      setValue(readStoredFeatureFlags()[key]);
     };
     window.addEventListener('storage', handleStorage);
-    // 也监听自定义事件，用于同一页面内的更新
-    window.addEventListener('featureflags:updated', handleStorage);
+    window.addEventListener(UPDATE_EVENT, handleStorage);
     return () => {
       window.removeEventListener('storage', handleStorage);
-      window.removeEventListener('featureflags:updated', handleStorage);
+      window.removeEventListener(UPDATE_EVENT, handleStorage);
     };
   }, [key]);
 

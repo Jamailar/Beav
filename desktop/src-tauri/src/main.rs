@@ -1424,6 +1424,62 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
     }
 }
 
+fn pick_save_file_native(
+    prompt: &str,
+    default_name: &str,
+    default_dir: Option<&std::path::Path>,
+) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let default_dir_script = default_dir
+            .map(|path| format!(", defaultLocation: Path({:?})", path.display().to_string()))
+            .unwrap_or_default();
+        let picker_call = format!(
+            "var app=Application.currentApplication(); app.includeStandardAdditions=true; try {{ var picked=app.chooseFileName({{withPrompt:{prompt:?}, defaultName:{default_name:?}{default_dir_script}}}); JSON.stringify(String(picked)); }} catch (error) {{ JSON.stringify(null); }}"
+        );
+        let value = run_osascript_json(&picker_call)?;
+        return Ok(value.as_str().map(PathBuf::from));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let prompt = escape_powershell_single_quoted(prompt);
+        let default_name = escape_powershell_single_quoted(default_name);
+        let initial_directory = default_dir
+            .map(|path| escape_powershell_single_quoted(&path.display().to_string()))
+            .unwrap_or_default();
+        let initial_directory_script = if initial_directory.is_empty() {
+            String::new()
+        } else {
+            format!("$dialog.InitialDirectory = '{initial_directory}'")
+        };
+        let script = format!(
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.SaveFileDialog
+$dialog.Title = '{prompt}'
+$dialog.FileName = '{default_name}'
+{initial_directory_script}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+  ConvertTo-Json -Compress $dialog.FileName
+}} else {{
+  'null'
+}}
+"#
+        );
+        let value = run_powershell_json(&script)?;
+        return Ok(value.as_str().map(PathBuf::from));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Some(directory) = default_dir {
+            return Ok(Some(directory.join(default_name)));
+        }
+        Ok(Some(PathBuf::from(default_name)))
+    }
+}
+
 fn copy_file_into_dir(source: &Path, target_dir: &Path) -> Result<(String, PathBuf), String> {
     let file_name = source
         .file_name()

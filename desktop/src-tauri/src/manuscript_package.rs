@@ -1,8 +1,11 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use tauri::State;
+use std::process::Stdio;
+use std::thread;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     commands::manuscripts::timeline_clip_duration_ms, get_default_package_entry,
@@ -290,7 +293,8 @@ fn asset_items_from_package_assets(assets: &Value) -> Vec<Value> {
 }
 
 fn asset_id_from_record(asset: &Value) -> Option<String> {
-    asset.get("assetId")
+    asset
+        .get("assetId")
         .or_else(|| asset.get("id"))
         .and_then(Value::as_str)
         .map(str::trim)
@@ -299,7 +303,13 @@ fn asset_id_from_record(asset: &Value) -> Option<String> {
 }
 
 fn asset_path_from_record(asset: &Value) -> Option<String> {
-    for key in ["absolutePath", "mediaPath", "previewUrl", "relativePath", "src"] {
+    for key in [
+        "absolutePath",
+        "mediaPath",
+        "previewUrl",
+        "relativePath",
+        "src",
+    ] {
         if let Some(value) = asset.get(key).and_then(Value::as_str) {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
@@ -311,7 +321,8 @@ fn asset_path_from_record(asset: &Value) -> Option<String> {
 }
 
 fn asset_kind_from_record(asset: &Value) -> String {
-    asset.get("kind")
+    asset
+        .get("kind")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -325,7 +336,10 @@ fn asset_kind_from_record(asset: &Value) -> String {
         })
 }
 
-fn legacy_source_asset_ids(editor_project: Option<&Value>, timeline_summary: &Value) -> Vec<String> {
+fn legacy_source_asset_ids(
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Vec<String> {
     let mut ids = Vec::<String>::new();
     let push_id = |ids: &mut Vec<String>, candidate: Option<&str>| {
         let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -338,10 +352,7 @@ fn legacy_source_asset_ids(editor_project: Option<&Value>, timeline_summary: &Va
 
     if let Some(clips) = timeline_summary.get("clips").and_then(Value::as_array) {
         for clip in clips {
-            push_id(
-                &mut ids,
-                clip.get("assetId").and_then(Value::as_str),
-            );
+            push_id(&mut ids, clip.get("assetId").and_then(Value::as_str));
         }
     }
 
@@ -381,9 +392,9 @@ fn infer_legacy_base_media(
             })
         })
         .or_else(|| {
-            asset_items.iter().find(|asset| {
-                matches!(asset_kind_from_record(asset).as_str(), "video" | "image")
-            })
+            asset_items
+                .iter()
+                .find(|asset| matches!(asset_kind_from_record(asset).as_str(), "video" | "image"))
         });
     let output_path = preferred_asset
         .and_then(asset_path_from_record)
@@ -411,11 +422,7 @@ fn infer_legacy_base_media(
         .map(|clips| {
             clips
                 .iter()
-                .map(|clip| {
-                    clip.get("durationMs")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0)
-                })
+                .map(|clip| clip.get("durationMs").and_then(Value::as_i64).unwrap_or(0))
                 .sum::<i64>()
         })
         .filter(|value| *value > 0);
@@ -448,7 +455,11 @@ fn infer_legacy_ffmpeg_recipe(
         .iter()
         .filter(|clip| clip.get("enabled").and_then(Value::as_bool).unwrap_or(true))
         .filter_map(|clip| {
-            let asset_id = clip.get("assetId").and_then(Value::as_str)?.trim().to_string();
+            let asset_id = clip
+                .get("assetId")
+                .and_then(Value::as_str)?
+                .trim()
+                .to_string();
             if asset_id.is_empty() {
                 return None;
             }
@@ -543,8 +554,13 @@ fn normalize_video_remotion_scene(
         .and_then(Value::as_str)
         .unwrap_or("full")
         .to_string();
-    let legacy_base_media =
-        infer_legacy_base_media(manifest, assets, &normalized, editor_project, timeline_summary);
+    let legacy_base_media = infer_legacy_base_media(
+        manifest,
+        assets,
+        &normalized,
+        editor_project,
+        timeline_summary,
+    );
     let legacy_ffmpeg_recipe =
         infer_legacy_ffmpeg_recipe(&normalized, editor_project, timeline_summary);
     if let Some(object) = normalized.as_object_mut() {
@@ -554,7 +570,12 @@ fn normalize_video_remotion_scene(
             .or_insert_with(|| json!(title));
         object
             .entry("entryCompositionId".to_string())
-            .or_insert_with(|| fallback.get("entryCompositionId").cloned().unwrap_or(json!("RedBoxVideoMotion")));
+            .or_insert_with(|| {
+                fallback
+                    .get("entryCompositionId")
+                    .cloned()
+                    .unwrap_or(json!("RedBoxVideoMotion"))
+            });
         object
             .entry("width".to_string())
             .or_insert_with(|| fallback.get("width").cloned().unwrap_or(json!(1080)));
@@ -566,10 +587,20 @@ fn normalize_video_remotion_scene(
             .or_insert_with(|| fallback.get("fps").cloned().unwrap_or(json!(30)));
         object
             .entry("durationInFrames".to_string())
-            .or_insert_with(|| fallback.get("durationInFrames").cloned().unwrap_or(json!(90)));
+            .or_insert_with(|| {
+                fallback
+                    .get("durationInFrames")
+                    .cloned()
+                    .unwrap_or(json!(90))
+            });
         object
             .entry("backgroundColor".to_string())
-            .or_insert_with(|| fallback.get("backgroundColor").cloned().unwrap_or(json!("#05070b")));
+            .or_insert_with(|| {
+                fallback
+                    .get("backgroundColor")
+                    .cloned()
+                    .unwrap_or(json!("#05070b"))
+            });
         object
             .entry("renderMode".to_string())
             .or_insert_with(|| json!("full"));
@@ -584,31 +615,23 @@ fn normalize_video_remotion_scene(
             .or_insert_with(|| json!({}));
         object
             .entry("render".to_string())
-            .or_insert_with(|| {
-                normalized_remotion_render_config(None, title, &render_mode)
-            });
+            .or_insert_with(|| normalized_remotion_render_config(None, title, &render_mode));
         if !object.contains_key("baseMedia") {
-            object.insert(
-                "baseMedia".to_string(),
-                legacy_base_media,
-            );
+            object.insert("baseMedia".to_string(), legacy_base_media);
         } else {
             let object_width = object.get("width").cloned().unwrap_or(Value::Null);
             let object_height = object.get("height").cloned().unwrap_or(Value::Null);
             if let Some(base_media) = object.get_mut("baseMedia").and_then(Value::as_object_mut) {
-            base_media
-                .entry("width".to_string())
-                .or_insert(object_width);
-            base_media
-                .entry("height".to_string())
-                .or_insert(object_height);
+                base_media
+                    .entry("width".to_string())
+                    .or_insert(object_width);
+                base_media
+                    .entry("height".to_string())
+                    .or_insert(object_height);
             }
         }
         if !object.contains_key("ffmpegRecipe") {
-            object.insert(
-                "ffmpegRecipe".to_string(),
-                legacy_ffmpeg_recipe,
-            );
+            object.insert("ffmpegRecipe".to_string(), legacy_ffmpeg_recipe);
         }
     }
     attach_base_media_to_primary_scene(&mut normalized);
@@ -1732,7 +1755,9 @@ fn detect_absolute_fall_bounce_correction(
     source_entity_y: Option<f64>,
     animation: &Value,
 ) -> Option<(f64, f64, f64)> {
-    if normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str)) != "fall-bounce" {
+    if normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str))
+        != "fall-bounce"
+    {
         return None;
     }
     let source_entity_y = source_entity_y?;
@@ -2023,8 +2048,14 @@ pub(crate) fn normalize_ai_remotion_scene(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("#05070b");
-    let fallback_base_media = fallback.get("baseMedia").cloned().unwrap_or_else(|| json!({}));
-    let candidate_base_media = candidate.get("baseMedia").cloned().unwrap_or_else(|| json!({}));
+    let fallback_base_media = fallback
+        .get("baseMedia")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let candidate_base_media = candidate
+        .get("baseMedia")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let base_media_reference_width = candidate_base_media
         .get("width")
         .and_then(Value::as_i64)
@@ -2218,10 +2249,15 @@ pub(crate) fn normalize_ai_remotion_scene(
                 })
             })
             .collect::<Vec<_>>();
-        let normalized_clip_id =
-            normalized_optional_id(raw_scene.get("clipId").or_else(|| fallback_scene.get("clipId")));
+        let normalized_clip_id = normalized_optional_id(
+            raw_scene
+                .get("clipId")
+                .or_else(|| fallback_scene.get("clipId")),
+        );
         let normalized_asset_id = normalized_optional_id(
-            raw_scene.get("assetId").or_else(|| fallback_scene.get("assetId")),
+            raw_scene
+                .get("assetId")
+                .or_else(|| fallback_scene.get("assetId")),
         );
         let has_scene_binding = !normalized_clip_id.is_null() || !normalized_asset_id.is_null();
         normalized_scenes.push(json!({
@@ -2336,7 +2372,37 @@ pub(crate) fn normalize_ai_remotion_scene(
     })
 }
 
-pub(crate) fn render_remotion_video(config: &Value, output_path: &Path) -> Result<Value, String> {
+const REMOTION_PROGRESS_PREFIX: &str = "__REMOTION_PROGRESS__";
+
+fn emit_remotion_render_progress(
+    app: &AppHandle,
+    file_path: &str,
+    status: &str,
+    percent: i64,
+    stage: &str,
+    output_path: Option<&Path>,
+    error: Option<&str>,
+) {
+    let _ = app.emit(
+        "manuscripts:render-progress",
+        json!({
+            "filePath": file_path,
+            "status": status,
+            "percent": percent.clamp(0, 100),
+            "stage": stage,
+            "outputPath": output_path.map(|path| path.display().to_string()),
+            "error": error,
+        }),
+    );
+}
+
+pub(crate) fn render_remotion_video(
+    config: &Value,
+    output_path: &Path,
+    scale: Option<f64>,
+    app: Option<&AppHandle>,
+    file_path: Option<&str>,
+) -> Result<Value, String> {
     let project_root = lexbox_project_root();
     let script_path = project_root.join("remotion").join("render.mjs");
     if !script_path.exists() {
@@ -2350,23 +2416,116 @@ pub(crate) fn render_remotion_video(config: &Value, output_path: &Path) -> Resul
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let output = std::process::Command::new("node")
+    if let (Some(app), Some(file_path)) = (app, file_path) {
+        emit_remotion_render_progress(
+            app,
+            file_path,
+            "running",
+            0,
+            "准备导出",
+            Some(output_path),
+            None,
+        );
+    }
+    let mut command = std::process::Command::new("node");
+    command
         .arg(&script_path)
         .arg(&temp_config_path)
-        .arg(output_path)
+        .arg(output_path);
+    if let Some(scale) = scale.filter(|value| value.is_finite() && *value > 0.0) {
+        command.arg(format!("{scale:.6}"));
+    }
+    let mut child = command
         .current_dir(&project_root)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| error.to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Remotion renderer stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Remotion renderer stderr unavailable".to_string())?;
+    let stdout_reader = thread::spawn(move || -> Result<String, String> {
+        let mut content = String::new();
+        BufReader::new(stdout)
+            .read_to_string(&mut content)
+            .map_err(|error| error.to_string())?;
+        Ok(content)
+    });
+    let progress_app = app.cloned();
+    let progress_file_path = file_path.map(ToString::to_string);
+    let output_path_string = output_path.display().to_string();
+    let stderr_reader = thread::spawn(move || -> Result<String, String> {
+        let mut non_progress = Vec::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = line.map_err(|error| error.to_string())?;
+            if let Some(raw_payload) = line.strip_prefix(REMOTION_PROGRESS_PREFIX) {
+                if let (Some(app), Some(file_path)) =
+                    (progress_app.as_ref(), progress_file_path.as_deref())
+                {
+                    if let Ok(payload) = serde_json::from_str::<Value>(raw_payload) {
+                        emit_remotion_render_progress(
+                            app,
+                            file_path,
+                            "running",
+                            payload.get("percent").and_then(Value::as_i64).unwrap_or(0),
+                            payload
+                                .get("stitchStage")
+                                .and_then(Value::as_str)
+                                .unwrap_or("处理中"),
+                            Some(Path::new(&output_path_string)),
+                            None,
+                        );
+                    }
+                }
+            } else if !line.trim().is_empty() {
+                non_progress.push(line);
+            }
+        }
+        Ok(non_progress.join("\n"))
+    });
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "Failed to read Remotion renderer stdout".to_string())??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "Failed to read Remotion renderer stderr".to_string())??;
     let _ = fs::remove_file(&temp_config_path);
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !status.success() {
+        if let (Some(app), Some(file_path)) = (app, file_path) {
+            emit_remotion_render_progress(
+                app,
+                file_path,
+                "error",
+                0,
+                "导出失败",
+                Some(output_path),
+                Some(&stderr),
+            );
+        }
         return Err(if stderr.is_empty() {
-            format!("Remotion render failed with status {}", output.status)
+            format!("Remotion render failed with status {}", status)
         } else {
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let (Some(app), Some(file_path)) = (app, file_path) {
+        emit_remotion_render_progress(
+            app,
+            file_path,
+            "done",
+            100,
+            "导出完成",
+            Some(output_path),
+            None,
+        );
+    }
+    let stdout = stdout.trim().to_string();
     if stdout.is_empty() {
         return Ok(json!({
             "success": true,
@@ -2818,13 +2977,7 @@ pub(crate) fn create_manuscript_package(
         )?;
         write_json_value(
             &package_editor_project_path(package_path),
-            &build_default_editor_project(
-                title,
-                content,
-                1080,
-                1080,
-                30,
-            ),
+            &build_default_editor_project(title, content, 1080, 1080, 30),
         )?;
     } else if package_kind == "article" {
         write_text_file(&package_path.join("layout.html"), "")?;

@@ -6,6 +6,8 @@ mod config_runtime;
 mod events;
 #[path = "runtime/orchestration_runtime.rs"]
 mod orchestration_runtime;
+#[path = "runtime/phase0.rs"]
+mod phase0;
 #[path = "runtime/session_runtime.rs"]
 mod session_runtime;
 #[path = "runtime/task_runtime.rs"]
@@ -17,6 +19,7 @@ pub use agent_engine::*;
 pub use config_runtime::*;
 pub use events::*;
 pub use orchestration_runtime::*;
+pub use phase0::*;
 pub use session_runtime::*;
 pub use task_runtime::*;
 pub use types::*;

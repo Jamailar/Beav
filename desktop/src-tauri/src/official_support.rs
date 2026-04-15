@@ -419,15 +419,37 @@ pub(crate) fn official_auth_token_from_settings(settings: &Value) -> Option<Stri
 }
 
 pub(crate) fn official_response_items(response: &Value) -> Vec<Value> {
-    if let Some(items) = response.as_array() {
-        return items.clone();
-    }
-    for key in ["items", "data", "results", "orders", "products", "records"] {
-        if let Some(items) = response.get(key).and_then(|value| value.as_array()) {
-            return items.clone();
+    fn collect_items(node: &Value) -> Option<Vec<Value>> {
+        if let Some(items) = node.as_array() {
+            return Some(items.clone());
         }
+        for key in [
+            "items",
+            "data",
+            "results",
+            "orders",
+            "products",
+            "records",
+            "usage_records",
+            "call_records",
+            "inference_records",
+            "logs",
+            "rows",
+            "list",
+            "content",
+            "transactions",
+            "recent_records",
+        ] {
+            if let Some(value) = node.get(key) {
+                if let Some(items) = collect_items(value) {
+                    return Some(items);
+                }
+            }
+        }
+        None
     }
-    Vec::new()
+
+    collect_items(response).unwrap_or_default()
 }
 
 pub(crate) fn official_unwrap_response_payload(response: &Value) -> Value {

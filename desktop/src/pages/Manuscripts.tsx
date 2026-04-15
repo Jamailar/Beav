@@ -226,6 +226,8 @@ type PackageState = {
     wechatHtml?: string;
 };
 
+type ExportVideoResolution = 'source' | '1080p' | '720p';
+
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
@@ -236,6 +238,36 @@ function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
 
 function stripDraftExtension(fileName: string): string {
     return stripManuscriptExtension(fileName);
+}
+
+function exportResolutionDimensions(
+    width: number,
+    height: number,
+    preset: ExportVideoResolution,
+): { width: number; height: number } {
+    const safeWidth = Math.max(1, width || 1);
+    const safeHeight = Math.max(1, height || 1);
+    if (preset === 'source') {
+        return { width: safeWidth, height: safeHeight };
+    }
+    const landscape = safeWidth > safeHeight;
+    const portrait = safeHeight > safeWidth;
+    const target = preset === '720p'
+        ? landscape
+            ? { width: 1280, height: 720 }
+            : portrait
+                ? { width: 720, height: 1280 }
+                : { width: 720, height: 720 }
+        : landscape
+            ? { width: 1920, height: 1080 }
+            : portrait
+                ? { width: 1080, height: 1920 }
+                : { width: 1080, height: 1080 };
+    const scale = Math.min(target.width / safeWidth, target.height / safeHeight, 1);
+    return {
+        width: Math.max(1, Math.round(safeWidth * scale)),
+        height: Math.max(1, Math.round(safeHeight * scale)),
+    };
 }
 
 function ensureDraftFileName(baseName: string, kind: CreateKind | 'unknown'): string {
@@ -661,6 +693,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [packageState, setPackageState] = useState<PackageState | null>(null);
     const [isGeneratingRemotion, setIsGeneratingRemotion] = useState(false);
     const [isRenderingRemotion, setIsRenderingRemotion] = useState(false);
+    const [isExportVideoModalOpen, setIsExportVideoModalOpen] = useState(false);
+    const [exportVideoResolution, setExportVideoResolution] = useState<ExportVideoResolution>('1080p');
+    const [exportVideoPath, setExportVideoPath] = useState('');
+    const [exportVideoProgress, setExportVideoProgress] = useState(0);
+    const [exportVideoStage, setExportVideoStage] = useState('');
+    const [exportVideoError, setExportVideoError] = useState('');
     const [bindAssetRole, setBindAssetRole] = useState<'cover' | 'image' | 'asset'>('image');
     const [isBindAssetModalOpen, setIsBindAssetModalOpen] = useState(false);
     const [editorChatSessionId, setEditorChatSessionId] = useState<string | null>(null);
@@ -1388,23 +1426,81 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, [editorDescriptor?.draftType, editorFile]);
 
-    const handleRenderRemotionVideo = useCallback(async () => {
-        if (!editorFile || editorDescriptor?.draftType !== 'video') return;
+    const handleRenderRemotionVideo = useCallback(() => {
+        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        setExportVideoError('');
+        setExportVideoStage('');
+        setExportVideoProgress(0);
+        setIsExportVideoModalOpen(true);
+    }, [editorDescriptor?.draftType, editorFile, isRenderingRemotion]);
+
+    const handlePickExportVideoPath = useCallback(async () => {
+        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
+                filePath: editorFile,
+                resolutionPreset: exportVideoResolution,
+                renderMode: 'full',
+            }) as { success?: boolean; canceled?: boolean; path?: string; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '选择导出位置失败');
+            }
+            if (!result.canceled && result.path) {
+                setExportVideoPath(result.path);
+            }
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '选择导出位置失败');
+        }
+    }, [editorDescriptor?.draftType, editorFile, exportVideoResolution, isRenderingRemotion]);
+
+    const handleConfirmExportVideo = useCallback(async () => {
+        if (!editorFile || editorDescriptor?.draftType !== 'video' || isRenderingRemotion) return;
+        let outputPath = exportVideoPath.trim();
+        if (!outputPath) {
+            const picked = await window.ipcRenderer.invoke('manuscripts:pick-export-path', {
+                filePath: editorFile,
+                resolutionPreset: exportVideoResolution,
+                renderMode: 'full',
+            }) as { success?: boolean; canceled?: boolean; path?: string; error?: string };
+            if (!picked?.success) {
+                void appAlert(picked?.error || '选择导出位置失败');
+                return;
+            }
+            if (picked.canceled || !picked.path) {
+                return;
+            }
+            outputPath = picked.path;
+            setExportVideoPath(outputPath);
+        }
         setIsRenderingRemotion(true);
+        setExportVideoError('');
+        setExportVideoStage('准备导出');
+        setExportVideoProgress(0);
         try {
             const result = await window.ipcRenderer.invoke('manuscripts:render-remotion-video', {
                 filePath: editorFile,
+                renderMode: 'full',
+                outputPath,
+                resolutionPreset: exportVideoResolution,
             }) as { success?: boolean; state?: PackageState; outputPath?: string; error?: string };
             if (!result?.success || !result.state) {
-                throw new Error(result?.error || '导出 Remotion 视频失败');
+                throw new Error(result?.error || '导出视频失败');
             }
             setPackageState(result.state);
+            setExportVideoProgress(100);
+            setExportVideoStage('导出完成');
+            if (result.outputPath) {
+                setExportVideoPath(result.outputPath);
+            }
         } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '导出 Remotion 视频失败');
+            const message = error instanceof Error ? error.message : '导出视频失败';
+            setExportVideoError(message);
+            setExportVideoStage('导出失败');
+            void appAlert(message);
         } finally {
             setIsRenderingRemotion(false);
         }
-    }, [editorDescriptor?.draftType, editorFile]);
+    }, [editorDescriptor?.draftType, editorFile, exportVideoPath, exportVideoResolution, isRenderingRemotion]);
 
     const handleOpenRenderedRemotionVideo = useCallback(async () => {
         const outputPath = packageState?.videoProject?.renderOutput || packageState?.remotion?.render?.outputPath;
@@ -1415,6 +1511,28 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             void appAlert(error instanceof Error ? error.message : '打开导出文件失败');
         }
     }, [packageState?.remotion?.render?.outputPath, packageState?.videoProject?.renderOutput]);
+
+    useEffect(() => {
+        const handleProgress = (_event: unknown, payload?: Record<string, unknown>) => {
+            if (!editorFile || payload?.filePath !== editorFile) return;
+            if (typeof payload.percent === 'number') {
+                setExportVideoProgress(Math.max(0, Math.min(100, payload.percent)));
+            }
+            if (typeof payload.stage === 'string') {
+                setExportVideoStage(payload.stage);
+            }
+            if (typeof payload.error === 'string' && payload.error.trim()) {
+                setExportVideoError(payload.error);
+            }
+            if (payload?.status === 'running') {
+                setIsExportVideoModalOpen(true);
+            }
+        };
+        window.ipcRenderer.on('manuscripts:render-progress', handleProgress);
+        return () => {
+            window.ipcRenderer.off('manuscripts:render-progress', handleProgress);
+        };
+    }, [editorFile]);
 
     const handleUpgradeDraftPackage = useCallback(async (targetKind: 'article' | 'post') => {
         if (!editorFile) return;
@@ -1440,6 +1558,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (!editorFile) {
             setPackageState(null);
+            setExportVideoPath('');
+            setExportVideoProgress(0);
+            setExportVideoStage('');
+            setExportVideoError('');
+            setIsExportVideoModalOpen(false);
             return;
         }
         void refreshPackageState(editorFile);
@@ -1859,6 +1982,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         () => bindAssetRole === 'asset' ? assets : bindableImageAssets,
         [assets, bindAssetRole, bindableImageAssets]
     );
+    const exportSourceWidth = Number(packageState?.videoProject?.remotion?.width || packageState?.remotion?.width || 1920);
+    const exportSourceHeight = Number(packageState?.videoProject?.remotion?.height || packageState?.remotion?.height || 1080);
+    const exportTargetSize = exportResolutionDimensions(exportSourceWidth, exportSourceHeight, exportVideoResolution);
 
     if (mode === 'editor' && editorFile) {
         const currentDescriptor = editorDescriptor || {
@@ -2090,11 +2216,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     void handleRenderRemotionVideo();
                                 }}
                                 disabled={isRenderingRemotion || !isScriptConfirmed}
-                                title={isScriptConfirmed ? '导出当前动画层' : '先确认脚本，再导出动画层'}
+                                title={isScriptConfirmed ? '导出当前视频' : '先确认脚本，再导出视频'}
                                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white disabled:opacity-40"
                             >
                                 <ExternalLink className="h-4 w-4" />
-                                {isRenderingRemotion ? '导出中...' : '导出动画层'}
+                                {isRenderingRemotion ? '导出中...' : '导出视频'}
                             </button>
                         )}
                         {isAudioPackage && (
@@ -3512,6 +3638,118 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     >
                         删除
                     </button>
+                </div>
+            )}
+
+            {isExportVideoModalOpen && (
+                <div
+                    className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4"
+                    onMouseDown={() => !isRenderingRemotion && setIsExportVideoModalOpen(false)}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-3xl border border-border bg-background shadow-2xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                            <div>
+                                <h2 className="text-lg font-semibold text-text-primary">导出视频</h2>
+                                <p className="mt-1 text-sm text-text-secondary">选择清晰度和保存位置，然后开始导出。</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => !isRenderingRemotion && setIsExportVideoModalOpen(false)}
+                                disabled={isRenderingRemotion}
+                                className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-40"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-6 space-y-5">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-text-primary">清晰度</label>
+                                <select
+                                    value={exportVideoResolution}
+                                    onChange={(event) => setExportVideoResolution(event.target.value as ExportVideoResolution)}
+                                    disabled={isRenderingRemotion}
+                                    className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary disabled:opacity-60"
+                                >
+                                    <option value="source">原始尺寸</option>
+                                    <option value="1080p">1080p</option>
+                                    <option value="720p">720p</option>
+                                </select>
+                                <div className="text-xs text-text-tertiary">
+                                    导出尺寸：{exportTargetSize.width} x {exportTargetSize.height}
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-text-primary">保存位置</label>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        value={exportVideoPath}
+                                        onChange={(event) => setExportVideoPath(event.target.value)}
+                                        placeholder="请选择导出位置"
+                                        disabled={isRenderingRemotion}
+                                        className="min-w-0 flex-1 rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary disabled:opacity-60"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handlePickExportVideoPath()}
+                                        disabled={isRenderingRemotion}
+                                        className="rounded-2xl border border-border px-4 py-3 text-sm text-text-primary hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                    >
+                                        选择位置
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="rounded-2xl border border-border bg-surface-secondary/20 px-4 py-4">
+                                <div className="flex items-center justify-between text-sm text-text-primary">
+                                    <span>导出进度</span>
+                                    <span className="font-mono">{exportVideoProgress}%</span>
+                                </div>
+                                <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/8">
+                                    <div
+                                        className="h-full rounded-full bg-accent-primary transition-[width] duration-300"
+                                        style={{ width: `${Math.max(0, Math.min(100, exportVideoProgress))}%` }}
+                                    />
+                                </div>
+                                <div className="mt-2 text-xs text-text-tertiary">
+                                    {exportVideoError || exportVideoStage || '尚未开始'}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
+                            <div className="truncate text-xs text-text-tertiary">
+                                {exportVideoPath || '未选择导出位置'}
+                            </div>
+                            <div className="flex items-center gap-3">
+                                {(packageState?.videoProject?.renderOutput || packageState?.remotion?.render?.outputPath) && !isRenderingRemotion && exportVideoProgress >= 100 ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleOpenRenderedRemotionVideo()}
+                                        className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors"
+                                    >
+                                        打开文件
+                                    </button>
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => setIsExportVideoModalOpen(false)}
+                                    disabled={isRenderingRemotion}
+                                    className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleConfirmExportVideo()}
+                                    disabled={isRenderingRemotion}
+                                    className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                                >
+                                    {isRenderingRemotion ? '导出中...' : '导出视频'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 

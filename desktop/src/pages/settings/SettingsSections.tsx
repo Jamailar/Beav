@@ -1,6 +1,7 @@
 import { memo, useMemo, type Dispatch, type SetStateAction } from 'react';
 import { Activity, AlertCircle, Database, Download, FolderOpen, Info, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
+import type { FeatureFlags } from '../../hooks/useFeatureFlags';
 import { PasswordInput } from './shared';
 import type {
   AgentTaskSnapshot,
@@ -48,9 +49,8 @@ type BrowserPluginStatus = {
 
 type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } | undefined>;
 
-type FeatureFlags = {
-    vectorRecommendation: boolean;
-};
+type RuntimeDebugSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
+type Phase0SmokeResult = Awaited<ReturnType<typeof window.ipcRenderer.debug.runPhase0Smoke>>;
 
 type AssistantDaemonStatus = {
     enabled: boolean;
@@ -1370,6 +1370,10 @@ interface ToolsSettingsSectionProps {
     isInstallingTool: boolean;
     installProgress: number;
     showDeveloperDiagnostics: boolean;
+    runtimeDebugSummary: RuntimeDebugSummary | null;
+    isRuntimeDebugSummaryLoading: boolean;
+    phase0SmokeResult: Phase0SmokeResult | null;
+    isPhase0SmokeRunning: boolean;
     toolDiagnostics: ToolDiagnosticDescriptor[];
     toolDiagnosticResults: Record<string, ToolDiagnosticRunResult | undefined>;
     toolDiagnosticRunning: Record<string, 'direct' | 'ai' | undefined>;
@@ -1432,6 +1436,7 @@ interface ToolsSettingsSectionProps {
     runtimeTaskActionRunning: Record<string, 'resume' | 'cancel' | undefined>;
     backgroundTaskActionRunning: Record<string, 'cancel' | undefined>;
     handleRefreshRuntimeData: () => Promise<void>;
+    handleRunPhase0Smoke: () => Promise<void>;
     handleCreateRuntimeTask: () => Promise<void>;
     handleResumeRuntimeTask: (taskId: string) => Promise<void>;
     handleCancelRuntimeTask: (taskId: string) => Promise<void>;
@@ -1468,6 +1473,10 @@ export function ToolsSettingsSection({
     isInstallingTool,
     installProgress,
     showDeveloperDiagnostics,
+    runtimeDebugSummary,
+    isRuntimeDebugSummaryLoading,
+    phase0SmokeResult,
+    isPhase0SmokeRunning,
     toolDiagnostics,
     toolDiagnosticResults,
     toolDiagnosticRunning,
@@ -1504,6 +1513,7 @@ export function ToolsSettingsSection({
     runtimeTaskActionRunning,
     backgroundTaskActionRunning,
     handleRefreshRuntimeData,
+    handleRunPhase0Smoke,
     handleCreateRuntimeTask,
     handleResumeRuntimeTask,
     handleCancelRuntimeTask,
@@ -1556,6 +1566,28 @@ export function ToolsSettingsSection({
                 return '注册异常';
         }
     };
+
+    const smokeStatusTone = (status: 'passed' | 'failed' | 'skipped') => {
+        switch (status) {
+            case 'passed':
+                return 'bg-green-500/10 text-green-600 border-green-200';
+            case 'failed':
+                return 'bg-red-500/10 text-red-600 border-red-200';
+            default:
+                return 'bg-amber-500/10 text-amber-600 border-amber-200';
+        }
+    };
+
+    const formatTimestamp = (value?: string | number | null) => {
+        if (value === null || value === undefined || value === '') return '未记录';
+        const numeric = typeof value === 'number' ? value : Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) {
+            return new Date(numeric).toLocaleString();
+        }
+        return String(value);
+    };
+
+    const formatPercent = (value?: number) => `${((value || 0) * 100).toFixed(0)}%`;
 
     const taskStatusTone = (status: AgentTaskSnapshot['status']) => {
         switch (status) {
@@ -1967,6 +1999,229 @@ export function ToolsSettingsSection({
 
             {showDeveloperDiagnostics && (
                 <div className="space-y-4">
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-text-primary">Phase 0 Baseline</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    这里直接展示宿主侧 Phase 0 基线：feature flags、resume 指标、runtime warm 摘要和 smoke 结果。
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRefreshRuntimeData()}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                >
+                                    {isRuntimeDebugSummaryLoading ? '刷新中...' : '刷新摘要'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRunPhase0Smoke()}
+                                    disabled={isPhase0SmokeRunning}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                >
+                                    {isPhase0SmokeRunning ? '执行中...' : '运行 Smoke'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {!runtimeDebugSummary ? (
+                            <div className="text-xs text-text-tertiary border border-dashed border-border rounded-lg px-3 py-5 text-center">
+                                {isRuntimeDebugSummaryLoading ? '正在加载 runtime summary...' : '尚未获取到 runtime summary。'}
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Workspace</div>
+                                        <div className="text-xs font-medium text-text-primary mt-2 break-all">
+                                            {runtimeDebugSummary.workspaceRoot || '未解析'}
+                                        </div>
+                                        <div className="text-[11px] text-text-tertiary mt-2">
+                                            generated: {formatTimestamp(runtimeDebugSummary.generatedAt)}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Resume Success</div>
+                                        <div className="text-lg font-semibold text-text-primary mt-2">
+                                            {formatPercent(runtimeDebugSummary.sessionResumeSuccessRate)}
+                                        </div>
+                                        <div className="text-[11px] text-text-tertiary mt-2">
+                                            {runtimeDebugSummary.phase0Metrics.sessionResumeSuccesses} / {runtimeDebugSummary.phase0Metrics.sessionResumeAttempts}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Smoke</div>
+                                        <div className="text-lg font-semibold text-text-primary mt-2">
+                                            {runtimeDebugSummary.phase0Metrics.smokePasses} passed
+                                        </div>
+                                        <div className="text-[11px] text-text-tertiary mt-2">
+                                            runs {runtimeDebugSummary.phase0Metrics.smokeRuns} / failures {runtimeDebugSummary.phase0Metrics.smokeFailures}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Readiness</div>
+                                        <div className="mt-2 space-y-1 text-[11px] text-text-secondary">
+                                            <div>workspace: {runtimeDebugSummary.configReadiness.workspaceResolved ? 'ready' : 'missing'}</div>
+                                            <div>chat model: {runtimeDebugSummary.configReadiness.chatModelReady ? 'ready' : 'missing'}</div>
+                                            <div>warm cache: {runtimeDebugSummary.configReadiness.runtimeWarmMatchesSettings ? 'matched' : 'stale'}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-4">
+                                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-xs font-medium text-text-primary">Runtime Warm Entries</div>
+                                            <span className="text-[11px] text-text-tertiary">
+                                                warmed {formatTimestamp(runtimeDebugSummary.runtimeWarm.lastWarmedAt)}
+                                            </span>
+                                        </div>
+                                        {runtimeDebugSummary.runtimeWarm.entries.length === 0 ? (
+                                            <div className="text-[11px] text-text-tertiary">暂无 warm entry。</div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {runtimeDebugSummary.runtimeWarm.entries.map((entry) => (
+                                                    <div key={entry.mode} className="rounded border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="text-xs font-medium text-text-primary">{entry.mode}</div>
+                                                            <span className={clsx(
+                                                                'text-[10px] px-1.5 py-0.5 rounded border',
+                                                                entry.modelConfigured
+                                                                    ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                                    : 'bg-amber-500/10 text-amber-600 border-amber-200',
+                                                            )}>
+                                                                {entry.modelConfigured ? 'model ready' : 'model missing'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] text-text-secondary">
+                                                            <div>prompt: {entry.systemPromptChars}</div>
+                                                            <div>est tokens: {entry.estimatedPromptTokens}</div>
+                                                            <div>skills: {entry.activeSkillCount}</div>
+                                                            <div>tools: {entry.allowedToolCount}/{entry.baseToolCount}</div>
+                                                        </div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-text-tertiary">
+                                                            <div>context chars: {entry.longTermContextChars}</div>
+                                                            <div>warmed: {formatTimestamp(entry.warmedAt)}</div>
+                                                            <div className="break-all">model: {entry.modelName || '未配置'}</div>
+                                                            <div className="break-all">protocol: {entry.protocol || 'n/a'}</div>
+                                                        </div>
+                                                        {entry.activeSkills.length > 0 ? (
+                                                            <div className="text-[11px] text-text-tertiary">
+                                                                skills: {entry.activeSkills.join(', ')}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="text-xs font-medium text-text-primary">Store Counts</div>
+                                            <div className="grid grid-cols-2 gap-2 text-[11px] text-text-secondary">
+                                                <div>sessions: {runtimeDebugSummary.storeCounts.sessions}</div>
+                                                <div>transcripts: {runtimeDebugSummary.storeCounts.transcripts}</div>
+                                                <div>checkpoints: {runtimeDebugSummary.storeCounts.checkpoints}</div>
+                                                <div>tool results: {runtimeDebugSummary.storeCounts.toolResults}</div>
+                                                <div>runtime tasks: {runtimeDebugSummary.storeCounts.runtimeTasks}</div>
+                                                <div>task traces: {runtimeDebugSummary.storeCounts.runtimeTaskTraces}</div>
+                                                <div>background: {runtimeDebugSummary.storeCounts.backgroundTasks}</div>
+                                                <div>hooks: {runtimeDebugSummary.storeCounts.hooks}</div>
+                                                <div>mcp servers: {runtimeDebugSummary.storeCounts.mcpServers}</div>
+                                                <div>skills: {runtimeDebugSummary.storeCounts.skills}</div>
+                                                <div>debug logs: {runtimeDebugSummary.storeCounts.debugLogs}</div>
+                                                <div>memories: {runtimeDebugSummary.storeCounts.memories}</div>
+                                                <div>memory history: {runtimeDebugSummary.storeCounts.memoryHistory}</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="text-xs font-medium text-text-primary">Derived Baselines</div>
+                                            <div className="space-y-2 text-[11px] text-text-secondary">
+                                                <div>avg tool calls / session: {runtimeDebugSummary.derivedMetrics.averageToolCallsPerSession.toFixed(2)}</div>
+                                                <div>avg transcript rows / session: {runtimeDebugSummary.derivedMetrics.averageTraceRecordsPerSession.toFixed(2)}</div>
+                                                <div>avg checkpoints / session: {runtimeDebugSummary.derivedMetrics.averageCheckpointsPerSession.toFixed(2)}</div>
+                                                <div>avg task traces / task: {runtimeDebugSummary.derivedMetrics.averageTaskTraceRowsPerTask.toFixed(2)}</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="text-xs font-medium text-text-primary">Memory Snapshot</div>
+                                            <div className="space-y-2 text-[11px] text-text-secondary">
+                                                <div>memories: {runtimeDebugSummary.memoryOverview.memoryCount}</div>
+                                                <div>history rows: {runtimeDebugSummary.memoryOverview.historyCount}</div>
+                                                <div>latest memory: {formatTimestamp(runtimeDebugSummary.memoryOverview.latestMemoryUpdatedAt)}</div>
+                                                <div>latest history: {formatTimestamp(runtimeDebugSummary.memoryOverview.latestHistoryAt)}</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Feature Flags</div>
+                                                <span className="text-[11px] text-text-tertiary">host truth</span>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {Object.entries(runtimeDebugSummary.featureFlags).map(([key, value]) => (
+                                                    <div key={key} className="flex items-center justify-between gap-2 rounded border border-border bg-surface-secondary/20 px-2 py-1.5 text-[11px]">
+                                                        <span className="text-text-secondary">{key}</span>
+                                                        <span className={clsx(
+                                                            'px-1.5 py-0.5 rounded border',
+                                                            value
+                                                                ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                                : 'bg-surface-secondary text-text-tertiary border-border',
+                                                        )}>
+                                                            {value ? 'on' : 'off'}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-medium text-text-primary">Phase 0 Smoke</div>
+                                        <span className="text-[11px] text-text-tertiary">
+                                            {phase0SmokeResult ? `最近执行 ${formatTimestamp(phase0SmokeResult.ranAt)}` : '尚未执行'}
+                                        </span>
+                                    </div>
+                                    {!phase0SmokeResult ? (
+                                        <div className="text-[11px] text-text-tertiary">还没有 smoke 结果，点击上方按钮执行一次。</div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-2 text-[11px]">
+                                                <span className={clsx(
+                                                    'px-1.5 py-0.5 rounded border',
+                                                    phase0SmokeResult.passed
+                                                        ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                        : 'bg-red-500/10 text-red-600 border-red-200',
+                                                )}>
+                                                    {phase0SmokeResult.passed ? 'passed' : 'failed'}
+                                                </span>
+                                                <span className="text-text-tertiary">failed count: {phase0SmokeResult.failedCount}</span>
+                                            </div>
+                                            {phase0SmokeResult.checks.map((check) => (
+                                                <div key={check.name} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-[11px] font-medium text-text-primary">{check.name}</div>
+                                                        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded border', smokeStatusTone(check.status))}>
+                                                            {check.status}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-[11px] text-text-tertiary mt-1">{check.detail}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                         <div className="flex items-start justify-between gap-3">
                             <div>
@@ -2752,49 +3007,98 @@ interface ExperimentalSettingsSectionProps {
 }
 
 export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalSettingsSectionProps) {
+    const items: Array<{
+        key: keyof FeatureFlags;
+        title: string;
+        badge: string;
+        description: string;
+        note?: string;
+    }> = [
+        {
+            key: 'vectorRecommendation',
+            title: '向量推荐',
+            badge: 'Beta',
+            description: '在稿件编辑器的分栏视图中，根据当前稿件内容的向量相似度对知识库进行智能排序。',
+            note: '此功能会调用 Embedding API 计算向量，可能产生额外费用。',
+        },
+        {
+            key: 'runtimeContextBundleV2',
+            title: 'Context Bundle V2',
+            badge: 'Phase 1',
+            description: '启用新的 runtime context bundle 入口，为后续 prompt 成本治理和上下文分层做预留。',
+        },
+        {
+            key: 'runtimeMemoryRecallV2',
+            title: 'Memory Recall V2',
+            badge: 'Phase 2',
+            description: '启用记忆/历史/检索拆分后的新 recall 路径，作为长期记忆升级的宿主开关。',
+        },
+        {
+            key: 'runtimeSubagentRuntimeV2',
+            title: 'Child Runtime V2',
+            badge: 'Phase 4',
+            description: '为真实 child runtime 和更严格的 subagent 边界预留开关。',
+        },
+        {
+            key: 'runtimeExecuteScriptV1',
+            title: 'Execute Script V1',
+            badge: 'Phase 5',
+            description: '为程序化执行层预留开关，用于把机械多步任务压缩到脚本执行层。',
+        },
+        {
+            key: 'runtimeAgentJobV1',
+            title: 'Agent Job V1',
+            badge: 'Phase 6',
+            description: '为统一 Agent Job / Scheduler / Daemon Runtime 的新执行链路预留开关。',
+        },
+    ];
+
     return (
         <section className="space-y-6">
             <div>
                 <h2 className="text-lg font-medium text-text-primary mb-2">实验性功能</h2>
                 <p className="text-xs text-text-tertiary">
-                    以下功能仍在开发和测试中，可能不稳定或影响性能。请谨慎开启。
+                    以下功能已经接到宿主侧 `settings.feature_flags`，切换后会同时写入本地缓存和 Rust host。
                 </p>
             </div>
 
             <div className="space-y-4">
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-4">
-                            <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                                向量推荐
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600 font-medium">
-                                    Beta
-                                </span>
-                            </h3>
-                            <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
-                                在稿件编辑器的分栏视图中，根据当前稿件内容的向量相似度对知识库进行智能排序。
-                                开启后，与当前内容最相关的素材会优先显示。
-                            </p>
-                            <p className="text-[10px] text-text-tertiary mt-2 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                此功能会调用 Embedding API 计算向量，可能产生额外费用
-                            </p>
+                {items.map((item) => (
+                    <div key={item.key} className="bg-surface-secondary/30 rounded-lg border border-border p-4">
+                        <div className="flex items-start justify-between">
+                            <div className="flex-1 pr-4">
+                                <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+                                    {item.title}
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600 font-medium">
+                                        {item.badge}
+                                    </span>
+                                </h3>
+                                <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
+                                    {item.description}
+                                </p>
+                                {item.note ? (
+                                    <p className="text-[10px] text-text-tertiary mt-2 flex items-center gap-1">
+                                        <AlertCircle className="w-3 h-3" />
+                                        {item.note}
+                                    </p>
+                                ) : null}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => updateFlag(item.key, !flags[item.key])}
+                                className="ui-switch-track w-11 h-6 shrink-0"
+                                data-state={flags[item.key] ? 'on' : 'off'}
+                            >
+                                <div
+                                    className={clsx(
+                                        'ui-switch-thumb top-1 w-4 h-4',
+                                        flags[item.key] ? 'translate-x-6' : 'translate-x-1'
+                                    )}
+                                />
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => updateFlag('vectorRecommendation', !flags.vectorRecommendation)}
-                            className="ui-switch-track w-11 h-6 shrink-0"
-                            data-state={flags.vectorRecommendation ? 'on' : 'off'}
-                        >
-                            <div
-                                className={clsx(
-                                    'ui-switch-thumb top-1 w-4 h-4',
-                                    flags.vectorRecommendation ? 'translate-x-6' : 'translate-x-1'
-                                )}
-                            />
-                        </button>
                     </div>
-                </div>
+                ))}
             </div>
 
         </section>
