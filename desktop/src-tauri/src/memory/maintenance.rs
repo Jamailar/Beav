@@ -240,12 +240,9 @@ mod tests {
         assert!(summary.deduped >= 1);
         assert!(
             summary.archived_task_learnings >= 1
-                || store
-                    .memories
-                    .iter()
-                    .any(|item| item.id == "m3"
-                        && item.status.as_deref() == Some("archived")
-                        && item.archive_reason.as_deref() == Some("stale-task-learning"))
+                || store.memories.iter().any(|item| item.id == "m3"
+                    && item.status.as_deref() == Some("archived")
+                    && item.archive_reason.as_deref() == Some("stale-task-learning"))
         );
         assert_eq!(
             store

@@ -127,6 +127,51 @@ const parseContextBundleSummary = (value: unknown): RuntimeContextBundleSummary 
             : [],
         scanWarnings: parseContextScanWarnings(record.scanWarnings),
         sections,
+        capabilitySet: parseRuntimeCapabilitySet(record.capabilitySet),
+    };
+};
+
+const parseRuntimeCapabilitySet = (value: unknown): RuntimeCapabilitySet | null => {
+    const record = asRecord(value);
+    if (!record) return null;
+    const fingerprint = asString(record.fingerprint);
+    const runtimeMode = asString(record.runtimeMode);
+    const entryKind = asString(record.entryKind) as RuntimeCapabilitySet['entryKind'] | null;
+    if (!fingerprint || !runtimeMode || !entryKind) return null;
+    const approvalPolicyRecord = asRecord(record.approvalPolicy);
+    const mcpScopeRecord = asRecord(record.mcpScope);
+    return {
+        fingerprint,
+        runtimeMode,
+        entryKind,
+        activeSkills: Array.isArray(record.activeSkills) ? record.activeSkills.map((item) => String(item || '')).filter(Boolean) : [],
+        allowedTools: Array.isArray(record.allowedTools) ? record.allowedTools.map((item) => String(item || '')).filter(Boolean) : [],
+        blockedTools: Array.isArray(record.blockedTools) ? record.blockedTools.map((item) => String(item || '')).filter(Boolean) : [],
+        approvalPolicy: {
+            defaultLevel: (asString(approvalPolicyRecord?.defaultLevel) as RuntimeCapabilitySet['approvalPolicy']['defaultLevel']) || 'none',
+            toolOverrides: Array.isArray(approvalPolicyRecord?.toolOverrides)
+                ? approvalPolicyRecord!.toolOverrides
+                    .map((item) => {
+                        const overrideRecord = asRecord(item);
+                        const toolName = asString(overrideRecord?.toolName);
+                        const level = asString(overrideRecord?.level) as RuntimeCapabilityApprovalOverride['level'] | null;
+                        const reason = asString(overrideRecord?.reason);
+                        if (!toolName || !level || !reason) return null;
+                        return { toolName, level, reason };
+                    })
+                    .filter((item): item is RuntimeCapabilityApprovalOverride => Boolean(item))
+                : [],
+        },
+        writeScope: Array.isArray(record.writeScope) ? record.writeScope.map((item) => String(item || '')).filter(Boolean) : [],
+        networkScope: Array.isArray(record.networkScope) ? record.networkScope.map((item) => String(item || '')).filter(Boolean) : [],
+        mcpScope: {
+            mode: asString(mcpScopeRecord?.mode) || 'none',
+            allowedActions: Array.isArray(mcpScopeRecord?.allowedActions) ? mcpScopeRecord!.allowedActions.map((item) => String(item || '')).filter(Boolean) : [],
+            blockedActions: Array.isArray(mcpScopeRecord?.blockedActions) ? mcpScopeRecord!.blockedActions.map((item) => String(item || '')).filter(Boolean) : [],
+            allowedServerIds: Array.isArray(mcpScopeRecord?.allowedServerIds) ? mcpScopeRecord!.allowedServerIds.map((item) => String(item || '')).filter(Boolean) : [],
+            allowedServerNames: Array.isArray(mcpScopeRecord?.allowedServerNames) ? mcpScopeRecord!.allowedServerNames.map((item) => String(item || '')).filter(Boolean) : [],
+        },
+        memoryWritePolicy: asString(record.memoryWritePolicy) || 'unknown',
     };
 };
 
@@ -1780,6 +1825,60 @@ export function ToolsSettingsSection({
         );
     };
 
+    const renderCapabilitySet = (
+        capabilitySet: RuntimeCapabilitySet,
+        options?: {
+            title?: string;
+        },
+    ) => (
+        <div className="space-y-3">
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2 text-[11px] text-text-secondary">
+                <div>entry: {capabilitySet.entryKind}</div>
+                <div>skills: {capabilitySet.activeSkills.length}</div>
+                <div>tools: {capabilitySet.allowedTools.length}</div>
+                <div>blocked: {capabilitySet.blockedTools.length}</div>
+                <div>approval: {capabilitySet.approvalPolicy.defaultLevel}</div>
+                <div>memory: {capabilitySet.memoryWritePolicy}</div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px] text-text-tertiary">
+                <span className="font-mono break-all">fingerprint: {capabilitySet.fingerprint}</span>
+                <span>runtime: {capabilitySet.runtimeMode}</span>
+                <span>mcp: {capabilitySet.mcpScope.mode}</span>
+            </div>
+            <div className="space-y-2">
+                <div className="text-[10px] uppercase tracking-wide text-text-tertiary">{options?.title || 'Scopes'}</div>
+                <div className="space-y-1 text-[11px] text-text-secondary">
+                    <div>write: {capabilitySet.writeScope.length > 0 ? capabilitySet.writeScope.join(', ') : 'none'}</div>
+                    <div>network: {capabilitySet.networkScope.length > 0 ? capabilitySet.networkScope.join(', ') : 'none'}</div>
+                    <div>allowed tools: {capabilitySet.allowedTools.join(', ') || 'none'}</div>
+                    <div>blocked tools: {capabilitySet.blockedTools.join(', ') || 'none'}</div>
+                </div>
+            </div>
+            {capabilitySet.approvalPolicy.toolOverrides.length > 0 ? (
+                <div className="space-y-2">
+                    <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Approval Overrides</div>
+                    <div className="space-y-2">
+                        {capabilitySet.approvalPolicy.toolOverrides.map((override) => (
+                            <div key={`${override.toolName}-${override.level}`} className="rounded border border-border bg-surface-primary/60 p-2 text-[11px] text-text-secondary">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="font-medium text-text-primary">{override.toolName}</span>
+                                    <span className="text-text-tertiary">{override.level}</span>
+                                </div>
+                                <div className="mt-1 text-text-tertiary">{override.reason}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+            {(capabilitySet.mcpScope.allowedActions.length > 0 || capabilitySet.mcpScope.blockedActions.length > 0) ? (
+                <div className="space-y-1 text-[11px] text-text-secondary">
+                    <div>mcp allowed actions: {capabilitySet.mcpScope.allowedActions.join(', ') || 'none'}</div>
+                    <div>mcp blocked actions: {capabilitySet.mcpScope.blockedActions.join(', ') || 'none'}</div>
+                </div>
+            ) : null}
+        </div>
+    );
+
     const taskStatusTone = (status: AgentTaskSnapshot['status']) => {
         switch (status) {
             case 'completed':
@@ -2323,6 +2422,19 @@ export function ToolsSettingsSection({
                                                                 当前 warm entry 还没有 context bundle summary。
                                                             </div>
                                                         )}
+                                                        {entry.capabilitySet ? (
+                                                            <details className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
+                                                                    <span className="font-medium text-text-primary">Capability Set</span>
+                                                                    <span className="text-text-tertiary">
+                                                                        {entry.capabilitySet.entryKind} · {entry.capabilitySet.allowedTools.length} tools
+                                                                    </span>
+                                                                </summary>
+                                                                <div className="mt-2">
+                                                                    {renderCapabilitySet(entry.capabilitySet)}
+                                                                </div>
+                                                            </details>
+                                                        ) : null}
                                                         {entry.activeSkills.length > 0 ? (
                                                             <div className="text-[11px] text-text-tertiary">
                                                                 skills: {entry.activeSkills.join(', ')}
@@ -2351,6 +2463,7 @@ export function ToolsSettingsSection({
                                                 <div>debug logs: {runtimeDebugSummary.storeCounts.debugLogs}</div>
                                                 <div>memories: {runtimeDebugSummary.storeCounts.memories}</div>
                                                 <div>memory history: {runtimeDebugSummary.storeCounts.memoryHistory}</div>
+                                                <div>capability audits: {runtimeDebugSummary.storeCounts.capabilityAudits ?? 0}</div>
                                             </div>
                                         </div>
 
@@ -2429,14 +2542,54 @@ export function ToolsSettingsSection({
                                                                         {payload?.runtimeMode ? <span>mode: {payload.runtimeMode}</span> : null}
                                                                     </div>
                                                                     {payload ? (
-                                                                        renderContextBundleSummary(payload, {
-                                                                            showContentPreview: true,
-                                                                        })
+                                                                        <div className="space-y-3">
+                                                                            {renderContextBundleSummary(payload, {
+                                                                                showContentPreview: true,
+                                                                            })}
+                                                                            {payload.capabilitySet ? renderCapabilitySet(payload.capabilitySet, { title: 'Capability Scopes' }) : null}
+                                                                        </div>
                                                                     ) : null}
                                                                 </div>
                                                             </details>
                                                         );
                                                     })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-xs font-medium text-text-primary">Recent Capability Audits</div>
+                                                <span className="text-[11px] text-text-tertiary">{runtimeDebugSummary.recentCapabilityAudits?.length || 0} items</span>
+                                            </div>
+                                            {!runtimeDebugSummary.recentCapabilityAudits || runtimeDebugSummary.recentCapabilityAudits.length === 0 ? (
+                                                <div className="text-[11px] text-text-tertiary">暂无 capability 审计记录。</div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                    {runtimeDebugSummary.recentCapabilityAudits.map((audit) => (
+                                                        <div key={audit.id} className="rounded border border-border bg-surface-secondary/20 p-2 text-[11px] text-text-secondary space-y-1">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className="font-medium text-text-primary">{audit.toolName}{audit.toolAction ? ` · ${audit.toolAction}` : ''}</span>
+                                                                <span className={clsx(
+                                                                    'px-1.5 py-0.5 rounded border text-[10px]',
+                                                                    audit.outcome === 'allowed'
+                                                                        ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                                        : audit.outcome === 'blocked'
+                                                                            ? 'bg-amber-500/10 text-amber-700 border-amber-200'
+                                                                            : 'bg-red-500/10 text-red-600 border-red-200'
+                                                                )}>
+                                                                    {audit.outcome}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-2 text-text-tertiary">
+                                                                <span>{audit.runtimeMode}</span>
+                                                                <span>{audit.entryKind}</span>
+                                                                <span>approval: {audit.approvalLevel}</span>
+                                                                <span>{formatTimestamp(audit.createdAt)}</span>
+                                                            </div>
+                                                            <div className="text-text-tertiary">{audit.reason}</div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>
@@ -3198,9 +3351,12 @@ export function ToolsSettingsSection({
                                                                             <span className="font-mono break-all">fingerprint: {contextBundle.fingerprint}</span>
                                                                         ) : null}
                                                                     </div>
-                                                                    {renderContextBundleSummary(contextBundle, {
-                                                                        showContentPreview: true,
-                                                                    })}
+                                                                    <div className="space-y-3">
+                                                                        {renderContextBundleSummary(contextBundle, {
+                                                                            showContentPreview: true,
+                                                                        })}
+                                                                        {contextBundle.capabilitySet ? renderCapabilitySet(contextBundle.capabilitySet, { title: 'Capability Scopes' }) : null}
+                                                                    </div>
                                                                 </div>
                                                             </details>
                                                         );

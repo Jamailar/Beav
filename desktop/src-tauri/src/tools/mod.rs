@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod catalog;
 pub mod compat;
 pub mod guards;

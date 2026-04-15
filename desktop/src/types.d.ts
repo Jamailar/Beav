@@ -15,6 +15,8 @@ export interface ToolDiagnosticDescriptor {
   displayName: string;
   description: string;
   kind: string;
+  defaultApproval?: 'none' | 'light' | 'explicit' | 'always_hold';
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
   visibility: 'public' | 'developer' | 'internal';
   contexts: string[];
   availabilityStatus: 'available' | 'missing_context' | 'internal_only' | 'not_in_current_pack' | 'registration_error';
@@ -425,6 +427,55 @@ declare global {
     truncatedSections: string[];
     scanWarnings: RuntimeContextScanWarning[];
     sections: RuntimeContextBundleSectionSummary[];
+    capabilitySet?: RuntimeCapabilitySet | null;
+  }
+
+  interface RuntimeCapabilityApprovalOverride {
+    toolName: string;
+    level: 'none' | 'light' | 'explicit' | 'always_hold';
+    reason: string;
+  }
+
+  interface RuntimeCapabilityMcpScope {
+    mode: string;
+    allowedActions: string[];
+    blockedActions: string[];
+    allowedServerIds: string[];
+    allowedServerNames: string[];
+  }
+
+  interface RuntimeCapabilitySet {
+    fingerprint: string;
+    runtimeMode: string;
+    entryKind: 'interactive' | 'background_task' | 'subagent' | 'diagnostics';
+    activeSkills: string[];
+    allowedTools: string[];
+    blockedTools: string[];
+    approvalPolicy: {
+      defaultLevel: 'none' | 'light' | 'explicit' | 'always_hold';
+      toolOverrides: RuntimeCapabilityApprovalOverride[];
+    };
+    writeScope: string[];
+    networkScope: string[];
+    mcpScope: RuntimeCapabilityMcpScope;
+    memoryWritePolicy: string;
+  }
+
+  interface RuntimeCapabilityAuditRecord {
+    id: string;
+    actor: string;
+    runtimeMode: string;
+    entryKind: 'interactive' | 'background_task' | 'subagent' | 'diagnostics';
+    sessionId?: string | null;
+    toolName: string;
+    toolAction?: string | null;
+    approvalLevel: 'none' | 'light' | 'explicit' | 'always_hold';
+    outcome: 'allowed' | 'blocked' | 'failed' | string;
+    reason: string;
+    capabilityFingerprint: string;
+    argumentsSummary?: unknown;
+    createdAt: number;
+    createdAtIso: string;
   }
 
   interface RuntimeWarmSummaryEntry {
@@ -445,6 +496,7 @@ declare global {
     baseUrl?: string | null;
     protocol?: string | null;
     contextBundleSummary?: RuntimeContextBundleSummary | null;
+    capabilitySet?: RuntimeCapabilitySet | null;
   }
 
   interface RuntimeDebugSummary {
@@ -467,6 +519,7 @@ declare global {
       debugLogs: number;
       memories: number;
       memoryHistory: number;
+      capabilityAudits?: number;
     };
     memoryOverview: {
       memoryCount: number;
@@ -503,6 +556,7 @@ declare global {
       updatedAt: string;
       lineage: SessionLineageSummary;
     }>;
+    recentCapabilityAudits?: RuntimeCapabilityAuditRecord[];
     runtimeWarm: {
       lastWarmedAt: number;
       settingsFingerprint: string;

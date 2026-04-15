@@ -1,5 +1,31 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalLevel {
+    None,
+    Light,
+    Explicit,
+    AlwaysHold,
+}
+
+pub fn approval_level_max(left: ApprovalLevel, right: ApprovalLevel) -> ApprovalLevel {
+    if left >= right {
+        left
+    } else {
+        right
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +46,8 @@ pub struct ToolDescriptor {
     pub description: &'static str,
     pub kind: ToolKind,
     pub requires_approval: bool,
+    pub default_approval: ApprovalLevel,
+    pub risk_level: ToolRiskLevel,
     pub concurrency_safe: bool,
     pub output_budget_chars: usize,
 }
@@ -32,6 +60,8 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
                 "Query app-managed RedBox data with one generic app tool. Prefer this over many specialized list/search tools.",
             kind: ToolKind::AppQuery,
             requires_approval: false,
+            default_approval: ApprovalLevel::None,
+            risk_level: ToolRiskLevel::Low,
             concurrency_safe: true,
             output_budget_chars: 12_000,
         }),
@@ -40,6 +70,8 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             description: "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
+            default_approval: ApprovalLevel::Light,
+            risk_level: ToolRiskLevel::Medium,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
@@ -48,7 +80,9 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             description:
                 "Read or update RedClaw long-term profile docs (Agent.md, Soul.md, user.md, CreatorProfile.md). Update only when user requests durable profile changes.",
             kind: ToolKind::ProfileDoc,
-            requires_approval: false,
+            requires_approval: true,
+            default_approval: ApprovalLevel::Explicit,
+            risk_level: ToolRiskLevel::High,
             concurrency_safe: false,
             output_budget_chars: 16_000,
         }),
@@ -56,7 +90,9 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_mcp",
             description: "Unified MCP management and call bridge.",
             kind: ToolKind::Mcp,
-            requires_approval: false,
+            requires_approval: true,
+            default_approval: ApprovalLevel::Explicit,
+            risk_level: ToolRiskLevel::Critical,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
@@ -64,7 +100,9 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_skill",
             description: "Unified skill and AI-role management entry.",
             kind: ToolKind::Skill,
-            requires_approval: false,
+            requires_approval: true,
+            default_approval: ApprovalLevel::Explicit,
+            risk_level: ToolRiskLevel::High,
             concurrency_safe: false,
             output_budget_chars: 12_000,
         }),
@@ -72,7 +110,9 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_runtime_control",
             description: "Unified runtime/session/task/background control entry.",
             kind: ToolKind::RuntimeControl,
-            requires_approval: false,
+            requires_approval: true,
+            default_approval: ApprovalLevel::Light,
+            risk_level: ToolRiskLevel::High,
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
@@ -80,7 +120,9 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_editor",
             description: "Inspect and edit the current video/audio manuscript package with a script-first workflow. Video mode now prefers project_read + ffmpeg_edit + Remotion actions.",
             kind: ToolKind::Editor,
-            requires_approval: false,
+            requires_approval: true,
+            default_approval: ApprovalLevel::Light,
+            risk_level: ToolRiskLevel::Medium,
             concurrency_safe: false,
             output_budget_chars: 24_000,
         }),

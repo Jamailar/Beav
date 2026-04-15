@@ -9,6 +9,7 @@ use crate::agent::{
 };
 use crate::persistence::with_store;
 use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
+use crate::tools::capabilities::resolve_capability_set_value;
 use crate::tools::registry::{openai_schemas_for_runtime_mode, openai_schemas_for_session};
 use crate::{lexbox_project_root, workspace_root, AppState};
 
@@ -75,7 +76,17 @@ pub(crate) fn interactive_runtime_context_snapshot(
     }
     build_runtime_context_bundle(state, runtime_mode, session_id)
         .ok()
-        .map(|bundle| context_bundle_checkpoint_payload(&bundle))
+        .map(|bundle| {
+            let mut payload = context_bundle_checkpoint_payload(&bundle);
+            if let Some(object) = payload.as_object_mut() {
+                if let Ok(capability_set) =
+                    resolve_capability_set_value(state, runtime_mode, session_id)
+                {
+                    object.insert("capabilitySet".to_string(), capability_set);
+                }
+            }
+            payload
+        })
 }
 
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {

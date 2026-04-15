@@ -188,6 +188,8 @@ pub fn diagnostics_tool_items() -> Vec<Value> {
             "description": tool.description,
             "kind": kind_text(tool.kind),
             "requiresApproval": tool.requires_approval,
+            "defaultApproval": tool.default_approval,
+            "riskLevel": tool.risk_level,
             "concurrencySafe": tool.concurrency_safe,
             "outputBudgetChars": tool.output_budget_chars,
             "visibility": "developer",

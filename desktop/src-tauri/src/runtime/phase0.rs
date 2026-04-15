@@ -6,6 +6,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::store_runtime_task;
 use crate::scheduler::derived_background_tasks;
 use crate::skills::build_skill_runtime_state;
+use crate::tools::capabilities::resolve_capability_set_for_store;
 use crate::tools::registry::base_tool_names_for_session_metadata;
 use crate::{
     commands::runtime_routing::route_runtime_intent_with_settings, memory_type_counts_value,
@@ -148,6 +149,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         derived_metrics,
         latest_context_snapshots,
         recent_session_lineage,
+        recent_capability_audits,
     ) = with_store(state, |store| {
         let settings_snapshot = store.settings.clone();
         let skills = store.skills.clone();
@@ -173,6 +175,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             "debugLogs": store.debug_logs.len(),
             "memories": store.memories.len(),
             "memoryHistory": store.memory_history.len(),
+            "capabilityAudits": store.capability_audit_records.len(),
         });
         let session_count = store.chat_sessions.len().max(1) as f64;
         let task_count = store.runtime_tasks.len().max(1) as f64;
@@ -223,15 +226,21 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                     .into_iter()
                     .take(8)
                     .map(|item| {
-                    json!({
-                        "sessionId": item.id,
-                        "title": item.title,
-                        "updatedAt": item.updated_at,
-                        "lineage": session_lineage_summary_value(&store, &item.id),
-                    })
+                        json!({
+                            "sessionId": item.id,
+                            "title": item.title,
+                            "updatedAt": item.updated_at,
+                            "lineage": session_lineage_summary_value(&store, &item.id),
+                        })
                     })
                     .collect::<Vec<_>>()
             },
+            store
+                .capability_audit_records
+                .iter()
+                .take(16)
+                .map(|item| json!(item))
+                .collect::<Vec<_>>(),
         ))
     })?;
 
@@ -252,52 +261,56 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         .runtime_warm
         .lock()
         .map_err(|error| error.to_string())?;
-    let warm_entries = SMOKE_RUNTIME_MODES
-        .iter()
-        .filter_map(|mode| runtime_warm.entries.get(*mode))
-        .map(|entry| {
-            let base_tools = base_tool_names_for_session_metadata(&entry.mode, None);
-            let skill_state = build_skill_runtime_state(&skills, &entry.mode, None, &base_tools);
-            let model_config = resolve_chat_config(&settings_only, entry.model_config.as_ref());
-            let prompt_chars = entry.system_prompt.chars().count();
-            let legacy_prompt_chars =
-                legacy_interactive_runtime_system_prompt(state, &entry.mode, None)
-                    .chars()
-                    .count();
-            let long_term_chars = entry
-                .long_term_context
-                .as_ref()
-                .map(|value| value.chars().count())
-                .unwrap_or(0);
-            json!({
-                "mode": entry.mode,
-                "warmedAt": entry.warmed_at,
-                "systemPromptChars": prompt_chars,
-                "estimatedPromptTokens": estimated_prompt_tokens(prompt_chars),
-                "legacySystemPromptChars": legacy_prompt_chars,
-                "charReductionRatio": if legacy_prompt_chars == 0 {
-                    0.0
-                } else {
-                    1.0 - (prompt_chars as f64 / legacy_prompt_chars as f64)
-                },
-                "longTermContextChars": long_term_chars,
-                "activeSkillCount": skill_state.active_skills.len(),
-                "activeSkills": skill_state
-                    .active_skills
-                    .iter()
-                    .map(|skill| skill.name.clone())
-                    .collect::<Vec<_>>(),
-                "baseToolCount": base_tools.len(),
-                "allowedToolCount": skill_state.allowed_tools.len(),
-                "allowedTools": skill_state.allowed_tools,
-                "modelConfigured": model_config.is_some(),
-                "modelName": model_config.as_ref().map(|config| config.model_name.clone()),
-                "baseUrl": model_config.as_ref().map(|config| config.base_url.clone()),
-                "protocol": model_config.as_ref().map(|config| config.protocol.clone()),
-                "contextBundleSummary": entry.context_bundle_summary,
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut warm_entries = Vec::new();
+    for mode in SMOKE_RUNTIME_MODES {
+        let Some(entry) = runtime_warm.entries.get(mode) else {
+            continue;
+        };
+        let base_tools = base_tool_names_for_session_metadata(&entry.mode, None);
+        let skill_state = build_skill_runtime_state(&skills, &entry.mode, None, &base_tools);
+        let model_config = resolve_chat_config(&settings_only, entry.model_config.as_ref());
+        let prompt_chars = entry.system_prompt.chars().count();
+        let capability_set = with_store(state, |store| {
+            Ok(resolve_capability_set_for_store(&store, &entry.mode, None))
+        })?;
+        let legacy_prompt_chars =
+            legacy_interactive_runtime_system_prompt(state, &entry.mode, None)
+                .chars()
+                .count();
+        let long_term_chars = entry
+            .long_term_context
+            .as_ref()
+            .map(|value| value.chars().count())
+            .unwrap_or(0);
+        warm_entries.push(json!({
+            "mode": entry.mode,
+            "warmedAt": entry.warmed_at,
+            "systemPromptChars": prompt_chars,
+            "estimatedPromptTokens": estimated_prompt_tokens(prompt_chars),
+            "legacySystemPromptChars": legacy_prompt_chars,
+            "charReductionRatio": if legacy_prompt_chars == 0 {
+                0.0
+            } else {
+                1.0 - (prompt_chars as f64 / legacy_prompt_chars as f64)
+            },
+            "longTermContextChars": long_term_chars,
+            "activeSkillCount": skill_state.active_skills.len(),
+            "activeSkills": skill_state
+                .active_skills
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect::<Vec<_>>(),
+            "baseToolCount": base_tools.len(),
+            "allowedToolCount": skill_state.allowed_tools.len(),
+            "allowedTools": skill_state.allowed_tools,
+            "modelConfigured": model_config.is_some(),
+            "modelName": model_config.as_ref().map(|config| config.model_name.clone()),
+            "baseUrl": model_config.as_ref().map(|config| config.base_url.clone()),
+            "protocol": model_config.as_ref().map(|config| config.protocol.clone()),
+            "contextBundleSummary": entry.context_bundle_summary,
+            "capabilitySet": capability_set,
+        }));
+    }
     let settings_fingerprint = runtime_warm.settings_fingerprint.clone();
     let last_warmed_at = runtime_warm.last_warmed_at;
     drop(runtime_warm);
@@ -317,6 +330,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
         "derivedMetrics": derived_metrics,
         "latestContextSnapshots": latest_context_snapshots,
         "recentSessionLineage": recent_session_lineage,
+        "recentCapabilityAudits": recent_capability_audits,
         "runtimeWarm": {
             "lastWarmedAt": last_warmed_at,
             "settingsFingerprint": settings_fingerprint,

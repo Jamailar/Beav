@@ -131,6 +131,7 @@ pub fn default_store() -> AppStore {
         runtime_tasks: Vec::new(),
         runtime_task_traces: Vec::new(),
         debug_logs: Vec::new(),
+        capability_audit_records: Vec::new(),
         archive_profiles: Vec::new(),
         archive_samples: Vec::new(),
         memories: Vec::new(),

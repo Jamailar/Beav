@@ -313,6 +313,7 @@ struct AppStore {
     runtime_tasks: Vec<RuntimeTaskRecord>,
     runtime_task_traces: Vec<RuntimeTaskTraceRecord>,
     debug_logs: Vec<String>,
+    capability_audit_records: Vec<tools::capabilities::CapabilityAuditRecord>,
     archive_profiles: Vec<ArchiveProfileRecord>,
     archive_samples: Vec<ArchiveSampleRecord>,
     memories: Vec<UserMemoryRecord>,
@@ -2440,7 +2441,8 @@ fn execute_interactive_tool_call(
     let normalized_call = tools::compat::normalize_tool_call(name, arguments);
     let name = normalized_call.name;
     let arguments = &normalized_call.arguments;
-    tools::guards::ensure_tool_allowed_for_session(state, runtime_mode, session_id, name)?;
+    let guard =
+        tools::guards::preflight_tool_call(state, runtime_mode, session_id, name, arguments)?;
     let call_skill_channel = |channel: &str, payload: Value| -> Result<Value, String> {
         commands::skills_ai::handle_skills_ai_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("Skill channel not handled: {channel}")))
@@ -2458,7 +2460,7 @@ fn execute_interactive_tool_call(
             .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
     };
 
-    match name {
+    let result = match name {
         "redbox_editor" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
             let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
@@ -3743,7 +3745,9 @@ fn execute_interactive_tool_call(
             }
         }
         other => Err(format!("unsupported interactive tool: {other}")),
-    }
+    };
+    tools::guards::record_tool_execution_outcome(state, session_id, &guard, &result);
+    result
 }
 
 pub(crate) fn editor_session_prompt_context(
