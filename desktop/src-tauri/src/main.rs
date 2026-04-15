@@ -757,8 +757,11 @@ fn now_iso() -> String {
     now_ms().to_string()
 }
 
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn make_id(prefix: &str) -> String {
-    format!("{prefix}-{}", now_ms())
+    let sequence = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{sequence}", now_ms())
 }
 
 fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Result<(), String> {

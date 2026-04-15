@@ -77,6 +77,83 @@ pub(crate) fn apply_workspace_hydration_snapshot(
     store.work_items = snapshot.work_items;
 }
 
+fn builtin_skill_records() -> Vec<SkillRecord> {
+    vec![
+        SkillRecord {
+            name: "redclaw-project".to_string(),
+            description: "RedClaw 项目编排技能".to_string(),
+            location: "redbox://skills/redclaw-project".to_string(),
+            body: "---\nallowedRuntimeModes: [redclaw]\nallowedToolPack: redclaw\nallowedTools: [redbox_app_query, redbox_fs, redbox_profile_doc, redbox_mcp, redbox_skill, redbox_runtime_control]\nhookMode: inline\nautoActivate: true\ncontextNote: 默认把项目目标、产物落盘与 Workboard 联动作为执行约束。\n---\n# RedClaw Project\n\n用于推进内容项目的内置技能。\n\n## 工作流\n\n1. 明确目标、平台和受众。\n2. 生成选题、文案、配图提示和复盘。\n3. 将产物保存到 RedClaw workspace，并同步生成 Workboard 工作项。\n4. 遇到 `save-copy`、`save-image`、`save-retro` 意图时，应优先落地对应文件。".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "cover-builder".to_string(),
+            description: "封面生成辅助技能".to_string(),
+            location: "redbox://skills/cover-builder".to_string(),
+            body: "---\nallowedRuntimeModes: [redclaw]\nallowedToolPack: redclaw\nallowedTools: [redbox_app_query, redbox_fs, redbox_mcp, redbox_skill, redbox_runtime_control]\nhookMode: inline\nautoActivate: false\ncontextNote: 需要明确输出封面标题、构图与提示词。\n---\n# Cover Builder\n\n用于把标题、平台调性和参考素材转成封面方案的内置技能。\n\n## 输出要求\n\n- 提供 3-5 个封面标题方案。\n- 标注主视觉、构图、色彩、字体建议。\n- 如果配置了图片生成 endpoint，优先生成真实封面资产；否则输出可执行的封面提示词。".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "remotion-best-practices".to_string(),
+            description: "视频编辑内置 Remotion 官方最佳实践技能".to_string(),
+            location: "redbox://skills/remotion-best-practices".to_string(),
+            body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nhookMode: inline\nautoActivate: true\ncontextNote: 当前视频运行时默认启用 Remotion 官方最佳实践知识包。优先按 Composition / Sequence / timing / assets 的思路设计动画，但最终仍以 remotion.scene.json 为宿主真相层，并以 baseMedia.outputPath 作为基础视频。\npromptPrefix: 你当前必须遵守 remotion-best-practices：先读取当前 Remotion 工程状态，再决定 composition/scene 边界、主体 element、timing 与 assets；不要直接虚构任意 React 代码或 CSS 动画。\npromptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落地结果。若官方 Remotion 能力超出宿主范围，必须显式降级为可预览的 scene patch，而不是假装已实现。\n---\n# Remotion Best Practices\n\n用于 `video-editor` 运行时的内置 Remotion 官方最佳实践技能。\n\n- 先 `redbox_editor(action=project_read)` 了解当前视频工程，再 `redbox_editor(action=remotion_read)` 读取当前 Remotion 工程状态。\n- 运行时会自动加载 compositions / animations / sequencing / timing / assets / text-animations / subtitles / transitions / calculate-metadata。\n- 先明确 Composition / scene 边界，再确定主体 element、timing、assets、字幕与导出默认项。\n- 结果必须回写 `remotion.scene.json`，不要退化成脱离宿主的自由 TSX 代码。\n- 若脚本没有明确要求屏幕文字，默认不要生成 `overlayTitle`、`overlayBody`、`overlays` 或解释性 `text` entity；优先只保留动画主体。\n- 不要调用旧时间轴动作编辑视频；基础视频剪辑走 `ffmpeg_edit`，图层动画走 `remotion_*`。\n- 禁止使用 CSS transition、CSS animation 或 Tailwind animate 类名来实现 Remotion 动画。".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "writing-style-creator".to_string(),
+            description: "写作风格技能创建与迭代技能".to_string(),
+            location: "redbox://skills/writing-style-creator".to_string(),
+            body: include_str!("../../../builtin-skills/writing-style-creator/SKILL.md").to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "writing-style".to_string(),
+            description: "当前空间唯一的系统写作风格技能".to_string(),
+            location: "redbox://skills/writing-style".to_string(),
+            body: include_str!("../../../builtin-skills/writing-style/SKILL.md").to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+    ]
+}
+
+fn ensure_builtin_skills(store: &mut AppStore) {
+    if !store.skills.iter().any(|item| item.name == "writing-style") {
+        if let Some(legacy) = store
+            .skills
+            .iter_mut()
+            .find(|item| item.name == "writing-style-base" && item.is_builtin.unwrap_or(false))
+        {
+            legacy.name = "writing-style".to_string();
+            legacy.description = "当前空间唯一的系统写作风格技能".to_string();
+            legacy.location = "redbox://skills/writing-style".to_string();
+            legacy.body = include_str!("../../../builtin-skills/writing-style/SKILL.md").to_string();
+            legacy.source_scope = Some("builtin".to_string());
+            legacy.is_builtin = Some(true);
+            legacy.disabled = Some(false);
+        }
+    }
+    store
+        .skills
+        .retain(|item| !(item.name == "writing-style-base" && item.is_builtin.unwrap_or(false)));
+    for builtin in builtin_skill_records() {
+        if store.skills.iter().any(|item| item.name == builtin.name) {
+            continue;
+        }
+        store.skills.push(builtin);
+    }
+}
+
 pub fn build_store_path() -> PathBuf {
     let base = config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -138,35 +215,7 @@ pub fn default_store() -> AppStore {
         memory_history: Vec::new(),
         mcp_servers: Vec::new(),
         runtime_hooks: Vec::new(),
-        skills: vec![
-            SkillRecord {
-                name: "redclaw-project".to_string(),
-                description: "RedClaw 项目编排技能".to_string(),
-                location: "redbox://skills/redclaw-project".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedToolPack: redclaw\nallowedTools: [redbox_app_query, redbox_fs, redbox_profile_doc, redbox_mcp, redbox_skill, redbox_runtime_control]\nhookMode: inline\nautoActivate: true\ncontextNote: 默认把项目目标、产物落盘与 Workboard 联动作为执行约束。\n---\n# RedClaw Project\n\n用于推进内容项目的内置技能。\n\n## 工作流\n\n1. 明确目标、平台和受众。\n2. 生成选题、文案、配图提示和复盘。\n3. 将产物保存到 RedClaw workspace，并同步生成 Workboard 工作项。\n4. 遇到 `save-copy`、`save-image`、`save-retro` 意图时，应优先落地对应文件。".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
-            SkillRecord {
-                name: "cover-builder".to_string(),
-                description: "封面生成辅助技能".to_string(),
-                location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedToolPack: redclaw\nallowedTools: [redbox_app_query, redbox_fs, redbox_mcp, redbox_skill, redbox_runtime_control]\nhookMode: inline\nautoActivate: false\ncontextNote: 需要明确输出封面标题、构图与提示词。\n---\n# Cover Builder\n\n用于把标题、平台调性和参考素材转成封面方案的内置技能。\n\n## 输出要求\n\n- 提供 3-5 个封面标题方案。\n- 标注主视觉、构图、色彩、字体建议。\n- 如果配置了图片生成 endpoint，优先生成真实封面资产；否则输出可执行的封面提示词。".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
-            SkillRecord {
-                name: "remotion-best-practices".to_string(),
-                description: "视频编辑内置 Remotion 官方最佳实践技能".to_string(),
-                location: "redbox://skills/remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nhookMode: inline\nautoActivate: true\ncontextNote: 当前视频运行时默认启用 Remotion 官方最佳实践知识包。优先按 Composition / Sequence / timing / assets 的思路设计动画，但最终仍以 remotion.scene.json 为宿主真相层，并以 baseMedia.outputPath 作为基础视频。\npromptPrefix: 你当前必须遵守 remotion-best-practices：先读取当前 Remotion 工程状态，再决定 composition/scene 边界、主体 element、timing 与 assets；不要直接虚构任意 React 代码或 CSS 动画。\npromptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落地结果。若官方 Remotion 能力超出宿主范围，必须显式降级为可预览的 scene patch，而不是假装已实现。\n---\n# Remotion Best Practices\n\n用于 `video-editor` 运行时的内置 Remotion 官方最佳实践技能。\n\n- 先 `redbox_editor(action=project_read)` 了解当前视频工程，再 `redbox_editor(action=remotion_read)` 读取当前 Remotion 工程状态。\n- 运行时会自动加载 compositions / animations / sequencing / timing / assets / text-animations / subtitles / transitions / calculate-metadata。\n- 先明确 Composition / scene 边界，再确定主体 element、timing、assets、字幕与导出默认项。\n- 结果必须回写 `remotion.scene.json`，不要退化成脱离宿主的自由 TSX 代码。\n- 若脚本没有明确要求屏幕文字，默认不要生成 `overlayTitle`、`overlayBody`、`overlays` 或解释性 `text` entity；优先只保留动画主体。\n- 不要调用旧时间轴动作编辑视频；基础视频剪辑走 `ffmpeg_edit`，图层动画走 `remotion_*`。\n- 禁止使用 CSS transition、CSS animation 或 Tailwind animate 类名来实现 Remotion 动画。".to_string(),
-                source_scope: Some("builtin".to_string()),
-                is_builtin: Some(true),
-                disabled: Some(false),
-            },
-        ],
+        skills: builtin_skill_records(),
         assistant_state: AssistantStateRecord {
             enabled: false,
             auto_start: true,
@@ -256,7 +305,9 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         Ok(content) => content,
         Err(_) => return default_store(),
     };
-    serde_json::from_str(&content).unwrap_or_else(|_| default_store())
+    let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
+    ensure_builtin_skills(&mut store);
+    store
 }
 
 pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
