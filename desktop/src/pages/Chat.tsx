@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
-import { Send, Terminal, Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Users, Paperclip, FileX, Square, MessageSquarePlus, Heart } from 'lucide-react';
+import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, FileX, Square, MessageSquarePlus } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
@@ -150,6 +150,10 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
 const STREAM_UPDATE_INTERVAL_MS = 48;
+const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
 
 function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
   const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
@@ -1905,21 +1909,16 @@ export function Chat({
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
     if (safe >= 1000) {
-      return `${Math.round(safe / 1000)}k`;
+      return COMPACT_TOKEN_FORMATTER.format(safe);
     }
     return `${safe}`;
   };
 
   const compactRatio = Math.max(0, Number(contextUsage?.compactRatio || 0));
   const contextUsedPercentRaw = Math.max(0, Math.min(100, compactRatio * 100));
-  const contextRemainingPercentRaw = Math.max(0, 100 - contextUsedPercentRaw);
   const contextUsedPercentDisplay = contextUsedPercentRaw < 10
     ? contextUsedPercentRaw.toFixed(1)
     : `${Math.round(contextUsedPercentRaw)}`;
-  const contextRemainingRounded = Math.round(contextRemainingPercentRaw);
-  const contextRemainingPercent = compactRatio > 0 && contextRemainingRounded >= 100
-    ? 99
-    : Math.max(0, Math.min(100, contextRemainingRounded));
   const contextBadgeClass = contextUsedPercentRaw >= 90
     ? 'text-red-600 border-red-500/40 bg-red-500/10'
     : contextUsedPercentRaw >= 70
@@ -1927,16 +1926,9 @@ export function Chat({
       : 'text-text-secondary border-border bg-surface-secondary/90';
   const compactThreshold = Math.max(0, Math.round(contextUsage?.compactThreshold || 0));
   const estimatedTotalTokens = Math.max(0, Math.round(contextUsage?.estimatedTotalTokens || 0));
-  const contextRemainingRatio = Math.max(0, Math.min(1, 1 - compactRatio));
   const contextRingRadius = 17;
   const contextRingCircumference = 2 * Math.PI * contextRingRadius;
-  const contextRingOffset = contextRingCircumference * (1 - contextRemainingRatio);
-  const contextRingColorClass = contextRemainingPercentRaw <= 15
-    ? 'text-red-500'
-    : contextRemainingPercentRaw <= 35
-      ? 'text-amber-500'
-      : 'text-emerald-500';
-  const isCompactWorkflowMode = Boolean(fixedSessionId && fixedSessionContextIndicatorMode === 'corner-ring');
+  const contextUsageRingOffset = contextRingCircumference * (1 - Math.max(0, Math.min(1, compactRatio)));
   const darkEmbedded = embeddedTheme === 'dark';
   const composerShellClass = darkEmbedded
     ? 'bg-[#121417] border border-white/10 rounded-[24px] p-1.5'
@@ -1967,7 +1959,71 @@ export function Chat({
   const shortcutChipClass = darkEmbedded
     ? 'flex-shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/62 transition-colors hover:border-white/20 hover:text-white disabled:opacity-50'
     : 'flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50';
+  const composerContextUsageButtonClass = darkEmbedded
+    ? 'peer relative flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-white/70 transition-opacity duration-200 hover:text-white/92 focus:outline-none'
+    : 'peer relative flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-[#65707d] transition-opacity duration-200 hover:text-[#4c5662] focus:outline-none';
+  const composerContextUsageTrackClass = darkEmbedded ? 'text-white/14' : 'text-[#ddd8cf]';
+  const composerContextUsageToneClass = contextUsedPercentRaw >= 90
+    ? 'text-red-500'
+    : contextUsedPercentRaw >= 70
+      ? 'text-amber-500'
+      : darkEmbedded
+        ? 'text-white/78'
+        : 'text-[#556170]';
+  const composerContextUsageTooltipClass = darkEmbedded
+    ? 'rounded-[24px] border border-white/10 bg-[#161a1f]/96 px-5 py-4 text-[13px] font-medium tracking-[0.01em] text-white/86 shadow-[0_18px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl'
+    : 'rounded-[24px] border border-[#ebe7dc] bg-[#fcfbf7]/96 px-5 py-4 text-[13px] font-medium tracking-[0.01em] text-[#2f2b26] shadow-[0_18px_60px_rgba(36,32,24,0.12)] backdrop-blur-xl';
+  const composerContextUsageArrowClass = darkEmbedded
+    ? 'border-b border-r border-white/10 bg-[#161a1f]/96'
+    : 'border-b border-r border-[#ebe7dc] bg-[#fcfbf7]/96';
+  const showComposerContextUsageIndicator = Boolean(
+    fixedSessionId &&
+    currentSessionId &&
+    contextUsage?.success &&
+    fixedSessionContextIndicatorMode !== 'none'
+  );
+  const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedTotalTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const composerContextUsageIndicator = showComposerContextUsageIndicator ? (
+    <div className="relative">
+      <button
+        type="button"
+        className={composerContextUsageButtonClass}
+        aria-label={composerContextUsageLabel}
+      >
+        <svg className="h-7 w-7 -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
+          <circle
+            cx="22"
+            cy="22"
+            r={contextRingRadius}
+            fill="transparent"
+            stroke="currentColor"
+            strokeWidth="3"
+            className={composerContextUsageTrackClass}
+          />
+          <circle
+            cx="22"
+            cy="22"
+            r={contextRingRadius}
+            fill="transparent"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            className={composerContextUsageToneClass}
+            strokeDasharray={contextRingCircumference}
+            strokeDashoffset={contextUsageRingOffset}
+          />
+        </svg>
+      </button>
+      <div className={clsx(
+        'pointer-events-none absolute bottom-full right-0 z-30 mb-3 w-72 max-w-[calc(100vw-2rem)] translate-y-1 opacity-0 transition-all duration-200 ease-out peer-hover:translate-y-0 peer-hover:opacity-100',
+        composerContextUsageTooltipClass
+      )}>
+        {composerContextUsageLabel}
+        <div className={clsx('absolute -bottom-1.5 right-[14px] h-3 w-3 rotate-45', composerContextUsageArrowClass)} />
+      </div>
+    </div>
+  ) : null;
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
@@ -2144,6 +2200,7 @@ export function Chat({
                 <Mic className="w-[18px] h-[18px]" />
               )}
             </button>
+            {composerContextUsageIndicator}
             <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
               {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
             </button>
@@ -2248,54 +2305,6 @@ export function Chat({
                 上下文 {contextUsedPercentDisplay}% · {contextUsage.estimatedTotalTokens || 0}/{contextUsage.compactThreshold || 0} tokens · compact {contextUsage.compactRounds || 0} 次
               </div>
             )}
-          </div>
-        )}
-
-        {/* Corner Ring Compact Indicator (for fixed session, e.g. RedClaw) */}
-        {fixedSessionId && currentSessionId && contextUsage?.success && fixedSessionContextIndicatorMode === 'corner-ring' && (
-          <div className="absolute right-6 bottom-28 z-20 pointer-events-none">
-            <div className="relative group pointer-events-auto">
-              <button
-                type="button"
-                className="relative w-14 h-14 rounded-full border border-border bg-surface-primary/95 backdrop-blur shadow-md flex items-center justify-center"
-                title="上下文窗口剩余空间"
-                aria-label="上下文窗口剩余空间"
-              >
-                <svg className="w-11 h-11 -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
-                  <circle
-                    cx="22"
-                    cy="22"
-                    r={contextRingRadius}
-                    fill="transparent"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    className="text-border"
-                  />
-                  <circle
-                    cx="22"
-                    cy="22"
-                    r={contextRingRadius}
-                    fill="transparent"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    className={contextRingColorClass}
-                    strokeDasharray={contextRingCircumference}
-                    strokeDashoffset={contextRingOffset}
-                  />
-                </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-text-primary">
-                  {contextRemainingPercent}%
-                </span>
-              </button>
-
-                <div className="absolute right-0 bottom-[68px] w-64 p-3 rounded-2xl border border-border bg-surface-primary/95 backdrop-blur shadow-xl text-xs text-text-secondary opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100">
-                <div className="font-semibold text-text-primary mb-1">背景信息窗口</div>
-                <div>{contextUsedPercentDisplay}% 已用（剩余 {contextRemainingPercentRaw.toFixed(1)}%）</div>
-                <div>已用 {formatTokenLabel(estimatedTotalTokens)} 标记，共 {formatTokenLabel(compactThreshold)}</div>
-                <div className="mt-1 text-text-tertiary">RedClaw 自动压缩其背景信息</div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -2623,6 +2632,7 @@ export function Chat({
                             )}
                           </button>
                         )}
+                        {composerContextUsageIndicator}
                         <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
                           {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
                         </button>

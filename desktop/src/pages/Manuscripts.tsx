@@ -2093,40 +2093,40 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         ]));
 
         return (
-            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-[#0f0f0f] text-white' : 'bg-background')}>
+            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-[#0f0f0f] text-white' : 'bg-surface-primary')}>
                 <div className={clsx(
-                    'flex items-center justify-between gap-3 px-6 py-3 backdrop-blur-sm',
+                    'flex items-center justify-between gap-3 px-6 py-3.5 backdrop-blur-md z-30',
                     isImmersiveWorkbench
-                        ? 'border-b border-white/10 bg-[#111111]'
-                        : 'border-b border-border/70 bg-background/95'
+                        ? 'border-b border-white/10 bg-[#111111]/90'
+                        : 'border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px]'
                 )}>
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-4 min-w-0">
                         <button
                             type="button"
                             onClick={() => setMode('gallery')}
                             className={clsx(
-                                'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors',
+                                'group inline-flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-[13px] font-bold transition-all active:scale-95',
                                 isImmersiveWorkbench
-                                    ? 'border border-white/10 text-white/70 hover:bg-white/5 hover:text-white'
-                                    : 'border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                                    ? 'bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 hover:text-white'
+                                    : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:bg-black/[0.06] hover:text-text-primary'
                             )}
                         >
-                            <ArrowLeft className="w-4 h-4" />
+                            <ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
                             返回草稿
                         </button>
                         <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <div className={clsx('text-sm font-medium truncate', isImmersiveWorkbench ? 'text-white' : 'text-text-primary')}>{currentDescriptor.title}</div>
-                                <span className={clsx('rounded-full px-2.5 py-1 text-[10px] font-medium', draftTheme.chip)}>
+                            <div className="flex flex-wrap items-center gap-2.5">
+                                <div className={clsx('text-[15px] font-extrabold tracking-tight truncate', isImmersiveWorkbench ? 'text-white' : 'text-text-primary')}>{currentDescriptor.title}</div>
+                                <span className={clsx('rounded-lg px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest', draftTheme.chip)}>
                                     {resolveDraftTypeLabel(draftType)}
                                 </span>
                             </div>
-                            <div className={clsx('text-xs truncate', isImmersiveWorkbench ? 'text-white/35' : 'text-text-tertiary')}>{editorFile}</div>
+                            <div className={clsx('mt-0.5 text-[10px] font-bold uppercase tracking-tighter truncate opacity-40', isImmersiveWorkbench ? 'text-white' : 'text-text-tertiary')}>{editorFile}</div>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                         {isAudioDraft && (
-                            <>
+                            <div className="flex items-center gap-1 mr-2 px-1 py-1 rounded-xl bg-black/[0.03] border border-black/[0.02]">
                                 <EditorLayoutToggleButton
                                     kind="timeline"
                                     collapsed={immersiveTimelineCollapsed}
@@ -2139,22 +2139,23 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     onClick={() => setImmersiveMaterialsCollapsed((value) => !value)}
                                     title={immersiveMaterialsCollapsed ? '展开素材栏' : '折叠素材栏'}
                                 />
-                            </>
+                            </div>
                         )}
+                        
                         {canUpgradeToArticle && (
                             <button
                                 type="button"
                                 onClick={() => void handleUpgradeDraftPackage('article')}
                                 disabled={isUpgradingDraft}
                                 className={clsx(
-                                    'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm disabled:opacity-60',
+                                    'inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95 shadow-sm',
                                     isImmersiveWorkbench
-                                        ? 'border border-white/10 text-white/70 hover:bg-white/5 hover:text-white'
-                                        : 'border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                                        ? 'bg-accent-primary text-white hover:bg-accent-hover'
+                                        : 'bg-text-primary text-white hover:bg-text-primary/90 shadow-text-primary/10'
                                 )}
                             >
-                                <Sparkles className="h-4 w-4" />
-                                {isUpgradingDraft ? '升级中...' : '升级为排版工程'}
+                                <Sparkles className="h-3.5 w-3.5" />
+                                {isUpgradingDraft ? 'UPGRADING...' : '升级为排版工程'}
                             </button>
                         )}
                         {canUpgradeToPost && (
@@ -2163,18 +2164,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 onClick={() => void handleUpgradeDraftPackage('post')}
                                 disabled={isUpgradingDraft}
                                 className={clsx(
-                                    'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm disabled:opacity-60',
+                                    'inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95 shadow-sm',
                                     isImmersiveWorkbench
-                                        ? 'border border-white/10 text-white/70 hover:bg-white/5 hover:text-white'
-                                        : 'border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                                        ? 'bg-accent-primary text-white hover:bg-accent-hover'
+                                        : 'bg-text-primary text-white hover:bg-text-primary/90 shadow-text-primary/10'
                                 )}
                             >
-                                <Sparkles className="h-4 w-4" />
-                                {isUpgradingDraft ? '升级中...' : '升级为图文工程'}
+                                <Sparkles className="h-3.5 w-3.5" />
+                                {isUpgradingDraft ? 'UPGRADING...' : '升级为图文工程'}
                             </button>
                         )}
+                        
                         {(isArticlePackage || isPostPackage) && (
-                            <>
+                            <div className="flex items-center gap-1">
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -2182,14 +2184,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         setIsBindAssetModalOpen(true);
                                     }}
                                     className={clsx(
-                                        'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm',
+                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'border border-white/10 text-white/70 hover:bg-white/5 hover:text-white'
-                                            : 'border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
-                                    <ImageIcon className="h-4 w-4" />
-                                    {isPostPackage ? '设置封面' : '绑定封面'}
+                                    <ImageIcon className="h-3.5 w-3.5" />
+                                    {isPostPackage ? '封面' : '绑定封面'}
                                 </button>
                                 <button
                                     type="button"
@@ -2198,17 +2200,18 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         setIsBindAssetModalOpen(true);
                                     }}
                                     className={clsx(
-                                        'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm',
+                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'border border-white/10 text-white/70 hover:bg-white/5 hover:text-white'
-                                            : 'border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
-                                    <FileImage className="h-4 w-4" />
-                                    {isPostPackage ? '添加配图' : '插入配图'}
+                                    <FileImage className="h-3.5 w-3.5" />
+                                    {isPostPackage ? '配图' : '插入配图'}
                                 </button>
-                            </>
+                            </div>
                         )}
+                        
                         {isVideoPackage && (
                             <button
                                 type="button"
@@ -2217,10 +2220,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 }}
                                 disabled={isRenderingRemotion || !isScriptConfirmed}
                                 title={isScriptConfirmed ? '导出当前视频' : '先确认脚本，再导出视频'}
-                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white disabled:opacity-40"
+                                className="inline-flex items-center gap-2 rounded-xl bg-accent-primary px-4 py-2 text-[12px] font-bold text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95 disabled:opacity-40"
                             >
-                                <ExternalLink className="h-4 w-4" />
-                                {isRenderingRemotion ? '导出中...' : '导出视频'}
+                                {isRenderingRemotion ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+                                {isRenderingRemotion ? 'EXPORTING...' : '导出视频'}
                             </button>
                         )}
                         {isAudioPackage && (
@@ -2229,9 +2232,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 onClick={() => {
                                     void handleImportAndBindAssetsToPackage();
                                 }}
-                                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white"
+                                className="inline-flex items-center gap-2 rounded-xl bg-accent-primary px-4 py-2 text-[12px] font-bold text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                             >
-                                <Upload className="h-4 w-4" />
+                                <Upload className="h-3.5 w-3.5" />
                                 导入素材
                             </button>
                         )}
@@ -2408,135 +2411,150 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     return (
         <>
-        <div className="h-full min-h-0 overflow-auto bg-background text-text-primary">
-            <div className="mx-auto flex w-full max-w-[1680px] flex-col px-5 py-4">
-                <div className="border-b border-border/60 px-2 py-4">
-                        <div className="flex flex-wrap items-center justify-between gap-4">
-                            <div className="flex min-w-0 flex-wrap items-center gap-5 text-sm">
+        <div className="h-full min-h-0 overflow-auto bg-surface-primary text-text-primary">
+            <div className="mx-auto flex w-full max-w-[1680px] flex-col px-6 py-2">
+                {/* 顶部导航与操作栏 - 更加精致 */}
+                <div className="border-b border-black/[0.03] py-5 px-1">
+                        <div className="flex flex-wrap items-center justify-between gap-6">
+                            <div className="flex min-w-0 items-center gap-8">
                                 {[
                                     { id: 'drafts', label: '我的稿件' },
-                                    { id: 'media', label: '素材画廊' },
+                                    { id: 'media', label: '素材库' },
                                 ].map((item) => (
                                     <button
                                         key={item.id}
                                         type="button"
                                         onClick={() => setFilter(item.id as DraftFilter)}
                                         className={clsx(
-                                            'relative pb-1 transition-colors',
-                                            filter === item.id ? 'font-semibold text-text-primary' : 'text-text-secondary hover:text-text-primary'
+                                            'relative py-1 text-[15px] font-bold transition-all',
+                                            filter === item.id ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
                                         )}
                                     >
                                         {item.label}
-                                        {filter === item.id && <span className="absolute inset-x-0 -bottom-[21px] h-0.5 rounded-full bg-accent-primary" />}
+                                        {filter === item.id && (
+                                            <div className="absolute -bottom-[21px] left-0 right-0 h-1 rounded-t-full bg-accent-primary shadow-[0_0_8px_rgba(var(--color-accent-primary),0.4)]" />
+                                        )}
                                     </button>
                                 ))}
                             </div>
-                            <div className="relative flex flex-wrap items-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setFilter('folders')}
-                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
-                                >
-                                    <FolderOpen className="h-4 w-4" />
-                                    空间目录
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsImageModalOpen(true);
-                                        void loadSettings();
-                                    }}
-                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
-                                >
-                                    <ImageIcon className="h-4 w-4" />
-                                    生图
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setIsVideoModalOpen(true);
-                                        void loadSettings();
-                                    }}
-                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
-                                >
-                                    <Clapperboard className="h-4 w-4" />
-                                    生视频
-                                </button>
+                            
+                            <div className="relative flex flex-wrap items-center gap-1.5">
+                                <div className="flex items-center gap-0.5 bg-black/[0.03] p-1 rounded-xl border border-black/[0.02]">
+                                    <button
+                                        type="button"
+                                        onClick={() => setFilter('folders')}
+                                        className={clsx(
+                                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all",
+                                            filter === 'folders' ? "bg-white text-text-primary shadow-sm ring-1 ring-black/[0.02]" : "text-text-tertiary hover:text-text-primary hover:bg-black/[0.02]"
+                                        )}
+                                    >
+                                        <FolderOpen className="h-3.5 w-3.5" />
+                                        目录
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsImageModalOpen(true);
+                                            void loadSettings();
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold text-text-tertiary transition-all hover:text-text-primary hover:bg-black/[0.02]"
+                                    >
+                                        <ImageIcon className="h-3.5 w-3.5" />
+                                        生图
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsVideoModalOpen(true);
+                                            void loadSettings();
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold text-text-tertiary transition-all hover:text-text-primary hover:bg-black/[0.02]"
+                                    >
+                                        <Clapperboard className="h-3.5 w-3.5" />
+                                        生视频
+                                    </button>
+                                </div>
+
+                                <div className="w-[1px] h-4 bg-black/[0.06] mx-1" />
+
                                 <button
                                     type="button"
                                     onClick={() => void loadData()}
-                                    className="inline-flex items-center gap-2 px-0.5 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
+                                    className="p-2 rounded-xl text-text-tertiary transition-all hover:bg-black/[0.04] hover:text-text-primary active:scale-90"
+                                    title="刷新"
                                 >
                                     <RefreshCw className={clsx('h-4 w-4', isRefreshing && 'animate-spin')} />
-                                    {isRefreshing ? '刷新中' : '刷新'}
                                 </button>
+                                
                                 <button
                                     type="button"
                                     onClick={() => setIsSearchOpen((prev) => !prev)}
                                     className={clsx(
-                                        'inline-flex items-center justify-center px-0.5 py-2 text-sm transition-colors',
+                                        'p-2 rounded-xl transition-all active:scale-90',
                                         isSearchOpen
-                                            ? 'text-accent-primary'
-                                            : 'text-text-secondary hover:text-text-primary'
+                                            ? 'bg-accent-primary/10 text-accent-primary shadow-inner'
+                                            : 'text-text-tertiary hover:bg-black/[0.04] hover:text-text-primary'
                                     )}
-                                    aria-label="搜索稿件"
+                                    title="搜索"
                                 >
                                     <Search className="h-4 w-4" />
                                 </button>
-                                <div className="flex items-center gap-2 rounded-2xl bg-accent-primary px-2 py-2 text-white shadow-[0_16px_36px_rgba(37,99,235,0.24)]">
+
+                                <div className="ml-2 flex items-center gap-1 bg-text-primary p-1 rounded-xl shadow-lg shadow-text-primary/10">
                                     <button
                                         type="button"
                                         onClick={() => {
                                             setCreateKind('longform');
                                             setCreateOpen(true);
                                         }}
-                                        className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium"
+                                        className="inline-flex items-center gap-1.5 rounded-[10px] bg-white/10 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-white/20 transition-all active:scale-95"
                                     >
-                                        <Plus className="h-4 w-4" />
+                                        <Plus className="h-3.5 w-3.5" />
                                         新建
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => void handleImportMediaFiles()}
                                         disabled={workingId === 'media-import'}
-                                        className="inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-3 py-1.5 text-sm"
+                                        className="inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-bold text-white/90 hover:text-white hover:bg-white/10 transition-all active:scale-95 disabled:opacity-30"
                                     >
-                                        <Upload className="h-4 w-4" />
+                                        <Upload className="h-3.5 w-3.5" />
                                         {workingId === 'media-import' ? '导入中' : '上传'}
                                     </button>
                                 </div>
+
+                                {/* 搜索弹窗 - 采用毛玻璃精致风格 */}
                                 <div
                                     ref={searchPopoverRef}
                                     className={clsx(
-                                        'absolute right-0 top-[calc(100%+14px)] z-20 w-[min(460px,calc(100vw-3rem))] origin-top-right transition-all duration-200',
+                                        'absolute right-0 top-[calc(100%+12px)] z-40 w-[min(480px,calc(100vw-4rem))] origin-top-right transition-all duration-300 ease-out',
                                         isSearchOpen
                                             ? 'pointer-events-auto translate-y-0 scale-100 opacity-100'
-                                            : 'pointer-events-none -translate-y-2 scale-95 opacity-0'
+                                            : 'pointer-events-none -translate-y-2 scale-[0.98] opacity-0'
                                     )}
                                 >
-                                    <div className="rounded-[28px] border border-border/70 bg-white/95 p-3 shadow-[0_24px_60px_rgba(15,23,42,0.16)] backdrop-blur-xl">
-                                        <div className="flex items-center gap-3 rounded-[22px] border border-border/60 bg-[#fbfaf6] px-4 py-3">
+                                    <div className="rounded-[24px] border border-white/60 bg-white/85 p-4 shadow-[0_32px_80px_-16px_rgba(0,0,0,0.14)] backdrop-blur-[32px]">
+                                        <div className="flex items-center gap-3 rounded-xl border border-black/[0.05] bg-black/[0.02] px-4 py-2.5 focus-within:bg-white focus-within:ring-2 focus-within:ring-accent-primary/10 transition-all">
                                             <Search className="h-4 w-4 text-text-tertiary" />
                                             <input
                                                 ref={searchInputRef}
                                                 value={query}
                                                 onChange={(event) => setQuery(event.target.value)}
-                                                placeholder="搜索稿件、摘要、素材提示词"
-                                                className="h-7 w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none"
+                                                placeholder="搜索标题、摘要或标签..."
+                                                className="h-6 w-full bg-transparent text-[13px] font-medium text-text-primary placeholder:text-text-tertiary/60 focus:outline-none"
                                             />
                                             {query ? (
                                                 <button
                                                     type="button"
                                                     onClick={() => setQuery('')}
-                                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
-                                                    aria-label="清空搜索"
+                                                    className="flex h-6 w-6 items-center justify-center rounded-full text-text-tertiary hover:bg-black/[0.06] hover:text-text-primary"
                                                 >
-                                                    <X className="h-4 w-4" />
+                                                    <X className="h-3.5 w-3.5" />
                                                 </button>
                                             ) : null}
                                         </div>
-                                        <div className="px-1 pt-2 text-[11px] text-text-tertiary">
-                                            按标题、摘要、路径和素材提示词搜索
+                                        <div className="mt-3 px-1 text-[10px] font-bold text-text-tertiary/60 uppercase tracking-widest">
+                                            Quick Search Insight
                                         </div>
                                     </div>
                                 </div>
@@ -2544,98 +2562,107 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         </div>
                     </div>
 
-                    <div className="border-b border-border/60 px-2 py-4">
-                        <div className="mt-4">
-                            <div className="mb-2 flex items-center">
-                                <div className="text-sm font-semibold text-text-primary">文件夹 ({visibleFolders.length})</div>
-                            </div>
-                            <div className="flex gap-3 overflow-x-auto pb-1">
-                                {currentFolderPath ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            if (isMediaScope) {
-                                                setMediaFolder(getParentFolderPath(mediaFolder));
-                                            } else {
-                                                setActiveFolder(getParentFolderPath(activeFolder));
-                                            }
-                                        }}
-                                        className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
-                                        aria-label="返回上一级"
-                                    >
-                                        <div className="flex h-16 w-16 items-center justify-center text-[#6b7280] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-text-primary">
-                                            <ArrowLeft className="h-8 w-8" strokeWidth={2.05} />
-                                        </div>
-                                    </button>
-                                ) : null}
+                    {/* 文件夹区域 - 紧凑型 */}
+                    <div className="border-b border-black/[0.03] py-6 px-1">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="text-[12px] font-bold text-text-tertiary uppercase tracking-widest px-1">文件夹 ({visibleFolders.length})</div>
+                        </div>
+                        <div className="flex gap-2.5 overflow-x-auto pb-1 custom-scrollbar">
+                            {currentFolderPath ? (
                                 <button
                                     type="button"
                                     onClick={() => {
-                                        setFolderCreateTitle('');
-                                        setFolderCreateOpen(true);
+                                        if (isMediaScope) {
+                                            setMediaFolder(getParentFolderPath(mediaFolder));
+                                        } else {
+                                            setActiveFolder(getParentFolderPath(activeFolder));
+                                        }
                                     }}
-                                    className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-center px-2 py-2 text-center"
-                                    aria-label="新建文件夹"
+                                    className="group flex min-w-[80px] flex-col items-center gap-2 p-2 rounded-xl transition-all hover:bg-black/[0.03]"
                                 >
-                                    <div className="flex h-16 w-16 items-center justify-center text-[#4b72b8] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-[#315d9e]">
-                                        <FolderPlus className="h-9 w-9" strokeWidth={1.85} />
+                                    <div className="flex h-12 w-12 items-center justify-center text-text-tertiary transition-all group-hover:-translate-x-0.5 group-hover:text-text-primary">
+                                        <ArrowLeft className="h-6 w-6" />
+                                    </div>
+                                    <div className="text-[10px] font-bold text-text-tertiary">返回上级</div>
+                                </button>
+                            ) : null}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setFolderCreateTitle('');
+                                    setFolderCreateOpen(true);
+                                }}
+                                className="group flex min-w-[80px] flex-col items-center gap-2 p-2 rounded-xl transition-all hover:bg-black/[0.03]"
+                            >
+                                <div className="flex h-12 w-12 items-center justify-center text-accent-primary/60 transition-all group-hover:scale-110 group-hover:text-accent-primary">
+                                    <FolderPlus className="h-7 w-7" />
+                                </div>
+                                <div className="text-[10px] font-bold text-text-tertiary">新建文件夹</div>
+                            </button>
+                            {visibleFolders.map((folder) => (
+                                <button
+                                    key={folder.path}
+                                    type="button"
+                                    onClick={() => {
+                                        if (isMediaScope) {
+                                            setMediaFolder(folder.path);
+                                        } else {
+                                            setActiveFolder(folder.path);
+                                        }
+                                    }}
+                                    onContextMenu={isMediaScope ? undefined : (event) => openFolderContextMenu(event, folder)}
+                                    className="group flex min-w-[80px] max-w-[100px] flex-col items-center gap-2 p-2 rounded-xl transition-all hover:bg-black/[0.03]"
+                                >
+                                    <div className="flex h-12 w-12 items-center justify-center text-accent-primary/50 transition-all group-hover:-translate-y-0.5 group-hover:text-accent-primary">
+                                        <Folder className="h-9 w-9" />
+                                    </div>
+                                    <div className="line-clamp-1 text-[11px] font-bold text-text-secondary group-hover:text-text-primary">
+                                        {folder.name}
                                     </div>
                                 </button>
-                                {visibleFolders.map((folder) => (
-                                    <button
-                                        key={folder.path}
-                                        type="button"
-                                        onClick={() => {
-                                            if (isMediaScope) {
-                                                setMediaFolder(folder.path);
-                                            } else {
-                                                setActiveFolder(folder.path);
-                                            }
-                                        }}
-                                        onContextMenu={isMediaScope ? undefined : (event) => openFolderContextMenu(event, folder)}
-                                        className="group flex min-w-[88px] max-w-[104px] flex-col items-center justify-start px-2 py-2 text-center"
-                                    >
-                                        <div className="flex h-16 w-16 items-center justify-center text-[#5d7fb8] transition-all duration-150 group-hover:-translate-y-0.5 group-hover:text-[#3d67ab]">
-                                            <Folder className="h-11 w-11" strokeWidth={1.75} />
-                                        </div>
-                                        <div className="-mt-0.5 line-clamp-2 text-[11px] leading-4 text-text-secondary group-hover:text-text-primary">
-                                            {folder.name}
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
+                            ))}
                         </div>
                     </div>
 
-                    <div className="border-b border-border/60 px-2 py-3">
+                    {/* 过滤器与布局切换 - 精密风格 */}
+                    <div className="border-b border-black/[0.03] py-4 px-1">
                         <div className="flex flex-wrap items-center gap-2">
-                            {FILTER_OPTIONS.map((item) => (
-                                <button
-                                    key={item.id}
-                                    type="button"
-                                    onClick={() => setFilter(item.id)}
-                                    className={clsx(
-                                        'rounded-full px-3.5 py-1.5 text-sm transition-colors',
-                                        filter === item.id ? 'bg-text-primary text-white' : 'text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
-                                    )}
-                                >
-                                    {item.label}
-                                </button>
-                            ))}
-                            <div className="ml-auto inline-flex rounded-xl border border-border bg-white/70 p-1">
+                            <div className="flex items-center gap-1 bg-black/[0.03] p-1 rounded-xl border border-black/[0.02]">
+                                {FILTER_OPTIONS.map((item) => (
+                                    <button
+                                        key={item.id}
+                                        type="button"
+                                        onClick={() => setFilter(item.id)}
+                                        className={clsx(
+                                            'px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all',
+                                            filter === item.id ? 'bg-white text-text-primary shadow-sm ring-1 ring-black/[0.02]' : 'text-text-tertiary hover:text-text-secondary hover:bg-black/[0.02]'
+                                        )}
+                                    >
+                                        {item.label}
+                                    </button>
+                                ))}
+                            </div>
+                            
+                            <div className="ml-auto flex items-center gap-0.5 bg-black/[0.03] p-1 rounded-xl border border-black/[0.02]">
                                 <button
                                     type="button"
                                     onClick={() => setLayout('gallery')}
-                                    className={clsx('rounded-lg p-2 transition-colors', layout === 'gallery' ? 'bg-background text-text-primary shadow-sm' : 'text-text-tertiary hover:text-text-primary')}
+                                    className={clsx(
+                                        'p-1.5 rounded-lg transition-all',
+                                        layout === 'gallery' ? 'bg-white text-text-primary shadow-sm ring-1 ring-black/[0.02]' : 'text-text-tertiary hover:text-text-primary'
+                                    )}
                                 >
-                                    <Grid2X2 className="h-4 w-4" />
+                                    <Grid2X2 className="h-3.5 w-3.5" />
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setLayout('list')}
-                                    className={clsx('rounded-lg p-2 transition-colors', layout === 'list' ? 'bg-background text-text-primary shadow-sm' : 'text-text-tertiary hover:text-text-primary')}
+                                    className={clsx(
+                                        'p-1.5 rounded-lg transition-all',
+                                        layout === 'list' ? 'bg-white text-text-primary shadow-sm ring-1 ring-black/[0.02]' : 'text-text-tertiary hover:text-text-primary'
+                                    )}
                                 >
-                                    <FolderOpen className="h-4 w-4" />
+                                    <FolderOpen className="h-3.5 w-3.5" />
                                 </button>
                             </div>
                         </div>
@@ -2684,7 +2711,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 {contentCards.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-border px-4 py-12 text-sm text-text-tertiary">当前没有符合筛选条件的内容。</div>
                                 ) : (
-                                    <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-x-3 gap-y-4' : 'space-y-2')}>
+                                    <div className={clsx(layout === 'gallery' ? 'grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-x-4 gap-y-6' : 'space-y-2')}>
                                         {contentCards.map((card) => {
                                             if (card.kind === 'draft') {
                                                 const typeTheme = resolveDraftTypeTheme(card.draftType);
@@ -2696,43 +2723,47 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                             ? FileImage
                                                             : FileText;
                                                 return (
-                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-[14px] border border-border bg-white/75 px-4 py-3')}>
+                                                    <div key={card.id} className={clsx(layout === 'gallery' ? 'group' : 'rounded-xl border border-black/[0.04] bg-white/70 px-4 py-2.5 transition-all hover:bg-white hover:shadow-sm')}>
                                                         <button
                                                             type="button"
                                                             onClick={() => void openDraftEditor(card.file.path)}
                                                             onContextMenu={(event) => openDraftContextMenu(event, card.file, card.title)}
                                                             className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
                                                         >
-                                                            <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[12px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
-                                                                {layout === 'gallery' ? (
-                                                                    <>
-                                                                        <div className={clsx('relative aspect-[5/6] px-3.5 py-3.5', typeTheme.tile)}>
-                                                                            <div className={clsx('inline-flex h-8 w-8 items-center justify-center rounded-[10px]', typeTheme.iconWrap)}>
+                                                            {layout === 'gallery' ? (
+                                                                <>
+                                                                    <div className={clsx(
+                                                                        'relative aspect-[5/6] overflow-hidden rounded-[14px] border border-black/[0.04] transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_12px_24px_-8px_rgba(0,0,0,0.12)]',
+                                                                        typeTheme.tile
+                                                                    )}>
+                                                                        <div className="absolute inset-0 p-4 flex flex-col">
+                                                                            <div className={clsx('inline-flex h-8 w-8 items-center justify-center rounded-lg shadow-sm', typeTheme.iconWrap)}>
                                                                                 <Icon className="h-4 w-4" />
                                                                             </div>
-                                                                            <div className="mt-4 text-[10px] uppercase tracking-[0.22em] text-white/60">{resolveDraftTypeLabel(card.draftType)}</div>
-                                                                            <div className="mt-1.5 line-clamp-2 text-[16px] font-semibold leading-tight">{card.title}</div>
-                                                                            <div className="absolute inset-x-3.5 bottom-3.5 rounded-[10px] border border-white/15 bg-white/10 px-2.5 py-1.5 text-[10px] text-white/80 backdrop-blur-sm">
-                                                                                <div className="line-clamp-2">{card.summary || '打开后继续编辑、排版或交给 AI 处理。'}</div>
+                                                                            <div className="mt-4 text-[9px] font-bold uppercase tracking-[0.24em] text-white/50">{resolveDraftTypeLabel(card.draftType)}</div>
+                                                                            <div className="mt-1.5 line-clamp-2 text-[15px] font-extrabold leading-tight text-white tracking-tight">{card.title}</div>
+                                                                            
+                                                                            <div className="mt-auto rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5 text-[10px] font-medium text-white/80 backdrop-blur-md">
+                                                                                <div className="line-clamp-2 leading-relaxed">{card.summary || '打开后继续编辑或交给 AI 处理。'}</div>
                                                                             </div>
                                                                         </div>
-                                                                        <div className="px-1.5 pb-1 pt-2">
-                                                                            <div className="truncate text-[12px] font-medium text-text-primary">{card.title}</div>
-                                                                            <div className="mt-0.5 text-[10px] text-text-tertiary/75">{formatDateLabel(card.updatedAt)}</div>
-                                                                        </div>
-                                                                    </>
-                                                                ) : (
-                                                                    <div className="flex min-w-0 items-center gap-4">
-                                                                        <div className={clsx('flex h-10 w-10 items-center justify-center rounded-xl', typeTheme.tile)}>
-                                                                            <Icon className="h-4.5 w-4.5" />
-                                                                        </div>
-                                                                        <div className="min-w-0 flex-1">
-                                                                            <div className="truncate text-sm font-medium text-text-primary">{card.title}</div>
-                                                                            <div className="mt-1 truncate text-xs text-text-tertiary">{card.summary || card.file.path}</div>
-                                                                        </div>
                                                                     </div>
-                                                                )}
-                                                            </div>
+                                                                    <div className="px-1 mt-2.5">
+                                                                        <div className="truncate text-[13px] font-bold text-text-primary group-hover:text-accent-primary transition-colors">{card.title}</div>
+                                                                        <div className="mt-0.5 text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter">{formatDateLabel(card.updatedAt)}</div>
+                                                                    </div>
+                                                                </>
+                                                            ) : (
+                                                                <div className="flex min-w-0 items-center gap-4">
+                                                                    <div className={clsx('flex h-9 w-9 items-center justify-center rounded-lg shadow-sm', typeTheme.tile)}>
+                                                                        <Icon className="h-4 w-4 text-white" />
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <div className="truncate text-[13px] font-bold text-text-primary">{card.title}</div>
+                                                                        <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary/70">{card.summary || card.file.path}</div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                         </button>
                                                     </div>
                                                 );
@@ -2742,67 +2773,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                             const previewSrc = resolveAssetUrl(asset.previewUrl || asset.relativePath || asset.absolutePath || '');
                                             const assetKind = card.assetKind;
                                             return (
-                                                    <div key={card.id} className={clsx(layout === 'gallery' ? '' : 'rounded-[14px] border border-border bg-white/75 px-4 py-3')}>
+                                                <div key={card.id} className={clsx(layout === 'gallery' ? 'group' : 'rounded-xl border border-black/[0.04] bg-white/70 px-4 py-2.5 transition-all hover:bg-white hover:shadow-sm')}>
                                                     <button
                                                         type="button"
                                                         onClick={() => setPreviewAsset(asset)}
                                                         onContextMenu={(event) => openAssetContextMenu(event, asset)}
                                                         className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
                                                     >
-                                                        <div className={clsx(layout === 'gallery' ? 'overflow-hidden rounded-[12px] border border-border bg-white/90' : 'flex-1 min-w-0')}>
-                                                            {layout === 'gallery' ? (
-                                                                <>
-                                                                    <div className="relative aspect-[5/6] overflow-hidden bg-surface-secondary/60">
-                                                                        {asset.source === 'generated' ? (
-                                                                            <div className="absolute left-2.5 top-2.5 z-10 rounded-full bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm">
-                                                                                AI生成
-                                                                            </div>
-                                                                        ) : null}
-                                                                        {assetKind === 'image' ? (
-                                                                            <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                                        ) : assetKind === 'video' ? (
-                                                                            <>
-                                                                                <video
-                                                                                    src={previewSrc}
-                                                                                    className="h-full w-full object-cover bg-black"
-                                                                                    muted
-                                                                                    playsInline
-                                                                                    preload="metadata"
-                                                                                    onLoadedData={(event) => {
-                                                                                        try {
-                                                                                            if (event.currentTarget.currentTime < 0.05) {
-                                                                                                event.currentTarget.currentTime = 0.05;
-                                                                                            }
-                                                                                        } catch {
-                                                                                            // ignore preview seek failures
-                                                                                        }
-                                                                                    }}
-                                                                                />
-                                                                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/65 to-transparent" />
-                                                                                <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center">
-                                                                                    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">
-                                                                                        <Play className="ml-0.5 h-5 w-5 fill-current" />
-                                                                                    </div>
-                                                                                </div>
-                                                                            </>
-                                                                        ) : (
-                                                                            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#10253f,#315e8f)] text-white">
-                                                                                <AudioLines className="h-10 w-10" />
-                                                                            </div>
-                                                                        )}
-                                                                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                                                                    </div>
-                                                                    <div className="px-1.5 pb-1 pt-2">
-                                                                        <div className="truncate text-[12px] font-medium text-text-primary">{card.title}</div>
-                                                                        <div className="mt-0.5 text-[10px] text-text-tertiary/75">{formatDateLabel(asset.updatedAt)}</div>
-                                                                    </div>
-                                                                </>
-                                                            ) : (
-                                                                <div className="flex min-w-0 items-center gap-4">
-                                                                    <div className="h-12 w-14 overflow-hidden rounded-xl bg-surface-secondary/60">
-                                                                        {assetKind === 'image' ? (
-                                                                            <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                                                        ) : assetKind === 'video' ? (
+                                                        {layout === 'gallery' ? (
+                                                            <>
+                                                                <div className="relative aspect-[5/6] overflow-hidden rounded-[14px] border border-black/[0.04] bg-black/[0.02] transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_12px_24px_-8px_rgba(0,0,0,0.12)]">
+                                                                    {asset.source === 'generated' ? (
+                                                                        <div className="absolute left-2.5 top-2.5 z-10 rounded-lg bg-black/60 px-2 py-1 text-[9px] font-bold text-white backdrop-blur-md uppercase tracking-widest border border-white/10">
+                                                                            AI
+                                                                        </div>
+                                                                    ) : null}
+                                                                    {assetKind === 'image' ? (
+                                                                        <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                                    ) : assetKind === 'video' ? (
+                                                                        <>
                                                                             <video
                                                                                 src={previewSrc}
                                                                                 className="h-full w-full object-cover bg-black"
@@ -2815,23 +2804,47 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                                             event.currentTarget.currentTime = 0.05;
                                                                                         }
                                                                                     } catch {
-                                                                                        // ignore preview seek failures
+                                                                                        // ignore
                                                                                     }
                                                                                 }}
                                                                             />
-                                                                        ) : (
-                                                                            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#10253f,#315e8f)] text-white">
-                                                                                <AudioLines className="h-5 w-5" />
+                                                                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                                                                                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-md border border-white/20">
+                                                                                    <Play className="ml-0.5 h-4 w-4 fill-current" />
+                                                                                </div>
                                                                             </div>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="min-w-0 flex-1">
-                                                                        <div className="truncate text-sm font-medium text-text-primary">{card.title}</div>
-                                                                        <div className="mt-1 truncate text-[11px] text-text-tertiary">{formatDateLabel(asset.updatedAt)}</div>
-                                                                    </div>
+                                                                        </>
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#10253f,#315e8f)] text-white/80">
+                                                                            <AudioLines className="h-9 w-9" />
+                                                                        </div>
+                                                                    )}
+                                                                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/60 to-transparent" />
                                                                 </div>
-                                                            )}
-                                                        </div>
+                                                                <div className="px-1 mt-2.5">
+                                                                    <div className="truncate text-[13px] font-bold text-text-primary group-hover:text-accent-primary transition-colors">{card.title}</div>
+                                                                    <div className="mt-0.5 text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter">{formatDateLabel(asset.updatedAt)}</div>
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="flex min-w-0 items-center gap-4">
+                                                                <div className="h-10 w-12 overflow-hidden rounded-lg bg-black/[0.03] border border-black/[0.04]">
+                                                                    {assetKind === 'image' ? (
+                                                                        <img src={previewSrc} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                                    ) : assetKind === 'video' ? (
+                                                                        <video src={previewSrc} className="h-full w-full object-cover bg-black" muted playsInline />
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center bg-black/[0.05] text-text-tertiary">
+                                                                            <AudioLines className="h-4 w-4" />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="truncate text-[13px] font-bold text-text-primary">{card.title}</div>
+                                                                    <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary/70">{formatDateLabel(asset.updatedAt)}</div>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </button>
                                                 </div>
                                             );
@@ -3339,19 +3352,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             )}
 
             {createOpen && (
-                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setCreateOpen(false)}>
-                    <div className="w-full max-w-[980px] rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
+                <div className="fixed inset-0 z-[1000] bg-black/40 backdrop-blur-[4px] flex items-center justify-center p-4 animate-in fade-in duration-300" onMouseDown={() => !isCreating && setCreateOpen(false)}>
+                    <div className="w-full max-w-[920px] rounded-[28px] border border-white/20 bg-white shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] flex flex-col overflow-hidden" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-8 py-7 border-b border-black/[0.04] bg-white">
                             <div>
-                                <h2 className="text-lg font-semibold text-text-primary">新建内容</h2>
-                                <p className="mt-1 text-sm text-text-secondary">选择要创建的稿件类型。</p>
+                                <h2 className="text-xl font-extrabold tracking-tight text-text-primary">新建内容</h2>
+                                <p className="mt-1 text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Select Draft Strategy</p>
                             </div>
-                            <button type="button" onClick={() => !isCreating && setCreateOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
+                            <button type="button" onClick={() => !isCreating && setCreateOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="px-6 py-6 space-y-6">
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="px-8 py-8 space-y-8 bg-white/50 backdrop-blur-xl">
+                            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                                 {CREATE_KIND_OPTIONS.map((option) => {
                                     const Icon = option.icon;
                                     const isActiveOption = createKind === option.id;
@@ -3361,31 +3374,35 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                             type="button"
                                             onClick={() => setCreateKind(option.id)}
                                             className={clsx(
-                                                'rounded-2xl border p-4 text-left transition-colors min-h-[150px]',
+                                                'group rounded-[20px] border p-5 text-left transition-all duration-300 min-h-[160px] flex flex-col',
                                                 isActiveOption
-                                                    ? 'border-accent-primary bg-accent-primary/8'
-                                                    : 'border-border bg-surface-secondary/20 hover:bg-surface-secondary/40'
+                                                    ? 'border-accent-primary bg-white shadow-lg ring-1 ring-accent-primary/10'
+                                                    : 'border-black/[0.05] bg-white hover:bg-white hover:border-black/[0.1] hover:shadow-md'
                                             )}
                                         >
-                                            <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center', isActiveOption ? 'bg-accent-primary/15 text-accent-primary' : 'bg-surface-primary text-text-secondary')}>
+                                            <div className={clsx('w-10 h-10 rounded-[14px] flex items-center justify-center transition-all duration-300', isActiveOption ? 'bg-accent-primary text-white' : 'bg-black/[0.05] text-text-tertiary group-hover:scale-110')}>
                                                 <Icon className="w-5 h-5" />
                                             </div>
-                                            <div className="mt-4 font-medium text-text-primary">{option.label}</div>
-                                            <div className="mt-2 text-xs leading-5 text-text-secondary">{option.description}</div>
+                                            <div className="mt-5 font-extrabold text-[15px] text-text-primary">{option.label}</div>
+                                            <div className="mt-2 text-[11px] leading-[1.6] text-text-tertiary font-bold line-clamp-2">{option.description}</div>
                                         </button>
                                     );
                                 })}
                             </div>
-                            <div className="rounded-2xl border border-border bg-surface-secondary/20 px-4 py-4">
-                                <div className="text-sm font-medium text-text-primary">草稿标题</div>
-                                <div className="mt-1 text-sm text-text-secondary">创建后默认标题为“未命名”，后续在稿件内部随时修改。</div>
-                                <div className="mt-2 text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</div>
+                            <div className="rounded-[18px] border border-black/[0.04] bg-black/[0.02] px-5 py-5 flex items-start gap-4">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white border border-black/[0.05] shadow-sm">
+                                    <Folder className="w-5 h-5 text-accent-primary/60" />
+                                </div>
+                                <div>
+                                    <div className="text-[13px] font-extrabold text-text-primary">创建位置</div>
+                                    <div className="mt-1 text-[11px] font-bold text-text-tertiary tracking-wide">{activeFolder || '全部草稿 / 根目录'}</div>
+                                </div>
                             </div>
                         </div>
-                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
-                            <button type="button" onClick={() => setCreateOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
-                            <button type="button" onClick={() => void handleCreateDraft()} disabled={isCreating} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
-                                {isCreating ? '创建中...' : '创建草稿'}
+                        <div className="flex items-center justify-end gap-3 px-8 py-6 border-t border-black/[0.04] bg-black/[0.02]">
+                            <button type="button" onClick={() => setCreateOpen(false)} disabled={isCreating} className="px-5 py-2.5 rounded-xl text-[13px] font-bold text-text-secondary hover:bg-black/[0.04] transition-all disabled:opacity-40">取消</button>
+                            <button type="button" onClick={() => void handleCreateDraft()} disabled={isCreating} className="px-6 py-2.5 rounded-xl bg-text-primary text-[13px] font-bold text-white shadow-lg shadow-text-primary/10 hover:bg-text-primary/90 transition-all active:scale-[0.98] disabled:opacity-40">
+                                {isCreating ? 'CREATING...' : '创建新草稿'}
                             </button>
                         </div>
                     </div>
@@ -3393,19 +3410,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             )}
 
             {folderCreateOpen && (
-                <div className="fixed inset-0 z-[1000] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4" onMouseDown={() => !isCreating && setFolderCreateOpen(false)}>
-                    <div className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-                        <div className="flex items-center justify-between px-6 py-5 border-b border-border/70">
-                            <div>
-                                <h2 className="text-lg font-semibold text-text-primary">新建文件夹</h2>
-                                <p className="mt-1 text-sm text-text-secondary">输入文件夹名称即可。</p>
-                            </div>
-                            <button type="button" onClick={() => !isCreating && setFolderCreateOpen(false)} className="rounded-xl p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary transition-colors">
-                                <X className="w-5 h-5" />
-                            </button>
+                <div className="fixed inset-0 z-[1000] bg-black/10 backdrop-blur-[6px] flex items-center justify-center p-4 animate-in fade-in duration-300" onMouseDown={() => !isCreating && setFolderCreateOpen(false)}>
+                    <div className="w-full max-w-md rounded-[24px] border border-white/60 bg-white/90 shadow-[0_40px_100px_-20px_rgba(0,0,0,0.2)] backdrop-blur-[32px] overflow-hidden flex flex-col" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="px-7 pt-7 pb-5">
+                            <h2 className="text-[17px] font-extrabold tracking-tight text-text-primary">新建文件夹</h2>
+                            <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Assign Directory Name</p>
                         </div>
-                        <div className="px-6 py-6 space-y-3">
-                            <label className="text-sm font-medium text-text-primary">名称</label>
+                        <div className="px-7 py-2 space-y-4">
                             <input
                                 autoFocus
                                 value={folderCreateTitle}
@@ -3416,15 +3427,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         void handleCreateFolder();
                                     }
                                 }}
-                                placeholder="输入文件夹名称"
-                                className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:outline-none focus:border-accent-primary"
+                                placeholder="输入文件夹名称..."
+                                className="w-full rounded-xl border border-black/[0.05] bg-black/[0.02] px-4 py-3 text-sm font-bold placeholder:text-text-tertiary/50 focus:outline-none focus:bg-white focus:ring-2 focus:ring-accent-primary/10 transition-all"
                             />
-                            <p className="text-xs text-text-tertiary">当前创建位置：{activeFolder || '全部草稿 / 根目录'}</p>
                         </div>
-                        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-border/70 bg-surface-secondary/10 rounded-b-3xl">
-                            <button type="button" onClick={() => setFolderCreateOpen(false)} disabled={isCreating} className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
-                            <button type="button" onClick={() => void handleCreateFolder()} disabled={isCreating || !folderCreateTitle.trim()} className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50">
-                                {isCreating ? '创建中...' : '创建文件夹'}
+                        <div className="flex items-center justify-end gap-2 px-7 py-6 mt-4">
+                            <button type="button" onClick={() => setFolderCreateOpen(false)} disabled={isCreating} className="px-4 py-2 rounded-lg text-[12px] font-bold text-text-tertiary hover:bg-black/[0.04] transition-all">取消</button>
+                            <button type="button" onClick={() => void handleCreateFolder()} disabled={isCreating || !folderCreateTitle.trim()} className="px-5 py-2 rounded-lg bg-text-primary text-[12px] font-bold text-white shadow-md hover:bg-text-primary/90 transition-all active:scale-95 disabled:opacity-30">
+                                {isCreating ? 'SAVING...' : '完成创建'}
                             </button>
                         </div>
                     </div>
