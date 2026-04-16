@@ -63,13 +63,22 @@ pub fn handle_generation_channel(
                 let preview_url = if channel == "video-gen:generate" {
                     let mut wrote_real_asset = false;
                     if let Some((endpoint, api_key, default_model)) = &real_video_config {
+                        let effective_video_model = model.clone().unwrap_or_else(|| {
+                            match payload_field(payload, "generationMode")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("text-to-video")
+                            {
+                                "reference-guided" => "wan2.7-r2v-video".to_string(),
+                                "first-last-frame" | "continuation" => {
+                                    "wan2.7-i2v-video".to_string()
+                                }
+                                _ => default_model.clone(),
+                            }
+                        });
                         if let Ok(response) = run_video_generation_request(
                             endpoint,
                             api_key.as_deref(),
-                            model
-                                .clone()
-                                .unwrap_or_else(|| default_model.clone())
-                                .as_str(),
+                            effective_video_model.as_str(),
                             payload,
                         ) {
                             if let Some(item) = extract_first_media_result(&response) {
@@ -123,18 +132,21 @@ pub fn handle_generation_channel(
                     None
                 } else {
                     let mut wrote_real_asset = false;
-                    if let Some((endpoint, api_key, default_model, _provider, _template)) =
-                        &real_image_config
+                    if let Some((
+                        endpoint,
+                        api_key,
+                        default_model,
+                        default_provider,
+                        default_template,
+                    )) = &real_image_config
                     {
-                        let effective_prompt = match payload_field(payload, "generationMode")
-                            .and_then(|value| value.as_str())
-                        {
-                            Some("image-to-image") | Some("reference-guided") => format!(
-                                "{}\n\n请参考附带参考图的构图和风格生成最终图片。",
-                                prompt.clone().unwrap_or_default()
-                            ),
-                            _ => prompt.clone().unwrap_or_default(),
-                        };
+                        let mut effective_payload = payload.clone();
+                        if let Some(object) = effective_payload.as_object_mut() {
+                            object.insert(
+                                "prompt".to_string(),
+                                json!(prompt.clone().unwrap_or_default()),
+                            );
+                        }
                         if let Ok(response) = run_image_generation_request(
                             endpoint,
                             api_key.as_deref(),
@@ -142,10 +154,11 @@ pub fn handle_generation_channel(
                                 .clone()
                                 .unwrap_or_else(|| default_model.clone())
                                 .as_str(),
-                            &effective_prompt,
-                            1,
-                            size.as_deref(),
-                            quality.as_deref(),
+                            provider.as_deref().unwrap_or(default_provider.as_str()),
+                            provider_template
+                                .as_deref()
+                                .unwrap_or(default_template.as_str()),
+                            &effective_payload,
                         ) {
                             if let Some(item) = extract_first_media_result(&response) {
                                 if write_generated_image_asset(&absolute_path, item).is_ok() {

@@ -38,6 +38,19 @@ impl CliArgs {
         })
     }
 
+    fn bool(&self, keys: &[&str]) -> Option<bool> {
+        keys.iter().find_map(|key| match self.options.get(*key) {
+            Some(Value::Bool(value)) => Some(*value),
+            Some(Value::Number(value)) => Some(value.as_i64().unwrap_or_default() != 0),
+            Some(Value::String(text)) => match text.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                "false" | "0" | "no" | "off" => Some(false),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
     fn value(&self, keys: &[&str]) -> Option<Value> {
         keys.iter().find_map(|key| self.options.get(*key).cloned())
     }
@@ -342,10 +355,7 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
-            "generate" => self.call_channel(
-                "image-gen:generate",
-                build_generation_payload(&args, payload),
-            ),
+            "generate" => self.handle_image_generate(&args, payload),
             "history" => {
                 let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
                 match sub {
@@ -385,10 +395,7 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
-            "generate" => self.call_channel(
-                "video-gen:generate",
-                build_generation_payload(&args, payload),
-            ),
+            "generate" => self.handle_video_generate(&args, payload),
             "project-create" => self.handle_video_project_create(&args, payload),
             "project-list" => self.handle_video_project_list(),
             "project-get" => self.handle_video_project_get(&args),
@@ -832,6 +839,120 @@ impl<'a> AppCliExecutor<'a> {
         )
     }
 
+    fn handle_image_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
+        let mut merged = build_generation_payload(args, payload);
+        let subject_matches = self.collect_subject_matches(args, payload, 4)?;
+        let subject_reference_images = subject_matches
+            .iter()
+            .flat_map(|subject| value_string_list(subject.get("absoluteImagePaths"), 4))
+            .take(4)
+            .collect::<Vec<_>>();
+        let mut reference_images = value_string_list(merged.get("referenceImages"), 4);
+        reference_images.extend(subject_reference_images);
+        dedupe_string_list(&mut reference_images, 4);
+        if let Some(object) = merged.as_object_mut() {
+            if !reference_images.is_empty() {
+                object.insert("referenceImages".to_string(), json!(reference_images));
+                if object
+                    .get("generationMode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
+                    object.insert("generationMode".to_string(), json!("reference-guided"));
+                }
+            }
+        }
+        self.call_channel("image-gen:generate", merged)
+    }
+
+    fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
+        let mut merged = build_generation_payload(args, payload);
+        let subject_matches = self.collect_subject_matches(args, payload, 5)?;
+        let subject_reference_images = subject_matches
+            .iter()
+            .flat_map(|subject| value_string_list(subject.get("absoluteImagePaths"), 1))
+            .take(5)
+            .collect::<Vec<_>>();
+        let mut reference_images = value_string_list(merged.get("referenceImages"), 5);
+        reference_images.extend(subject_reference_images);
+        dedupe_string_list(&mut reference_images, 5);
+        let explicit_driving_audio = args
+            .string(&["driving-audio", "audio-url"])
+            .or_else(|| payload_string(payload, "drivingAudio"))
+            .filter(|item| !item.trim().is_empty());
+        let inferred_driving_audio = explicit_driving_audio.clone().or_else(|| {
+            subject_matches.iter().find_map(|subject| {
+                subject
+                    .get("absoluteVoicePath")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+            })
+        });
+        if let Some(object) = merged.as_object_mut() {
+            if !reference_images.is_empty() {
+                object.insert("referenceImages".to_string(), json!(reference_images));
+                if object
+                    .get("generationMode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
+                    object.insert("generationMode".to_string(), json!("reference-guided"));
+                }
+            }
+            if let Some(driving_audio) = inferred_driving_audio {
+                object.insert("drivingAudio".to_string(), json!(driving_audio));
+            }
+        }
+        self.call_channel("video-gen:generate", merged)
+    }
+
+    fn collect_subject_matches(
+        &self,
+        args: &CliArgs,
+        payload: &Value,
+        limit: usize,
+    ) -> Result<Vec<Value>, String> {
+        let subject_ids = comma_list_strings(
+            args.value(&["subject-ids", "subjectIds"])
+                .or_else(|| payload_field(payload, "subjectIds").cloned()),
+        );
+        if !subject_ids.is_empty() {
+            let mut matches = Vec::<Value>::new();
+            for id in subject_ids.into_iter().take(limit) {
+                let result = self.call_channel("subjects:get", json!({ "id": id }))?;
+                if let Some(subject) = result
+                    .get("subject")
+                    .cloned()
+                    .filter(|item| !item.is_null())
+                {
+                    matches.push(subject);
+                }
+            }
+            return Ok(matches);
+        }
+        let subject_query = args
+            .string(&["subject-query", "query-subjects"])
+            .or_else(|| payload_string(payload, "subjectQuery"));
+        if let Some(subject_query) = subject_query.filter(|item| !item.trim().is_empty()) {
+            let result = self.call_channel("subjects:search", json!({ "query": subject_query }))?;
+            return Ok(result
+                .get("subjects")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .take(limit)
+                .collect());
+        }
+        Ok(Vec::new())
+    }
+
     fn generated_media_history(&self, kind: &str) -> Result<Value, String> {
         let result = self.call_channel("media:list", json!({}))?;
         let assets = result
@@ -1019,10 +1140,36 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
     copy_optional_string(
         &mut merged,
         "generationMode",
-        args.string(&["generation-mode", "generationMode"]),
+        args.string(&["generation-mode", "generationMode", "mode"]),
+    );
+    copy_optional_string(
+        &mut merged,
+        "resolution",
+        args.string(&["resolution", "size"]),
+    );
+    copy_optional_string(
+        &mut merged,
+        "drivingAudio",
+        args.string(&["driving-audio", "audio-url", "drivingAudio"]),
+    );
+    copy_optional_string(
+        &mut merged,
+        "firstClip",
+        args.string(&["first-clip", "video-url", "firstClip"]),
+    );
+    copy_optional_string(
+        &mut merged,
+        "subjectQuery",
+        args.string(&["subject-query", "query-subjects", "subjectQuery"]),
     );
     if let Some(count) = args.i64(&["count"]) {
         merged.insert("count".to_string(), json!(count));
+    }
+    if let Some(duration_seconds) = args.i64(&["duration", "seconds", "durationSeconds"]) {
+        merged.insert("durationSeconds".to_string(), json!(duration_seconds));
+    }
+    if let Some(generate_audio) = args.bool(&["audio", "generate-audio", "generateAudio"]) {
+        merged.insert("generateAudio".to_string(), json!(generate_audio));
     }
     if let Some(subject_ids) = comma_list_value(args.value(&["subject-ids", "subjectIds"])) {
         merged.insert("subjectIds".to_string(), subject_ids);
@@ -1058,6 +1205,52 @@ fn comma_list_value(value: Option<Value>) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+fn comma_list_strings(value: Option<Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::trim).map(ToString::to_string))
+            .filter(|item| !item.is_empty())
+            .collect(),
+        Some(Value::String(text)) => text
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn value_string_list(value: Option<&Value>, limit: usize) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .take(limit)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn dedupe_string_list(items: &mut Vec<String>, limit: usize) {
+    let mut deduped = Vec::<String>::new();
+    for item in items.drain(..) {
+        if !deduped.contains(&item) {
+            deduped.push(item);
+        }
+        if deduped.len() >= limit {
+            break;
+        }
+    }
+    *items = deduped;
 }
 
 fn copy_optional_string(target: &mut Map<String, Value>, key: &str, value: Option<String>) {
@@ -1184,14 +1377,18 @@ fn help_response(namespace: Option<&str>) -> Value {
             "media delete --asset-id <assetId>",
         ],
         "image" => vec![
-            "image generate --prompt \"...\" [--subject-ids a,b]",
+            "image generate --prompt \"...\" [--mode reference-guided] [--reference-images /abs/a.png,/abs/b.png]",
+            "image generate --prompt \"...\" [--subject-ids subject_a,subject_b]",
             "image history list",
             "image history get --id <assetId>",
             "image providers",
             "image models",
         ],
         "video" => vec![
-            "video generate --prompt \"...\"",
+            "video generate --prompt \"...\" [--mode text-to-video] [--duration 8] [--resolution 1080p]",
+            "video generate --prompt \"...\" --mode reference-guided --reference-images /abs/a.png,/abs/b.png",
+            "video generate --prompt \"...\" --mode first-last-frame --reference-images /abs/first.png,/abs/last.png",
+            "video generate --prompt \"...\" --mode continuation --first-clip /abs/clip.mp4",
             "video project-create --title \"...\" [--duration 8s] [--aspect-ratio 9:16]",
             "video project-list",
             "video project-get --path <relativePath>",

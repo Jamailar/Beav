@@ -19,37 +19,99 @@ pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> S
     }
 }
 
+fn build_openai_model_endpoint_candidates(base_url: &str) -> Vec<String> {
+    let normalized = normalize_base_url(base_url);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = vec![
+        format!("{normalized}/models"),
+        format!("{normalized}/v1/models"),
+    ];
+    if let Ok(parsed) = url::Url::parse(&normalized) {
+        let origin = format!(
+            "{}://{}",
+            parsed.scheme(),
+            parsed.host_str().unwrap_or_default()
+        );
+        let path = parsed.path().trim_end_matches('/');
+        for hint in [
+            "/v1",
+            "/openai",
+            "/api/v1",
+            "/openai/v1",
+            "/compatible-mode/v1",
+            "/compatible-mode",
+            "/compatibility/v1",
+            "/v2",
+            "/api/v3",
+            "/v1beta/openai",
+            "/api/paas/v4",
+        ] {
+            candidates.push(format!("{origin}{hint}/models"));
+        }
+        if !path.is_empty() && path != "/" {
+            candidates.push(format!("{origin}{path}/models"));
+        }
+    }
+    candidates.retain(|item| !item.trim().is_empty());
+    candidates.dedup();
+    candidates
+}
+
+fn response_model_items(response: &Value) -> Vec<Value> {
+    let data_items = response
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let fallback_items = response
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    data_items.into_iter().chain(fallback_items).collect()
+}
+
 pub(crate) fn fetch_openai_models(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<Value>, String> {
-    let response = run_curl_json(
-        "GET",
-        &format!("{}/models", normalize_base_url(base_url)),
-        api_key,
-        &[],
-        None,
-    )?;
-    let items = response
-        .get("data")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let models = items
-        .into_iter()
-        .filter_map(|item| {
-            let id = item
-                .get("id")
-                .and_then(|value| value.as_str())?
-                .trim()
-                .to_string();
-            if id.is_empty() {
-                return None;
+    let mut last_error = String::new();
+    for endpoint in build_openai_model_endpoint_candidates(base_url) {
+        match run_curl_json("GET", &endpoint, api_key, &[], None) {
+            Ok(response) => {
+                let models = response_model_items(&response)
+                    .into_iter()
+                    .filter_map(|item| {
+                        let id = item
+                            .get("id")
+                            .or_else(|| item.get("name"))
+                            .or_else(|| item.get("model"))
+                            .and_then(Value::as_str)?
+                            .trim()
+                            .to_string();
+                        if id.is_empty() {
+                            return None;
+                        }
+                        Some(json!({ "id": id }))
+                    })
+                    .collect::<Vec<_>>();
+                if !models.is_empty() {
+                    return Ok(models);
+                }
+                last_error = format!("empty model list from {endpoint}");
             }
-            Some(json!({ "id": id }))
-        })
-        .collect::<Vec<_>>();
-    Ok(models)
+            Err(error) => {
+                last_error = format!("{endpoint}: {error}");
+            }
+        }
+    }
+    Err(if last_error.is_empty() {
+        "failed to fetch OpenAI-compatible models".to_string()
+    } else {
+        format!("failed to fetch OpenAI-compatible models: {last_error}")
+    })
 }
 
 pub(crate) fn fetch_anthropic_models(

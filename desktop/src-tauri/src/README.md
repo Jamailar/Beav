@@ -10,6 +10,7 @@
 - `persistence/`：本地状态读取、持久化、工作区 hydrate。
 - `scheduler/`：后台调度计算、任务派生状态。
 - `runtime.rs`：运行时核心类型与通用运行时辅助。
+- `knowledge.rs`：知识库 workspace-first 写入与旧入口适配。
 - `*_helpers/*.rs`：按能力拆分的辅助与执行模块（profile、mcp、io、media、import 等）。
 
 ## 文档约定

@@ -3,9 +3,10 @@ use crate::persistence::{
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
+use crate::knowledge;
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 fn builtin_animation_elements() -> Vec<Value> {
     vec![json!({
@@ -158,46 +159,11 @@ pub fn handle_library_channel(
             }
             "knowledge:delete-youtube" => {
                 let video_id = payload_value_as_string(payload).unwrap_or_default();
-                let result = with_store_mut(state, |store| {
-                    store.youtube_videos.retain(|item| item.id != video_id);
-                    Ok(json!({ "success": true }))
-                })?;
-                let _ = app.emit(
-                    "knowledge:youtube-video-updated",
-                    json!({ "noteId": video_id, "status": "deleted" }),
-                );
-                Ok(result)
+                knowledge::delete_youtube_note(app, state, &video_id)
             }
             "knowledge:retry-youtube-subtitle" => {
                 let video_id = payload_value_as_string(payload).unwrap_or_default();
-                let result = with_store_mut(state, |store| {
-                    let Some(video) = store
-                        .youtube_videos
-                        .iter_mut()
-                        .find(|item| item.id == video_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "视频记录不存在" }));
-                    };
-                    let subtitle = video
-                        .subtitle_content
-                        .clone()
-                        .filter(|item| !item.trim().is_empty())
-                        .unwrap_or_else(|| {
-                            format!(
-                                "RedBox recovered subtitle placeholder\n\n标题：{}\n链接：{}\n\n{}",
-                                video.title, video.video_url, video.description
-                            )
-                        });
-                    video.subtitle_content = Some(subtitle.clone());
-                    video.has_subtitle = true;
-                    video.status = Some("completed".to_string());
-                    Ok(json!({ "success": true, "subtitleContent": subtitle }))
-                })?;
-                let _ = app.emit(
-                    "knowledge:youtube-video-updated",
-                    json!({ "noteId": video_id, "status": "completed" }),
-                );
-                Ok(result)
+                knowledge::retry_youtube_subtitle(app, state, &video_id)
             }
             "knowledge:youtube-regenerate-summaries" => {
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
@@ -232,18 +198,7 @@ pub fn handle_library_channel(
                     updates.push((video_id.clone(), summary));
                 }
                 let updated_count = updates.len();
-                with_store_mut(state, |store| {
-                    for (video_id, summary) in &updates {
-                        if let Some(video) = store
-                            .youtube_videos
-                            .iter_mut()
-                            .find(|item| item.id == *video_id)
-                        {
-                            video.summary = Some(summary.clone());
-                        }
-                    }
-                    Ok(())
-                })?;
+                knowledge::save_youtube_summaries(state, &updates)?;
                 Ok(json!({ "success": true, "updated": updated_count }))
             }
             "knowledge:read-youtube-subtitle" => {
@@ -260,16 +215,7 @@ pub fn handle_library_channel(
             }
             "knowledge:delete" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();
-                let result = with_store_mut(state, |store| {
-                    let before = store.knowledge_notes.len();
-                    store.knowledge_notes.retain(|item| item.id != note_id);
-                    if before == store.knowledge_notes.len() {
-                        return Ok(json!({ "success": false, "error": "笔记不存在" }));
-                    }
-                    Ok(json!({ "success": true }))
-                })?;
-                let _ = app.emit("knowledge:note-updated", json!({ "noteId": note_id }));
-                Ok(result)
+                knowledge::delete_note(app, state, &note_id)
             }
             "knowledge:transcribe" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();
@@ -342,38 +288,19 @@ pub fn handle_library_channel(
                         note_snapshot.content.chars().take(240).collect::<String>()
                     )
                 };
-                let result = with_store_mut(state, |store| {
-                    let Some(note) = store
-                        .knowledge_notes
-                        .iter_mut()
-                        .find(|item| item.id == note_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "笔记不存在" }));
-                    };
-                    note.transcription_status = Some("completed".to_string());
-                    note.transcript = Some(transcript.clone());
-                    Ok(json!({
-                        "success": true,
-                        "transcript": note.transcript.clone(),
-                    }))
-                })?;
-                let _ = app.emit(
-                "knowledge:note-updated",
-                json!({ "noteId": note_id, "hasTranscript": true, "transcriptionStatus": "completed" }),
-            );
-                Ok(result)
+                knowledge::persist_note_transcript(app, state, &note_id, &transcript)
             }
             "knowledge:docs:add-files"
             | "knowledge:docs:add-folder"
             | "knowledge:docs:add-obsidian-vault" => {
-                let (kind, folder_name, title) = match channel {
+                let (kind, title) = match channel {
                     "knowledge:docs:add-files" => {
-                        ("copied-file", "imported-files", "Imported Files")
+                        ("copied-file", "Imported Files")
                     }
                     "knowledge:docs:add-folder" => {
-                        ("tracked-folder", "tracked-folder", "Tracked Folder")
+                        ("tracked-folder", "Tracked Folder")
                     }
-                    _ => ("obsidian-vault", "obsidian-vault", "Obsidian Vault"),
+                    _ => ("obsidian-vault", "Obsidian Vault"),
                 };
 
                 let root = if channel == "knowledge:docs:add-files" {
@@ -381,13 +308,12 @@ pub fn handle_library_channel(
                     if selected.is_empty() {
                         return Ok(json!({ "success": false, "error": "未选择文件" }));
                     }
-                    let batch_root =
-                        knowledge_root(state)?.join(format!("{}-{}", folder_name, now_ms()));
-                    fs::create_dir_all(&batch_root).map_err(|error| error.to_string())?;
-                    for file in &selected {
-                        let _ = copy_file_into_dir(file, &batch_root)?;
-                    }
-                    batch_root
+                    let display_name = format!(
+                        "{} · {}",
+                        title,
+                        with_store(state, |store| Ok(store.active_space_id.clone()))?
+                    );
+                    return knowledge::import_document_files(app, state, &selected, &display_name);
                 } else {
                     let selected = pick_files_native(
                         if channel == "knowledge:docs:add-folder" {
@@ -407,8 +333,6 @@ pub fn handle_library_channel(
                 if !root.exists() {
                     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
                 }
-                let file_count = count_files_in_dir(&root)?;
-                let sample_files = collect_sample_files(&root, 6)?;
                 let fallback_name = root
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -420,49 +344,11 @@ pub fn handle_library_channel(
                     fallback_name,
                     with_store(state, |store| Ok(store.active_space_id.clone()))?
                 );
-                let now = now_iso();
-                let source = with_store_mut(state, |store| {
-                    if let Some(existing) = store
-                        .document_sources
-                        .iter_mut()
-                        .find(|item| item.root_path == root.display().to_string())
-                    {
-                        existing.file_count = file_count;
-                        existing.sample_files = sample_files.clone();
-                        existing.updated_at = now.clone();
-                        return Ok(existing.clone());
-                    }
-                    let source = DocumentKnowledgeSourceRecord {
-                        id: make_id("doc-source"),
-                        kind: kind.to_string(),
-                        name: display_name,
-                        root_path: root.display().to_string(),
-                        locked: kind != "tracked-folder",
-                        indexing: false,
-                        index_error: None,
-                        file_count,
-                        sample_files: sample_files.clone(),
-                        created_at: now.clone(),
-                        updated_at: now,
-                    };
-                    store.document_sources.push(source.clone());
-                    Ok(source)
-                })?;
-                let _ = app.emit("knowledge:docs-updated", json!({ "sourceId": source.id }));
-                Ok(json!({ "success": true, "source": source }))
+                knowledge::add_document_source(app, state, kind, &root, &display_name, kind != "tracked-folder")
             }
             "knowledge:docs:delete-source" => {
                 let source_id = payload_value_as_string(payload).unwrap_or_default();
-                let result = with_store_mut(state, |store| {
-                    let before = store.document_sources.len();
-                    store.document_sources.retain(|item| item.id != source_id);
-                    if before == store.document_sources.len() {
-                        return Ok(json!({ "success": false, "error": "文档源不存在" }));
-                    }
-                    Ok(json!({ "success": true }))
-                })?;
-                let _ = app.emit("knowledge:docs-updated", json!({ "sourceId": source_id }));
-                Ok(result)
+                knowledge::delete_document_source(app, state, &source_id)
             }
             "media:list" => {
                 let _ = ensure_store_hydrated_for_media(state);
@@ -778,9 +664,19 @@ pub fn handle_library_channel(
                             base_title
                         };
                         let mut wrote_real_asset = false;
-                        if let Some((endpoint, api_key, default_model, _provider, _template)) =
-                            &real_image_config
+                        if let Some((
+                            endpoint,
+                            api_key,
+                            default_model,
+                            default_provider,
+                            default_template,
+                        )) = &real_image_config
                         {
+                            let request_payload = json!({
+                                "prompt": prompt,
+                                "count": 1,
+                                "quality": quality,
+                            });
                             if let Ok(response) = run_image_generation_request(
                                 endpoint,
                                 api_key.as_deref(),
@@ -788,10 +684,11 @@ pub fn handle_library_channel(
                                     .clone()
                                     .unwrap_or_else(|| default_model.clone())
                                     .as_str(),
-                                &prompt,
-                                1,
-                                None,
-                                quality.as_deref(),
+                                provider.as_deref().unwrap_or(default_provider.as_str()),
+                                provider_template
+                                    .as_deref()
+                                    .unwrap_or(default_template.as_str()),
+                                &request_payload,
                             ) {
                                 if let Some(item) = extract_first_media_result(&response) {
                                     if write_generated_image_asset(&absolute_path, item).is_ok() {

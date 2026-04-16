@@ -11,6 +11,7 @@ mod events;
 mod helpers;
 mod http_utils;
 mod interactive_runtime_shared;
+mod knowledge;
 mod legacy_import;
 mod manuscript_package;
 mod mcp;

@@ -544,7 +544,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (presetId.includes('dashscope') || presetId.includes('qwen')) {
       return { provider: 'dashscope', template: 'dashscope-wan-native' };
     }
-    if (presetId.includes('ark') || presetId.includes('jimeng')) {
+    if (presetId.includes('jimeng')) {
+      return { provider: 'jimeng', template: 'jimeng-openai-wrapper' };
+    }
+    if (presetId.includes('ark')) {
       return { provider: 'ark-seedream', template: 'ark-seedream-native' };
     }
     if (presetId.includes('gemini')) {

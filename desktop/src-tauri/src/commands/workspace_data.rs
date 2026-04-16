@@ -1,3 +1,4 @@
+use crate::knowledge;
 use crate::persistence::{ensure_store_hydrated_for_work, with_store, with_store_mut};
 use crate::*;
 use serde_json::{json, Value};
@@ -41,50 +42,7 @@ pub fn handle_workspace_data_channel(
             "youtube:save-note" => {
                 let input: YoutubeSavePayload = serde_json::from_value(payload.clone())
                     .map_err(|error| format!("YouTube note payload 无效: {error}"))?;
-                let mut emitted_new: Option<(String, String)> = None;
-                let result = with_store_mut(state, |store| {
-                    if let Some(existing) = store
-                        .youtube_videos
-                        .iter()
-                        .find(|item| {
-                            item.video_id == input.video_id || item.video_url == input.video_url
-                        })
-                        .cloned()
-                    {
-                        return Ok(
-                            json!({ "success": true, "duplicate": true, "noteId": existing.id }),
-                        );
-                    }
-
-                    let record = YoutubeVideoRecord {
-                        id: make_id("youtube"),
-                        video_id: input.video_id,
-                        video_url: input.video_url,
-                        title: input.title.clone(),
-                        original_title: Some(input.title),
-                        description: input.description.unwrap_or_default(),
-                        summary: Some(
-                            "RedBox captured this video for later migration work.".to_string(),
-                        ),
-                        thumbnail_url: input.thumbnail_url.unwrap_or_default(),
-                        has_subtitle: false,
-                        subtitle_content: None,
-                        status: Some("completed".to_string()),
-                        created_at: now_iso(),
-                        folder_path: None,
-                    };
-                    let note_id = record.id.clone();
-                    emitted_new = Some((record.id.clone(), record.title.clone()));
-                    store.youtube_videos.push(record);
-                    Ok(json!({ "success": true, "duplicate": false, "noteId": note_id }))
-                })?;
-                if let Some((note_id, title)) = emitted_new {
-                    let _ = app.emit(
-                        "knowledge:new-youtube-video",
-                        json!({ "noteId": note_id, "title": title, "status": "completed" }),
-                    );
-                }
-                Ok(result)
+                knowledge::save_youtube_note(app, state, &input)
             }
             "work:list" => {
                 let _ = ensure_store_hydrated_for_work(state);

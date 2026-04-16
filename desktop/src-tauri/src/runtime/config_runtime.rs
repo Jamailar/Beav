@@ -59,8 +59,11 @@ pub fn infer_protocol(base_url: &str, preset_id: Option<&str>, explicit: Option<
         }
     }
     let lower = base_url.to_lowercase();
-    if lower.contains("anthropic") {
+    if lower.contains("/anthropic") || lower.contains("anthropic.com") {
         return "anthropic".to_string();
+    }
+    if lower.contains("/openai") || lower.contains("/compatible-mode") {
+        return "openai".to_string();
     }
     if lower.contains("gemini")
         || lower.contains("googleapis.com")
