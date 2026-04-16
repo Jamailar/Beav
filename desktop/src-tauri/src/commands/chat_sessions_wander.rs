@@ -826,19 +826,33 @@ pub fn handle_chat_sessions_wander_channel(
                                 record.tail_message_count
                             ),
                             "context": crate::runtime::session_context_value_for_session(store, &session_id),
+                            "usage": crate::runtime::session_context_usage_value(store, &session_id),
                             "totalMessages": total_messages,
                         }),
                         None => json!({
                             "success": true,
                             "compacted": false,
-                            "message": if total_messages <= crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES as i64 {
+                            "message": if total_messages <= crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES as i64 {
                                 format!(
-                                    "当前仅有 {} 条消息，低于压缩阈值 {}",
+                                    "当前仅有 {} 条消息，至少需要超过 {} 条消息才有可归档内容",
                                     total_messages,
-                                    crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES
+                                    crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES
                                 )
                             } else {
-                                "暂无可压缩内容".to_string()
+                                let usage = crate::runtime::session_context_usage_value(store, &session_id);
+                                let threshold = usage
+                                    .get("compactThreshold")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(crate::runtime::DEFAULT_SESSION_COMPACT_TARGET_TOKENS);
+                                let effective = usage
+                                    .get("estimatedEffectiveTokens")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0);
+                                format!(
+                                    "当前有效上下文约 {} tokens，尚未超过自动 compact 阈值 {}，且没有新的可归档历史",
+                                    effective,
+                                    threshold
+                                )
                             }
                         }),
                     })

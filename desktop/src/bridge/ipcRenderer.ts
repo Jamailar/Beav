@@ -58,6 +58,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
     return {
       success: true,
       estimatedTotalTokens: 0,
+      estimatedEffectiveTokens: 0,
       compactThreshold: 0,
       compactRatio: 0,
       compactRounds: 0,

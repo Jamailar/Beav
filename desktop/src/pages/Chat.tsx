@@ -82,6 +82,7 @@ interface ChatContextUsage {
   success: boolean;
   contextType?: string;
   estimatedTotalTokens?: number;
+  estimatedEffectiveTokens?: number;
   compactThreshold?: number;
   compactRatio?: number;
   compactRounds?: number;
@@ -1925,6 +1926,10 @@ export function Chat({
       ? 'text-amber-600 border-amber-500/40 bg-amber-500/10'
       : 'text-text-secondary border-border bg-surface-secondary/90';
   const compactThreshold = Math.max(0, Math.round(contextUsage?.compactThreshold || 0));
+  const estimatedEffectiveTokens = Math.max(
+    0,
+    Math.round(contextUsage?.estimatedEffectiveTokens ?? contextUsage?.estimatedTotalTokens ?? 0),
+  );
   const estimatedTotalTokens = Math.max(0, Math.round(contextUsage?.estimatedTotalTokens || 0));
   const contextRingRadius = 17;
   const contextRingCircumference = 2 * Math.PI * contextRingRadius;
@@ -1982,7 +1987,7 @@ export function Chat({
     contextUsage?.success &&
     fixedSessionContextIndicatorMode !== 'none'
   );
-  const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedTotalTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
+  const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
   const composerContextUsageIndicator = showComposerContextUsageIndicator ? (
     <div className="relative">
@@ -2066,24 +2071,32 @@ export function Chat({
     </div>
   ) : null;
 
+  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string }) => {
+    if (action.url) {
+      try {
+        await window.ipcRenderer.invoke('app:open-path', { path: action.url });
+      } catch (error) {
+        console.error('Failed to open welcome action url:', error);
+      }
+      return;
+    }
+    if (action.text) {
+      sendMessage(action.text);
+    }
+  }, [sendMessage]);
+
   const welcomeActionsBlock = welcomeActions && welcomeActions.length > 0 ? (
     <div className="flex items-center justify-center gap-6">
       {welcomeActions.map((action) => (
-        <div
+        <button
           key={action.label}
-          role="button"
-          tabIndex={0}
-          onClick={() => {
-            if (action.url) {
-              window.open(action.url, '_blank');
-            } else if (action.text) {
-              sendMessage(action.text);
-            }
-          }}
+          type="button"
+          onClick={() => void handleWelcomeAction(action)}
           className={clsx(
             'group inline-flex items-center justify-center h-[36px] min-w-[36px] max-w-[36px] px-0 rounded-full border border-black/[0.04] bg-white/70 cursor-pointer overflow-hidden whitespace-nowrap transition-[max-width,padding,background-color,border-color,box-shadow] duration-500 ease-in-out hover:max-w-[200px] hover:px-4 hover:justify-start hover:gap-2 hover:bg-white hover:border-accent-primary/20 hover:shadow-md active:scale-95',
             darkEmbedded && 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
           )}
+          aria-label={action.label}
         >
           <div className={clsx(
             'flex-shrink-0 flex items-center justify-center w-5 h-5 transition-colors duration-300',
@@ -2094,7 +2107,7 @@ export function Chat({
           <span className="opacity-0 max-w-0 overflow-hidden text-[13px] font-bold text-text-secondary group-hover:opacity-100 group-hover:max-w-[150px] transition-all duration-500 ease-in-out">
             {action.label}
           </span>
-        </div>
+        </button>
       ))}
     </div>
   ) : null;
@@ -2302,7 +2315,7 @@ export function Chat({
             </div>
             {contextUsage?.success && (
               <div className={clsx('text-[11px] px-2.5 py-1 rounded-full border backdrop-blur', contextBadgeClass)}>
-                上下文 {contextUsedPercentDisplay}% · {contextUsage.estimatedTotalTokens || 0}/{contextUsage.compactThreshold || 0} tokens · compact {contextUsage.compactRounds || 0} 次
+                上下文 {contextUsedPercentDisplay}% · {estimatedEffectiveTokens}/{contextUsage.compactThreshold || 0} tokens · compact {contextUsage.compactRounds || 0} 次
               </div>
             )}
           </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2 } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1418,33 +1418,33 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     }
 
     return (
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col bg-surface-primary">
             <div
                 className={clsx(
-                    'border-b border-border bg-surface-primary',
+                    'border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px] z-30',
                     isEmbedded ? 'px-3 py-2' : 'px-6 py-4'
                 )}
             >
-                <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3')}>
-                    <div className="flex items-center gap-2 py-1">
+                <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3.5')}>
+                    <div className="flex items-center gap-3 py-1">
                         <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar">
                             {typeFilters.map((item) => (
                                 <button
                                     key={item.key}
                                     onClick={() => setSelectedTypeFilter(item.key)}
                                     className={clsx(
-                                        'shrink-0 px-3.5 py-2 text-xs rounded-xl border transition-all flex items-center gap-2 backdrop-blur-sm',
+                                        'shrink-0 px-3.5 py-1.5 text-[12px] font-bold rounded-xl border transition-all flex items-center gap-2 active:scale-95',
                                         selectedTypeFilter === item.key
-                                            ? 'bg-text-primary text-white border-text-primary shadow-md'
-                                            : 'bg-surface-primary text-text-secondary border-border hover:border-text-tertiary/30 hover:bg-surface-secondary hover:text-text-primary'
+                                            ? 'bg-text-primary text-white border-transparent shadow-lg shadow-text-primary/10'
+                                            : 'bg-black/[0.03] text-text-tertiary border-transparent hover:bg-black/[0.06] hover:text-text-primary'
                                     )}
                                 >
-                                    <span className="font-medium tracking-[0.01em]">{item.label}</span>
+                                    <span>{item.label}</span>
                                     <span className={clsx(
-                                        'text-[10px] px-1.5 py-0.5 rounded-lg',
+                                        'text-[10px] px-1.5 py-0.5 rounded-lg font-bold',
                                         selectedTypeFilter === item.key
-                                            ? 'bg-white/15 text-white'
-                                            : 'bg-surface-secondary text-text-tertiary'
+                                            ? 'bg-white/20 text-white'
+                                            : 'bg-black/5 text-text-tertiary/60'
                                     )}>
                                         {item.count}
                                     </span>
@@ -1453,9 +1453,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         </div>
 
                         {isSearchOpen ? (
-                            <div className="flex items-center gap-2 shrink-0">
-                                <div className="relative w-[220px] sm:w-[260px]">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
+                            <div className="flex items-center gap-2 shrink-0 animate-in fade-in slide-in-from-right-4 duration-300">
+                                <div className="relative w-[240px] sm:w-[300px]">
+                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary" />
                                     <input
                                         ref={searchInputRef}
                                         type="text"
@@ -1463,14 +1463,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         placeholder="搜索知识库..."
                                         autoFocus
-                                        className="w-full bg-surface-secondary border border-border rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        className="w-full bg-black/[0.03] border border-transparent rounded-xl pl-9 pr-8 py-2 text-[13px] font-bold text-text-primary placeholder:text-text-tertiary/50 focus:outline-none focus:bg-white focus:ring-2 focus:ring-accent-primary/10 transition-all"
                                     />
                                     {searchQuery && (
                                         <button
                                             onClick={() => setSearchQuery('')}
-                                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary"
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary transition-colors"
                                         >
-                                            <X className="w-3 h-3" />
+                                            <X className="w-3.5 h-3.5" />
                                         </button>
                                     )}
                                 </div>
@@ -1479,56 +1479,54 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         setIsSearchOpen(false);
                                         setSearchQuery('');
                                     }}
-                                    className="px-3 py-2 text-sm text-text-tertiary hover:text-text-primary hover:bg-surface-secondary rounded-lg transition-colors"
+                                    className="px-3.5 py-2 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all"
                                 >
                                     取消
                                 </button>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-center gap-1.5 shrink-0">
                                 <button
                                     onClick={() => setIsSearchOpen(true)}
-                                    className="inline-flex h-9 px-3 text-text-tertiary hover:text-text-primary hover:bg-surface-secondary rounded-lg transition-colors border border-border/60 items-center justify-center"
+                                    className="inline-flex h-9 w-9 text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all items-center justify-center active:scale-90"
                                     title="搜索 (Cmd+F)"
                                 >
                                     <Search className="w-4 h-4" />
                                 </button>
                                 {!isEmbedded && (
                                     <>
+                                        <div className="w-[1px] h-4 bg-black/[0.06] mx-1" />
+                                        
                                         {(selectedTypeFilter === 'all' || selectedTypeFilter === 'youtube') && youtubeSummaryPendingCount > 0 && (
                                             <button
                                                 onClick={() => void handleRefreshYoutubeSummaries()}
                                                 disabled={isRefreshingYoutubeSummaries}
-                                                className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                                className="inline-flex items-center gap-1.5 h-9 px-3.5 text-[12px] font-bold rounded-xl bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20 transition-all disabled:opacity-40 active:scale-95"
                                             >
                                                 {isRefreshingYoutubeSummaries ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                                                补全 YouTube 摘要
-                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-secondary text-text-tertiary">
+                                                补全摘要
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-lg bg-accent-primary/10 font-bold">
                                                     {youtubeSummaryPendingCount}
                                                 </span>
                                             </button>
                                         )}
-                                        <button
-                                            onClick={handleAddDocumentFiles}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
-                                        >
-                                            <Plus className="w-3.5 h-3.5" />
-                                            文件
-                                        </button>
-                                        <button
-                                            onClick={handleAddDocumentFolder}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
-                                        >
-                                            <FolderPlus className="w-3.5 h-3.5" />
-                                            文件夹
-                                        </button>
-                                        <button
-                                            onClick={handleAddObsidianVault}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
-                                        >
-                                            <FolderOpen className="w-3.5 h-3.5" />
-                                            Obsidian
-                                        </button>
+                                        
+                                        <div className="flex items-center gap-1 bg-text-primary p-1 rounded-xl shadow-lg shadow-text-primary/10">
+                                            <button
+                                                onClick={handleAddDocumentFiles}
+                                                className="inline-flex items-center gap-1.5 h-7 px-2.5 text-[11px] font-bold text-white hover:bg-white/10 rounded-lg transition-all active:scale-95"
+                                            >
+                                                <Plus className="w-3.5 h-3.5" />
+                                                文件
+                                            </button>
+                                            <button
+                                                onClick={handleAddDocumentFolder}
+                                                className="inline-flex items-center gap-1.5 h-7 px-2.5 text-[11px] font-bold text-white hover:bg-white/10 rounded-lg transition-all active:scale-95"
+                                            >
+                                                <FolderPlus className="w-3.5 h-3.5" />
+                                                文件夹
+                                            </button>
+                                        </div>
                                     </>
                                 )}
                             </div>
@@ -1536,45 +1534,37 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     </div>
 
                     {!isEmbedded && allTags.length > 0 && (
-                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
                             <button
                                 onClick={() => setSelectedTag(null)}
                                 className={clsx(
-                                    'shrink-0 px-3 py-1 text-xs font-medium rounded-full transition-all border',
+                                    'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider',
                                     !selectedTag
-                                        ? 'bg-surface-primary text-text-primary border-border shadow-sm ring-1 ring-border/50'
-                                        : 'bg-transparent text-text-tertiary border-transparent hover:bg-surface-secondary hover:text-text-secondary'
+                                        ? 'bg-black/[0.04] text-text-primary border-transparent shadow-sm'
+                                        : 'bg-transparent text-text-tertiary border-transparent hover:bg-black/[0.03] hover:text-text-secondary'
                                 )}
                             >
-                                全部标签
+                                All Tags
                             </button>
                             {allTags.map(({ tag, count }) => (
                                 <button
                                     key={tag}
                                     onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
                                     className={clsx(
-                                        'shrink-0 px-3 py-1 text-xs rounded-full transition-all flex items-center gap-1.5 border',
+                                        'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
                                         selectedTag === tag
-                                            ? tag === '公众号文章'
-                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20'
-                                                : tag === '网页文章'
-                                                    ? 'bg-sky-600 text-white border-sky-600 shadow-md shadow-sky-600/20'
-                                                    : 'bg-accent-primary text-white border-accent-primary shadow-md shadow-accent-primary/20'
-                                            : clsx('bg-surface-secondary/50 border-transparent hover:bg-surface-secondary hover:text-text-primary', getKnowledgeTagClass(tag))
+                                            ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                            : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
                                     )}
                                 >
-                                    <span className="opacity-70">#</span>
+                                    <span className="opacity-40">#</span>
                                     {tag}
                                     <span
                                         className={clsx(
-                                            'text-[10px] py-0.5 px-1.5 rounded-full',
+                                            'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
                                             selectedTag === tag
                                                 ? 'bg-white/20 text-white'
-                                                : tag === '公众号文章'
-                                                    ? 'bg-emerald-100 text-emerald-700'
-                                                    : tag === '网页文章'
-                                                        ? 'bg-sky-100 text-sky-700'
-                                                        : 'bg-surface-tertiary text-text-tertiary'
+                                                : 'bg-black/5 text-text-tertiary/60'
                                         )}
                                     >
                                         {count}
@@ -1606,58 +1596,58 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         return (
                                             <div
                                                 key={item.id}
-                                                className="mb-3 break-inside-avoid rounded-xl border border-border bg-surface-primary p-3 shadow-sm"
+                                                className="mb-3 break-inside-avoid rounded-2xl border border-black/[0.04] bg-white shadow-sm p-4 transition-all"
                                             >
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div className="min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="text-sm font-semibold text-text-primary truncate">{source.name}</div>
-                                                            <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', getKnowledgeKindBadgeClass('docs'))}>
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <div className="text-[14px] font-extrabold text-text-primary truncate tracking-tight">{source.name}</div>
+                                                            <span className={clsx('text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg', getKnowledgeKindBadgeClass('docs'))}>
                                                                 {getKnowledgeKindLabel('docs')}
                                                             </span>
                                                             {source.locked && (
-                                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                                                                    锁定目录
+                                                                <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-600 border border-amber-100">
+                                                                    LOCKED
                                                                 </span>
                                                             )}
                                                         </div>
-                                                        <div className="mt-1 text-[11px] text-text-tertiary break-all">{source.rootPath}</div>
+                                                        <div className="mt-1.5 text-[10px] font-bold text-text-tertiary/60 break-all uppercase tracking-tighter">{source.rootPath}</div>
                                                     </div>
                                                     <button
                                                         type="button"
                                                         onClick={() => void handleDeleteDocumentSource(source)}
-                                                        className="p-1.5 rounded-md text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                                                        className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 transition-all active:scale-90"
                                                         title="移除此文档源"
                                                     >
                                                         <Trash2 className="w-3.5 h-3.5" />
                                                     </button>
                                                 </div>
-                                                <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px] text-text-secondary">
-                                                    <span className="inline-flex items-center gap-1 rounded-md bg-surface-secondary px-2 py-1">
-                                                        <FileText className="w-3 h-3" />
-                                                        {source.fileCount} 个文档
+                                                <div className="mt-3.5 flex flex-wrap gap-1.5 text-[10px] font-bold">
+                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.03] px-2.5 py-1.5 text-text-secondary border border-black/[0.02]">
+                                                        <FileText className="w-3 h-3 opacity-60" />
+                                                        {source.fileCount} DOCUMENTS
                                                     </span>
                                                     {source.indexing && (
-                                                        <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 text-blue-700 px-2 py-1">
+                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-accent-primary/10 text-accent-primary px-2.5 py-1.5 border border-accent-primary/10">
                                                             <Loader2 className="w-3 h-3 animate-spin" />
-                                                            建立索引中
+                                                            INDEXING...
                                                         </span>
                                                     )}
                                                     {!source.indexing && source.indexError && (
-                                                        <span className="inline-flex items-center gap-1 rounded-md bg-red-100 text-red-700 px-2 py-1">
-                                                            索引失败
+                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-red-50 text-red-600 px-2.5 py-1.5 border border-red-100 uppercase">
+                                                            Index Failed
                                                         </span>
                                                     )}
                                                 </div>
                                                 {source.sampleFiles.length > 0 && (
-                                                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                                                    <div className="mt-3.5 flex flex-wrap gap-1.5">
                                                         {source.sampleFiles.slice(0, 6).map((file) => (
                                                             <span
                                                                 key={`${source.id}-${file}`}
-                                                                className="inline-flex max-w-full items-start gap-1 text-[11px] px-2 py-1 rounded-md bg-surface-secondary text-text-secondary"
+                                                                className="inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg bg-black/[0.02] text-text-tertiary border border-black/[0.01]"
                                                             >
-                                                                <FileText className="w-3 h-3 shrink-0 mt-0.5" />
-                                                                <span className="min-w-0 break-all leading-relaxed">{file}</span>
+                                                                <FileText className="w-3 h-3 shrink-0 mt-0.5 opacity-40" />
+                                                                <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
                                                             </span>
                                                         ))}
                                                     </div>
@@ -1675,69 +1665,64 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                 key={item.id}
                                                 onClick={() => setSelectedVideo(video)}
                                                 className={clsx(
-                                                    'group mb-3 break-inside-avoid w-full text-left bg-surface-primary border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow',
-                                                    isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-border'
+                                                    'group mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
+                                                    isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
                                                 )}
                                             >
-                                                <div className="relative aspect-[16/10] bg-surface-secondary overflow-hidden">
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass('youtube'))}>
+                                                <div className="relative aspect-[16/10] bg-black/[0.02] overflow-hidden">
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md', getKnowledgeKindBadgeClass('youtube'))}>
                                                         {getKnowledgeKindLabel('youtube')}
                                                     </span>
                                                     {video.thumbnailUrl && !isProcessing ? (
                                                         <img
                                                             src={resolveAssetUrl(video.thumbnailUrl)}
                                                             alt={video.title}
-                                                            className="w-full h-full object-cover"
+                                                            className="w-full h-full object-cover transition-transform duration-500"
+
                                                         />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center text-text-tertiary">
                                                             {isProcessing ? (
                                                                 <div className="flex flex-col items-center gap-2">
-                                                                    <div className="w-8 h-8 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
-                                                                    <span className="text-xs text-yellow-600">处理中...</span>
+                                                                    <Loader2 className="w-8 h-8 animate-spin text-yellow-500" />
                                                                 </div>
                                                             ) : (
-                                                                <Play className="w-8 h-8" />
+                                                                <Play className="w-8 h-8 opacity-20" />
                                                             )}
                                                         </div>
                                                     )}
-                                                    {isProcessing && video.thumbnailUrl && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                                                            <div className="flex flex-col items-center gap-2">
-                                                                <div className="w-10 h-10 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                                                                <span className="text-xs text-white font-medium">下载字幕中...</span>
-                                                            </div>
-                                                        </div>
-                                                    )}
+                                                    
                                                     {!isProcessing && !isFailed && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 hover:opacity-100 transition-opacity">
-                                                            <div className="w-12 h-12 rounded-full bg-red-600 flex items-center justify-center">
-                                                                <Play className="w-6 h-6 text-white ml-1" fill="white" />
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-xl">
+                                                                <Play className="w-5 h-5 fill-current ml-0.5" />
                                                             </div>
                                                         </div>
                                                     )}
+                                                    
                                                     {video.summary && !isProcessing && (
-                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                                                            {video.originalTitle && video.originalTitle.trim() && video.originalTitle !== video.title && (
-                                                                <div className="mb-1 text-[10px] text-white/70 line-clamp-2">
-                                                                    原始标题：{video.originalTitle}
-                                                                </div>
-                                                            )}
-                                                            <div className="text-[11px] leading-relaxed text-white line-clamp-4">
+                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                                                            <div className="text-[11px] leading-relaxed text-white/90 line-clamp-3 font-medium">
                                                                 {video.summary}
                                                             </div>
                                                         </div>
                                                     )}
                                                 </div>
-                                                <div className="p-2.5">
-                                                    <div className="text-xs font-semibold text-text-primary line-clamp-2">{video.title}</div>
-                                                    <div className="mt-1 text-[11px] text-text-tertiary line-clamp-2">
-                                                        {isProcessing ? '正在下载字幕和封面...' : (video.summary || video.description || '暂无描述')}
+                                                <div className="p-4">
+                                                    <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{video.title}</div>
+                                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/70 line-clamp-2 leading-relaxed">
+                                                        {isProcessing ? '正在智能解析内容细节...' : (video.summary || video.description || '暂无描述信息')}
                                                     </div>
-                                                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
+                                                    <div className="mt-3.5 flex items-center justify-between gap-2 text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter border-t border-black/[0.02] pt-3">
                                                         <span>{new Date(video.createdAt).toLocaleDateString()}</span>
-                                                        {video.hasSubtitle && !isProcessing && <span>已提取字幕</span>}
-                                                        {isFailed && <span className="text-red-500">处理失败</span>}
+                                                        <div className="flex items-center gap-2">
+                                                            {video.hasSubtitle && !isProcessing && (
+                                                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
+                                                                    SUBTITLES
+                                                                </span>
+                                                            )}
+                                                            {isFailed && <span className="text-red-500">FAILED</span>}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </button>
@@ -1761,46 +1746,46 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             key={item.id}
                                             onClick={() => setSelectedNote(note)}
                                             className={clsx(
-                                                'mb-3 break-inside-avoid w-full text-left bg-surface-primary border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow',
-                                                isTextArticleCard ? 'overflow-visible p-3' : 'overflow-hidden'
+                                                'mb-4 break-inside-avoid w-full text-left bg-white border border-black/[0.04] rounded-[20px] shadow-sm transition-all duration-300',
+                                                isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
                                             )}
                                         >
                                             {isTextArticleCard ? (
-                                                <div className={clsx('flex gap-3', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
+                                                <div className={clsx('flex gap-4', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
                                                     <div className={clsx(
-                                                        'flex shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600',
-                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-10 w-10',
+                                                        'flex shrink-0 items-center justify-center rounded-[14px] bg-sky-500/10 text-sky-600 border border-sky-100',
+                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-11 w-11',
                                                     )}>
                                                         <FileText className="w-5 h-5" />
                                                     </div>
                                                     <div className="min-w-0 flex-1">
-                                                        <div className="flex items-start justify-between gap-2">
+                                                        <div className="flex items-start justify-between gap-3">
                                                             <div className={clsx(
-                                                                'font-semibold text-text-primary',
-                                                                embeddedUsesCompactCard ? 'text-[13px] line-clamp-3' : 'text-xs line-clamp-2',
+                                                                'font-extrabold text-text-primary tracking-tight group-hover:text-accent-primary transition-colors',
+                                                                embeddedUsesCompactCard ? 'text-[14px] line-clamp-3' : 'text-[15px] line-clamp-2',
                                                             )}>
                                                                 {note.title}
                                                             </div>
-                                                            <span className={clsx('shrink-0 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                            <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
                                                                 {getKnowledgeKindLabel(item.kind)}
                                                             </span>
                                                         </div>
                                                         <div className={clsx(
-                                                            'mt-2 text-text-tertiary leading-relaxed',
-                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-7' : 'text-[11px] line-clamp-6',
+                                                            'mt-2.5 text-text-tertiary leading-relaxed font-medium',
+                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
                                                         )}>
                                                             {notePreviewText}
                                                         </div>
-                                                        <div className="mt-3 flex items-center gap-2 text-[10px] text-text-tertiary flex-wrap">
+                                                        <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
                                                             <span>{new Date(note.createdAt).toLocaleDateString()}</span>
                                                             {note.sourceUrl && (
                                                                 <span className="flex items-center gap-1 max-w-full">
-                                                                    <ExternalLink className="w-3 h-3" />
-                                                                    <span className="truncate max-w-[140px]">{note.author || '原文链接'}</span>
+                                                                    <ExternalLink className="w-3 h-3 opacity-40" />
+                                                                    <span className="truncate max-w-[140px]">{note.author || 'SOURCE'}</span>
                                                                 </span>
                                                             )}
                                                             {note.tags?.slice(0, 2).map((tag) => (
-                                                                <span key={tag} className={clsx('text-[10px] px-1.5 py-0.5 rounded border', getKnowledgeTagClass(tag))}>
+                                                                <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
                                                                     #{tag}
                                                                 </span>
                                                             ))}
@@ -1810,148 +1795,128 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             ) : coverImage ? (
                                                 <div
                                                     className={clsx(
-                                                        'relative w-full bg-surface-secondary overflow-hidden',
+                                                        'relative w-full bg-black/[0.02] overflow-hidden',
                                                         (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/3]' : resolveAspectClass(note.id)
                                                     )}
                                                 >
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
                                                     <img
                                                         src={resolveAssetUrl(coverImage)}
                                                         alt={note.title}
-                                                        className="w-full h-full object-cover"
+                                                        className="w-full h-full object-cover transition-transform duration-500"
+
                                                         onLoad={(event) => handleImageLoad(note.id, event)}
                                                     />
                                                     {isNoteTranscribing && (
-                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
-                                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                                            <span className="text-[11px] font-medium">转录中...</span>
+                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/40 text-white backdrop-blur-sm">
+                                                            <Loader2 className="w-6 h-6 animate-spin text-white" />
+                                                            <span className="text-[11px] font-bold tracking-widest uppercase">Transcribing</span>
                                                         </div>
                                                     )}
                                                 </div>
                                             ) : note.video ? (
-                                                <div className="relative w-full aspect-[3/4] bg-surface-secondary overflow-hidden flex items-center justify-center">
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                <div className="relative w-full aspect-[3/4] bg-black/[0.02] overflow-hidden flex items-center justify-center">
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
                                                     <video
                                                         src={resolveAssetUrl(note.video)}
-                                                        className="w-full h-full object-contain"
+                                                        className="w-full h-full object-contain bg-black"
                                                         muted
                                                         playsInline
                                                         preload="metadata"
                                                     />
-                                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                                        <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
-                                                            <Play className="w-5 h-5 text-white ml-0.5" fill="white" />
+                                                    <div className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-xl">
+                                                            <Play className="w-5 h-5 fill-current ml-0.5" />
                                                         </div>
                                                     </div>
-                                                    {isNoteTranscribing && (
-                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
-                                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                                            <span className="text-[11px] font-medium">转录中...</span>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             ) : (
                                                 <div
                                                     className={clsx(
-                                                        'relative bg-surface-secondary flex items-center justify-center text-text-tertiary',
+                                                        'relative bg-black/[0.02] flex items-center justify-center text-text-tertiary',
                                                         (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/2.6]' : 'aspect-[3/4]'
                                                     )}
                                                 >
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
-                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') ? <FileText className="w-6 h-6" /> : <Image className="w-6 h-6" />}
+                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') ? <FileText className="w-8 h-8 opacity-20" /> : <Image className="w-8 h-8 opacity-20" />}
                                                 </div>
                                             )}
-                                            <div className="p-2.5">
-                                                <div className="text-xs font-semibold text-text-primary line-clamp-2">{note.title}</div>
-                                                <div
-                                                    className={clsx(
-                                                        'text-[11px] text-text-tertiary',
-                                                        (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1 line-clamp-5' : 'mt-1 line-clamp-3'
+                                            {!isTextArticleCard && (
+                                                <div className="p-4">
+                                                    <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{note.title}</div>
+                                                    <div
+                                                        className={clsx(
+                                                            'text-[11px] font-medium text-text-tertiary/70 leading-relaxed',
+                                                            (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1.5 line-clamp-4' : 'mt-1.5 line-clamp-2'
+                                                        )}
+                                                    >
+                                                        {notePreviewText}
+                                                    </div>
+                                                    {!isEmbedded && note.tags && note.tags.length > 0 && (
+                                                        <div className="mt-2.5 flex flex-wrap gap-1">
+                                                            {note.tags.slice(0, 3).map((tag) => (
+                                                                <span key={tag} className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
+                                                                    #{tag}
+                                                                </span>
+                                                            ))}
+                                                        </div>
                                                     )}
-                                                >
-                                                    {notePreviewText}
-                                                </div>
-                                                {!isEmbedded && note.tags && note.tags.length > 0 && (
-                                                    <div className="mt-1.5 flex flex-wrap gap-1">
-                                                        {note.tags.slice(0, 3).map((tag) => (
-                                                            <span key={tag} className={clsx('text-[10px] px-1.5 py-0.5 rounded border', getKnowledgeTagClass(tag))}>
-                                                                #{tag}
+                                                    <div className="mt-3.5 flex items-center gap-3 text-[9px] font-bold text-text-tertiary/40 flex-wrap uppercase tracking-tighter border-t border-black/[0.02] pt-3">
+                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                                                        
+                                                        {item.kind !== 'link-article' && (
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="flex items-center gap-1">
+                                                                    <Heart className="w-3 h-3 opacity-60" />
+                                                                    {note.stats?.likes || 0}
+                                                                </span>
+                                                                {typeof note.stats?.collects === 'number' && (
+                                                                    <span className="flex items-center gap-1">
+                                                                        <Star className="w-3 h-3 opacity-60" />
+                                                                        {note.stats.collects}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {note.images?.length > 0 && (
+                                                            <span className="flex items-center gap-1">
+                                                                <Image className="w-3 h-3 opacity-60" />
+                                                                {note.images.length}
                                                             </span>
-                                                        ))}
-                                                        {note.tags.length > 3 && (
-                                                            <span className="text-[10px] text-text-tertiary px-1">+{note.tags.length - 3}</span>
+                                                        )}
+                                                        
+                                                        {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
+                                                            <span className="flex items-center gap-1 max-w-full">
+                                                                <ExternalLink className="w-3 h-3 opacity-40" />
+                                                                <span className="truncate max-w-[120px]">{note.author || 'SOURCE'}</span>
+                                                            </span>
                                                         )}
                                                     </div>
-                                                )}
-                                                <div className="mt-2 flex items-center gap-2 text-[10px] text-text-tertiary flex-wrap">
-                                                    <span>{new Date(note.createdAt).toLocaleDateString()}</span>
-                                                    {isNoteTranscribing && (
-                                                        <span className="flex items-center gap-1 text-blue-600">
-                                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                                            转录中
-                                                        </span>
-                                                    )}
-                                                    {item.kind !== 'link-article' && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Heart className="w-3 h-3" />
-                                                            {note.stats?.likes || 0}
-                                                        </span>
-                                                    )}
-                                                    {typeof note.stats?.collects === 'number' && item.kind !== 'link-article' && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Star className="w-3 h-3" />
-                                                            {note.stats.collects}
-                                                        </span>
-                                                    )}
-                                                    {note.images?.length > 0 && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Image className="w-3 h-3" />
-                                                            {note.images.length}
-                                                        </span>
-                                                    )}
-                                                    {note.video && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Play className="w-3 h-3" />
-                                                            视频
-                                                        </span>
-                                                    )}
-                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
-                                                        <span className="flex items-center gap-1 max-w-full">
-                                                            <ExternalLink className="w-3 h-3" />
-                                                            <span className="truncate max-w-[120px]">{note.author || '原文链接'}</span>
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {canExpandToWechat && (
-                                                    <div className="mt-2">
-                                                        <span
-                                                            role="button"
-                                                            tabIndex={0}
-                                                            onClick={(event) => {
-                                                                event.stopPropagation();
-                                                                handleExpandToWechat(note);
-                                                            }}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter' || event.key === ' ') {
-                                                                    event.preventDefault();
+                                                    {canExpandToWechat && (
+                                                        <div className="mt-3">
+                                                            <span
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={(event) => {
                                                                     event.stopPropagation();
                                                                     handleExpandToWechat(note);
-                                                                }
-                                                            }}
-                                                            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
-                                                        >
-                                                            <Sparkles className="w-3 h-3" />
-                                                            扩写为公众号
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
+                                                                }}
+                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-extrabold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-95 shadow-sm"
+                                                            >
+                                                                <Sparkles className="w-3.5 h-3.5" />
+                                                                扩写为公众号
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </button>
                                     );
                                 })}
@@ -1965,36 +1930,36 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             {/* Xiaohongshu Note Detail Modal */}
             {selectedNote && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
                     onClick={() => setSelectedNote(null)}
                 >
                     <div
-                        className="w-full max-w-3xl mx-4 bg-surface-primary rounded-2xl border border-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col"
+                        className="w-full max-w-[860px] mx-4 bg-white rounded-[28px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] overflow-hidden max-h-[90vh] flex flex-col"
                         onClick={(event) => event.stopPropagation()}
                     >
                         {(() => {
                             const showRichArticle = Boolean(selectedNote.htmlFileUrl && selectedNote.captureKind === 'wechat-article');
                             return (
                         <>
-                        <div className="px-6 py-4 border-b border-border flex items-start justify-between">
+                        <div className="px-8 py-6 border-b border-black/[0.04] flex items-start justify-between bg-white relative z-10">
                             <div className="min-w-0">
-                                <h1 className="text-lg font-semibold text-text-primary line-clamp-2">{selectedNote.title}</h1>
-                                <div className="flex items-center gap-3 mt-1 text-xs text-text-tertiary">
-                                    <span>作者: {selectedNote.author}</span>
+                                <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedNote.title}</h1>
+                                <div className="flex flex-wrap items-center gap-4 mt-2 text-[11px] font-bold text-text-tertiary uppercase tracking-wider">
+                                    <span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5 opacity-60" /> {selectedNote.author}</span>
                                     {selectedNote.siteName && (
-                                        <span>{selectedNote.siteName}</span>
+                                        <span className="flex items-center gap-1.5"><ExternalLink className="w-3.5 h-3.5 opacity-60" /> {selectedNote.siteName}</span>
                                     )}
-                                    <span className="flex items-center gap-1">
-                                        <Heart className="w-3 h-3" /> {selectedNote.stats?.likes || 0}
+                                    <span className="flex items-center gap-1.5 text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-100">
+                                        <Heart className="w-3.5 h-3.5 fill-current" /> {selectedNote.stats?.likes || 0}
                                     </span>
                                     {typeof selectedNote.stats?.collects === 'number' && (
-                                        <span className="flex items-center gap-1">
-                                            <Star className="w-3 h-3" /> {selectedNote.stats.collects}
+                                        <span className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-100">
+                                            <Star className="w-3.5 h-3.5 fill-current" /> {selectedNote.stats.collects}
                                         </span>
                                     )}
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 ml-4">
                                 <button
                                     onClick={() => openChat(
                                         selectedNote.id,
@@ -2002,67 +1967,61 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         selectedNote.title,
                                         selectedNote.content + (selectedNote.transcript ? `\n\nVideo Transcript:\n${selectedNote.transcript}` : '')
                                     )}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
+                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
-                                    <MessageCircle className="w-3.5 h-3.5" />
-                                    AI 助手
+                                    <MessageCircle className="w-4 h-4" />
+                                    对话
                                 </button>
                                 {SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(selectedNote) && onNavigateToRedClaw && (
                                     <button
                                         onClick={() => handleExpandToWechat(selectedNote)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-500 rounded-lg hover:from-emerald-600 hover:to-teal-600 transition-all shadow-sm"
+                                        className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-emerald-500 text-white text-[13px] font-extrabold shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all active:scale-95"
                                     >
-                                        <Sparkles className="w-3.5 h-3.5" />
-                                        扩写为公众号稿件
+                                        <Sparkles className="w-4 h-4" />
+                                        扩写
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
-                                    title="保存封面为模板"
+                                    onClick={() => setSelectedNote(null)}
+                                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90"
                                 >
-                                    <BookmarkPlus className="w-3.5 h-3.5" />
-                                    存为封面模板
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-8 py-8 space-y-8 custom-scrollbar bg-white">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
+                                >
+                                    <BookmarkPlus className="w-3.5 h-3.5" /> 存为封面模板
                                 </button>
                                 <button
                                     onClick={() => void handleShowInFolder(selectedNote.folderPath)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="在文件夹中打开"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
                                 >
-                                    <FolderOpen className="w-4 h-4" />
+                                    <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
                                 </button>
                                 {selectedNote.video && !selectedNote.transcript && (
                                     <button
                                         onClick={() => handleTranscribeNote(selectedNote.id)}
                                         disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg hover:from-blue-600 hover:to-cyan-600 transition-all shadow-sm disabled:opacity-60"
-                                        title="提取文字"
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-[11px] font-bold hover:bg-blue-600 transition-all disabled:opacity-40"
                                     >
-                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? (
-                                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                        ) : (
-                                            <FileText className="w-3.5 h-3.5" />
-                                        )}
-                                        {selectedNote.transcriptionStatus === 'processing' || isTranscribing ? '转录中...' : '提取文字'}
+                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                        提取文字
                                     </button>
                                 )}
-                                <button
-                                    onClick={() => setSelectedNote(null)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="关闭"
-                                >
-                                    <X className="w-4 h-4" />
-                                </button>
                             </div>
-                        </div>
 
-                        <div className="flex-1 overflow-auto p-6 space-y-6" onClick={(event) => event.stopPropagation()}>
                             {selectedNote.video && (
-                                <div className="relative mx-auto w-full max-w-[480px]">
-                                    <div className="relative rounded-xl overflow-hidden border border-border bg-surface-secondary">
+                                <div className="relative mx-auto w-full max-w-[640px]">
+                                    <div className="relative rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl aspect-video">
                                         <video
                                             src={resolveAssetUrl(selectedNote.video)}
-                                            className="block w-full h-auto max-h-[60vh] object-contain"
+                                            className="w-full h-full object-contain"
                                             controls
                                             playsInline
                                             preload="metadata"
@@ -2073,16 +2032,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                             {!showRichArticle && selectedNote.images && selectedNote.images.length > 0 && (() => {
                                 const orderedImages = orderImages(selectedNote.images);
-                                const currentImage = orderedImages[selectedImageIndex];
-                                const aspectClass = resolveAspectClass(currentImage);
                                 return (
-                                    <div className="relative mx-auto w-full max-w-[360px]">
-                                        <div className={`relative rounded-xl overflow-hidden border border-border bg-surface-secondary ${aspectClass}`}>
+                                    <div className="relative group">
+                                        <div className="aspect-[4/3] rounded-[24px] overflow-hidden border border-black/[0.04] bg-black/[0.02]">
                                             <img
-                                                src={resolveAssetUrl(currentImage)}
-                                                alt={`图片 ${selectedImageIndex + 1}`}
-                                                className="w-full h-full object-cover"
-                                                onLoad={(event) => handleImageLoad(currentImage, event)}
+                                                src={resolveAssetUrl(orderedImages[selectedImageIndex])}
+                                                alt={`${selectedNote.title} - ${selectedImageIndex + 1}`}
+                                                className="w-full h-full object-contain"
                                                 onClick={() => setIsImagePreviewOpen(true)}
                                             />
                                         </div>
@@ -2090,18 +2046,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             <>
                                                 <button
                                                     onClick={() => setSelectedImageIndex((prev) => (prev === 0 ? orderedImages.length - 1 : prev - 1))}
-                                                    className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60"
+                                                    className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/20 backdrop-blur-xl border border-white/30 text-white flex items-center justify-center hover:bg-white/40 shadow-xl transition-all"
                                                 >
-                                                    <ChevronLeft className="w-4 h-4" />
+                                                    <ChevronLeft className="w-5 h-5" />
                                                 </button>
                                                 <button
                                                     onClick={() => setSelectedImageIndex((prev) => (prev === orderedImages.length - 1 ? 0 : prev + 1))}
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60"
+                                                    className="absolute right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/20 backdrop-blur-xl border border-white/30 text-white flex items-center justify-center hover:bg-white/40 shadow-xl transition-all"
                                                 >
-                                                    <ChevronRight className="w-4 h-4" />
+                                                    <ChevronRight className="w-5 h-5" />
                                                 </button>
-                                                <div className="absolute bottom-3 right-3 text-[11px] text-white bg-black/50 rounded-full px-2 py-0.5">
-                                                    {selectedImageIndex + 1}/{orderedImages.length}
+                                                <div className="absolute bottom-4 right-4 text-[10px] font-bold text-white bg-black/40 backdrop-blur-md rounded-lg px-2.5 py-1.5 uppercase tracking-widest border border-white/10">
+                                                    IMAGE {selectedImageIndex + 1} OF {orderedImages.length}
                                                 </div>
                                             </>
                                         )}
@@ -2110,7 +2066,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             })()}
 
                             {showRichArticle ? (
-                                <div className="rounded-xl border border-border overflow-hidden bg-white">
+                                <div className="rounded-[20px] border border-black/[0.04] overflow-hidden bg-white shadow-inner">
                                     <iframe
                                         src={resolveAssetUrl(selectedNote.htmlFileUrl)}
                                         title={selectedNote.title}
@@ -2118,39 +2074,45 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         className="block w-full h-[72vh] bg-white"
                                     />
                                 </div>
-                            ) : renderNoteBody(selectedNote)}
+                            ) : (
+                                <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-headings:font-extrabold prose-headings:tracking-tight">
+                                    {renderNoteBody(selectedNote)}
+                                </div>
+                            )}
 
                             {selectedNote.video && selectedNote.transcript && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden transition-all hover:bg-black/[0.03]">
                                     <button
                                         onClick={() => setShowTranscript(!showTranscript)}
-                                        className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
+                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary transition-colors"
                                     >
-                                        <span className="flex items-center gap-2">
-                                            <FileText className="w-4 h-4" />
-                                            视频转录
+                                        <span className="flex items-center gap-2.5">
+                                            <FileText className="w-4 h-4 text-accent-primary" />
+                                            视频转录文本
                                         </span>
-                                        <ChevronRight className={`w-4 h-4 transition-transform ${showTranscript ? 'rotate-90' : ''}`} />
+                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showTranscript ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
                                     </button>
                                     {showTranscript && (
-                                        <div className="px-4 pb-4">
-                                            <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-80 overflow-auto">
-                                                {selectedNote.transcript}
-                                            </pre>
+                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
+                                            <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
+                                                <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
+                                                    {selectedNote.transcript}
+                                                </pre>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
                             )}
                         </div>
 
-                        <div className="px-6 py-4 border-t border-border flex items-center justify-between" onClick={(event) => event.stopPropagation()}>
-                            <div className="text-xs text-text-tertiary">保存时间 {selectedNote.createdAt}</div>
+                        <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>
+                            <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-widest">SAVED ON {selectedNote.createdAt}</div>
                             <button
                                 onClick={() => handleDeleteNote(selectedNote.id)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50"
+                                className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-bold text-rose-500 hover:bg-rose-50 rounded-xl transition-all active:scale-95"
                             >
                                 <Trash2 className="w-3.5 h-3.5" />
-                                删除笔记
+                                移除记录
                             </button>
                         </div>
                         </>
@@ -2163,36 +2125,36 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             {/* YouTube Video Detail Modal */}
             {selectedVideo && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
                     onClick={() => setSelectedVideo(null)}
                 >
                     <div
-                        className="w-full max-w-4xl mx-4 bg-surface-primary rounded-2xl border border-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col"
+                        className="w-full max-w-[920px] mx-4 bg-white rounded-[32px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] overflow-hidden max-h-[90vh] flex flex-col"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="px-6 py-4 border-b border-border flex items-start justify-between">
+                        <div className="px-8 py-7 border-b border-black/[0.04] flex items-start justify-between bg-white relative z-10">
                             <div className="min-w-0 flex-1">
-                                <h1 className="text-lg font-semibold text-text-primary line-clamp-2">{selectedVideo.title}</h1>
-                                <div className="flex items-center gap-3 mt-1 text-xs text-text-tertiary">
-                                    <span>保存于 {new Date(selectedVideo.createdAt).toLocaleDateString()}</span>
+                                <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedVideo.title}</h1>
+                                <div className="flex items-center gap-4 mt-2.5 text-[11px] font-bold text-text-tertiary uppercase tracking-wider">
+                                    <span className="flex items-center gap-1.5 bg-black/[0.03] px-2 py-0.5 rounded-md">SAVED {new Date(selectedVideo.createdAt).toLocaleDateString()}</span>
                                     {selectedVideo.hasSubtitle && (
-                                        <span className="flex items-center gap-1 text-green-600">
-                                            <FileText className="w-3 h-3" /> 有字幕
+                                        <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                                            <FileText className="w-3.5 h-3.5" /> SUBTITLES INCLUDED
                                         </span>
                                     )}
                                 </div>
                                 {selectedVideo.summary && (
-                                    <div className="mt-2 text-sm text-text-secondary line-clamp-3">
+                                    <div className="mt-4 text-[13px] font-medium leading-relaxed text-text-secondary line-clamp-3 bg-black/[0.02] p-4 rounded-2xl border border-black/[0.01]">
                                         {selectedVideo.summary}
                                     </div>
                                 )}
                                 {selectedVideo.originalTitle && selectedVideo.originalTitle.trim() && selectedVideo.originalTitle !== selectedVideo.title && (
-                                    <div className="mt-1 text-xs text-text-tertiary line-clamp-2">
-                                        原始标题：{selectedVideo.originalTitle}
+                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
+                                        Original Title: {selectedVideo.originalTitle}
                                     </div>
                                 )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 ml-6">
                                 <button
                                     onClick={() => openChat(
                                         selectedVideo.id,
@@ -2200,134 +2162,125 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         selectedVideo.title,
                                         `Title: ${selectedVideo.title}\nDescription: ${selectedVideo.description || 'None'}\n\nSubtitle:\n${selectedVideo.subtitleContent || '(No subtitle)'}`
                                     )}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
+                                    className="inline-flex h-11 px-5 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
-                                    <MessageCircle className="w-3.5 h-3.5" />
-                                    AI 助手
-                                </button>
-                                <button
-                                    onClick={() => void handleShowInFolder(selectedVideo.folderPath)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="在文件夹中打开"
-                                >
-                                    <FolderOpen className="w-4 h-4" />
+                                    <MessageCircle className="w-4.5 h-4.5" />
+                                    AI 分析
                                 </button>
                                 <button
                                     onClick={() => setSelectedVideo(null)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="关闭"
+                                    className="flex h-11 w-11 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90"
                                 >
-                                    <X className="w-4 h-4" />
+                                    <X className="w-5.5 h-5.5" />
                                 </button>
                             </div>
                         </div>
 
-                        <div className="flex-1 overflow-auto p-6 space-y-6" onClick={(event) => event.stopPropagation()}>
-                            {/* Thumbnail */}
-                            <div className="relative mx-auto w-full max-w-2xl">
-                                <div className="relative rounded-xl overflow-hidden border border-border bg-surface-secondary aspect-video">
+                        <div className="flex-1 overflow-y-auto px-8 py-8 space-y-8 custom-scrollbar bg-white">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    onClick={() => void handleShowInFolder(selectedVideo.folderPath)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
+                                >
+                                    <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
+                                </button>
+                                <button
+                                    onClick={() => openYouTube(selectedVideo.videoUrl)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 text-rose-600 text-[11px] font-bold hover:bg-rose-100 border border-rose-100 transition-all"
+                                >
+                                    <ExternalLink className="w-3.5 h-3.5" /> 在 YouTube 打开
+                                </button>
+                            </div>
+
+                            <div className="relative mx-auto w-full max-w-[640px]">
+                                <div className="relative rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl aspect-video">
                                     {selectedVideo.thumbnailUrl ? (
                                         <img
                                             src={resolveAssetUrl(selectedVideo.thumbnailUrl)}
                                             alt={selectedVideo.title}
-                                            className="w-full h-full object-cover"
+                                            className="w-full h-full object-cover opacity-80"
                                         />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center text-text-tertiary">
-                                            <Play className="w-12 h-12" />
+                                            <Play className="w-12 h-12 opacity-20" />
                                         </div>
                                     )}
-                                    {/* Play button overlay */}
                                     <button
                                         onClick={() => openYouTube(selectedVideo.videoUrl)}
-                                        className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/40 transition-colors"
+                                        className="absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/40 transition-all group"
                                     >
-                                        <div className="w-16 h-16 rounded-full bg-red-600 flex items-center justify-center shadow-lg">
-                                            <Play className="w-8 h-8 text-white ml-1" fill="white" />
+                                        <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-2xl group-hover:scale-110 transition-transform duration-300">
+                                            <Play className="w-8 h-8 fill-current ml-1" />
                                         </div>
                                     </button>
                                 </div>
                             </div>
 
-                            {/* Description */}
                             {selectedVideo.description && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
-                                    <h3 className="text-sm font-semibold text-text-primary mb-2">视频描述</h3>
-                                    <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed">
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.01] p-6">
+                                    <h3 className="text-[14px] font-extrabold text-text-primary mb-4 uppercase tracking-wider">视频描述</h3>
+                                    <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed">
                                         {selectedVideo.description}
                                     </pre>
                                 </div>
                             )}
 
-                            {/* Subtitle */}
-                            {selectedVideo.hasSubtitle && selectedVideo.subtitleContent && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
+                            {selectedVideo.hasSubtitle && (
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden">
                                     <button
                                         onClick={() => setShowSubtitle(!showSubtitle)}
-                                        className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
+                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary"
                                     >
-                                        <span className="flex items-center gap-2">
-                                            <FileText className="w-4 h-4" />
+                                        <span className="flex items-center gap-2.5">
+                                            <FileText className="w-4 h-4 text-accent-primary" />
                                             字幕内容
                                         </span>
-                                        <ChevronRight className={`w-4 h-4 transition-transform ${showSubtitle ? 'rotate-90' : ''}`} />
+                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showSubtitle ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
                                     </button>
-                                    {showSubtitle && (
-                                        <div className="px-4 pb-4">
-                                            <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-80 overflow-auto">
-                                                {selectedVideo.subtitleContent}
-                                            </pre>
+                                    {(showSubtitle || (selectedVideo.hasSubtitle && !selectedVideo.subtitleContent && isSubtitleLoading)) && (
+                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
+                                            {isSubtitleLoading ? (
+                                                <div className="flex items-center gap-3 bg-white p-5 rounded-xl border border-black/[0.02]">
+                                                    <Loader2 className="w-5 h-5 animate-spin text-accent-primary" />
+                                                    <span className="text-[13px] font-bold text-accent-primary uppercase tracking-widest">Loading Subtitles...</span>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
+                                                    <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
+                                                        {selectedVideo.subtitleContent}
+                                                    </pre>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
                             )}
-                            {selectedVideo.hasSubtitle && !selectedVideo.subtitleContent && isSubtitleLoading && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
-                                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-blue-700">正在加载字幕...</span>
-                                </div>
-                            )}
 
-                            {/* No Subtitle - Retry Button */}
                             {!selectedVideo.hasSubtitle && selectedVideo.status === 'completed' && (
-                                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-2 text-yellow-700">
-                                        <FileText className="w-4 h-4" />
-                                        <span className="text-sm">该视频暂无字幕</span>
+                                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 flex items-center justify-between">
+                                    <div className="flex items-center gap-3 text-amber-700">
+                                        <FileText className="w-5 h-5 opacity-60" />
+                                        <span className="text-[13px] font-bold">该视频暂无可用字幕</span>
                                     </div>
                                     <button
                                         onClick={() => handleRetrySubtitle(selectedVideo.id)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-yellow-700 border border-yellow-400 rounded hover:bg-yellow-100 transition-colors"
+                                        className="flex items-center gap-2 px-4 py-2 text-[11px] font-bold text-amber-700 bg-white border border-amber-200 rounded-lg hover:bg-amber-50 transition-all active:scale-95"
                                     >
                                         <RefreshCw className="w-3.5 h-3.5" />
-                                        重新获取字幕
+                                        重新尝试获取
                                     </button>
-                                </div>
-                            )}
-
-                            {/* Processing Status */}
-                            {selectedVideo.status === 'processing' && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
-                                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-blue-700">正在获取字幕...</span>
                                 </div>
                             )}
                         </div>
 
-                        <div className="px-6 py-4 border-t border-border flex items-center justify-between" onClick={(event) => event.stopPropagation()}>
-                            <button
-                                onClick={() => openYouTube(selectedVideo.videoUrl)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50"
-                            >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                在 YouTube 打开
-                            </button>
+                        <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>
+                            <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-widest">YouTube Knowledge Source</div>
                             <button
                                 onClick={() => handleDeleteVideo(selectedVideo.id)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50"
+                                className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-bold text-rose-500 hover:bg-rose-50 rounded-xl transition-all active:scale-95"
                             >
                                 <Trash2 className="w-3.5 h-3.5" />
-                                删除视频
+                                移除视频
                             </button>
                         </div>
                     </div>

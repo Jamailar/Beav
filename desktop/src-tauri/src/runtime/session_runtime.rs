@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use tauri::State;
 
 pub const SESSION_CONTEXT_TAIL_MESSAGES: usize = 8;
-pub const SESSION_COMPACT_THRESHOLD_MESSAGES: usize = 12;
+pub const SESSION_AUTO_COMPACT_MIN_MESSAGES: usize = 12;
+pub const DEFAULT_SESSION_COMPACT_TARGET_TOKENS: i64 = 256_000;
+pub const MIN_SESSION_COMPACT_TARGET_TOKENS: i64 = 16_000;
 const SESSION_CONTEXT_SUMMARY_MAX_CHARS: usize = 1200;
 const SESSION_BUNDLE_MAX_SESSIONS: usize = 200;
 
@@ -556,13 +558,12 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
         .iter()
         .map(|item| item.content.chars().count() as i64)
         .sum::<i64>();
+    let estimated_total_tokens = estimate_tokens_from_chars(total_chars);
     let context = store
         .session_context_records
         .iter()
         .find(|item| item.session_id == session_id);
-    let estimated_total_tokens = context
-        .map(|item| item.estimated_total_tokens)
-        .unwrap_or_else(|| estimate_tokens_from_chars(total_chars));
+    let compact_threshold = session_compact_target_tokens(store);
     let compacted_message_count = context
         .map(|item| item.compacted_message_count)
         .unwrap_or(0);
@@ -571,6 +572,17 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
         .map(|item| Value::String(item.updated_at.clone()))
         .unwrap_or(Value::Null);
     let summary_chars = context.map(|item| item.summary_chars).unwrap_or(0);
+    let estimated_effective_tokens = estimate_tokens_from_chars(if compacted_message_count > 0 {
+        summary_chars
+            + messages
+                .iter()
+                .rev()
+                .take(SESSION_CONTEXT_TAIL_MESSAGES)
+                .map(|item| item.content.chars().count() as i64)
+                .sum::<i64>()
+    } else {
+        total_chars
+    });
     let effective_messages = if compacted_message_count > 0 {
         compacted_message_count.min(1) + messages.len().min(SESSION_CONTEXT_TAIL_MESSAGES) as i64
     } else {
@@ -580,28 +592,16 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
     json!({
         "success": true,
         "estimatedTotalTokens": estimated_total_tokens,
-        "estimatedEffectiveTokens": estimate_tokens_from_chars(
-            if compacted_message_count > 0 {
-                summary_chars
-                    + messages
-                        .iter()
-                        .rev()
-                        .take(SESSION_CONTEXT_TAIL_MESSAGES)
-                        .map(|item| item.content.chars().count() as i64)
-                        .sum::<i64>()
-            } else {
-                total_chars
-            }
-        ),
+        "estimatedEffectiveTokens": estimated_effective_tokens,
         "totalMessages": messages.len(),
         "effectiveMessages": effective_messages,
         "compactedMessageCount": compacted_message_count,
         "recentMessageCount": messages.len().min(SESSION_CONTEXT_TAIL_MESSAGES),
-        "compactThreshold": SESSION_COMPACT_THRESHOLD_MESSAGES,
-        "compactRatio": if messages.is_empty() {
+        "compactThreshold": compact_threshold,
+        "compactRatio": if compact_threshold <= 0 {
             0.0
         } else {
-            compacted_message_count as f64 / messages.len() as f64
+            estimated_effective_tokens as f64 / compact_threshold as f64
         },
         "compactRounds": compact_rounds,
         "compactUpdatedAt": compact_updated_at,
@@ -616,7 +616,17 @@ pub fn update_session_context_record(
     force: bool,
 ) -> Option<ChatSessionContextRecord> {
     let messages = chat_messages_for_session(store, session_id);
-    if messages.len() < SESSION_COMPACT_THRESHOLD_MESSAGES {
+    let total_chars = messages
+        .iter()
+        .map(|item| item.content.chars().count() as i64)
+        .sum::<i64>();
+    let estimated_total_tokens = estimate_tokens_from_chars(total_chars);
+    let compact_target_tokens = session_compact_target_tokens(store);
+    let meets_auto_threshold = messages.len() >= SESSION_AUTO_COMPACT_MIN_MESSAGES
+        && estimated_total_tokens >= compact_target_tokens;
+    let can_force_compact = messages.len() > SESSION_CONTEXT_TAIL_MESSAGES;
+
+    if (!force && !meets_auto_threshold) || (force && !can_force_compact) {
         store
             .session_context_records
             .retain(|item| item.session_id != session_id);
@@ -647,12 +657,7 @@ pub fn update_session_context_record(
             (Some(item), false) => item.compact_rounds.max(1),
             (None, _) => 1,
         },
-        estimated_total_tokens: estimate_tokens_from_chars(
-            messages
-                .iter()
-                .map(|item| item.content.chars().count() as i64)
-                .sum::<i64>(),
-        ),
+        estimated_total_tokens,
         first_user_message: messages
             .iter()
             .find(|item| item.role == "user")
@@ -907,6 +912,24 @@ fn snippet(value: &str, limit: usize) -> String {
 
 fn estimate_tokens_from_chars(chars: i64) -> i64 {
     ((chars.max(0) as f64) / 4.0).ceil() as i64
+}
+
+fn session_compact_target_tokens(store: &AppStore) -> i64 {
+    store
+        .settings
+        .get("redclaw_compact_target_tokens")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|item| i64::try_from(item).ok()))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|item| item.trim().parse::<i64>().ok())
+                })
+        })
+        .map(|value| value.max(MIN_SESSION_COMPACT_TARGET_TOKENS))
+        .unwrap_or(DEFAULT_SESSION_COMPACT_TARGET_TOKENS)
 }
 
 fn compare_created_at(left: &str, right: &str) -> std::cmp::Ordering {
@@ -1472,6 +1495,10 @@ mod tests {
         }
     }
 
+    fn large_test_message(index: usize) -> String {
+        format!("message {index} {}", "x".repeat(5000))
+    }
+
     #[test]
     fn session_list_item_value_includes_counts_and_summary() {
         let mut store = crate::AppStore::default();
@@ -1714,17 +1741,24 @@ mod tests {
             usage.get("recentMessageCount").and_then(Value::as_u64),
             Some(8)
         );
+        assert_eq!(
+            usage.get("compactThreshold").and_then(Value::as_i64),
+            Some(DEFAULT_SESSION_COMPACT_TARGET_TOKENS)
+        );
     }
 
     #[test]
     fn runtime_context_messages_prepend_resume_summary_when_snapshot_exists() {
         let mut store = crate::AppStore::default();
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
         for index in 0..14 {
             let role = if index % 2 == 0 { "user" } else { "assistant" };
             store.chat_messages.push(test_chat_message(
                 "session-ctx",
                 role,
-                &format!("message {index}"),
+                &large_test_message(index),
                 &index.to_string(),
             ));
         }
@@ -1741,8 +1775,11 @@ mod tests {
         assert!(summary.contains("Latest archived user intent: message 4"));
         assert!(summary.contains("Latest archived assistant reply: message 5"));
         assert_eq!(
-            messages[1].get("content").and_then(Value::as_str),
-            Some("message 6")
+            messages[1]
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|item| item.starts_with("message 6 ")),
+            Some(true)
         );
     }
 
@@ -1780,12 +1817,15 @@ mod tests {
     fn session_resume_value_includes_context_and_resume_messages() {
         let mut store = crate::AppStore::default();
         store.chat_sessions.push(test_session("session-1"));
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
         for index in 0..14 {
             let role = if index % 2 == 0 { "user" } else { "assistant" };
             store.chat_messages.push(test_chat_message(
                 "session-1",
                 role,
-                &format!("message {index}"),
+                &large_test_message(index),
                 &index.to_string(),
             ));
         }
@@ -1801,6 +1841,76 @@ mod tests {
                 .map(|items| items.len()),
             Some(9)
         );
+    }
+
+    #[test]
+    fn auto_compaction_requires_token_threshold_but_manual_compaction_still_works() {
+        let mut store = crate::AppStore::default();
+        for index in 0..14 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            store.chat_messages.push(test_chat_message(
+                "session-compact-threshold",
+                role,
+                &format!("short message {index}"),
+                &index.to_string(),
+            ));
+        }
+
+        assert!(update_session_context_record(
+            &mut store,
+            "session-compact-threshold",
+            "auto",
+            false,
+        )
+        .is_none());
+
+        let manual =
+            update_session_context_record(&mut store, "session-compact-threshold", "manual", true)
+                .expect(
+                "manual compaction should archive history once there are more than tail messages",
+            );
+        assert_eq!(manual.compacted_message_count, 6);
+    }
+
+    #[test]
+    fn context_usage_uses_effective_tokens_against_configured_threshold() {
+        let mut store = crate::AppStore::default();
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
+        for index in 0..14 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            store.chat_messages.push(test_chat_message(
+                "session-usage",
+                role,
+                &large_test_message(index),
+                &index.to_string(),
+            ));
+        }
+
+        let record = update_session_context_record(&mut store, "session-usage", "auto", false)
+            .expect("auto compaction should trigger once tokens exceed threshold");
+        let usage = session_context_usage_value(&store, "session-usage");
+        let effective_tokens = usage
+            .get("estimatedEffectiveTokens")
+            .and_then(Value::as_i64)
+            .expect("effective tokens should be present");
+        let compact_ratio = usage
+            .get("compactRatio")
+            .and_then(Value::as_f64)
+            .expect("compact ratio should be present");
+
+        assert_eq!(
+            usage.get("compactThreshold").and_then(Value::as_i64),
+            Some(MIN_SESSION_COMPACT_TARGET_TOKENS)
+        );
+        assert_eq!(
+            usage.get("estimatedTotalTokens").and_then(Value::as_i64),
+            Some(record.estimated_total_tokens)
+        );
+        assert!(effective_tokens < record.estimated_total_tokens);
+        assert!(compact_ratio > 0.0);
+        assert!(compact_ratio < 1.0);
     }
 
     #[test]

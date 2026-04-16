@@ -801,6 +801,7 @@ declare global {
           compactRounds?: number;
           compactUpdatedAt?: string | null;
           estimatedTotalTokens?: number;
+          estimatedEffectiveTokens?: number;
           compactSummaryTokens?: number;
           activeHistoryTokens?: number;
           compactThreshold?: number;

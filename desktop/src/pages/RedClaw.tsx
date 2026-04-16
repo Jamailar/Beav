@@ -49,6 +49,18 @@ interface RedClawProps {
     isActive?: boolean;
 }
 
+function redClawLastSessionStorageKey(spaceId: string): string {
+    const normalized = String(spaceId || 'default').trim() || 'default';
+    return `redclaw:lastSession:${normalized}`;
+}
+
+function readRedClawLastSessionId(spaceId: string): string | null {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem(redClawLastSessionStorageKey(spaceId));
+    const sessionId = String(raw || '').trim();
+    return sessionId || null;
+}
+
 export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWorkboard, isActive = true }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -116,6 +128,12 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
     }, [activeSessionId]);
 
     useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!activeSpaceId || !activeSessionId) return;
+        localStorage.setItem(redClawLastSessionStorageKey(activeSpaceId), activeSessionId);
+    }, [activeSessionId, activeSpaceId]);
+
+    useEffect(() => {
         sessionListRef.current = sessionList;
     }, [sessionList]);
 
@@ -147,12 +165,15 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
             ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName }) as ContextChatSessionListItem[];
 
             items = Array.isArray(items) ? sortContextSessionItems(items) : [];
+            const rememberedSessionId = readRedClawLastSessionId(nextActiveSpaceId);
 
             let nextActiveSessionId =
                 options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
                     ? options.preferredSessionId
                     : activeSessionIdRef.current && items.some((item) => item.id === activeSessionIdRef.current)
                         ? activeSessionIdRef.current
+                        : rememberedSessionId && items.some((item) => item.id === rememberedSessionId)
+                            ? rememberedSessionId
                         : items[0]?.id || null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
@@ -462,6 +483,9 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
         setHistoryLoading(true);
         try {
             await window.ipcRenderer.chat.deleteSession(targetSessionId);
+            if (typeof window !== 'undefined' && readRedClawLastSessionId(nextActiveSpaceId) === targetSessionId) {
+                localStorage.removeItem(redClawLastSessionStorageKey(nextActiveSpaceId));
+            }
             const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
             setSessionList(remaining);
 
