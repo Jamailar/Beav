@@ -275,8 +275,32 @@ select {
   }
 }
 
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
 .animate-slide-in-right {
   animation: slide-in-right 0.2s ease-out;
+}
+
+@keyframes slide-in-left-refined {
+  from {
+    transform: translateX(-20px) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-left-refined {
+  animation: slide-in-left-refined 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .ui-switch-track {

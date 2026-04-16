@@ -29,127 +29,130 @@ export function RedClawHistoryDrawer({
 }: RedClawHistoryDrawerProps) {
     return (
         <>
-            <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+            <div className="absolute top-4 left-5 z-30 flex items-center gap-2">
                 <button
                     type="button"
                     onClick={onToggleOpen}
                     className={clsx(
-                        'flex items-center gap-2 rounded-full border px-3 py-2 text-xs shadow-sm backdrop-blur transition-all',
+                        'flex items-center gap-2 rounded-xl border border-white/40 px-3.5 py-1.5 text-[12px] font-bold shadow-sm backdrop-blur-xl transition-all active:scale-95',
                         open
-                            ? 'border-accent-primary/40 bg-surface-primary/96 text-accent-primary'
-                            : 'border-border bg-surface-primary/90 text-text-secondary hover:border-accent-primary/30 hover:text-text-primary'
+                            ? 'bg-accent-primary text-white border-transparent'
+                            : 'bg-white/70 text-text-secondary hover:bg-white/90 hover:text-text-primary'
                     )}
                     title="查看历史对话"
                     aria-label="查看历史对话"
                 >
-                    <History className="w-4 h-4" />
-                    <span className="hidden sm:inline">历史对话</span>
+                    <History className="w-3.5 h-3.5" />
+                    <span>历史</span>
                 </button>
             </div>
+
             {open && (
                 <div className="absolute inset-0 z-40">
                     <button
                         type="button"
-                        className="absolute inset-0 bg-black/8 backdrop-blur-[1px]"
+                        className="absolute inset-0 bg-black/[0.02] backdrop-blur-[2px] transition-opacity"
                         aria-label="关闭历史对话抽屉"
                         onClick={onClose}
                     />
-                    <div className="absolute right-4 top-4 bottom-4 w-[360px] max-w-[calc(100%-2rem)] rounded-[28px] border border-border bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(246,243,238,0.98))] shadow-[0_24px_80px_rgba(33,24,18,0.18)] backdrop-blur-xl overflow-hidden">
-                        <div className="flex h-full flex-col">
-                            <div className="border-b border-border/80 px-4 py-4 bg-surface-primary/72">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <div className="text-sm font-semibold text-text-primary">历史对话</div>
-                                        <div className="mt-1 text-[11px] text-text-tertiary">仅当前空间 · {activeSpaceName}</div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
+                    
+                    <div className="absolute left-4 top-4 bottom-4 w-[320px] max-w-[calc(100%-2rem)] rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.12)] backdrop-blur-[40px] overflow-hidden flex flex-col animate-slide-in-left-refined">
+                        <div className="relative flex h-full flex-col">
+                            {/* Header - 移除空间名，更紧凑 */}
+                            <div className="px-5 pt-5 pb-2">
+                                <div className="flex items-center justify-between">
+                                    <h2 className="text-[15px] font-extrabold tracking-tight text-text-primary">会话历史</h2>
+                                    <div className="flex items-center gap-1.5">
                                         <button
                                             type="button"
                                             onClick={() => void onCreateSession()}
                                             disabled={historyLoading}
-                                            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-[11px] text-text-secondary transition-colors hover:border-accent-primary/40 hover:text-accent-primary disabled:opacity-60"
+                                            className="flex h-7 items-center gap-1 rounded-lg bg-text-primary px-2.5 text-[11px] font-bold text-white transition-all hover:bg-text-primary/90 active:scale-95 disabled:opacity-40"
                                         >
-                                            {historyLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                                            新对话
+                                            <Plus className="w-3.5 h-3.5" />
+                                            新会话
                                         </button>
                                         <button
                                             type="button"
                                             onClick={onClose}
-                                            className="rounded-full border border-transparent p-1.5 text-text-tertiary transition-colors hover:border-border hover:bg-surface-primary hover:text-text-primary"
-                                            title="关闭历史对话"
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary"
                                         >
-                                            <X className="w-4 h-4" />
+                                            <X className="w-3.5 h-3.5" />
                                         </button>
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex-1 overflow-y-auto px-3 py-3">
+
+                            {/* Content Section - 高密度列表 */}
+                            <div className="flex-1 overflow-y-auto px-2 custom-scrollbar">
                                 {historyLoading && sessionList.length === 0 ? (
-                                    <div className="flex h-full items-center justify-center text-text-tertiary">
-                                        <div className="flex flex-col items-center gap-2">
-                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                            <span className="text-xs">正在加载历史对话...</span>
-                                        </div>
+                                    <div className="flex h-full items-center justify-center py-10">
+                                        <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />
                                     </div>
                                 ) : sessionList.length === 0 ? (
-                                    <div className="flex h-full flex-col items-center justify-center rounded-[24px] border border-dashed border-border/80 bg-surface-primary/70 px-6 text-center">
-                                        <div className="text-sm font-medium text-text-primary">暂无历史对话</div>
-                                        <div className="mt-2 text-xs leading-5 text-text-tertiary">
-                                            当前空间还没有 RedClaw 会话，点击右上角新对话立即开始。
-                                        </div>
+                                    <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+                                        <History className="w-8 h-8 text-accent-primary/20 mb-3" />
+                                        <h3 className="text-[13px] font-bold text-text-primary">暂无记录</h3>
                                     </div>
                                 ) : (
-                                    <div className="space-y-2">
+                                    <div className="space-y-0.5 pb-6">
                                         {sessionList.map((session) => {
-                                            const isActiveSession = session.id === activeSessionId;
-                                            const sessionTitle = session.chatSession?.title?.trim() || '新对话';
-                                            const sessionUpdatedAt = formatDateTime(session.chatSession?.updatedAt || null);
-                                            const sessionSummary = session.summary?.trim() || '还没有摘要，进入会话后开始继续。';
+                                            const isActive = session.id === activeSessionId;
+                                            const title = session.chatSession?.title?.trim() || '未命名会话';
+                                            const time = formatDateTime(session.chatSession?.updatedAt || null);
+                                            const summary = session.summary?.trim();
+                                            
                                             return (
                                                 <div
                                                     key={session.id}
                                                     role="button"
                                                     tabIndex={0}
                                                     onClick={() => onSwitchSession(session.id)}
-                                                    onKeyDown={(event) => {
-                                                        if (event.key === 'Enter' || event.key === ' ') {
-                                                            event.preventDefault();
-                                                            onSwitchSession(session.id);
-                                                        }
-                                                    }}
+                                                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSwitchSession(session.id)}
                                                     className={clsx(
-                                                        'group w-full rounded-[22px] border px-4 py-3 text-left transition-all',
-                                                        isActiveSession
-                                                            ? 'border-accent-primary/40 bg-accent-primary/8 shadow-[0_8px_24px_rgba(166,84,32,0.12)]'
-                                                            : 'border-border bg-surface-primary/72 hover:border-text-tertiary/30 hover:bg-surface-primary'
+                                                        'group relative w-full rounded-lg px-3 py-2.5 text-left transition-all duration-200 active:scale-[0.98]',
+                                                        isActive
+                                                            ? 'bg-white shadow-sm ring-1 ring-black/[0.03]'
+                                                            : 'hover:bg-white/40'
                                                     )}
                                                 >
-                                                    <div className="flex items-start gap-3">
+                                                    {isActive && (
+                                                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-accent-primary rounded-r-full" />
+                                                    )}
+                                                    
+                                                    <div className="flex items-start justify-between gap-3">
                                                         <div className="min-w-0 flex-1">
-                                                            <div className="flex items-center gap-2">
-                                                                <div className="truncate text-sm font-medium text-text-primary">{sessionTitle}</div>
-                                                                {isActiveSession && (
-                                                                    <span className="rounded-full bg-accent-primary/12 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
-                                                                        当前
-                                                                    </span>
+                                                            <h4 className={clsx(
+                                                                'truncate text-[13px] font-bold leading-tight transition-colors',
+                                                                isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                                            )}>
+                                                                {title}
+                                                            </h4>
+                                                            
+                                                            <div className="mt-0.5 flex items-center gap-1.5 text-[9px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
+                                                                <span>{time}</span>
+                                                                {isActive && (
+                                                                    <span className="text-accent-primary uppercase tracking-normal">● Online</span>
                                                                 )}
                                                             </div>
-                                                            <div className="mt-1 text-[11px] text-text-tertiary">{sessionUpdatedAt}</div>
-                                                            <div className="mt-2 line-clamp-2 text-xs leading-5 text-text-secondary">
-                                                                {sessionSummary}
-                                                            </div>
+                                                            
+                                                            {summary && (
+                                                                <p className="mt-1.5 line-clamp-1 text-[11px] leading-normal text-text-secondary/70 font-medium">
+                                                                    {summary}
+                                                                </p>
+                                                            )}
                                                         </div>
+                                                        
                                                         <button
                                                             type="button"
-                                                            onClick={(event) => {
-                                                                event.stopPropagation();
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
                                                                 void onDeleteSession(session.id);
                                                             }}
-                                                            className="mt-0.5 rounded-full border border-transparent p-1.5 text-text-tertiary opacity-0 transition-all hover:border-red-500/20 hover:bg-red-500/8 hover:text-red-500 group-hover:opacity-100"
-                                                            title="删除对话"
-                                                            aria-label={`删除对话 ${sessionTitle}`}
+                                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                                                            title="移除"
                                                         >
-                                                            <Trash2 className="w-3.5 h-3.5" />
+                                                            <Trash2 className="w-3 h-3" />
                                                         </button>
                                                     </div>
                                                 </div>
@@ -158,6 +161,13 @@ export function RedClawHistoryDrawer({
                                     </div>
                                 )}
                             </div>
+                            
+                            {/* Footer hint */}
+                            <div className="px-5 py-3 border-t border-black/[0.02]">
+                                <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
+                                    LexBox Engine
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -165,3 +175,5 @@ export function RedClawHistoryDrawer({
         </>
     );
 }
+
+

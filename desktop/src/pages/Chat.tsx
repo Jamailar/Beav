@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
-import { Send, Terminal, Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Users, Paperclip, FileX, Square } from 'lucide-react';
+import { Send, Terminal, Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Users, Paperclip, FileX, Square, MessageSquarePlus, Heart } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
@@ -49,6 +49,7 @@ interface ChatProps {
   welcomeTitle?: string;
   welcomeSubtitle?: string;
   welcomeIconSrc?: string;
+  welcomeActions?: Array<{ label: string; text?: string; url?: string; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
@@ -389,6 +390,7 @@ export function Chat({
   welcomeTitle = '有什么可以帮您？',
   welcomeSubtitle = '我可以帮您阅读和编辑稿件、分析内容、提供创作建议',
   welcomeIconSrc,
+  welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
   allowFileUpload = true,
@@ -2008,6 +2010,39 @@ export function Chat({
     </div>
   ) : null;
 
+  const welcomeActionsBlock = welcomeActions && welcomeActions.length > 0 ? (
+    <div className="flex items-center justify-center gap-6">
+      {welcomeActions.map((action) => (
+        <div
+          key={action.label}
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if (action.url) {
+              window.open(action.url, '_blank');
+            } else if (action.text) {
+              sendMessage(action.text);
+            }
+          }}
+          className={clsx(
+            'group inline-flex items-center justify-center h-[36px] min-w-[36px] max-w-[36px] px-0 rounded-full border border-black/[0.04] bg-white/70 cursor-pointer overflow-hidden whitespace-nowrap transition-[max-width,padding,background-color,border-color,box-shadow] duration-500 ease-in-out hover:max-w-[200px] hover:px-4 hover:justify-start hover:gap-2 hover:bg-white hover:border-accent-primary/20 hover:shadow-md active:scale-95',
+            darkEmbedded && 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
+          )}
+        >
+          <div className={clsx(
+            'flex-shrink-0 flex items-center justify-center w-5 h-5 transition-colors duration-300',
+            action.color || (darkEmbedded ? 'text-white/60' : 'text-text-tertiary group-hover:text-accent-primary')
+          )}>
+            {action.icon || <Sparkles className="w-4 h-4" />}
+          </div>
+          <span className="opacity-0 max-w-0 overflow-hidden text-[13px] font-bold text-text-secondary group-hover:opacity-100 group-hover:max-w-[150px] transition-all duration-500 ease-in-out">
+            {action.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
   const emptyComposerForm = (
     <form onSubmit={handleSubmit} className="relative w-full">
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
@@ -2279,41 +2314,23 @@ export function Chat({
 
         {/* Content Area */}
         {isEmptySession && !dockedEmptyState ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto">
+          <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative">
             <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
               {/* Logo/Icon */}
               {showWelcomeHeader ? (
                 <>
-                  <div className="flex justify-center">
-                    {welcomeIconSrc ? (
-                      <img
-                        src={welcomeIconSrc}
-                        alt={welcomeTitle}
-                        className="w-24 h-24 object-contain"
-                      />
-                    ) : (
-                      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-                        <Sparkles className="w-8 h-8 text-white" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
-                    {welcomeSubtitle ? (
-                      <p className={clsx('text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>{welcomeSubtitle}</p>
-                    ) : null}
-                  </div>
+                  {welcomeHeaderBlock}
                 </>
               ) : null}
-
               {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
                 <div className="flex flex-wrap justify-center gap-2 text-xs">
                   {welcomeShortcuts.map((shortcut) => (
                     <button
                       key={shortcut.label}
                       onClick={() => sendMessage(shortcut.text)}
-                      className="px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer"
+                      className={darkEmbedded
+                        ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
+                        : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
                     >
                       {shortcut.label}
                     </button>
@@ -2438,6 +2455,12 @@ export function Chat({
                 )}
               </form>
             </div>
+            {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
+            <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
+              <div className="pointer-events-auto">
+                {welcomeActionsBlock}
+              </div>
+            </div>
           </div>
         ) : (
           <>
@@ -2447,6 +2470,7 @@ export function Chat({
                 {dockedEmptyState ? (
                   <div className="text-center space-y-6 py-10">
                     {welcomeHeaderBlock}
+                    {welcomeActionsBlock}
                     {welcomeShortcutsBlock}
                   </div>
                 ) : (

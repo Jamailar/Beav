@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { ChevronLeft, Loader2 } from 'lucide-react';
+import { Loader2, Sparkles, MessageSquarePlus, Heart } from 'lucide-react';
+import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -884,6 +885,21 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
         window.addEventListener('mouseup', handleMouseUp);
     }, [sidebarWidth]);
 
+    const welcomeActions = useMemo(() => [
+        {
+            label: '想吐槽或提建议?',
+            url: 'https://github.com/Jamailar/RedBox/issues',
+            icon: <MessageSquarePlus className="w-5 h-5" />,
+        },
+        {
+            label: '喜欢我就点个 Star 吧',
+            url: 'https://github.com/Jamailar/RedBox',
+            icon: <Heart className="w-5 h-5 fill-current" />,
+            color: 'text-rose-500'
+        }
+    ], []);
+
+
     return (
         <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
             <div className="relative flex-1 min-w-0 overflow-hidden">
@@ -914,6 +930,7 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
                                 welcomeTitle="RedClaw 自媒体AI工作台"
                                 welcomeSubtitle=""
                                 welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}
+                                welcomeActions={welcomeActions}
                                 contentLayout={sidebarCollapsed ? 'wide' : 'default'}
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}
@@ -933,20 +950,23 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWo
                                 onSwitchSession={switchSession}
                                 onDeleteSession={(sessionId) => void deleteHistorySession(sessionId)}
                             />
-                            {sidebarCollapsed && (
+                            <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        setSidebarCollapsed(false);
-                                        setSidebarTab('skills');
-                                    }}
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 z-20 h-14 w-6 rounded-l-lg border border-r-0 border-border bg-surface-primary/92 text-text-tertiary shadow-sm backdrop-blur transition-colors hover:text-accent-primary hover:border-accent-primary/40"
-                                    title="展开 RedClaw 侧栏"
-                                    aria-label="展开 RedClaw 侧栏"
+                                    onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                                    className={clsx(
+                                        'flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium shadow-sm backdrop-blur-md transition-all active:scale-95',
+                                        !sidebarCollapsed
+                                            ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
+                                            : 'border-border bg-surface-primary/80 text-text-secondary hover:border-accent-primary/30 hover:bg-surface-primary hover:text-text-primary'
+                                    )}
+                                    title={sidebarCollapsed ? "展开技能面板" : "收起技能面板"}
+                                    aria-label="切换技能面板"
                                 >
-                                    <ChevronLeft className="w-4 h-4 mx-auto" />
+                                    <Sparkles className="w-4 h-4" />
+                                    <span className="hidden sm:inline">技能</span>
                                 </button>
-                            )}
+                            </div>
                         </div>
                     </div>
                 ) : (
