@@ -282,11 +282,14 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
     ensure_builtin_skills_present(&mut store);
+    crate::session_manager::enforce_default_retention(&mut store);
     store
 }
 
 pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
-    let serialized = serde_json::to_string_pretty(store).map_err(|error| error.to_string())?;
+    let mut snapshot = store.clone();
+    crate::session_manager::enforce_default_retention(&mut snapshot);
+    let serialized = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -299,8 +302,15 @@ pub fn with_store_mut<T>(
 ) -> Result<T, String> {
     let mut store = state.store.lock().map_err(|_| "状态锁已损坏".to_string())?;
     let result = mutator(&mut store)?;
+    let retention = crate::session_manager::enforce_default_retention(&mut store);
     let snapshot = store.clone();
     drop(store);
+    for session_id in retention.removed_session_ids {
+        let _ = crate::runtime::remove_session_bundle(state, &session_id);
+        if let Ok(mut guard) = state.chat_runtime_states.lock() {
+            guard.remove(&session_id);
+        }
+    }
     schedule_store_persist(state, snapshot);
     Ok(result)
 }

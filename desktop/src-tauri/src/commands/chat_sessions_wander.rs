@@ -1,13 +1,14 @@
-use crate::commands::chat_state::{
-    apply_context_binding_metadata, build_context_session_id, diagnostics_session_defaults,
-    session_matches_context_binding,
-};
+use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, checkpoint_count_for_session, session_context_usage_value,
-    session_detail_value, session_list_item_value, session_resume_value, tool_results_for_session,
-    trace_for_session, transcript_count_for_session, transcript_resume_messages,
-    transcript_session_list_value, transcript_session_meta_by_id, update_session_context_record,
+    append_compact_boundary_entry, session_context_usage_value, tool_results_for_session,
+    trace_for_session, transcript_resume_messages, transcript_session_list_value,
+    transcript_session_meta_by_id, update_session_context_record,
+};
+use crate::session_manager::{
+    create_context_session, create_session, delete_session, ensure_context_session, fork_session,
+    list_context_sessions, list_sessions, resolve_resume_target_session_id, session_detail_value,
+    session_list_item_value, session_resume_value, update_metadata,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -513,21 +514,14 @@ pub fn handle_chat_sessions_wander_channel(
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
-                let session_id = build_context_session_id(&context_type, &context_id);
                 let session = with_store_mut(state, |store| {
-                    let (session, _) = ensure_chat_session(
-                        &mut store.chat_sessions,
-                        Some(session_id),
-                        Some(title),
-                    );
-                    apply_context_binding_metadata(
-                        session,
+                    Ok(ensure_context_session(
+                        store,
                         &context_type,
                         &context_id,
+                        title,
                         initial_context.as_deref(),
-                    );
-                    session.updated_at = now_iso();
-                    Ok(session.clone())
+                    ))
                 })?;
                 Ok(json!(session))
             }
@@ -535,18 +529,15 @@ pub fn handle_chat_sessions_wander_channel(
                 let context_id = payload_string(&payload, "contextId").unwrap_or_default();
                 let context_type = payload_string(&payload, "contextType").unwrap_or_default();
                 with_store(state, |store| {
-                    let mut items = store
-                        .chat_sessions
-                        .iter()
-                        .filter(|session| {
-                            session_matches_context_binding(session, &context_type, &context_id)
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    let items = list_context_sessions(&store, &context_type, &context_id);
                     Ok(json!(items
                         .iter()
-                        .map(|session| session_list_item_value(&store, session))
+                        .map(|session| {
+                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
+                                .ok()
+                                .flatten();
+                            session_list_item_value(&store, session, transcript_meta.as_ref())
+                        })
                         .collect::<Vec<_>>()))
                 })
             }
@@ -559,22 +550,13 @@ pub fn handle_chat_sessions_wander_channel(
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
                 let session = with_store_mut(state, |store| {
-                    let timestamp = now_iso();
-                    let mut session = ChatSessionRecord {
-                        id: make_id("session"),
-                        title,
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp,
-                        metadata: None,
-                    };
-                    apply_context_binding_metadata(
-                        &mut session,
+                    Ok(create_context_session(
+                        store,
                         &context_type,
                         &context_id,
+                        title,
                         initial_context.as_deref(),
-                    );
-                    store.chat_sessions.push(session.clone());
-                    Ok(session)
+                    ))
                 })?;
                 Ok(json!(session))
             }
@@ -586,25 +568,18 @@ pub fn handle_chat_sessions_wander_channel(
                 let context_id =
                     payload_string(&payload, "contextId").unwrap_or(default_context_id);
                 let title = payload_string(&payload, "title").unwrap_or(default_title);
-                let session_id = build_context_session_id(&context_type, &context_id);
                 let session = with_store_mut(state, |store| {
-                    let (session, _) = ensure_chat_session(
-                        &mut store.chat_sessions,
-                        Some(session_id),
-                        Some(title.clone()),
-                    );
-                    session.title = title.clone();
-                    apply_context_binding_metadata(session, &context_type, &context_id, None);
-                    session.updated_at = now_iso();
-                    Ok(session.clone())
+                    Ok(ensure_context_session(
+                        store,
+                        &context_type,
+                        &context_id,
+                        title,
+                        None,
+                    ))
                 })?;
                 Ok(json!(session))
             }
-            "chat:get-sessions" => with_store(state, |store| {
-                let mut sessions = store.chat_sessions.clone();
-                sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                Ok(json!(sessions))
-            }),
+            "chat:get-sessions" => with_store(state, |store| Ok(json!(list_sessions(&store)))),
             "sessions:list" => with_store(state, |store| {
                 let started_at = now_ms();
                 let request_id = format!("sessions:list:{}", started_at);
@@ -617,11 +592,14 @@ pub fn handle_chat_sessions_wander_channel(
                     })
                     .unwrap_or_default();
                 let items: Vec<Value> = if transcript_items.is_empty() {
-                    let mut sessions = store.chat_sessions.clone();
-                    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    sessions
+                    list_sessions(&store)
                         .into_iter()
-                        .map(|session| session_list_item_value(&store, &session))
+                        .map(|session| {
+                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
+                                .ok()
+                                .flatten();
+                            session_list_item_value(&store, &session, transcript_meta.as_ref())
+                        })
                         .collect()
                 } else {
                     let mut merged = transcript_items;
@@ -634,7 +612,12 @@ pub fn handle_chat_sessions_wander_channel(
                         .chat_sessions
                         .iter()
                         .filter(|session| !known_ids.contains(&session.id))
-                        .map(|session| session_list_item_value(&store, session))
+                        .map(|session| {
+                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
+                                .ok()
+                                .flatten();
+                            session_list_item_value(&store, session, transcript_meta.as_ref())
+                        })
                         .collect::<Vec<_>>();
                     merged.append(&mut store_only);
                     merged.sort_by(|a, b| {
@@ -663,92 +646,75 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(json!(items))
             }),
             "sessions:get" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| Ok(session_detail_value(&store, &session_id)))
+                let requested_session_id = payload_string(&payload, "sessionId");
+                with_store(state, |store| {
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(Value::Null);
+                    };
+                    let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                        .ok()
+                        .flatten();
+                    Ok(session_detail_value(
+                        &store,
+                        &session_id,
+                        transcript_meta.as_ref(),
+                    ))
+                })
             }
-            "sessions:resume" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+            "sessions:resume" => with_store(state, |store| {
+                let requested_session_id = payload_string(&payload, "sessionId");
+                let Some(session_id) =
+                    resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                else {
+                    return Ok(Value::Null);
+                };
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
                     .ok()
                     .flatten();
-                with_store(state, |store| {
-                    let resume_messages = transcript_resume_messages(
-                        state,
-                        &store,
-                        &session_id,
-                        crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
-                    )
-                    .ok();
-                    let value = session_resume_value(&store, &session_id, resume_messages.clone());
-                    if !value.is_null() {
-                        return Ok(value);
-                    }
-                    Ok(json!({
-                        "chatSession": transcript_meta.as_ref().map(|meta| json!({
-                            "id": meta.session_id,
-                            "title": meta.title,
-                            "updatedAt": meta.updated_at,
-                            "createdAt": meta.created_at,
-                        })).unwrap_or(Value::Null),
-                        "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
-                        "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
-                        "context": Value::Null,
-                        "resumeMessages": resume_messages.unwrap_or_default(),
-                        "lastCheckpoint": Value::Null,
-                    }))
-                })
-            }
+                let resume_messages = transcript_resume_messages(
+                    state,
+                    &store,
+                    &session_id,
+                    crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
+                )
+                .ok();
+                let value = session_resume_value(
+                    &store,
+                    &session_id,
+                    transcript_meta.as_ref(),
+                    resume_messages.clone(),
+                );
+                if !value.is_null() {
+                    return Ok(value);
+                }
+                Ok(json!({
+                    "chatSession": transcript_meta.as_ref().map(|meta| json!({
+                        "id": meta.session_id,
+                        "title": meta.title,
+                        "updatedAt": meta.updated_at,
+                        "createdAt": meta.created_at,
+                    })).unwrap_or(Value::Null),
+                    "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
+                    "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
+                    "context": Value::Null,
+                    "resumeMessages": resume_messages.unwrap_or_default(),
+                    "lastCheckpoint": Value::Null,
+                }))
+            }),
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let forked = with_store_mut(state, |store| {
-                    let Some(source) = store
-                        .chat_sessions
-                        .iter()
-                        .find(|item| item.id == session_id)
-                        .cloned()
-                    else {
+                    let Some(forked) = fork_session(store, &session_id) else {
                         return Ok(json!({ "success": false, "error": "会话不存在" }));
                     };
-                    let new_id = make_id("session");
-                    let timestamp = now_iso();
-                    let new_session = ChatSessionRecord {
-                        id: new_id.clone(),
-                        title: format!("{} (Fork)", source.title),
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp.clone(),
-                        metadata: source.metadata.clone(),
-                    };
-                    store.chat_sessions.push(new_session.clone());
-                    for item in store
-                        .chat_messages
-                        .iter()
-                        .filter(|entry| entry.session_id == source.id)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                    {
-                        let mut copy = item.clone();
-                        copy.id = make_id("message");
-                        copy.session_id = new_id.clone();
-                        copy.created_at = timestamp.clone();
-                        store.chat_messages.push(copy);
-                    }
-                    if let Some(context) = store
-                        .session_context_records
-                        .iter()
-                        .find(|item| item.session_id == source.id)
-                        .cloned()
-                    {
-                        let mut copied = context;
-                        copied.session_id = new_id.clone();
-                        copied.updated_at = timestamp.clone();
-                        store.session_context_records.push(copied);
-                    }
                     Ok(json!({
                         "success": true,
                         "session": {
-                            "id": new_session.id,
-                            "transcriptCount": transcript_count_for_session(store, &source.id),
-                            "checkpointCount": checkpoint_count_for_session(store, &source.id),
+                            "id": forked.session.id,
+                            "transcriptCount": forked.transcript_count,
+                            "checkpointCount": forked.checkpoint_count,
                         }
                     }))
                 })?;
@@ -762,20 +728,35 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(forked)
             }
             "sessions:get-transcript" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                let requested_session_id = payload_string(&payload, "sessionId");
                 with_store(state, |store| {
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
                     Ok(json!(trace_for_session(&store, &session_id)))
                 })
             }
             "sessions:get-tool-results" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                let requested_session_id = payload_string(&payload, "sessionId");
                 with_store(state, |store| {
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
                     Ok(json!(tool_results_for_session(&store, &session_id)))
                 })
             }
             "chat:get-messages" => {
-                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                let requested_session_id = payload_value_as_string(&payload);
                 with_store(state, |store| {
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
                     let mut messages: Vec<ChatMessageRecord> = store
                         .chat_messages
                         .iter()
@@ -789,30 +770,14 @@ pub fn handle_chat_sessions_wander_channel(
             "chat:create-session" => {
                 let title =
                     payload_value_as_string(&payload).unwrap_or_else(|| "New Chat".to_string());
-                let session = with_store_mut(state, |store| {
-                    let timestamp = now_iso();
-                    let session = ChatSessionRecord {
-                        id: make_id("session"),
-                        title,
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp,
-                        metadata: None,
-                    };
-                    store.chat_sessions.push(session.clone());
-                    Ok(session)
-                })?;
+                let session =
+                    with_store_mut(state, |store| Ok(create_session(store, title, None)))?;
                 Ok(json!(session))
             }
             "chat:delete-session" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
-                    store.chat_sessions.retain(|item| item.id != session_id);
-                    store
-                        .chat_messages
-                        .retain(|item| item.session_id != session_id);
-                    store
-                        .session_context_records
-                        .retain(|item| item.session_id != session_id);
+                    let _ = delete_session(store, &session_id);
                     Ok(json!({ "success": true }))
                 })?;
                 let _ = crate::runtime::remove_session_bundle(state, &session_id);
@@ -904,14 +869,7 @@ pub fn handle_chat_sessions_wander_channel(
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let metadata = payload_field(&payload, "metadata").cloned();
                 with_store_mut(state, |store| {
-                    if let Some(session) = store
-                        .chat_sessions
-                        .iter_mut()
-                        .find(|item| item.id == session_id)
-                    {
-                        session.metadata = metadata;
-                        session.updated_at = now_iso();
-                    }
+                    let _ = update_metadata(store, &session_id, metadata);
                     Ok(json!({ "success": true }))
                 })
             }

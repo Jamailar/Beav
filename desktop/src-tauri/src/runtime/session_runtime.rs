@@ -1,11 +1,13 @@
 use crate::persistence::with_store;
 use crate::runtime::{
-    append_session_checkpoint, runtime_task_value, SessionCheckpointRecord,
-    SessionToolResultRecord, SessionTranscriptRecord,
+    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
+    SessionTranscriptRecord,
 };
+#[cfg(test)]
+use crate::ChatSessionRecord;
 use crate::{
     make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
-    ChatSessionContextRecord, ChatSessionRecord,
+    ChatSessionContextRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -268,65 +270,23 @@ pub fn last_checkpoint_for_session(
         .max_by_key(|item| item.created_at)
 }
 
-pub fn chat_session_summary_value(session: &ChatSessionRecord) -> Value {
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": session.updated_at,
-    })
-}
-
+#[cfg(test)]
 pub fn session_list_item_value(store: &AppStore, session: &ChatSessionRecord) -> Value {
-    json!({
-        "id": session.id,
-        "messageCount": session_message_count_for_session(store, &session.id),
-        "summary": session_summary_text_for_session(store, &session.id),
-        "transcriptCount": transcript_count_for_session(store, &session.id),
-        "checkpointCount": checkpoint_count_for_session(store, &session.id),
-        "context": session_context_value_for_session(store, &session.id),
-        "chatSession": chat_session_summary_value(session)
-    })
+    crate::session_manager::session_list_item_value(store, session, None)
 }
 
+#[cfg(test)]
 pub fn session_detail_value(store: &AppStore, session_id: &str) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    json!({
-        "chatSession": chat_session_summary_value(session),
-        "context": session_context_value_for_session(store, session_id),
-        "transcript": trace_for_session(store, session_id),
-        "checkpoints": checkpoints_for_session(store, session_id),
-        "toolResults": tool_results_for_session(store, session_id),
-    })
+    crate::session_manager::session_detail_value(store, session_id, None)
 }
 
+#[cfg(test)]
 pub fn session_resume_value(
     store: &AppStore,
     session_id: &str,
     resume_messages: Option<Vec<Value>>,
 ) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    json!({
-        "chatSession": chat_session_summary_value(session),
-        "summary": session_summary_text_for_session(store, session_id),
-        "messageCount": session_message_count_for_session(store, session_id),
-        "context": session_context_value_for_session(store, session_id),
-        "resumeMessages": resume_messages.unwrap_or_else(|| {
-            runtime_context_messages_for_session(None, store, session_id, SESSION_CONTEXT_TAIL_MESSAGES)
-        }),
-        "lastCheckpoint": last_checkpoint_for_session(store, session_id),
-    })
+    crate::session_manager::session_resume_value(store, session_id, None, resume_messages)
 }
 
 pub fn chat_messages_for_session(store: &AppStore, session_id: &str) -> Vec<ChatMessageRecord> {
@@ -817,25 +777,9 @@ pub fn runtime_context_messages_for_session(
     result
 }
 
+#[cfg(test)]
 pub fn session_bridge_summary_value(session: &ChatSessionRecord, store: &AppStore) -> Value {
-    let updated_at = session.updated_at.parse::<i64>().unwrap_or(0);
-    let created_at = session.created_at.parse::<i64>().unwrap_or(0);
-    let owner_task_count = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session.id.as_str()))
-        .count() as i64;
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": updated_at,
-        "createdAt": created_at,
-        "contextType": "chat",
-        "runtimeMode": "default",
-        "isBackgroundSession": false,
-        "ownerTaskCount": owner_task_count,
-        "backgroundTaskCount": 0,
-    })
+    crate::session_manager::session_bridge_summary_value(store, session, None)
 }
 
 fn session_context_record_value(record: &ChatSessionContextRecord) -> Value {
@@ -1434,44 +1378,13 @@ fn sync_transcript_from_bundle(
     update_session_transcript_index(state, meta)
 }
 
+#[cfg(test)]
 pub fn session_bridge_detail_value(
     store: &AppStore,
     session_id: &str,
     background_tasks: &[Value],
 ) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    let tasks: Vec<Value> = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session_id))
-        .map(runtime_task_value)
-        .collect();
-    json!({
-        "session": {
-            "id": session.id,
-            "title": session.title,
-            "updatedAt": session.updated_at.parse::<i64>().unwrap_or(0),
-            "createdAt": session.created_at.parse::<i64>().unwrap_or(0),
-            "contextType": "chat",
-            "runtimeMode": "default",
-            "isBackgroundSession": false,
-            "ownerTaskCount": tasks.len(),
-            "backgroundTaskCount": background_tasks.len(),
-            "metadata": session.metadata,
-        },
-        "transcript": trace_for_session(store, session_id),
-        "checkpoints": checkpoints_for_session(store, session_id),
-        "toolResults": tool_results_for_session(store, session_id),
-        "tasks": tasks,
-        "backgroundTasks": background_tasks,
-        "permissionRequests": [],
-    })
+    crate::session_manager::session_bridge_detail_value(store, session_id, background_tasks, None)
 }
 
 pub fn persist_runtime_query_checkpoints(

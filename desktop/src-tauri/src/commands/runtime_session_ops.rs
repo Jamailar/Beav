@@ -5,9 +5,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     checkpoints_value_for_session, tool_results_value_for_session, trace_value_for_session,
 };
-use crate::{
-    make_id, now_iso, now_ms, payload_string, payload_value_as_string, AppState, ChatSessionRecord,
-};
+use crate::session_manager::fork_session;
+use crate::{now_ms, payload_string, payload_value_as_string, AppState};
 
 pub fn runtime_state_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let requested_session_id = payload_value_as_string(payload).unwrap_or_default();
@@ -104,24 +103,13 @@ pub fn fork_runtime_session(
 ) -> Result<Value, String> {
     let session_id = payload_string(payload, "sessionId").unwrap_or_default();
     with_store_mut(state, |store| {
-        let Some(source) = store
-            .chat_sessions
-            .iter()
-            .find(|item| item.id == session_id)
-            .cloned()
-        else {
+        let Some(forked) = fork_session(store, &session_id) else {
             return Ok(json!({ "success": false, "error": "会话不存在" }));
         };
-        let new_id = make_id("session");
-        let timestamp = now_iso();
-        let forked = ChatSessionRecord {
-            id: new_id.clone(),
-            title: format!("{} (Fork)", source.title),
-            created_at: timestamp.clone(),
-            updated_at: timestamp,
-            metadata: source.metadata.clone(),
-        };
-        store.chat_sessions.push(forked);
-        Ok(json!({ "success": true, "sessionId": session_id, "forkedSessionId": new_id }))
+        Ok(json!({
+            "success": true,
+            "sessionId": session_id,
+            "forkedSessionId": forked.session.id
+        }))
     })
 }

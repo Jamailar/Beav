@@ -21,6 +21,7 @@ mod persistence;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
+mod session_manager;
 mod skills;
 mod subagents;
 mod tools;
