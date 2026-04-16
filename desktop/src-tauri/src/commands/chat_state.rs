@@ -150,6 +150,59 @@ pub fn build_context_bound_metadata(context_type: &str, context_id: Option<&str>
     })
 }
 
+pub fn apply_context_binding_metadata(
+    session: &mut ChatSessionRecord,
+    context_type: &str,
+    context_id: &str,
+    initial_context: Option<&str>,
+) {
+    let mut metadata = session
+        .metadata
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "contextType".to_string(),
+        Value::String(context_type.to_string()),
+    );
+    metadata.insert(
+        "contextId".to_string(),
+        Value::String(context_id.to_string()),
+    );
+    metadata.insert("isContextBound".to_string(), Value::Bool(true));
+    if let Some(initial_context_value) = initial_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert(
+            "initialContext".to_string(),
+            Value::String(initial_context_value.to_string()),
+        );
+    }
+    session.metadata = Some(Value::Object(metadata));
+}
+
+pub fn session_matches_context_binding(
+    session: &ChatSessionRecord,
+    context_type: &str,
+    context_id: &str,
+) -> bool {
+    let metadata = match session.metadata.as_ref().and_then(Value::as_object) {
+        Some(metadata) => metadata,
+        None => return false,
+    };
+    metadata
+        .get("contextType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some(context_type.trim())
+        && metadata
+            .get("contextId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            == Some(context_id.trim())
+}
+
 pub fn build_context_session_id(context_type: &str, context_id: &str) -> String {
     format!(
         "context-session:{context_type}:{}",
@@ -263,5 +316,70 @@ mod tests {
         assert_eq!(context_type, "diagnostics");
         assert_eq!(context_id, "developer-diagnostics");
         assert_eq!(title, "Developer Diagnostics");
+    }
+
+    #[test]
+    fn apply_context_binding_metadata_preserves_existing_fields() {
+        let mut session = ChatSessionRecord {
+            id: "session-1".to_string(),
+            title: "Test".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "allowedTools": ["redbox_fs"]
+            })),
+        };
+
+        apply_context_binding_metadata(
+            &mut session,
+            "redclaw",
+            "redclaw-singleton:default",
+            Some("seed context"),
+        );
+
+        let metadata = session.metadata.expect("metadata");
+        assert_eq!(
+            metadata.get("contextType").and_then(Value::as_str),
+            Some("redclaw")
+        );
+        assert_eq!(
+            metadata.get("contextId").and_then(Value::as_str),
+            Some("redclaw-singleton:default")
+        );
+        assert_eq!(
+            metadata.get("initialContext").and_then(Value::as_str),
+            Some("seed context")
+        );
+        assert_eq!(
+            metadata
+                .get("allowedTools")
+                .and_then(Value::as_array)
+                .map(|items| items.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn session_matches_context_binding_reads_metadata_only() {
+        let session = ChatSessionRecord {
+            id: "context-session:redclaw:legacy".to_string(),
+            title: "Test".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "contextType": "knowledge",
+                "contextId": "note-1",
+                "isContextBound": true
+            })),
+        };
+
+        assert!(session_matches_context_binding(
+            &session,
+            "knowledge",
+            "note-1"
+        ));
+        assert!(!session_matches_context_binding(
+            &session, "redclaw", "legacy"
+        ));
     }
 }

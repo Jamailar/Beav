@@ -72,7 +72,6 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
         displayContent,
         taskHints: {
             intent: 'manuscript_creation',
-            activeSkills: ['writing-style'],
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

@@ -1,5 +1,6 @@
 use crate::commands::chat_state::{
-    build_context_bound_metadata, build_context_session_id, diagnostics_session_defaults,
+    apply_context_binding_metadata, build_context_session_id, diagnostics_session_defaults,
+    session_matches_context_binding,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
@@ -461,6 +462,8 @@ pub fn handle_chat_sessions_wander_channel(
         channel,
         "chat:getOrCreateFileSession"
             | "chat:getOrCreateContextSession"
+            | "chat:list-context-sessions"
+            | "chat:create-context-session"
             | "chat:create-diagnostics-session"
             | "chat:get-sessions"
             | "sessions:list"
@@ -509,6 +512,7 @@ pub fn handle_chat_sessions_wander_channel(
                     .unwrap_or_else(|| "context".to_string());
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
+                let initial_context = payload_string(&payload, "initialContext");
                 let session_id = build_context_session_id(&context_type, &context_id);
                 let session = with_store_mut(state, |store| {
                     let (session, _) = ensure_chat_session(
@@ -516,12 +520,61 @@ pub fn handle_chat_sessions_wander_channel(
                         Some(session_id),
                         Some(title),
                     );
-                    session.metadata = Some(build_context_bound_metadata(
+                    apply_context_binding_metadata(
+                        session,
                         &context_type,
-                        Some(&context_id),
-                    ));
+                        &context_id,
+                        initial_context.as_deref(),
+                    );
                     session.updated_at = now_iso();
                     Ok(session.clone())
+                })?;
+                Ok(json!(session))
+            }
+            "chat:list-context-sessions" => {
+                let context_id = payload_string(&payload, "contextId").unwrap_or_default();
+                let context_type = payload_string(&payload, "contextType").unwrap_or_default();
+                with_store(state, |store| {
+                    let mut items = store
+                        .chat_sessions
+                        .iter()
+                        .filter(|session| {
+                            session_matches_context_binding(session, &context_type, &context_id)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    Ok(json!(items
+                        .iter()
+                        .map(|session| session_list_item_value(&store, session))
+                        .collect::<Vec<_>>()))
+                })
+            }
+            "chat:create-context-session" => {
+                let context_id = payload_string(&payload, "contextId")
+                    .unwrap_or_else(|| make_id("context").to_string());
+                let context_type = payload_string(&payload, "contextType")
+                    .unwrap_or_else(|| "context".to_string());
+                let title =
+                    payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
+                let initial_context = payload_string(&payload, "initialContext");
+                let session = with_store_mut(state, |store| {
+                    let timestamp = now_iso();
+                    let mut session = ChatSessionRecord {
+                        id: make_id("session"),
+                        title,
+                        created_at: timestamp.clone(),
+                        updated_at: timestamp,
+                        metadata: None,
+                    };
+                    apply_context_binding_metadata(
+                        &mut session,
+                        &context_type,
+                        &context_id,
+                        initial_context.as_deref(),
+                    );
+                    store.chat_sessions.push(session.clone());
+                    Ok(session)
                 })?;
                 Ok(json!(session))
             }
@@ -541,10 +594,7 @@ pub fn handle_chat_sessions_wander_channel(
                         Some(title.clone()),
                     );
                     session.title = title.clone();
-                    session.metadata = Some(build_context_bound_metadata(
-                        &context_type,
-                        Some(&context_id),
-                    ));
+                    apply_context_binding_metadata(session, &context_type, &context_id, None);
                     session.updated_at = now_iso();
                     Ok(session.clone())
                 })?;

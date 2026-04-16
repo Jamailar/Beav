@@ -40,6 +40,9 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
     return [];
   }
+  if (channel === 'chat:list-context-sessions') {
+    return [];
+  }
   if (channel === 'chat:get-messages') {
     return [];
   }
@@ -284,6 +287,10 @@ function createIpcRenderer() {
       createSession: (title?: string) => invokeChannel('chat:create-session', title),
       createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) =>
         invokeChannel('chat:create-diagnostics-session', payload || {}),
+      listContextSessions: (payload: { contextId: string; contextType: string }) =>
+        invokeChannel('chat:list-context-sessions', payload),
+      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) =>
+        invokeChannel('chat:create-context-session', payload),
       getOrCreateContextSession: (params: Record<string, unknown>) => invokeChannel('chat:getOrCreateContextSession', params),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),

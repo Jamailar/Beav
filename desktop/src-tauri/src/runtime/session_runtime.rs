@@ -768,14 +768,25 @@ pub fn runtime_context_messages_for_session(
     session_id: &str,
     limit: usize,
 ) -> Vec<Value> {
+    let initial_context_prompt = session_initial_context_prompt(store, session_id);
     if let Some(state) = state {
         if let Ok(bundle_messages) = load_session_bundle_messages(state, session_id) {
             if !bundle_messages.is_empty() {
-                return bundle_messages_for_runtime(
+                let mut result = bundle_messages_for_runtime(
                     &bundle_messages,
                     session_resume_summary_prompt(store, session_id),
                     limit,
                 );
+                if let Some(prompt) = initial_context_prompt.as_deref() {
+                    result.insert(
+                        0,
+                        json!({
+                            "role": "user",
+                            "content": prompt
+                        }),
+                    );
+                }
+                return result;
             }
         }
     }
@@ -789,11 +800,21 @@ pub fn runtime_context_messages_for_session(
             })
         })
         .collect::<Vec<_>>();
-    bundle_messages_for_runtime(
+    let mut result = bundle_messages_for_runtime(
         &items,
         session_resume_summary_prompt(store, session_id),
         limit,
-    )
+    );
+    if let Some(prompt) = initial_context_prompt.as_deref() {
+        result.insert(
+            0,
+            json!({
+                "role": "user",
+                "content": prompt
+            }),
+        );
+    }
+    result
 }
 
 pub fn session_bridge_summary_value(session: &ChatSessionRecord, store: &AppStore) -> Value {
@@ -846,6 +867,19 @@ fn session_resume_summary_prompt(store: &AppStore, session_id: &str) -> Option<S
                 item.summary
             )
         })
+}
+
+fn session_initial_context_prompt(store: &AppStore, session_id: &str) -> Option<String> {
+    store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+        .and_then(|session| session.metadata.as_ref())
+        .and_then(|metadata| metadata.get("initialContext"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("[Session initial context]\n{value}"))
 }
 
 pub fn bundle_messages_for_runtime(
@@ -1796,6 +1830,36 @@ mod tests {
         assert_eq!(
             messages[1].get("content").and_then(Value::as_str),
             Some("message 6")
+        );
+    }
+
+    #[test]
+    fn runtime_context_messages_preserve_initial_context_for_context_bound_sessions() {
+        let mut store = crate::AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-redclaw".to_string(),
+            title: "Session".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({
+                "contextType": "redclaw",
+                "contextId": "redclaw-singleton:default",
+                "initialContext": "RedClaw seeded context"
+            })),
+        });
+        store
+            .chat_messages
+            .push(test_chat_message("session-redclaw", "user", "hello", "1"));
+
+        let messages = runtime_context_messages_for_session(None, &store, "session-redclaw", 8);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].get("content").and_then(Value::as_str),
+            Some("[Session initial context]\nRedClaw seeded context")
+        );
+        assert_eq!(
+            messages[1].get("content").and_then(Value::as_str),
+            Some("hello")
         );
     }
 

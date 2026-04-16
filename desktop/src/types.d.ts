@@ -281,6 +281,20 @@ declare global {
     updatedAt: string;
   }
 
+  interface ContextChatSessionListItem {
+    id: string;
+    messageCount: number;
+    summary: string;
+    transcriptCount: number;
+    checkpointCount: number;
+    context?: unknown;
+    chatSession?: {
+      id: string;
+      title?: string;
+      updatedAt?: string;
+    } | null;
+  }
+
   interface ChatMessage {
     id: string;
     session_id: string;
@@ -770,7 +784,9 @@ declare global {
         getSessions: () => Promise<ChatSession[]>;
         createSession: (title?: string) => Promise<ChatSession>;
         createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
-        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext: string }) => Promise<ChatSession>;
+        listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
+        createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) => Promise<ChatSession>;
+        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string }) => Promise<ChatSession>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
         clearMessages: (sessionId: string) => Promise<{ success: boolean }>;

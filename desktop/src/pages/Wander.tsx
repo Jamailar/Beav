@@ -330,7 +330,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '',
       '注意：不要只依赖我在消息里给的摘要。你必须先读取下方3个素材文件夹中的文件，再开始写作。',
       '请优先读取每个素材目录下的 meta.json，并按需要继续读取正文/转录文件。',
-      '本次任务必须使用 writing-style 技能。标题候选、正文、标签建议和封面文案都要遵守这份写作风格技能，不要写成模板化的 AI 文案。',
+      '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -358,7 +358,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
       taskHints: {
         intent: 'manuscript_creation',
-        activeSkills: ['writing-style'],
       },
       attachment: {
         type: 'wander-references',
