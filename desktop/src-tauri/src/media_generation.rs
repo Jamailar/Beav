@@ -1298,6 +1298,9 @@ fn build_video_request_body(model: &str, payload: &Value) -> Result<Value, Strin
     );
     let duration_seconds =
         normalize_video_duration(payload_field(payload, "durationSeconds").and_then(Value::as_i64));
+    let generate_audio = payload_field(payload, "generateAudio")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut body = json!({
         "model": model,
@@ -1305,6 +1308,7 @@ fn build_video_request_body(model: &str, payload: &Value) -> Result<Value, Strin
         "size": map_openai_video_size(aspect_ratio, resolution),
         "seconds": map_openai_video_seconds(duration_seconds),
         "n": payload_field(payload, "count").and_then(Value::as_i64).unwrap_or(1).clamp(1, 2),
+        "generateAudio": generate_audio,
     });
 
     if is_redbox_compatible_endpoint(REDBOX_OFFICIAL_VIDEO_BASE_URL) {
@@ -1415,12 +1419,50 @@ pub(crate) fn video_poll_url(endpoint: &str, task_id: &str, status_url: Option<S
 pub(crate) fn poll_video_generation_result(
     endpoint: &str,
     api_key: Option<&str>,
+    model: &str,
     response: &Value,
 ) -> Option<String> {
     if let Some(url) = extract_media_url(response) {
         return Some(url);
     }
     let task_id = extract_task_id(response)?;
+    if is_redbox_compatible_endpoint(endpoint) {
+        let query_urls =
+            build_compatible_video_route_urls(endpoint, "/videos/generations/tasks/query");
+        for _ in 0..60 {
+            thread::sleep(std::time::Duration::from_millis(2000));
+            for query_url in &query_urls {
+                if let Ok(next) = run_curl_json(
+                    "POST",
+                    query_url,
+                    api_key,
+                    &[],
+                    Some(json!({
+                        "model": model,
+                        "task_id": task_id,
+                    })),
+                ) {
+                    if let Some(url) = extract_media_url(&next) {
+                        return Some(url);
+                    }
+                    let status = next
+                        .get("status")
+                        .or_else(|| next.pointer("/output/task_status"))
+                        .or_else(|| next.pointer("/data/status"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if status.contains("failed")
+                        || status.contains("error")
+                        || status.contains("cancel")
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+        return None;
+    }
     let status_url = extract_status_url(response);
     let poll_url = video_poll_url(endpoint, &task_id, status_url);
     for _ in 0..60 {

@@ -235,6 +235,12 @@ pub fn default_store() -> AppStore {
                 "stateDir": "",
                 "availableAccountIds": []
             }),
+            knowledge_api: json!({
+                "enabled": true,
+                "endpointPath": "/api/knowledge",
+                "authToken": "",
+                "webhookUrl": ""
+            }),
         },
         redclaw_state: RedclawStateRecord {
             enabled: false,

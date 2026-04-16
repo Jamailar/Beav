@@ -39,6 +39,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "nsis"],
+    "resources": ["resources/knowledge-api-guide.html"],
     "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

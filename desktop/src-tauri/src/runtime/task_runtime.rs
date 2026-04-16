@@ -143,8 +143,16 @@ pub fn list_runtime_task_traces_value(
     store: &AppStore,
     task_id: &str,
     include_children: bool,
+    limit: Option<usize>,
 ) -> Value {
-    serde_json::json!(list_runtime_task_traces(store, task_id, include_children))
+    let mut items = list_runtime_task_traces(store, task_id, include_children);
+    if let Some(limit) = limit.filter(|value| *value > 0) {
+        if items.len() > limit {
+            let split_at = items.len().saturating_sub(limit);
+            items.drain(..split_at);
+        }
+    }
+    serde_json::json!(items)
 }
 
 pub fn mark_task_running(task: &mut RuntimeTaskRecord, summary: &str) {

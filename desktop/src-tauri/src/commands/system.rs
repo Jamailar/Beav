@@ -1,12 +1,31 @@
 use arboard::Clipboard;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     log_timing_event, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
     refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
+
+fn knowledge_api_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("knowledge-api-guide.html");
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    let bundled = resource_dir.join("knowledge-api-guide.html");
+    if bundled.exists() {
+        return Ok(bundled);
+    }
+    Err("知识导入 API 文档页不存在".to_string())
+}
 
 pub fn handle_system_channel(
     app: &AppHandle,
@@ -18,6 +37,7 @@ pub fn handle_system_channel(
         "app:get-version"
         | "app:check-update"
         | "app:open-release-page"
+        | "app:open-knowledge-api-guide"
         | "app:open-path"
         | "db:get-settings"
         | "db:save-settings"
@@ -41,6 +61,11 @@ pub fn handle_system_channel(
                         });
                     open::that(&url).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "url": url }))
+                }
+                "app:open-knowledge-api-guide" => {
+                    let path = knowledge_api_guide_path(app)?;
+                    open::that(&path).map_err(|error| error.to_string())?;
+                    Ok(json!({ "success": true, "path": path.display().to_string() }))
                 }
                 "app:open-path" => {
                     let path = payload_string(payload, "path")

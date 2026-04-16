@@ -122,6 +122,7 @@ const VIDEO_GENERATION_MODE_OPTIONS = [
     { value: 'text-to-video', label: '文生视频' },
     { value: 'reference-guided', label: '参考图视频' },
     { value: 'first-last-frame', label: '首尾帧视频' },
+    { value: 'continuation', label: '视频续写' },
 ] as const;
 
 function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
@@ -154,12 +155,15 @@ function flattenManuscripts(nodes: FileNode[]): string[] {
     return result.sort((a, b) => a.localeCompare(b));
 }
 
-function getVideoReferenceModeHint(mode: 'text-to-video' | 'reference-guided' | 'first-last-frame'): string {
+function getVideoReferenceModeHint(mode: 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation'): string {
     if (mode === 'reference-guided') {
         return '上传 1 到 5 张参考图，视频会尽量复用这些图中的主体元素、风格和构图线索。';
     }
     if (mode === 'first-last-frame') {
         return '请上传 2 张图片，第一张作为首帧，第二张作为尾帧。';
+    }
+    if (mode === 'continuation') {
+        return '请上传 1 段起始视频，模型会沿着这段镜头继续生成后续内容。';
     }
     return '文生视频不需要参考图。';
 }
@@ -219,14 +223,17 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoProjectId, setVideoProjectId] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
-    const [videoGenerationMode, setVideoGenerationMode] = useState<'text-to-video' | 'reference-guided' | 'first-last-frame'>('text-to-video');
+    const [videoGenerationMode, setVideoGenerationMode] = useState<'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation'>('text-to-video');
     const [videoReferenceImages, setVideoReferenceImages] = useState<Array<ReferenceImageItem | null>>([]);
     const [videoPrimaryReferenceImage, setVideoPrimaryReferenceImage] = useState<ReferenceImageItem | null>(null);
     const [videoLastFrameImage, setVideoLastFrameImage] = useState<ReferenceImageItem | null>(null);
+    const [videoFirstClip, setVideoFirstClip] = useState<ReferenceImageItem | null>(null);
+    const [videoDrivingAudio, setVideoDrivingAudio] = useState<ReferenceImageItem | null>(null);
     const [isReadingVideoRefImages, setIsReadingVideoRefImages] = useState(false);
     const [videoAspectRatio, setVideoAspectRatio] = useState<'16:9' | '9:16'>('16:9');
     const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>('720p');
     const [videoDurationSeconds, setVideoDurationSeconds] = useState(8);
+    const [videoGenerateAudio, setVideoGenerateAudio] = useState(false);
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
@@ -532,6 +539,11 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             : videoGenerationMode === 'first-last-frame'
                 ? [videoPrimaryReferenceImage, videoLastFrameImage].filter(Boolean) as ReferenceImageItem[]
                 : [];
+        const effectiveGenerationMode = videoGenerationMode === 'continuation'
+            ? 'continuation'
+            : effectiveVideoReferenceImages.length > 0
+                ? videoGenerationMode
+                : 'text-to-video';
         if (!videoPrompt.trim()) {
             setVideoGenError('请先输入视频提示词');
             return;
@@ -542,6 +554,10 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         }
         if (videoGenerationMode === 'first-last-frame' && effectiveVideoReferenceImages.length < 2) {
             setVideoGenError('首尾帧视频模式需要 2 张参考图');
+            return;
+        }
+        if (videoGenerationMode === 'continuation' && !videoFirstClip?.dataUrl) {
+            setVideoGenError('视频续写模式需要 1 段起始视频');
             return;
         }
         if (!hasVideoConfig) {
@@ -557,13 +573,15 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 projectId: videoProjectId.trim() || undefined,
                 title: videoTitle.trim() || undefined,
                 model: effectiveVideoModel,
-                generationMode: effectiveVideoReferenceImages.length > 0 ? videoGenerationMode : 'text-to-video',
+                generationMode: effectiveGenerationMode,
                 referenceImages: effectiveVideoReferenceImages.map((item) => item.dataUrl),
+                firstClip: videoFirstClip?.dataUrl || undefined,
+                drivingAudio: videoDrivingAudio?.dataUrl || undefined,
                 aspectRatio: videoAspectRatio,
                 resolution: videoResolution,
                 durationSeconds: videoDurationSeconds,
                 count: 1,
-                generateAudio: false,
+                generateAudio: videoGenerateAudio,
             }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
             if (!result?.success) {
@@ -585,6 +603,9 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         videoAspectRatio,
         videoDurationSeconds,
         effectiveVideoModel,
+        videoDrivingAudio,
+        videoFirstClip,
+        videoGenerateAudio,
         videoLastFrameImage,
         videoPrimaryReferenceImage,
         videoReferenceImages,
@@ -619,6 +640,32 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         } catch (uploadError) {
             console.error('Failed to parse video reference image:', uploadError);
             setVideoGenError('视频参考图读取失败，请重试');
+        } finally {
+            setIsReadingVideoRefImages(false);
+            event.target.value = '';
+        }
+    }, []);
+
+    const handleVideoMediaFile = useCallback(async (
+        event: React.ChangeEvent<HTMLInputElement>,
+        target: 'firstClip' | 'drivingAudio'
+    ) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        setIsReadingVideoRefImages(true);
+        try {
+            const item = {
+                name: file.name,
+                dataUrl: await readFileAsDataUrl(file),
+            };
+            if (target === 'firstClip') {
+                setVideoFirstClip(item);
+            } else {
+                setVideoDrivingAudio(item);
+            }
+        } catch (uploadError) {
+            console.error('Failed to parse video media file:', uploadError);
+            setVideoGenError(target === 'firstClip' ? '起始视频读取失败，请重试' : '驱动音频读取失败，请重试');
         } finally {
             setIsReadingVideoRefImages(false);
             event.target.value = '';
@@ -1156,7 +1203,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <select
                                         value={videoGenerationMode}
-                                        onChange={(event) => setVideoGenerationMode(event.target.value as 'text-to-video' | 'reference-guided' | 'first-last-frame')}
+                                        onChange={(event) => setVideoGenerationMode(event.target.value as 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation')}
                                         className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
                                     >
                                         {VIDEO_GENERATION_MODE_OPTIONS.map((option) => (
@@ -1260,6 +1307,82 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                     </div>
                                 )}
 
+                                {videoGenerationMode === 'continuation' && (
+                                    <label className="group relative flex aspect-video max-w-[320px] cursor-pointer overflow-hidden rounded-xl border border-dashed border-border bg-surface-secondary/20 hover:border-accent-primary/40 hover:bg-surface-secondary/40">
+                                        {videoFirstClip ? (
+                                            <div className="flex h-full w-full items-end bg-gradient-to-br from-surface-secondary to-surface-primary p-4 text-text-primary">
+                                                <div className="space-y-1">
+                                                    <div className="text-xs text-text-tertiary">起始视频</div>
+                                                    <div className="text-sm font-medium truncate">{videoFirstClip.name}</div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-text-tertiary">
+                                                <Clapperboard className="h-5 w-5" />
+                                                <div className="text-xs">上传起始视频</div>
+                                                <div className="text-[11px]">支持 mp4 / mov / webm</div>
+                                            </div>
+                                        )}
+                                        <div className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] text-white">起始视频</div>
+                                        {videoFirstClip && (
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    setVideoFirstClip(null);
+                                                }}
+                                                className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/70"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        )}
+                                        <input
+                                            type="file"
+                                            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                                            className="hidden"
+                                            onChange={(event) => void handleVideoMediaFile(event, 'firstClip')}
+                                        />
+                                    </label>
+                                )}
+
+                                <label className="group relative flex aspect-[3/1] max-w-[320px] cursor-pointer overflow-hidden rounded-xl border border-dashed border-border bg-surface-secondary/20 hover:border-accent-primary/40 hover:bg-surface-secondary/40">
+                                    {videoDrivingAudio ? (
+                                        <div className="flex h-full w-full items-end bg-gradient-to-br from-surface-secondary to-surface-primary p-4 text-text-primary">
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-text-tertiary">驱动音频（可选）</div>
+                                                <div className="text-sm font-medium truncate">{videoDrivingAudio.name}</div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-text-tertiary">
+                                            <FolderOpen className="h-5 w-5" />
+                                            <div className="text-xs">上传驱动音频</div>
+                                            <div className="text-[11px]">可选，用于人物口播/声音参考</div>
+                                        </div>
+                                    )}
+                                    <div className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] text-white">驱动音频</div>
+                                    {videoDrivingAudio && (
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                setVideoDrivingAudio(null);
+                                            }}
+                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/70"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </button>
+                                    )}
+                                    <input
+                                        type="file"
+                                        accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+                                        className="hidden"
+                                        onChange={(event) => void handleVideoMediaFile(event, 'drivingAudio')}
+                                    />
+                                </label>
+
                                 <div className="text-[11px] text-text-tertiary">
                                     {isReadingVideoRefImages ? '正在读取参考图...' : getVideoReferenceModeHint(videoGenerationMode)}
                                 </div>
@@ -1286,6 +1409,14 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                     <option value={10}>10 秒</option>
                                     <option value={12}>12 秒</option>
                                 </select>
+                                <label className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 text-text-secondary inline-flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={videoGenerateAudio}
+                                        onChange={(event) => setVideoGenerateAudio(event.target.checked)}
+                                    />
+                                    让模型尝试生成音频
+                                </label>
                             </div>
 
                             <div className="flex items-center gap-2">

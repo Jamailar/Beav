@@ -516,8 +516,9 @@ pub fn handle_official_channel(
                         "session": official_settings_session(&store.settings)
                     }))
                 }),
-                "redbox-auth:get-session" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
+                "redbox-auth:get-session" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let session = official_settings_session(&settings);
                     let models = if session.is_some() {
                         fetch_official_models_for_settings(&settings)
@@ -532,13 +533,16 @@ pub fn handle_official_channel(
                     if session.is_some() && !models.is_empty() {
                         official_sync_source_into_settings(&mut settings, &models);
                     }
-                    store.settings = settings.clone();
+                    with_store_mut(state, |store| {
+                        store.settings = settings.clone();
+                        Ok(())
+                    })?;
                     Ok(json!({
                         "success": true,
                         "session": official_settings_session(&settings),
                         "routeSynced": session.is_some(),
                     }))
-                }),
+                }
                 "redbox-auth:logout" => {
                     let response = with_store_mut(state, |store| {
                         let mut settings = store.settings.clone();

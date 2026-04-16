@@ -1,9 +1,9 @@
 use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, session_context_usage_value, tool_results_for_session,
-    trace_for_session, transcript_resume_messages, transcript_session_list_value,
-    transcript_session_meta_by_id, update_session_context_record,
+    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
+    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
+    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
@@ -12,6 +12,7 @@ use crate::session_manager::{
 };
 use crate::*;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
@@ -583,22 +584,23 @@ pub fn handle_chat_sessions_wander_channel(
             "sessions:list" => with_store(state, |store| {
                 let started_at = now_ms();
                 let request_id = format!("sessions:list:{}", started_at);
-                let transcript_items = transcript_session_list_value(state)
-                    .and_then(|value| {
-                        value
-                            .as_array()
-                            .cloned()
-                            .ok_or_else(|| "invalid transcript index".to_string())
-                    })
-                    .unwrap_or_default();
+                let transcript_index = list_transcript_sessions(state).unwrap_or_default();
+                let transcript_meta_by_session_id: HashMap<String, SessionTranscriptFileMeta> =
+                    transcript_index
+                        .iter()
+                        .cloned()
+                        .map(|item| (item.session_id.clone(), item))
+                        .collect();
+                let transcript_items: Vec<Value> = transcript_index
+                    .iter()
+                    .map(crate::runtime::transcript_session_meta_value)
+                    .collect();
                 let items: Vec<Value> = if transcript_items.is_empty() {
                     list_sessions(&store)
                         .into_iter()
                         .map(|session| {
-                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
-                                .ok()
-                                .flatten();
-                            session_list_item_value(&store, &session, transcript_meta.as_ref())
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, &session, transcript_meta)
                         })
                         .collect()
                 } else {
@@ -607,16 +609,14 @@ pub fn handle_chat_sessions_wander_channel(
                         .iter()
                         .filter_map(|item| item.get("id").and_then(Value::as_str))
                         .map(ToString::to_string)
-                        .collect::<std::collections::HashSet<_>>();
+                        .collect::<HashSet<_>>();
                     let mut store_only = store
                         .chat_sessions
                         .iter()
                         .filter(|session| !known_ids.contains(&session.id))
                         .map(|session| {
-                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
-                                .ok()
-                                .flatten();
-                            session_list_item_value(&store, session, transcript_meta.as_ref())
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, session, transcript_meta)
                         })
                         .collect::<Vec<_>>();
                     merged.append(&mut store_only);
@@ -729,24 +729,38 @@ pub fn handle_chat_sessions_wander_channel(
             }
             "sessions:get-transcript" => {
                 let requested_session_id = payload_string(&payload, "sessionId");
+                let limit = payload
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
                 with_store(state, |store| {
                     let Some(session_id) =
                         resolve_resume_target_session_id(&store, requested_session_id.as_deref())
                     else {
                         return Ok(json!([]));
                     };
-                    Ok(json!(trace_for_session(&store, &session_id)))
+                    Ok(trace_value_for_session(&store, &session_id, false, limit))
                 })
             }
             "sessions:get-tool-results" => {
                 let requested_session_id = payload_string(&payload, "sessionId");
+                let limit = payload
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
                 with_store(state, |store| {
                     let Some(session_id) =
                         resolve_resume_target_session_id(&store, requested_session_id.as_deref())
                     else {
                         return Ok(json!([]));
                     };
-                    Ok(json!(tool_results_for_session(&store, &session_id)))
+                    Ok(tool_results_value_for_session(
+                        &store,
+                        &session_id,
+                        false,
+                        None,
+                        limit,
+                    ))
                 })
             }
             "chat:get-messages" => {

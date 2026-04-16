@@ -126,6 +126,18 @@ pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTrans
     items
 }
 
+fn take_recent_items<T>(mut items: Vec<T>, limit: Option<usize>) -> Vec<T> {
+    let Some(limit) = limit.filter(|value| *value > 0) else {
+        return items;
+    };
+    if items.len() <= limit {
+        return items;
+    }
+    let split_at = items.len().saturating_sub(limit);
+    items.drain(..split_at);
+    items
+}
+
 fn session_ids_for_query(
     store: &AppStore,
     session_id: &str,
@@ -154,6 +166,7 @@ pub fn trace_value_for_session(
     store: &AppStore,
     session_id: &str,
     include_child_sessions: bool,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -167,7 +180,7 @@ pub fn trace_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<SessionCheckpointRecord> {
@@ -186,6 +199,7 @@ pub fn checkpoints_value_for_session(
     session_id: &str,
     include_child_sessions: bool,
     runtime_id: Option<&str>,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -204,7 +218,7 @@ pub fn checkpoints_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn tool_results_for_session(
@@ -226,6 +240,7 @@ pub fn tool_results_value_for_session(
     session_id: &str,
     include_child_sessions: bool,
     runtime_id: Option<&str>,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -244,7 +259,7 @@ pub fn tool_results_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn transcript_count_for_session(store: &AppStore, session_id: &str) -> i64 {
@@ -364,13 +379,6 @@ pub fn transcript_session_meta_value(meta: &SessionTranscriptFileMeta) -> Value 
             "createdAt": meta.created_at,
         }
     })
-}
-
-pub fn transcript_session_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    Ok(json!(list_transcript_sessions(state)?
-        .iter()
-        .map(transcript_session_meta_value)
-        .collect::<Vec<_>>()))
 }
 
 pub fn transcript_session_meta_by_id(

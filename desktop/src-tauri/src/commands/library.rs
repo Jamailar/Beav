@@ -1,9 +1,9 @@
+use crate::knowledge;
 use crate::persistence::{
     ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
-use crate::knowledge;
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, State};
@@ -102,6 +102,10 @@ pub fn handle_library_channel(
         "knowledge:list"
             | "knowledge:list-youtube"
             | "knowledge:docs:list"
+            | "knowledge:health"
+            | "knowledge:ingest-entry"
+            | "knowledge:ingest-document-source"
+            | "knowledge:batch-ingest"
             | "knowledge:delete-youtube"
             | "knowledge:retry-youtube-subtitle"
             | "knowledge:youtube-regenerate-summaries"
@@ -156,6 +160,30 @@ pub fn handle_library_channel(
                     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                     Ok(json!(items))
                 })
+            }
+            "knowledge:health" => knowledge::knowledge_http_health(
+                state,
+                knowledge::knowledge_http_body_limit(),
+                knowledge::knowledge_http_batch_limit(),
+            ),
+            "knowledge:ingest-entry" => {
+                let request: knowledge::KnowledgeEntryIngestRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("knowledge ingest entry payload 无效: {error}"))?;
+                knowledge::ingest_entry(Some(app), state, &request)
+            }
+            "knowledge:ingest-document-source" => {
+                let request: knowledge::KnowledgeDocumentSourceIngestRequest =
+                    serde_json::from_value(payload.clone()).map_err(|error| {
+                        format!("knowledge ingest document source payload 无效: {error}")
+                    })?;
+                knowledge::ingest_document_source(Some(app), state, &request)
+            }
+            "knowledge:batch-ingest" => {
+                let request: knowledge::KnowledgeBatchIngestRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("knowledge batch ingest payload 无效: {error}"))?;
+                knowledge::batch_ingest(Some(app), state, &request)
             }
             "knowledge:delete-youtube" => {
                 let video_id = payload_value_as_string(payload).unwrap_or_default();
@@ -294,12 +322,8 @@ pub fn handle_library_channel(
             | "knowledge:docs:add-folder"
             | "knowledge:docs:add-obsidian-vault" => {
                 let (kind, title) = match channel {
-                    "knowledge:docs:add-files" => {
-                        ("copied-file", "Imported Files")
-                    }
-                    "knowledge:docs:add-folder" => {
-                        ("tracked-folder", "Tracked Folder")
-                    }
+                    "knowledge:docs:add-files" => ("copied-file", "Imported Files"),
+                    "knowledge:docs:add-folder" => ("tracked-folder", "Tracked Folder"),
                     _ => ("obsidian-vault", "Obsidian Vault"),
                 };
 
@@ -344,7 +368,14 @@ pub fn handle_library_channel(
                     fallback_name,
                     with_store(state, |store| Ok(store.active_space_id.clone()))?
                 );
-                knowledge::add_document_source(app, state, kind, &root, &display_name, kind != "tracked-folder")
+                knowledge::add_document_source(
+                    app,
+                    state,
+                    kind,
+                    &root,
+                    &display_name,
+                    kind != "tracked-folder",
+                )
             }
             "knowledge:docs:delete-source" => {
                 let source_id = payload_value_as_string(payload).unwrap_or_default();

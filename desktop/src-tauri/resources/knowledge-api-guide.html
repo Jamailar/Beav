@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LexBox Knowledge API Guide</title>
+    <style>
+      :root {
+        --color-bg: #f8fafc;
+        --color-surface: #ffffff;
+        --color-border: rgba(0, 0, 0, 0.05);
+        --color-text-primary: #0f172a;
+        --color-text-secondary: #475569;
+        --color-text-tertiary: #94a3b8;
+        --color-accent: #3b82f6;
+        --color-accent-soft: rgba(59, 130, 246, 0.08);
+        --color-emerald: #10b981;
+        --color-rose: #f43f5e;
+        --font-sans: 'Inter', 'PingFang SC', system-ui, sans-serif;
+        --font-mono: 'JetBrains Mono', 'Menlo', 'ui-monospace', monospace;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: var(--font-sans);
+        background-color: var(--color-bg);
+        color: var(--color-text-primary);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .container {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 48px 24px;
+      }
+
+      header {
+        margin-bottom: 48px;
+        text-align: left;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 99px;
+        background: var(--color-accent-soft);
+        color: var(--color-accent);
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        font-size: 32px;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        margin: 0 0 12px 0;
+      }
+
+      .subtitle {
+        color: var(--color-text-secondary);
+        font-size: 16px;
+        max-width: 600px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 24px;
+      }
+
+      section {
+        margin-bottom: 32px;
+      }
+
+      .card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 20px;
+        padding: 24px;
+        box-shadow: 0 4px 20px -12px rgba(0, 0, 0, 0.05);
+      }
+
+      h2 {
+        font-size: 18px;
+        font-weight: 800;
+        margin: 0 0 20px 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .base-url-box {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 16px 20px;
+        border-radius: 14px;
+        font-family: var(--font-mono);
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+      }
+
+      .endpoint {
+        border: 1px solid var(--color-border);
+        border-radius: 16px;
+        margin-bottom: 16px;
+        overflow: hidden;
+        background: var(--color-bg);
+      }
+
+      .endpoint-header {
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid var(--color-border);
+        background: #fff;
+      }
+
+      .method {
+        font-family: var(--font-mono);
+        font-weight: 800;
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        min-width: 50px;
+        text-align: center;
+      }
+
+      .method.post { background: var(--color-accent-soft); color: var(--color-accent); }
+      .method.get { background: rgba(16, 185, 129, 0.1); color: var(--color-emerald); }
+
+      .path {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--color-text-primary);
+      }
+
+      .endpoint-body {
+        padding: 16px;
+      }
+
+      .endpoint-desc {
+        font-size: 13px;
+        color: var(--color-text-secondary);
+        margin-bottom: 12px;
+        font-weight: 500;
+      }
+
+      pre {
+        margin: 0;
+        background: #1e293b;
+        color: #f1f5f9;
+        padding: 16px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-family: var(--font-mono);
+        overflow-x: auto;
+        line-height: 1.6;
+      }
+
+      .side-card {
+        padding: 20px;
+      }
+
+      .side-card h3 {
+        font-size: 13px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-text-tertiary);
+        margin: 0 0 16px 0;
+      }
+
+      .list-item {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      .list-item:last-child { border: none; }
+
+      .list-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 4px;
+        color: var(--color-text-primary);
+      }
+
+      .list-desc {
+        font-size: 12px;
+        color: var(--color-text-tertiary);
+        font-weight: 500;
+      }
+
+      .copy-btn {
+        background: transparent;
+        border: none;
+        color: var(--color-accent);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 6px;
+        transition: all 0.2s;
+      }
+
+      .copy-btn:hover { background: var(--color-accent-soft); }
+
+      .auth-box {
+        border-left: 3px solid var(--color-accent);
+        background: var(--color-accent-soft);
+        padding: 12px 16px;
+        border-radius: 0 10px 10px 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--color-text-secondary);
+      }
+
+      .chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .chip {
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-family: var(--font-mono);
+        font-weight: 600;
+        color: var(--color-text-secondary);
+      }
+
+      @media (max-width: 850px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="badge">API Developer Guide</div>
+        <h1>知识库导入接口</h1>
+        <div class="subtitle">供浏览器扩展及第三方应用调用的本地 API，用于快速导入知识素材。</div>
+      </header>
+
+      <div class="grid">
+        <main>
+          <section class="card">
+            <h2>服务地址</h2>
+            <div class="base-url-box">
+              <span id="base-url-text">http://127.0.0.1:31937/api/knowledge</span>
+              <button class="copy-btn" onclick="copyText('base-url-text', this)">COPY</button>
+            </div>
+            <div class="auth-box">
+              鉴权：Header 携带 Authorization: Bearer {TOKEN} (如已配置)
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>核心接口</h2>
+            
+            <div class="endpoint">
+              <div class="endpoint-header">
+                <span class="method get">GET</span>
+                <span class="path">/health</span>
+              </div>
+              <div class="endpoint-body">
+                <div class="endpoint-desc">检查服务状态及导入限制。</div>
+                <pre>curl http://127.0.0.1:31937/api/knowledge/health</pre>
+              </div>
+            </div>
+
+            <div class="endpoint">
+              <div class="endpoint-header">
+                <span class="method post">POST</span>
+                <span class="path">/entries</span>
+              </div>
+              <div class="endpoint-body">
+                <div class="endpoint-desc">导入单条记录（网页、笔记、视频信息）。</div>
+                <pre>{
+  "kind": "link-article",
+  "source": { "sourceUrl": "https://..." },
+  "content": { "title": "标题", "text": "正文内容" },
+  "options": { "allowUpdate": true }
+}</pre>
+              </div>
+            </div>
+
+            <div class="endpoint">
+              <div class="endpoint-header">
+                <span class="method post">POST</span>
+                <span class="path">/document-sources</span>
+              </div>
+              <div class="endpoint-body">
+                <div class="endpoint-desc">导入本地文件夹或文档源。</div>
+                <pre>{
+  "kind": "tracked-folder",
+  "rootPath": "/absolute/path/to/folder",
+  "name": "我的文档库"
+}</pre>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <aside class="stack">
+          <div class="card side-card">
+            <h3>支持类型 (Kinds)</h3>
+            <div class="chip-group">
+              <span class="chip">xhs-note</span>
+              <span class="chip">wechat-article</span>
+              <span class="chip">youtube-video</span>
+              <span class="chip">link-article</span>
+              <span class="chip">tracked-folder</span>
+              <span class="chip">obsidian-vault</span>
+            </div>
+          </div>
+
+          <div class="card side-card" style="margin-top: 24px;">
+            <h3>去重原则</h3>
+            <div class="list-item">
+              <div class="list-title">优先级</div>
+              <div class="list-desc">dedupeKey > externalId > sourceUrl</div>
+            </div>
+            <div class="list-item">
+              <div class="list-title">静默更新</div>
+              <div class="list-desc">allowUpdate=true 时，匹配项将被覆盖。</div>
+            </div>
+          </div>
+
+          <div class="card side-card" style="margin-top: 24px;">
+            <h3>响应格式</h3>
+            <pre style="background: transparent; color: var(--color-text-secondary); padding: 0; font-size: 11px;">{
+  "success": true,
+  "entryId": "..."
+}</pre>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <script>
+      function copyText(id, btn) {
+        const text = document.getElementById(id).innerText;
+        navigator.clipboard.writeText(text).then(() => {
+          const original = btn.innerText;
+          btn.innerText = 'COPIED!';
+          setTimeout(() => btn.innerText = original, 2000);
+        });
+      }
+    </script>
+  </body>
+</html>

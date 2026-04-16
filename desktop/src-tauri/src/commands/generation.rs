@@ -86,6 +86,7 @@ pub fn handle_generation_channel(
                                     poll_video_generation_result(
                                         endpoint,
                                         api_key.as_deref(),
+                                        effective_video_model.as_str(),
                                         &response,
                                     )
                                 }) {

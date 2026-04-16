@@ -713,6 +713,7 @@ declare global {
       getAppVersion: () => Promise<string>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
+      openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
         getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; error?: string }>;
         prepare: () => Promise<{ success: boolean; path: string; alreadyPrepared?: boolean; error?: string }>;
@@ -1047,6 +1048,12 @@ declare global {
             authToken?: string;
             webhookUrl: string;
           };
+          knowledgeApi: {
+            enabled: boolean;
+            endpointPath: string;
+            authToken?: string;
+            webhookUrl: string;
+          };
           weixin: {
             enabled: boolean;
             endpointPath: string;
@@ -1088,6 +1095,11 @@ declare global {
             endpointPath?: string;
             authToken?: string;
           };
+          knowledgeApi?: {
+            enabled?: boolean;
+            endpointPath?: string;
+            authToken?: string;
+          };
           weixin?: {
             enabled?: boolean;
             endpointPath?: string;
@@ -1119,6 +1131,11 @@ declare global {
             replyUsingChatId?: boolean;
           };
           relay?: {
+            enabled?: boolean;
+            endpointPath?: string;
+            authToken?: string;
+          };
+          knowledgeApi?: {
             enabled?: boolean;
             endpointPath?: string;
             authToken?: string;

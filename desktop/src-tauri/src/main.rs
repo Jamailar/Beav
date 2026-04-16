@@ -331,7 +331,7 @@ struct AppStore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 struct AssistantStateRecord {
     enabled: bool,
     auto_start: bool,
@@ -348,6 +348,7 @@ struct AssistantStateRecord {
     feishu: Value,
     relay: Value,
     weixin: Value,
+    knowledge_api: Value,
 }
 
 impl Default for AssistantStateRecord {
@@ -395,6 +396,12 @@ impl Default for AssistantStateRecord {
                 "connected": false,
                 "stateDir": "",
                 "availableAccountIds": []
+            }),
+            knowledge_api: json!({
+                "enabled": true,
+                "endpointPath": "/api/knowledge",
+                "authToken": "",
+                "webhookUrl": ""
             }),
         }
     }
@@ -5643,21 +5650,25 @@ fn handle_channel(
 }
 
 #[tauri::command]
-fn ipc_invoke(
+async fn ipc_invoke(
     app: AppHandle,
     channel: String,
     payload: Option<Value>,
-    state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    handle_channel(&app, &channel, payload.unwrap_or(Value::Null), &state)
+    let payload_value = payload.unwrap_or(Value::Null);
+    tauri::async_runtime::spawn_blocking(move || {
+        let managed_state = app.state::<AppState>();
+        handle_channel(&app, &channel, payload_value, &managed_state)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn ipc_send(
+async fn ipc_send(
     app: AppHandle,
     channel: String,
     payload: Option<Value>,
-    state: State<'_, AppState>,
 ) -> Result<(), String> {
     let payload = payload.unwrap_or(Value::Null);
     if channel == "chat:send-message"
@@ -5757,7 +5768,12 @@ fn ipc_send(
         });
         Ok(())
     } else {
-        commands::chat::handle_send_channel(&app, &channel, payload, &state)
+        tauri::async_runtime::spawn_blocking(move || {
+            let managed_state = app.state::<AppState>();
+            commands::chat::handle_send_channel(&app, &channel, payload, &managed_state)
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 }
 

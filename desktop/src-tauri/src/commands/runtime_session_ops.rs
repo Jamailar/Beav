@@ -47,11 +47,16 @@ pub fn runtime_trace_value(state: &State<'_, AppState>, payload: &Value) -> Resu
         .get("includeChildSessions")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
     with_store(state, |store| {
         Ok(trace_value_for_session(
             &store,
             &session_id,
             include_child_sessions,
+            limit,
         ))
     })
 }
@@ -66,12 +71,17 @@ pub fn runtime_checkpoints_value(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let runtime_id = payload_string(payload, "runtimeId");
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
     with_store(state, |store| {
         Ok(checkpoints_value_for_session(
             &store,
             &session_id,
             include_child_sessions,
             runtime_id.as_deref(),
+            limit,
         ))
     })
 }
@@ -86,12 +96,17 @@ pub fn runtime_tool_results_value(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let runtime_id = payload_string(payload, "runtimeId");
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
     with_store(state, |store| {
         Ok(tool_results_value_for_session(
             &store,
             &session_id,
             include_child_sessions,
             runtime_id.as_deref(),
+            limit,
         ))
     })
 }

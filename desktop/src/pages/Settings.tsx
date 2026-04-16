@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check, Radio } from 'lucide-react';
 import clsx from 'clsx';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
@@ -68,6 +68,7 @@ import {
   ExperimentalSettingsSection,
   GeneralSettingsSection,
   KnowledgeSettingsSection,
+  RemoteConnectionSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
@@ -80,7 +81,7 @@ const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
 
-type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'experimental' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 
@@ -101,6 +102,11 @@ type AssistantDaemonDraft = {
     replyUsingChatId: boolean;
   };
   relay: {
+    enabled: boolean;
+    endpointPath: string;
+    authToken: string;
+  };
+  knowledgeApi: {
     enabled: boolean;
     endpointPath: string;
     authToken: string;
@@ -151,6 +157,11 @@ const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
     endpointPath: '/hooks/channel/relay',
     authToken: '',
   },
+  knowledgeApi: {
+    enabled: true,
+    endpointPath: '/api/knowledge',
+    authToken: '',
+  },
   weixin: {
     enabled: false,
     endpointPath: '/hooks/weixin/relay',
@@ -187,6 +198,11 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
       enabled: status.relay?.enabled !== false,
       endpointPath: String(status.relay?.endpointPath || '/hooks/channel/relay'),
       authToken: String(status.relay?.authToken || ''),
+    },
+    knowledgeApi: {
+      enabled: status.knowledgeApi?.enabled !== false,
+      endpointPath: String(status.knowledgeApi?.endpointPath || '/api/knowledge'),
+      authToken: String(status.knowledgeApi?.authToken || ''),
     },
     weixin: {
       enabled: Boolean(status.weixin?.enabled),
@@ -396,6 +412,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
+  const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
@@ -406,6 +423,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     knowledge: false,
     tools: false,
     experimental: false,
+    remote: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
@@ -413,6 +431,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     knowledge: false,
     tools: false,
     experimental: false,
+    remote: false,
   });
 
   const logSettingsPerf = useCallback((stage: string, startedAt: number, extra?: string) => {
@@ -865,7 +884,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!isActive) {
       return;
     }
-    if (activeTab !== 'general') {
+    if (activeTab !== 'remote') {
       return;
     }
 
@@ -934,13 +953,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedRuntimeTaskId || !runtimeTasks.some((task) => task.id === selectedRuntimeTaskId)) return;
     void loadRuntimeTaskTraces(selectedRuntimeTaskId);
-  }, [activeTab, formData.developer_mode_enabled, selectedRuntimeTaskId]);
+  }, [activeTab, formData.developer_mode_enabled, runtimeTasks, selectedRuntimeTaskId]);
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedRuntimeSessionId || !runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)) return;
     void loadRuntimeSessionDetails(selectedRuntimeSessionId);
-  }, [activeTab, formData.developer_mode_enabled, selectedRuntimeSessionId]);
+  }, [activeTab, formData.developer_mode_enabled, runtimeSessions, selectedRuntimeSessionId]);
 
   useEffect(() => {
     setTestStatus('idle');
@@ -2091,11 +2112,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       } | null;
       const accessToken = String(cached?.session?.accessToken || '').trim();
       if (!accessToken) {
+        officialStartupSyncRef.current = false;
         return;
       }
-      await window.ipcRenderer.invoke('redbox-auth:get-session');
+      void window.ipcRenderer.invoke('redbox-auth:get-session')
+        .catch((error) => {
+          console.error('Failed to sync official auth during startup', error);
+        })
+        .finally(() => {
+          officialStartupSyncRef.current = false;
+        });
     } catch (error) {
       console.error('Failed to sync official auth during startup', error);
+      officialStartupSyncRef.current = false;
     }
   }, []);
 
@@ -2154,15 +2183,52 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
-  const loadAssistantDaemonStatus = useCallback(async () => {
+  const withTimeout = useCallback(<T,>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        reject(new Error(label));
+      }, timeoutMs);
+      task.then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      }).catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }, []);
+
+  const loadAssistantDaemonStatus = useCallback(async (options?: {
+    timeoutMs?: number;
+    suppressAlert?: boolean;
+  }) => {
     try {
-      const status = await window.ipcRenderer.assistantDaemon.getStatus();
+      const request = window.ipcRenderer.assistantDaemon.getStatus() as Promise<AssistantDaemonStatus>;
+      const status = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
+        ? await withTimeout(request, options.timeoutMs, '远程连接状态加载超时')
+        : await request;
       setAssistantDaemonStatus(status);
       replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
     } catch (error) {
       console.error('Failed to load assistant daemon status', error);
+      if (!options?.suppressAlert) {
+        void appAlert(`加载远程连接状态失败：${String(error)}`);
+      }
     }
-  }, [replaceAssistantDaemonDraft]);
+  }, [replaceAssistantDaemonDraft, withTimeout]);
+
+  const scheduleRemoteTabWarmup = useCallback(() => {
+    if (remoteTabWarmTimerRef.current != null) {
+      window.clearTimeout(remoteTabWarmTimerRef.current);
+    }
+    remoteTabWarmTimerRef.current = window.setTimeout(() => {
+      remoteTabWarmTimerRef.current = null;
+      void loadAssistantDaemonStatus({
+        timeoutMs: 1500,
+        suppressAlert: true,
+      });
+    }, 0);
+  }, [loadAssistantDaemonStatus]);
 
   const buildAssistantDaemonPayload = useCallback(() => ({
     enabled: assistantDaemonDraft.enabled,
@@ -2184,6 +2250,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       enabled: assistantDaemonDraft.relay.enabled,
       endpointPath: String(assistantDaemonDraft.relay.endpointPath || '').trim(),
       authToken: String(assistantDaemonDraft.relay.authToken || '').trim() || undefined,
+    },
+    knowledgeApi: {
+      enabled: assistantDaemonDraft.knowledgeApi.enabled,
+      endpointPath: String(assistantDaemonDraft.knowledgeApi.endpointPath || '').trim(),
+      authToken: String(assistantDaemonDraft.knowledgeApi.authToken || '').trim() || undefined,
     },
     weixin: {
       enabled: assistantDaemonDraft.weixin.enabled,
@@ -2342,11 +2413,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     baseSettingsInFlightRef.current = true;
     const startedAt = performance.now();
     try {
-      await syncOfficialAuthForStartup();
       await loadSettings({
         preserveViewState: true,
         preserveRemoteModels: true,
       });
+      void syncOfficialAuthForStartup();
       baseSettingsLoadedRef.current = true;
       tabWarmRef.current.ai = true;
       logSettingsPerf(force ? 'base-settings-refresh' : 'base-settings-load', startedAt);
@@ -2366,7 +2437,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
-          loadAssistantDaemonStatus(),
         ]);
       } else if (tab === 'knowledge') {
         await loadVectorStats();
@@ -2377,16 +2447,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
-          await loadToolDiagnostics();
-          await loadRuntimeRoles();
           await Promise.all([
-            loadRuntimeTasks(),
-            loadRuntimeSessions(),
-            loadRuntimeHooks(),
-          ]);
-          await Promise.all([
-            loadBackgroundTasks(),
-            loadBackgroundWorkerPool(),
+            loadToolDiagnostics(),
+            loadRuntimeRoles(),
           ]);
         }
       } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
@@ -2409,7 +2472,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     formData.developer_mode_enabled,
     isActive,
     loadAppVersion,
-    loadAssistantDaemonStatus,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
@@ -2457,6 +2519,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!isActive) return;
     const handleSettingsUpdated = () => {
       void ensureBaseSettingsLoaded(true);
+      if (activeTab === 'remote') {
+        scheduleRemoteTabWarmup();
+      }
       if (activeTab === 'general' || activeTab === 'knowledge' || activeTab === 'tools') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
@@ -2466,7 +2531,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return () => {
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
-  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive]);
+  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
   useEffect(() => {
     if (!isActive) {
@@ -2477,25 +2542,36 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
+    if (activeTab === 'remote') {
+      scheduleRemoteTabWarmup();
+    }
     if (activeTab === 'knowledge') {
       void ensureTabResourcesLoaded('knowledge');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
-      runtimePollTimer = window.setInterval(() => {
-        if (!formData.developer_mode_enabled) return;
-        void Promise.all([
-          loadRuntimeTasks(),
-          loadRuntimeSessions(),
-        ]);
-      }, Math.max(8000, SETTINGS_TAB_POLL_DELAY_MS));
-      backgroundTaskPollTimer = window.setInterval(() => {
-        if (!formData.developer_mode_enabled) return;
-        void Promise.all([
-          loadBackgroundTasks(),
-          loadBackgroundWorkerPool(),
-        ]);
-      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+      if (
+        formData.developer_mode_enabled
+        && (runtimeTasks.length > 0 || runtimeSessions.length > 0)
+      ) {
+        runtimePollTimer = window.setInterval(() => {
+          void Promise.all([
+            loadRuntimeTasks(),
+            loadRuntimeSessions(),
+          ]);
+        }, Math.max(8000, SETTINGS_TAB_POLL_DELAY_MS));
+      }
+      if (
+        formData.developer_mode_enabled
+        && backgroundTasks.length > 0
+      ) {
+        backgroundTaskPollTimer = window.setInterval(() => {
+          void Promise.all([
+            loadBackgroundTasks(),
+            loadBackgroundWorkerPool(),
+          ]);
+        }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+      }
     }
 
     return () => {
@@ -2505,8 +2581,25 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (backgroundTaskPollTimer) {
         window.clearInterval(backgroundTaskPollTimer);
       }
+      if (remoteTabWarmTimerRef.current != null) {
+        window.clearTimeout(remoteTabWarmTimerRef.current);
+        remoteTabWarmTimerRef.current = null;
+      }
     };
-  }, [activeTab, ensureTabResourcesLoaded, formData.developer_mode_enabled, isActive, loadBackgroundTasks, loadBackgroundWorkerPool, loadRuntimeSessions, loadRuntimeTasks]);
+  }, [
+    activeTab,
+    backgroundTasks.length,
+    ensureTabResourcesLoaded,
+    formData.developer_mode_enabled,
+    isActive,
+    loadBackgroundTasks,
+    loadBackgroundWorkerPool,
+    loadRuntimeSessions,
+    loadRuntimeTasks,
+    runtimeSessions.length,
+    runtimeTasks.length,
+    scheduleRemoteTabWarmup,
+  ]);
 
   const handleRebuildIndex = async () => {
     if (!(await appConfirm('确定要重建所有索引吗？这可能需要一些时间，且会暂时清空现有向量数据。', { title: '重建索引', confirmLabel: '重建', tone: 'danger' }))) return;
@@ -2587,6 +2680,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (error) {
       console.error('Failed to open browser plugin dir', error);
       void appAlert(`打开插件目录失败：${String(error)}`);
+    }
+  };
+
+  const handleOpenKnowledgeApiGuide = async () => {
+    try {
+      const result = await window.ipcRenderer.openKnowledgeApiGuide();
+      if (!result.success) {
+        void appAlert(`打开知识导入 API 文档失败：${result.error || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('Failed to open knowledge api guide', error);
+      void appAlert(`打开知识导入 API 文档失败：${String(error)}`);
     }
   };
 
@@ -2715,6 +2820,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
+    { id: 'remote', label: '远程连接', icon: Radio },
     { id: 'knowledge', label: '知识库索引', icon: Database },
     { id: 'tools', label: '工具管理', icon: Wrench },
     { id: 'experimental', label: '实验性功能', icon: FlaskConical },
@@ -2760,6 +2866,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleRefreshDebugLogs={loadRecentDebugLogs}
                 handleOpenDebugLogDir={openDebugLogDirectory}
                 handleVersionTap={handleVersionTap}
+              />
+            )}
+
+            {activeTab === 'remote' && (
+              <RemoteConnectionSettingsSection
+                formData={formData}
+                setFormData={setFormData}
                 assistantDaemonStatus={assistantDaemonStatus}
                 assistantDaemonDraft={assistantDaemonDraft}
                 setAssistantDaemonDraft={setAssistantDaemonDraft}
@@ -3572,6 +3685,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isPreparingBrowserPlugin={isPreparingBrowserPlugin}
                 handlePrepareBrowserPlugin={handlePrepareBrowserPlugin}
                 handleOpenBrowserPluginDir={handleOpenBrowserPluginDir}
+                handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 isInstallingTool={isInstallingTool}
                 installProgress={installProgress}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}

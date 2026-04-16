@@ -671,6 +671,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                 <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
                 再次漫步
               </button>
+
             </>
           )}
           <div className={clsx('flex items-center gap-3', phase !== 'idle' && 'ml-1 pl-4 border-l border-black/[0.06]')}>

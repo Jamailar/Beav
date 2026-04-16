@@ -264,6 +264,7 @@ function createIpcRenderer() {
     getAppVersion: () => invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => invokeChannel('app:check-update', { force }),
     openAppReleasePage: (url?: string) => invokeChannel('app:open-release-page', { url }),
+    openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
       prepare: () => invokeChannel('plugin:prepare-browser-extension'),

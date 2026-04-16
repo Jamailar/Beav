@@ -72,6 +72,9 @@ pub fn handle_assistant_daemon_channel(
                     if let Some(weixin) = payload_field(payload, "weixin") {
                         store.assistant_state.weixin = weixin.clone();
                     }
+                    if let Some(knowledge_api) = payload_field(payload, "knowledgeApi") {
+                        store.assistant_state.knowledge_api = knowledge_api.clone();
+                    }
                     if enable_listening {
                         store.assistant_state.enabled = true;
                         store.assistant_state.lock_state = "owner".to_string();

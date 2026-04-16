@@ -4,10 +4,175 @@ use crate::persistence::{
 };
 use crate::workspace_loaders::read_json_file;
 use crate::*;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
+
+const DEFAULT_KNOWLEDGE_API_BODY_LIMIT: usize = 1_024 * 1_024;
+const DEFAULT_KNOWLEDGE_BATCH_LIMIT: usize = 64;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeSourceInput {
+    pub app_id: Option<String>,
+    pub plugin_id: Option<String>,
+    pub external_id: Option<String>,
+    pub source_url: Option<String>,
+    pub captured_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeEntryStatsInput {
+    pub likes: Option<i64>,
+    pub collects: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeEntryContentInput {
+    pub title: String,
+    pub author: Option<String>,
+    pub text: Option<String>,
+    pub excerpt: Option<String>,
+    pub html: Option<String>,
+    pub description: Option<String>,
+    pub summary: Option<String>,
+    pub site_name: Option<String>,
+    pub transcript: Option<String>,
+    pub tags: Vec<String>,
+    pub stats: Option<KnowledgeEntryStatsInput>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeEntryAssetsInput {
+    pub cover_url: Option<String>,
+    pub image_urls: Vec<String>,
+    pub video_url: Option<String>,
+    pub thumbnail_url: Option<String>,
+}
+
+fn default_allow_update() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnowledgeIngestOptionsInput {
+    #[serde(default)]
+    pub dedupe_key: Option<String>,
+    #[serde(default = "default_allow_update")]
+    pub allow_update: bool,
+    #[serde(default)]
+    pub summarize: bool,
+    #[serde(default)]
+    pub transcribe: bool,
+}
+
+impl Default for KnowledgeIngestOptionsInput {
+    fn default() -> Self {
+        Self {
+            dedupe_key: None,
+            allow_update: true,
+            summarize: false,
+            transcribe: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeEntryIngestRequest {
+    pub space_id: Option<String>,
+    pub kind: String,
+    pub source: KnowledgeSourceInput,
+    pub content: KnowledgeEntryContentInput,
+    pub assets: KnowledgeEntryAssetsInput,
+    pub options: KnowledgeIngestOptionsInput,
+}
+
+fn default_copy_into_workspace() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KnowledgeDocumentSourceOptionsInput {
+    #[serde(default = "default_copy_into_workspace")]
+    pub copy_into_workspace: bool,
+    #[serde(default = "default_allow_update")]
+    pub allow_update: bool,
+}
+
+impl Default for KnowledgeDocumentSourceOptionsInput {
+    fn default() -> Self {
+        Self {
+            copy_into_workspace: true,
+            allow_update: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeDocumentSourceIngestRequest {
+    pub space_id: Option<String>,
+    pub kind: String,
+    pub source: KnowledgeSourceInput,
+    pub name: Option<String>,
+    pub paths: Vec<String>,
+    pub root_path: Option<String>,
+    pub options: KnowledgeDocumentSourceOptionsInput,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeBatchIngestRequest {
+    pub entries: Vec<KnowledgeEntryIngestRequest>,
+    pub document_sources: Vec<KnowledgeDocumentSourceIngestRequest>,
+}
+
+fn normalize_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn normalize_vec(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn ensure_supported_space(
+    state: &State<'_, AppState>,
+    requested_space_id: Option<&str>,
+) -> Result<String, String> {
+    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    if let Some(space_id) = requested_space_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if space_id != active_space_id {
+            return Err(format!(
+                "当前仅支持写入活动空间；请求 spaceId={}，活动空间={}",
+                space_id, active_space_id
+            ));
+        }
+    }
+    Ok(active_space_id)
+}
+
+fn knowledge_redbook_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = knowledge_root(state)?.join("redbook");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
 
 fn knowledge_docs_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = knowledge_root(state)?.join("docs");
@@ -21,12 +186,27 @@ fn imported_docs_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn youtube_entry_id(video_id: &str) -> String {
-    let slug = slug_from_relative_path(video_id);
+fn redbook_entry_dir(state: &State<'_, AppState>, entry_id: &str) -> Result<PathBuf, String> {
+    let root = knowledge_redbook_root(state)?.join(entry_id);
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn youtube_entry_id(seed: &str) -> String {
+    let slug = slug_from_relative_path(seed);
     if slug.is_empty() {
         make_id("youtube")
     } else {
         format!("youtube-{slug}")
+    }
+}
+
+fn note_entry_id(seed: &str) -> String {
+    let slug = slug_from_relative_path(seed);
+    if slug.is_empty() {
+        make_id("knowledge")
+    } else {
+        format!("knowledge-{slug}")
     }
 }
 
@@ -101,81 +281,510 @@ fn is_workspace_managed_doc_root(state: &State<'_, AppState>, path: &Path) -> bo
         .is_some_and(|(workspace_root, candidate)| candidate.starts_with(workspace_root))
 }
 
-pub(crate) fn save_youtube_note(
-    app: &AppHandle,
+fn metadata_string(path: &Path, key: &str) -> Option<String> {
+    read_json_file(path).and_then(|meta| {
+        meta.get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn find_redbook_entry_id_by_meta_field(
     state: &State<'_, AppState>,
-    input: &YoutubeSavePayload,
-) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_knowledge(state);
-    let existing = with_store(state, |store| {
+    field_name: &str,
+    expected: &str,
+) -> Result<Option<String>, String> {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return Ok(None);
+    }
+    let root = knowledge_redbook_root(state)?;
+    let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let meta_path = path.join("meta.json");
+        let Some(value) = metadata_string(&meta_path, field_name) else {
+            continue;
+        };
+        if value == expected {
+            let entry_id = metadata_string(&meta_path, "id")
+                .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
+            return Ok(Some(entry_id));
+        }
+    }
+    Ok(None)
+}
+
+fn note_content_markdown(content: &KnowledgeEntryContentInput) -> Option<String> {
+    normalize_string(content.text.clone())
+        .or_else(|| normalize_string(content.description.clone()))
+        .or_else(|| normalize_string(content.excerpt.clone()))
+}
+
+fn resolve_note_seed(request: &KnowledgeEntryIngestRequest) -> String {
+    normalize_string(request.source.external_id.clone())
+        .or_else(|| normalize_string(request.options.dedupe_key.clone()))
+        .or_else(|| normalize_string(request.source.source_url.clone()))
+        .or_else(|| normalize_string(Some(request.content.title.clone())))
+        .unwrap_or_else(|| make_id("knowledge"))
+}
+
+fn find_existing_note_entry_id(
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Option<String>, String> {
+    if let Some(dedupe_key) = normalize_string(request.options.dedupe_key.clone()) {
+        if let Some(entry_id) =
+            find_redbook_entry_id_by_meta_field(state, "dedupeKey", &dedupe_key)?
+        {
+            return Ok(Some(entry_id));
+        }
+    }
+    if let Some(external_id) = normalize_string(request.source.external_id.clone()) {
+        if let Some(entry_id) =
+            find_redbook_entry_id_by_meta_field(state, "externalId", &external_id)?
+        {
+            return Ok(Some(entry_id));
+        }
+    }
+    if let Some(source_url) = normalize_string(request.source.source_url.clone()) {
+        let existing = with_store(state, |store| {
+            Ok(store
+                .knowledge_notes
+                .iter()
+                .find(|item| item.source_url.as_deref() == Some(source_url.as_str()))
+                .map(|item| item.id.clone()))
+        })?;
+        if existing.is_some() {
+            return Ok(existing);
+        }
+        if let Some(entry_id) =
+            find_redbook_entry_id_by_meta_field(state, "sourceUrl", &source_url)?
+        {
+            return Ok(Some(entry_id));
+        }
+    }
+    Ok(None)
+}
+
+fn find_existing_youtube_video(
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Option<YoutubeVideoRecord>, String> {
+    let external_id = normalize_string(request.source.external_id.clone());
+    let source_url = normalize_string(request.source.source_url.clone());
+    with_store(state, |store| {
         Ok(store
             .youtube_videos
             .iter()
-            .find(|item| item.video_id == input.video_id || item.video_url == input.video_url)
+            .find(|item| {
+                external_id
+                    .as_deref()
+                    .is_some_and(|video_id| item.video_id == video_id)
+                    || source_url
+                        .as_deref()
+                        .is_some_and(|video_url| item.video_url == video_url)
+            })
             .cloned())
-    })?;
+    })
+}
 
+fn ingest_youtube_entry(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Value, String> {
+    ensure_supported_space(state, request.space_id.as_deref())?;
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    let existing = find_existing_youtube_video(state, request)?;
+    if existing.is_some() && !request.options.allow_update {
+        let existing = existing.unwrap();
+        return Ok(json!({
+            "success": true,
+            "kind": "youtube-video",
+            "duplicate": true,
+            "updated": false,
+            "entryId": existing.id,
+        }));
+    }
+
+    let video_id = normalize_string(request.source.external_id.clone())
+        .ok_or_else(|| "youtube-video 缺少 source.externalId / videoId".to_string())?;
+    let video_url = normalize_string(request.source.source_url.clone())
+        .ok_or_else(|| "youtube-video 缺少 source.sourceUrl / videoUrl".to_string())?;
+    let title = normalize_string(Some(request.content.title.clone()))
+        .ok_or_else(|| "youtube-video 缺少 content.title".to_string())?;
+    let description = normalize_string(request.content.description.clone())
+        .or_else(|| normalize_string(request.content.text.clone()))
+        .unwrap_or_default();
     let entry_id = existing
         .as_ref()
         .map(|item| item.id.clone())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| youtube_entry_id(&input.video_id));
-    let created_at = existing
-        .as_ref()
-        .map(|item| item.created_at.clone())
+        .unwrap_or_else(|| youtube_entry_id(&video_id));
+    let created_at = normalize_string(request.source.captured_at.clone())
+        .or_else(|| existing.as_ref().map(|item| item.created_at.clone()))
         .unwrap_or_else(now_iso);
-    let summary = existing
-        .as_ref()
-        .and_then(|item| item.summary.clone())
+    let summary = normalize_string(request.content.summary.clone())
+        .or_else(|| existing.as_ref().and_then(|item| item.summary.clone()))
         .unwrap_or_else(|| "RedBox captured this video for later migration work.".to_string());
-    let subtitle_file = existing.as_ref().and_then(|item| {
-        item.folder_path
-            .as_ref()
-            .and_then(|folder| read_json_file(Path::new(folder).join("meta.json").as_path()))
-            .and_then(|meta| {
-                meta.get("subtitleFile")
-                    .or_else(|| meta.get("subtitle_file"))
-                    .and_then(|value| value.as_str())
-                    .map(ToString::to_string)
+    let subtitle_file = normalize_string(request.content.transcript.clone())
+        .map(|_| "subtitle.txt".to_string())
+        .or_else(|| {
+            existing.as_ref().and_then(|item| {
+                item.folder_path
+                    .as_ref()
+                    .and_then(|folder| {
+                        read_json_file(Path::new(folder).join("meta.json").as_path())
+                    })
+                    .and_then(|meta| {
+                        meta.get("subtitleFile")
+                            .or_else(|| meta.get("subtitle_file"))
+                            .and_then(|value| value.as_str())
+                            .map(ToString::to_string)
+                    })
             })
-    });
+        });
     let entry_dir = youtube_entry_dir(state, &entry_id)?;
-    let meta_path = entry_dir.join("meta.json");
+    if let Some(transcript) = normalize_string(request.content.transcript.clone()) {
+        fs::write(entry_dir.join("subtitle.txt"), transcript).map_err(|error| error.to_string())?;
+    }
     let meta = json!({
         "id": entry_id,
-        "videoId": input.video_id,
-        "videoUrl": input.video_url,
-        "title": input.title,
-        "originalTitle": input.title,
-        "description": input.description.clone().unwrap_or_default(),
+        "videoId": video_id,
+        "videoUrl": video_url,
+        "title": title,
+        "originalTitle": title,
+        "description": description,
         "summary": summary,
-        "thumbnailUrl": input.thumbnail_url.clone().unwrap_or_default(),
-        "hasSubtitle": existing.as_ref().map(|item| item.has_subtitle).unwrap_or(false),
-        "status": existing
-            .as_ref()
-            .and_then(|item| item.status.clone())
-            .unwrap_or_else(|| "completed".to_string()),
+        "thumbnailUrl": normalize_string(request.assets.thumbnail_url.clone()).unwrap_or_default(),
+        "hasSubtitle": subtitle_file.is_some(),
+        "status": "completed",
         "createdAt": created_at,
         "subtitleFile": subtitle_file,
+        "sourceAppId": normalize_string(request.source.app_id.clone()),
+        "sourcePluginId": normalize_string(request.source.plugin_id.clone()),
+        "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
     });
-    write_json_value(&meta_path, &meta)?;
+    write_json_value(&entry_dir.join("meta.json"), &meta)?;
     refresh_knowledge_projection_and_emit(
-        Some(app),
+        app,
         state,
         Some((
             "knowledge:new-youtube-video",
             json!({
                 "noteId": entry_id,
-                "title": input.title,
+                "title": request.content.title,
                 "status": "completed",
             }),
         )),
     )?;
     Ok(json!({
         "success": true,
+        "kind": "youtube-video",
         "duplicate": existing.is_some(),
-        "migrated": existing.as_ref().is_some_and(|item| item.folder_path.is_none()),
-        "noteId": entry_id,
+        "updated": existing.is_some(),
+        "entryId": entry_id,
+        "requestedActions": {
+            "summarize": request.options.summarize,
+            "transcribe": request.options.transcribe,
+        },
+    }))
+}
+
+fn ingest_note_entry(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Value, String> {
+    ensure_supported_space(state, request.space_id.as_deref())?;
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    let existing_entry_id = find_existing_note_entry_id(state, request)?;
+    if existing_entry_id.is_some() && !request.options.allow_update {
+        return Ok(json!({
+            "success": true,
+            "kind": request.kind,
+            "duplicate": true,
+            "updated": false,
+            "entryId": existing_entry_id,
+        }));
+    }
+
+    let title = normalize_string(Some(request.content.title.clone()))
+        .ok_or_else(|| "knowledge entry 缺少 content.title".to_string())?;
+    let entry_id = existing_entry_id
+        .clone()
+        .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
+    let entry_dir = redbook_entry_dir(state, &entry_id)?;
+
+    let markdown = note_content_markdown(&request.content);
+    if let Some(markdown) = markdown.as_ref() {
+        fs::write(entry_dir.join("content.md"), markdown).map_err(|error| error.to_string())?;
+    }
+    if let Some(html) = normalize_string(request.content.html.clone()) {
+        fs::write(entry_dir.join("content.html"), html).map_err(|error| error.to_string())?;
+    }
+    if let Some(transcript) = normalize_string(request.content.transcript.clone()) {
+        fs::write(entry_dir.join("transcript.md"), transcript)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let stats = request.content.stats.clone().unwrap_or_default();
+    let images = normalize_vec(request.assets.image_urls.clone());
+    let cover_url =
+        normalize_string(request.assets.cover_url.clone()).or_else(|| images.first().cloned());
+    let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
+    let meta = json!({
+        "id": entry_id,
+        "type": normalize_string(Some(request.kind.clone())).unwrap_or_else(|| "knowledge-note".to_string()),
+        "captureKind": normalize_string(Some(request.kind.clone())).unwrap_or_else(|| "knowledge-note".to_string()),
+        "sourceUrl": normalize_string(request.source.source_url.clone()),
+        "sourceAppId": normalize_string(request.source.app_id.clone()),
+        "sourcePluginId": normalize_string(request.source.plugin_id.clone()),
+        "externalId": normalize_string(request.source.external_id.clone()),
+        "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
+        "title": title,
+        "author": normalize_string(request.content.author.clone()).unwrap_or_else(|| "原文链接".to_string()),
+        "excerpt": normalize_string(request.content.excerpt.clone()),
+        "description": normalize_string(request.content.description.clone()),
+        "siteName": normalize_string(request.content.site_name.clone()),
+        "tags": normalize_vec(request.content.tags.clone()),
+        "images": images,
+        "cover": cover_url,
+        "videoUrl": normalize_string(request.assets.video_url.clone()),
+        "video": normalize_string(request.assets.video_url.clone()),
+        "htmlFile": if normalize_string(request.content.html.clone()).is_some() { Some("content.html") } else { None },
+        "transcriptFile": if normalize_string(request.content.transcript.clone()).is_some() { Some("transcript.md") } else { None },
+        "transcriptionStatus": if normalize_string(request.content.transcript.clone()).is_some() { Some("completed") } else { None },
+        "stats": {
+            "likes": stats.likes.unwrap_or(0),
+            "collects": stats.collects
+        },
+        "createdAt": created_at,
+        "updatedAt": now_iso(),
+    });
+    write_json_value(&entry_dir.join("meta.json"), &meta)?;
+    refresh_knowledge_projection_and_emit(
+        app,
+        state,
+        Some((
+            "knowledge:note-updated",
+            json!({
+                "noteId": entry_id,
+                "kind": request.kind,
+                "hasTranscript": normalize_string(request.content.transcript.clone()).is_some(),
+            }),
+        )),
+    )?;
+    Ok(json!({
+        "success": true,
+        "kind": request.kind,
+        "duplicate": existing_entry_id.is_some(),
+        "updated": existing_entry_id.is_some(),
+        "entryId": entry_id,
+        "requestedActions": {
+            "summarize": request.options.summarize,
+            "transcribe": request.options.transcribe,
+        },
+    }))
+}
+
+fn collect_document_paths(request: &KnowledgeDocumentSourceIngestRequest) -> Vec<PathBuf> {
+    let mut paths = request
+        .paths
+        .iter()
+        .filter_map(|item| normalize_string(Some(item.clone())).map(PathBuf::from))
+        .collect::<Vec<_>>();
+    if let Some(root_path) = normalize_string(request.root_path.clone()) {
+        let root = PathBuf::from(root_path);
+        if root.is_file() {
+            paths.push(root);
+        }
+    }
+    paths
+}
+
+pub(crate) fn ingest_entry(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+) -> Result<Value, String> {
+    let kind = request.kind.trim();
+    if kind.is_empty() {
+        return Err("knowledge entry kind 不能为空".to_string());
+    }
+    match kind {
+        "youtube-video" => ingest_youtube_entry(app, state, request),
+        "xhs-note" | "xhs-video" | "link-article" | "wechat-article" | "knowledge-note"
+        | "webpage" | "article" => ingest_note_entry(app, state, request),
+        other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
+    }
+}
+
+pub(crate) fn ingest_document_source(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeDocumentSourceIngestRequest,
+) -> Result<Value, String> {
+    let app = app.ok_or_else(|| "document source ingestion 缺少 app handle".to_string())?;
+    ensure_supported_space(state, request.space_id.as_deref())?;
+    let kind = request.kind.trim();
+    if kind.is_empty() {
+        return Err("document source kind 不能为空".to_string());
+    }
+    let name = normalize_string(request.name.clone()).unwrap_or_else(|| match kind {
+        "tracked-folder" => "Tracked Folder".to_string(),
+        "obsidian-vault" => "Obsidian Vault".to_string(),
+        _ => "Imported Files".to_string(),
+    });
+    match kind {
+        "copied-file" => {
+            if !request.options.copy_into_workspace {
+                return Err("copied-file 当前必须 copyIntoWorkspace=true".to_string());
+            }
+            let files = collect_document_paths(request);
+            if files.is_empty() {
+                return Err("copied-file 需要至少一个有效文件路径".to_string());
+            }
+            let source_id = make_id("doc-source");
+            let batch_root = imported_docs_root(state)?.join(&source_id);
+            fs::create_dir_all(&batch_root).map_err(|error| error.to_string())?;
+            for file in &files {
+                let _ = copy_file_into_dir(file, &batch_root)?;
+            }
+            add_document_source(app, state, kind, &batch_root, &name, true)
+        }
+        "tracked-folder" | "obsidian-vault" => {
+            let root = normalize_string(request.root_path.clone())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    request
+                        .paths
+                        .first()
+                        .and_then(|path| normalize_string(Some(path.clone())).map(PathBuf::from))
+                })
+                .ok_or_else(|| format!("{kind} 需要 rootPath"))?;
+            if !root.exists() || !root.is_dir() {
+                return Err(format!("文档源目录不存在: {}", root.display()));
+            }
+            let response = add_document_source(app, state, kind, &root, &name, false)?;
+            Ok(json!({
+                "success": response.get("success").and_then(|value| value.as_bool()).unwrap_or(false),
+                "source": response.get("source").cloned().unwrap_or(Value::Null),
+                "requestedOptions": {
+                    "allowUpdate": request.options.allow_update,
+                    "copyIntoWorkspace": request.options.copy_into_workspace,
+                },
+            }))
+        }
+        other => Err(format!("暂不支持的 document source kind: {other}")),
+    }
+}
+
+pub(crate) fn batch_ingest(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeBatchIngestRequest,
+) -> Result<Value, String> {
+    let total = request.entries.len() + request.document_sources.len();
+    if total == 0 {
+        return Err("batch-ingest 不能为空".to_string());
+    }
+    if total > DEFAULT_KNOWLEDGE_BATCH_LIMIT {
+        return Err(format!(
+            "单次 batch-ingest 最多支持 {} 项",
+            DEFAULT_KNOWLEDGE_BATCH_LIMIT
+        ));
+    }
+    let mut results = Vec::new();
+    for entry in &request.entries {
+        results.push(json!({
+            "type": "entry",
+            "result": ingest_entry(app, state, entry)?,
+        }));
+    }
+    for document_source in &request.document_sources {
+        results.push(json!({
+            "type": "document-source",
+            "result": ingest_document_source(app, state, document_source)?,
+        }));
+    }
+    Ok(json!({
+        "success": true,
+        "count": results.len(),
+        "results": results,
+    }))
+}
+
+pub(crate) fn knowledge_http_health(
+    state: &State<'_, AppState>,
+    body_limit_bytes: usize,
+    batch_limit: usize,
+) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    let snapshot = with_store(state, |store| {
+        Ok(json!({
+            "success": true,
+            "counts": {
+                "entries": store.knowledge_notes.len(),
+                "youtubeVideos": store.youtube_videos.len(),
+                "documentSources": store.document_sources.len(),
+            },
+            "limits": {
+                "bodyBytes": body_limit_bytes,
+                "batchItems": batch_limit,
+            },
+            "spaceId": store.active_space_id,
+        }))
+    })?;
+    Ok(snapshot)
+}
+
+pub(crate) fn knowledge_http_body_limit() -> usize {
+    DEFAULT_KNOWLEDGE_API_BODY_LIMIT
+}
+
+pub(crate) fn knowledge_http_batch_limit() -> usize {
+    DEFAULT_KNOWLEDGE_BATCH_LIMIT
+}
+
+pub(crate) fn save_youtube_note(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    input: &YoutubeSavePayload,
+) -> Result<Value, String> {
+    let request = KnowledgeEntryIngestRequest {
+        space_id: None,
+        kind: "youtube-video".to_string(),
+        source: KnowledgeSourceInput {
+            app_id: Some("lexbox".to_string()),
+            plugin_id: None,
+            external_id: Some(input.video_id.clone()),
+            source_url: Some(input.video_url.clone()),
+            captured_at: None,
+        },
+        content: KnowledgeEntryContentInput {
+            title: input.title.clone(),
+            description: input.description.clone(),
+            ..Default::default()
+        },
+        assets: KnowledgeEntryAssetsInput {
+            thumbnail_url: input.thumbnail_url.clone(),
+            ..Default::default()
+        },
+        options: KnowledgeIngestOptionsInput::default(),
+    };
+    let response = ingest_entry(Some(app), state, &request)?;
+    Ok(json!({
+        "success": response.get("success").and_then(|value| value.as_bool()).unwrap_or(false),
+        "duplicate": response.get("duplicate").and_then(|value| value.as_bool()).unwrap_or(false),
+        "migrated": response.get("duplicate").and_then(|value| value.as_bool()).unwrap_or(false),
+        "noteId": response.get("entryId").cloned().unwrap_or(Value::Null),
     }))
 }
 
@@ -399,13 +1008,22 @@ pub(crate) fn import_document_files(
     files: &[PathBuf],
     display_name: &str,
 ) -> Result<Value, String> {
-    let source_id = make_id("doc-source");
-    let batch_root = imported_docs_root(state)?.join(&source_id);
-    fs::create_dir_all(&batch_root).map_err(|error| error.to_string())?;
-    for file in files {
-        let _ = copy_file_into_dir(file, &batch_root)?;
-    }
-    add_document_source(app, state, "copied-file", &batch_root, display_name, true)
+    let request = KnowledgeDocumentSourceIngestRequest {
+        space_id: None,
+        kind: "copied-file".to_string(),
+        source: KnowledgeSourceInput {
+            app_id: Some("lexbox".to_string()),
+            ..Default::default()
+        },
+        name: Some(display_name.to_string()),
+        paths: files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+        root_path: None,
+        options: KnowledgeDocumentSourceOptionsInput::default(),
+    };
+    ingest_document_source(Some(app), state, &request)
 }
 
 pub(crate) fn delete_document_source(
@@ -518,10 +1136,7 @@ pub(crate) fn persist_note_transcript(
                 }),
             )),
         )?;
-        return Ok(json!({
-            "success": true,
-            "transcript": transcript,
-        }));
+        return Ok(json!({ "success": true, "transcript": transcript }));
     }
 
     with_store_mut(state, |store| {
@@ -532,8 +1147,8 @@ pub(crate) fn persist_note_transcript(
         else {
             return Ok(());
         };
-        target.transcription_status = Some("completed".to_string());
         target.transcript = Some(transcript.to_string());
+        target.transcription_status = Some("completed".to_string());
         Ok(())
     })?;
     let _ = app.emit(
