@@ -6,8 +6,6 @@ mod config_runtime;
 mod events;
 #[path = "runtime/orchestration_runtime.rs"]
 mod orchestration_runtime;
-#[path = "runtime/phase0.rs"]
-mod phase0;
 #[path = "runtime/session_runtime.rs"]
 mod session_runtime;
 #[path = "runtime/task_runtime.rs"]
@@ -19,7 +17,6 @@ pub use agent_engine::*;
 pub use config_runtime::*;
 pub use events::*;
 pub use orchestration_runtime::*;
-pub use phase0::*;
 pub use session_runtime::*;
 pub use task_runtime::*;
 pub use types::*;
@@ -49,14 +46,15 @@ mod tests {
 
     #[test]
     fn runtime_direct_route_marks_background_tasks_as_long_running() {
-        let route = runtime_direct_route(
+        let route = runtime_direct_route_record(
             "default",
             "run it",
             Some(&json!({
                 "scheduledTaskId": "scheduled-1",
                 "forceLongRunningTask": true
             })),
-        );
+        )
+        .into_value();
         assert_eq!(
             route.get("intent").and_then(Value::as_str),
             Some("automation")
@@ -71,13 +69,14 @@ mod tests {
 
     #[test]
     fn runtime_direct_route_promotes_advisor_persona_to_multi_agent() {
-        let route = runtime_direct_route(
+        let route = runtime_direct_route_record(
             "default",
             "generate persona",
             Some(&json!({
                 "intent": "advisor_persona"
             })),
-        );
+        )
+        .into_value();
         assert_eq!(
             route.get("requiresMultiAgent").and_then(Value::as_bool),
             Some(true)

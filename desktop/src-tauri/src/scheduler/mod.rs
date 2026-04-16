@@ -20,11 +20,9 @@ use crate::{run_memory_maintenance_with_reason, AppState, AppStore};
 
 pub use job_runtime::{
     archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,
-    enqueue_assistant_daemon_job_execution, enqueue_due_job_executions,
-    enqueue_manual_job_execution_for_source, enqueue_runtime_task_job_execution,
-    ensure_runtime_task_job_definition,
+    enqueue_due_job_executions, enqueue_manual_job_execution_for_source,
     recover_stale_job_executions, requeue_retrying_job_executions, retry_job_execution,
-    run_due_job_executions, run_job_queue_once, agent_job_feature_enabled,
+    run_due_job_executions, run_job_queue_once,
 };
 
 pub fn parse_millis_string(value: Option<&str>) -> Option<i64> {
@@ -123,12 +121,7 @@ pub fn sync_redclaw_job_definitions(store: &mut AppStore) {
     let existing = store.redclaw_job_definitions.clone();
     let mut next = existing
         .iter()
-        .filter(|item| {
-            !matches!(
-                item.source_kind.as_deref(),
-                Some("scheduled") | Some("long_cycle")
-            )
-        })
+        .filter(|item| item.source_task_id.is_none())
         .cloned()
         .collect::<Vec<_>>();
 
@@ -156,7 +149,6 @@ fn background_phase_from_status(status: &str) -> &str {
     match status {
         "queued" | "leased" => "queued",
         "running" | "retrying" => "thinking",
-        "held" => "held",
         "succeeded" | "completed" => "completed",
         "failed" | "dead_lettered" => "failed",
         "cancelled" => "cancelled",
@@ -168,8 +160,6 @@ fn definition_kind_for_background(kind: &str) -> &str {
     match kind {
         "long_cycle" => "long-cycle",
         "scheduled" => "scheduled-task",
-        "runtime_task" => "runtime-task",
-        "assistant_daemon" => "assistant-daemon",
         other => other,
     }
 }
@@ -198,14 +188,6 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
 
     for definition in &store.redclaw_job_definitions {
         let execution = latest_execution_by_definition.get(&definition.id).copied();
-        if execution.is_none()
-            && !matches!(
-                definition.source_kind.as_deref(),
-                Some("scheduled") | Some("long_cycle")
-            )
-        {
-            continue;
-        }
         let worker_state = execution
             .map(|item| item.status.clone())
             .unwrap_or_else(|| {
@@ -270,20 +252,6 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
                 .map(|item| item.updated_at.clone())
                 .unwrap_or_else(|| definition.updated_at.clone()),
             "completedAt": execution.and_then(|item| item.completed_at.clone()),
-            "lineage": {
-                "sourceKind": definition.source_kind,
-                "sourceTaskId": definition.source_task_id,
-                "ownerContextId": definition.owner_context_id,
-                "runtimeMode": definition.runtime_mode,
-                "triggerKind": definition.trigger_kind,
-                "progressionKind": definition.progression_kind,
-            },
-            "lastCheckpoint": execution
-                .and_then(|item| item.checkpoints.last().cloned()),
-            "lastArtifact": execution
-                .and_then(|item| item.artifacts.last().cloned()),
-            "deliveryPolicy": definition.payload.get("jobContract").and_then(|value| value.get("deliveryPolicy")).cloned(),
-            "retryPolicy": definition.payload.get("jobContract").and_then(|value| value.get("retryPolicy")).cloned(),
             "turns": execution.map(|item| item.checkpoints.clone()).unwrap_or_default()
         }));
     }

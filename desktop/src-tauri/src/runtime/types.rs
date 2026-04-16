@@ -459,7 +459,6 @@ pub struct InteractiveToolCall {
 #[serde(default, rename_all = "camelCase")]
 pub struct RuntimeSubagentRoleSpec {
     pub role_id: String,
-    pub child_runtime_type: String,
     pub purpose: String,
     pub handoff_contract: String,
     pub output_schema: String,
@@ -470,7 +469,6 @@ pub struct RuntimeSubagentRoleSpec {
 pub struct RuntimeWarmEntry {
     pub mode: String,
     pub system_prompt: String,
-    pub context_bundle_summary: Option<Value>,
     pub model_config: Option<Value>,
     pub long_term_context: Option<String>,
     pub warmed_at: i64,

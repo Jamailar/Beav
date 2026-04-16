@@ -174,30 +174,18 @@ pub fn resume_runtime_task_snapshot(
     Some(task.clone())
 }
 
-pub fn cancel_runtime_task_tree(store: &mut AppStore, task_id: &str) -> Vec<String> {
-    let mut cancelled = Vec::new();
-    let mut stack = vec![task_id.to_string()];
-    while let Some(current) = stack.pop() {
-        let child_ids = store
-            .runtime_tasks
-            .iter()
-            .filter(|item| item.parent_task_id.as_deref() == Some(current.as_str()))
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        if let Some(task) = store
-            .runtime_tasks
-            .iter_mut()
-            .find(|item| item.id == current)
-        {
-            task.status = "cancelled".to_string();
-            task.updated_at = now_i64();
-            task.completed_at = Some(now_i64());
-            task.aggregation_status = Some("cancelled".to_string());
-            cancelled.push(task.id.clone());
-        }
-        stack.extend(child_ids);
-    }
-    cancelled
+pub fn cancel_runtime_task(store: &mut AppStore, task_id: &str) -> bool {
+    let Some(task) = store
+        .runtime_tasks
+        .iter_mut()
+        .find(|item| item.id == task_id)
+    else {
+        return false;
+    };
+    task.status = "cancelled".to_string();
+    task.updated_at = now_i64();
+    task.completed_at = Some(now_i64());
+    true
 }
 
 pub fn set_runtime_graph_node(
@@ -706,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_runtime_task_tree_marks_completed_and_returns_root() {
+    fn cancel_runtime_task_marks_completed_and_returns_true() {
         let route = runtime_direct_route_record("default", "draft", None);
         let task = create_runtime_task(
             "manual",
@@ -721,75 +709,15 @@ mod tests {
         let mut store = crate::AppStore::default();
         store.runtime_tasks.push(task);
 
-        let cancelled = cancel_runtime_task_tree(&mut store, &task_id);
-        assert_eq!(cancelled, vec![task_id.clone()]);
+        assert!(cancel_runtime_task(&mut store, &task_id));
         assert_eq!(store.runtime_tasks[0].status, "cancelled");
         assert!(store.runtime_tasks[0].completed_at.is_some());
     }
 
     #[test]
-    fn cancel_runtime_task_tree_returns_empty_for_unknown_task() {
+    fn cancel_runtime_task_returns_false_for_unknown_task() {
         let mut store = crate::AppStore::default();
-        assert!(cancel_runtime_task_tree(&mut store, "missing-task").is_empty());
-    }
-
-    #[test]
-    fn cancel_runtime_task_tree_cancels_descendants() {
-        let route = runtime_direct_route_record("default", "draft", None);
-        let mut parent = create_runtime_task(
-            "manual",
-            "running",
-            "default".to_string(),
-            Some("session-parent".to_string()),
-            Some("draft".to_string()),
-            route.clone(),
-            None,
-        );
-        parent.id = "task-parent".to_string();
-        let mut child = create_runtime_task(
-            "subagent",
-            "running",
-            "default".to_string(),
-            Some("session-child".to_string()),
-            Some("draft child".to_string()),
-            route.clone(),
-            None,
-        );
-        child.id = "task-child".to_string();
-        child.parent_task_id = Some(parent.id.clone());
-        child.root_task_id = Some(parent.id.clone());
-        let mut grandchild = create_runtime_task(
-            "subagent",
-            "running",
-            "default".to_string(),
-            Some("session-grandchild".to_string()),
-            Some("draft leaf".to_string()),
-            route,
-            None,
-        );
-        grandchild.id = "task-grandchild".to_string();
-        grandchild.parent_task_id = Some(child.id.clone());
-        grandchild.root_task_id = Some(parent.id.clone());
-
-        let mut store = crate::AppStore::default();
-        store.runtime_tasks.push(parent);
-        store.runtime_tasks.push(child);
-        store.runtime_tasks.push(grandchild);
-
-        let cancelled = cancel_runtime_task_tree(&mut store, "task-parent");
-
-        assert_eq!(cancelled.len(), 3);
-        assert!(cancelled.iter().any(|item| item == "task-parent"));
-        assert!(cancelled.iter().any(|item| item == "task-child"));
-        assert!(cancelled.iter().any(|item| item == "task-grandchild"));
-        assert!(store
-            .runtime_tasks
-            .iter()
-            .all(|item| item.status == "cancelled"));
-        assert!(store
-            .runtime_tasks
-            .iter()
-            .all(|item| item.aggregation_status.as_deref() == Some("cancelled")));
+        assert!(!cancel_runtime_task(&mut store, "missing-task"));
     }
 
     #[test]

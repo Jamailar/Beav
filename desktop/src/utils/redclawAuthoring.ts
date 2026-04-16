@@ -7,6 +7,7 @@ export interface AuthoringTaskHints {
     intent?: string;
     forceMultiAgent?: boolean;
     forceLongRunningTask?: boolean;
+    activeSkills?: string[];
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
     formatTarget?: AuthoringFormatTarget;
@@ -71,6 +72,7 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
         displayContent,
         taskHints: {
             intent: 'manuscript_creation',
+            activeSkills: ['writing-style'],
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

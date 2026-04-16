@@ -37,6 +37,7 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "redclaw" => "redclaw",
         "video-editor" | "video_editor" | "video-draft" | "redvideo" => "video-editor",
         "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
+        "diagnostics" | "debug" | "debugger" => "diagnostics",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" => "knowledge",
         "advisor-discussion" => "advisor-discussion",

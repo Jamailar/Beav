@@ -4,8 +4,8 @@ use crate::runtime::{
     SessionToolResultRecord, SessionTranscriptRecord,
 };
 use crate::{
-    make_id, now_iso, session_lineage_summary_value, slug_from_relative_path, store_root, AppState,
-    AppStore, ChatMessageRecord, ChatSessionContextRecord, ChatSessionRecord,
+    make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
+    ChatSessionContextRecord, ChatSessionRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -284,7 +284,6 @@ pub fn session_list_item_value(store: &AppStore, session: &ChatSessionRecord) ->
         "transcriptCount": transcript_count_for_session(store, &session.id),
         "checkpointCount": checkpoint_count_for_session(store, &session.id),
         "context": session_context_value_for_session(store, &session.id),
-        "lineage": session_lineage_summary_value(store, &session.id),
         "chatSession": chat_session_summary_value(session)
     })
 }
@@ -300,7 +299,6 @@ pub fn session_detail_value(store: &AppStore, session_id: &str) -> Value {
     json!({
         "chatSession": chat_session_summary_value(session),
         "context": session_context_value_for_session(store, session_id),
-        "lineage": session_lineage_summary_value(store, session_id),
         "transcript": trace_for_session(store, session_id),
         "checkpoints": checkpoints_for_session(store, session_id),
         "toolResults": tool_results_for_session(store, session_id),
@@ -324,7 +322,6 @@ pub fn session_resume_value(
         "summary": session_summary_text_for_session(store, session_id),
         "messageCount": session_message_count_for_session(store, session_id),
         "context": session_context_value_for_session(store, session_id),
-        "lineage": session_lineage_summary_value(store, session_id),
         "resumeMessages": resume_messages.unwrap_or_else(|| {
             runtime_context_messages_for_session(None, store, session_id, SESSION_CONTEXT_TAIL_MESSAGES)
         }),
@@ -1449,7 +1446,6 @@ pub fn persist_runtime_query_checkpoints(
     route_reasoning: &str,
     route_value: Value,
     orchestration: Option<Value>,
-    context_bundle_snapshot: Option<Value>,
 ) {
     append_session_checkpoint(
         store,
@@ -1471,22 +1467,12 @@ pub fn persist_runtime_query_checkpoints(
             Some(orchestration_value),
         );
     }
-    if let Some(context_bundle_payload) = context_bundle_snapshot {
-        append_session_checkpoint(
-            store,
-            session_id,
-            "runtime.context_bundle",
-            "context bundle snapshot".to_string(),
-            Some(context_bundle_payload),
-        );
-    }
 }
 
 pub fn runtime_query_checkpoint_events(
     route_reasoning: &str,
     route_value: Value,
     orchestration: Option<Value>,
-    context_bundle_snapshot: Option<Value>,
 ) -> Vec<(String, String, Option<Value>)> {
     let mut events = vec![(
         "runtime.route".to_string(),
@@ -1502,13 +1488,6 @@ pub fn runtime_query_checkpoint_events(
             "runtime.orchestration".to_string(),
             "subagent orchestration completed".to_string(),
             Some(orchestration_value),
-        ));
-    }
-    if let Some(context_bundle_payload) = context_bundle_snapshot {
-        events.push((
-            "runtime.context_bundle".to_string(),
-            "context bundle snapshot".to_string(),
-            Some(context_bundle_payload),
         ));
     }
     events
@@ -1731,12 +1710,10 @@ mod tests {
             "route resolved",
             json!({ "intent": "direct_answer" }),
             Some(json!({ "outputs": [{"roleId": "planner"}] })),
-            Some(json!({ "fingerprint": "ctx-1" })),
         );
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 2);
         assert_eq!(events[0].0, "runtime.route");
         assert_eq!(events[1].0, "runtime.orchestration");
-        assert_eq!(events[2].0, "runtime.context_bundle");
     }
 
     #[test]
@@ -1749,10 +1726,9 @@ mod tests {
             "route resolved",
             json!({ "intent": "direct_answer" }),
             Some(json!({ "outputs": [{ "roleId": "planner" }] })),
-            Some(json!({ "fingerprint": "ctx-1" })),
         );
 
-        assert_eq!(store.session_checkpoints.len(), 3);
+        assert_eq!(store.session_checkpoints.len(), 2);
         assert_eq!(
             store.session_checkpoints[0].checkpoint_type,
             "runtime.route"
@@ -1760,10 +1736,6 @@ mod tests {
         assert_eq!(
             store.session_checkpoints[1].checkpoint_type,
             "runtime.orchestration"
-        );
-        assert_eq!(
-            store.session_checkpoints[2].checkpoint_type,
-            "runtime.context_bundle"
         );
     }
 

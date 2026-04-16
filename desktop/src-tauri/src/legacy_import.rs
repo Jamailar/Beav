@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     configured_workspace_dir, copy_dir_recursive, ensure_workspace_dirs, file_url_for_path,
-    hydrate_store_from_workspace_files, legacy_workspace_dir, managed_workspace_dir_candidates,
-    now_iso, preferred_workspace_dir, should_force_preferred_workspace_dir,
-    slug_from_relative_path, AppStore, ArchiveProfileRecord, ArchiveSampleRecord,
-    ChatMessageRecord, ChatSessionRecord, SessionTranscriptRecord, SpaceRecord,
+    hydrate_store_from_workspace_files, is_same_path, legacy_workspace_dir,
+    managed_workspace_dir_candidates, now_iso, preferred_workspace_dir,
+    should_force_preferred_workspace_dir, slug_from_relative_path, AppStore, ArchiveProfileRecord,
+    ArchiveSampleRecord, ChatMessageRecord, ChatSessionRecord, SessionTranscriptRecord,
+    SpaceRecord,
 };
 
 pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
@@ -513,6 +514,9 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     for legacy_workspace_root in legacy_workspace_root_candidates(store, db_path.as_deref()) {
+        if is_same_path(&legacy_workspace_root, &workspace_base) {
+            continue;
+        }
         let _ = migrate_legacy_workspace_dirs(&default_space_root, &legacy_workspace_root);
 
         let legacy_spaces_root = legacy_workspace_root.join("spaces");

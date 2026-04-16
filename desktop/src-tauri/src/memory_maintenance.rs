@@ -4,10 +4,6 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::{
-    apply_structured_memory_maintenance, build_structured_memory_summary_markdown,
-    normalized_memory_type,
-};
-use crate::{
     generate_structured_response_with_settings, load_redbox_prompt, make_id, normalize_base_url,
     now_i64, now_iso, parse_json_value_from_text, payload_string, render_redbox_prompt,
     run_curl_json, run_curl_text, truncate_chars, value_to_i64_string, with_store, with_store_mut,
@@ -33,7 +29,32 @@ fn memory_maintenance_status_path(state: &State<'_, AppState>) -> Result<PathBuf
 }
 
 fn memory_summary_markdown(memories: &[UserMemoryRecord]) -> String {
-    build_structured_memory_summary_markdown(memories)
+    let mut lines = vec![
+        "# MEMORY.md".to_string(),
+        "".to_string(),
+        format!("自动生成时间：{}", now_iso()),
+        "".to_string(),
+        "## Active Memories".to_string(),
+    ];
+    let mut active = memories
+        .iter()
+        .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
+        .cloned()
+        .collect::<Vec<_>>();
+    active.sort_by(|a, b| {
+        b.updated_at
+            .unwrap_or(b.created_at)
+            .cmp(&a.updated_at.unwrap_or(a.created_at))
+    });
+    if active.is_empty() {
+        lines.push("- （暂无）".to_string());
+    } else {
+        for item in active.iter().take(80) {
+            let preview = truncate_chars(item.content.trim(), 220);
+            lines.push(format!("- [{}] {}", item.r#type, preview));
+        }
+    }
+    lines.join("\n")
 }
 
 pub(crate) fn persist_memory_workspace_state(
@@ -83,22 +104,7 @@ pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
         .iter()
         .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
         .cloned()
-        .map(|item| {
-            json!({
-                "id": item.id,
-                "type": normalized_memory_type(&item),
-                "content": item.content,
-                "summary": item.summary,
-                "tags": item.tags,
-                "sourceSessionId": item.source_session_id,
-                "sourceCheckpointId": item.source_checkpoint_id,
-                "sourceToolResultId": item.source_tool_result_id,
-                "scopeKey": item.scope_key,
-                "confidence": item.confidence,
-                "expiresAt": item.expires_at,
-                "updatedAt": item.updated_at,
-            })
-        })
+        .map(|item| json!(item))
         .collect();
     let archived_memories: Vec<Value> = store
         .memories
@@ -151,10 +157,7 @@ pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
             ("active_memory_count", active_memories.len().to_string()),
             ("archived_memory_count", archived_memories.len().to_string()),
             ("history_count", history.len().to_string()),
-            (
-                "recent_conversations_count",
-                recent_conversations.len().to_string(),
-            ),
+            ("recent_conversations_count", "0".to_string()),
             (
                 "active_memories_json",
                 serde_json::to_string_pretty(&active_memories).unwrap_or_else(|_| "[]".to_string()),
@@ -221,11 +224,6 @@ pub(crate) fn run_memory_maintenance_with_reason(
     state: &State<'_, AppState>,
     reason: &str,
 ) -> Result<Value, String> {
-    let pre_summary = with_store_mut(state, |store| {
-        let summary = apply_structured_memory_maintenance(store);
-        persist_memory_workspace_state(state, store)?;
-        Ok(summary)
-    })?;
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let prompt = with_store(state, |store| Ok(build_memory_maintenance_prompt(&store)))?;
     let system_prompt =
@@ -260,9 +258,8 @@ pub(crate) fn run_memory_maintenance_with_reason(
                     if content.trim().is_empty() {
                         continue;
                     }
-                    let memory_type = crate::normalize_memory_type(
-                        payload_string(&action, "memoryType").as_deref(),
-                    );
+                    let memory_type = payload_string(&action, "memoryType")
+                        .unwrap_or_else(|| "general".to_string());
                     let tags = action
                         .get("tags")
                         .and_then(|value| value.as_array())
@@ -288,14 +285,6 @@ pub(crate) fn run_memory_maintenance_with_reason(
                         canonical_key: None,
                         revision: Some(1),
                         last_conflict_at: None,
-                        summary: payload_string(&action, "summary"),
-                        scope_key: payload_string(&action, "scopeKey"),
-                        source_session_id: payload_string(&action, "sourceSessionId"),
-                        source_checkpoint_id: payload_string(&action, "sourceCheckpointId"),
-                        source_tool_result_id: payload_string(&action, "sourceToolResultId"),
-                        confidence: action.get("confidence").and_then(|value| value.as_f64()),
-                        expires_at: action.get("expiresAt").and_then(|value| value.as_i64()),
-                        last_maintained_at: Some(now_i64()),
                     };
                     store.memories.push(record.clone());
                     store.memory_history.push(MemoryHistoryRecord {
@@ -324,7 +313,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
                             item.content = content;
                         }
                         if let Some(memory_type) = payload_string(&action, "memoryType") {
-                            item.r#type = crate::normalize_memory_type(Some(&memory_type));
+                            item.r#type = memory_type;
                         }
                         if let Some(tags) = action.get("tags").and_then(|value| value.as_array()) {
                             item.tags = tags
@@ -332,13 +321,6 @@ pub(crate) fn run_memory_maintenance_with_reason(
                                 .filter_map(|entry| entry.as_str().map(ToString::to_string))
                                 .collect();
                         }
-                        if let Some(summary) = payload_string(&action, "summary") {
-                            item.summary = Some(summary);
-                        }
-                        if let Some(scope_key) = payload_string(&action, "scopeKey") {
-                            item.scope_key = Some(scope_key);
-                        }
-                        item.last_maintained_at = Some(now_i64());
                         item.updated_at = Some(now_i64());
                         let after = json!(item.clone());
                         store.memory_history.push(MemoryHistoryRecord {
@@ -412,11 +394,6 @@ pub(crate) fn run_memory_maintenance_with_reason(
         }
         Ok(())
     })?;
-    let post_summary = with_store_mut(state, |store| {
-        let summary = apply_structured_memory_maintenance(store);
-        persist_memory_workspace_state(state, store)?;
-        Ok(summary)
-    })?;
     let next_scheduled = match reason {
         "query-after" => now_i64() + 5 * 60 * 1000,
         "periodic" => now_i64() + 30 * 60 * 1000,
@@ -431,15 +408,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
         "lastRunAt": now_i64(),
         "lastScanAt": now_i64(),
         "lastReason": reason,
-        "lastSummary": parsed.get("summary").and_then(|value| value.as_str()).map(ToString::to_string).unwrap_or_else(|| {
-            format!(
-                "RedBox memory maintenance completed. normalized={} deduped={} compressed={} archivedTaskLearnings={}",
-                pre_summary.normalized + post_summary.normalized,
-                pre_summary.deduped + post_summary.deduped,
-                pre_summary.compressed + post_summary.compressed,
-                pre_summary.archived_task_learnings + post_summary.archived_task_learnings
-            )
-        }),
+        "lastSummary": parsed.get("summary").and_then(|value| value.as_str()).unwrap_or("RedBox memory maintenance completed."),
         "lastError": Value::Null,
         "nextScheduledAt": next_scheduled,
         "raw": parsed,

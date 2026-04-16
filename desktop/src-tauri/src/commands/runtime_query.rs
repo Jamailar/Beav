@@ -8,31 +8,13 @@ use crate::agent::{
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::emit_runtime_task_checkpoint_saved;
-use crate::interactive_runtime_shared::interactive_runtime_context_snapshot;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
-use crate::skills::{
-    active_hooks_for_event, active_skill_activation_items, build_resolved_skill_runtime_state,
-    resolve_skill_records,
-};
+use crate::skills::active_skill_activation_items;
 use crate::{
-    append_debug_log_state, log_timing_event, now_ms, payload_field, payload_string,
-    resolve_runtime_mode_for_session, AppState,
+    log_timing_event, now_ms, payload_field, payload_string, resolve_runtime_mode_for_session,
+    AppState,
 };
-
-fn merge_request_metadata(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
-    match (base, overlay) {
-        (Some(Value::Object(mut base_map)), Some(Value::Object(overlay_map))) => {
-            for (key, value) in overlay_map {
-                base_map.insert(key, value);
-            }
-            Some(Value::Object(base_map))
-        }
-        (_, Some(overlay)) => Some(overlay),
-        (Some(base), None) => Some(base),
-        (None, None) => None,
-    }
-}
 
 pub fn handle_runtime_query(
     app: &AppHandle,
@@ -69,20 +51,6 @@ pub fn handle_runtime_query(
         &message,
         payload_field(payload, "metadata"),
     );
-    append_debug_log_state(
-        state,
-        format!(
-            "[runtime-route] runtime=query session={} mode={} source={} intent={} role={} multiAgent={} longRunning={} reasoning={}",
-            session_id.as_deref().unwrap_or("new-session"),
-            runtime_mode,
-            route.source,
-            route.intent,
-            route.recommended_role,
-            route.requires_multi_agent,
-            route.requires_long_running_task,
-            route.reasoning
-        ),
-    );
     let orchestration = if route.requires_multi_agent || route.requires_long_running_task {
         Some(run_subagent_orchestration_for_task(
             Some(app),
@@ -99,114 +67,26 @@ pub fn handle_runtime_query(
     } else {
         None
     };
-    let request_metadata = merge_request_metadata(
-        payload_field(payload, "metadata").cloned(),
-        Some(json!({
-            "intent": route.intent.clone(),
-            "preferredRole": route.recommended_role.clone(),
-        })),
-    );
-    let context_bundle_snapshot =
-        interactive_runtime_context_snapshot(
-            state,
-            &runtime_mode,
-            session_id.as_deref(),
-            request_metadata.as_ref(),
-            Some(&crate::skills::SkillActivationContext {
-                current_message: Some(message.clone()),
-                intent: request_metadata
-                    .as_ref()
-                    .and_then(|value| value.get("intent"))
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                touched_paths: Vec::new(),
-                args: None,
-            }),
-        );
     let prepared = build_runtime_query_turn(
         session_id,
         route,
         orchestration,
-        context_bundle_snapshot,
         &message,
         payload_field(payload, "modelConfig"),
-        request_metadata.clone(),
     );
     let turn = PreparedSessionAgentTurn::runtime_query(prepared);
     let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
-    let workspace = crate::workspace_root(state).ok();
-    let (resolved_runtime_mode, activated_skills, skill_runtime_state) = with_store(state, |store| {
+    let (resolved_runtime_mode, activated_skills) = with_store(state, |store| {
         let runtime_mode = resolve_runtime_mode_for_session(&store, execution.session_id());
         let metadata = store
             .chat_sessions
             .iter()
             .find(|item| item.id == execution.session_id())
-            .and_then(|item| item.metadata.clone());
-        let merged_metadata = merge_request_metadata(metadata, request_metadata.clone());
-        let items = active_skill_activation_items(
-            &resolve_skill_records(&store.skills, workspace.as_deref()),
-            &runtime_mode,
-            merged_metadata.as_ref(),
-            Some(&crate::skills::SkillActivationContext {
-                current_message: Some(message.clone()),
-                intent: merged_metadata
-                    .as_ref()
-                    .and_then(|value| value.get("intent"))
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                touched_paths: Vec::new(),
-                args: None,
-            }),
-        );
-        let base_tools = crate::tools::registry::base_tool_names_for_session_metadata(
-            &runtime_mode,
-            merged_metadata.as_ref(),
-        );
-        let skill_state = build_resolved_skill_runtime_state(
-            &store.skills,
-            workspace.as_deref(),
-            &runtime_mode,
-            merged_metadata.as_ref(),
-            &base_tools,
-            Some(&crate::skills::SkillActivationContext {
-                current_message: Some(message.clone()),
-                intent: merged_metadata
-                    .as_ref()
-                    .and_then(|value| value.get("intent"))
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                touched_paths: Vec::new(),
-                args: None,
-            }),
-        );
-        Ok((runtime_mode, items, skill_state))
+            .and_then(|item| item.metadata.as_ref());
+        let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
+        Ok((runtime_mode, items))
     })?;
-    append_debug_log_state(
-        state,
-        format!(
-            "[skill-activation] runtime=query session={} mode={} intent={} activeSkills={} activeHookEvents={}",
-            execution.session_id(),
-            resolved_runtime_mode,
-            request_metadata
-                .as_ref()
-                .and_then(|value| value.get("intent"))
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-            skill_runtime_state
-                .active_skills
-                .iter()
-                .map(|item| item.name.clone())
-                .collect::<Vec<_>>()
-                .join(", "),
-            skill_runtime_state
-                .active_hooks
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-    );
     for (name, description) in activated_skills {
         emit_runtime_task_checkpoint_saved(
             app,
@@ -220,28 +100,6 @@ pub fn handle_runtime_query(
                 "runtimeMode": resolved_runtime_mode,
             })),
         );
-    }
-    let hook_actions =
-        active_hooks_for_event(&skill_runtime_state.active_skills, "skillActivated", &resolved_runtime_mode, &message);
-    if !hook_actions.is_empty() {
-        let _ = with_store_mut(state, |store| {
-            for hook in hook_actions {
-                if hook.action_type != "checkpoint" {
-                    continue;
-                }
-                crate::runtime::append_session_checkpoint(
-                    store,
-                    execution.session_id(),
-                    "skill.hook.skill_activated",
-                    hook.summary
-                        .clone()
-                        .or(hook.message.clone())
-                        .unwrap_or_else(|| "skill activation hook fired".to_string()),
-                    hook.payload.clone(),
-                );
-            }
-            Ok(())
-        });
     }
     let _ = with_store_mut(state, |store| {
         persist_runtime_query_checkpoints(
@@ -258,9 +116,6 @@ pub fn handle_runtime_query(
             checkpoint_bundle
                 .as_ref()
                 .and_then(|bundle| bundle.orchestration.clone()),
-            checkpoint_bundle
-                .as_ref()
-                .and_then(|bundle| bundle.context_bundle_snapshot.clone()),
         );
         Ok(())
     });
@@ -276,9 +131,6 @@ pub fn handle_runtime_query(
         checkpoint_bundle
             .as_ref()
             .and_then(|bundle| bundle.orchestration.clone()),
-        checkpoint_bundle
-            .as_ref()
-            .and_then(|bundle| bundle.context_bundle_snapshot.clone()),
     ) {
         emit_runtime_task_checkpoint_saved(
             app,

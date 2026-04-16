@@ -77,6 +77,27 @@ pub(crate) fn apply_workspace_hydration_snapshot(
     store.work_items = snapshot.work_items;
 }
 
+pub fn build_store_path() -> PathBuf {
+    let base = config_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let redbox_dir = base.join("RedBox");
+    let lexbox_dir = base.join("LexBox");
+    let redbox_path = redbox_dir.join("redbox-state.json");
+    let lexbox_path = lexbox_dir.join("lexbox-state.json");
+
+    if redbox_path.exists() {
+        let _ = fs::create_dir_all(&redbox_dir);
+        return redbox_path;
+    }
+    if lexbox_path.exists() {
+        let _ = fs::create_dir_all(&lexbox_dir);
+        return lexbox_path;
+    }
+
+    let _ = fs::create_dir_all(&redbox_dir);
+    redbox_path
+}
+
 fn builtin_skill_records() -> Vec<SkillRecord> {
     vec![
         SkillRecord {
@@ -107,19 +128,10 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
             disabled: Some(false),
         },
         SkillRecord {
-            name: "writing-style-creator".to_string(),
-            description: "写作风格技能创建与迭代技能".to_string(),
-            location: "redbox://skills/writing-style-creator".to_string(),
-            body: include_str!("../../../builtin-skills/writing-style-creator/SKILL.md").to_string(),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled: Some(false),
-        },
-        SkillRecord {
             name: "writing-style".to_string(),
-            description: "当前空间唯一的系统写作风格技能".to_string(),
+            description: "统一写作风格底盘技能".to_string(),
             location: "redbox://skills/writing-style".to_string(),
-            body: include_str!("../../../builtin-skills/writing-style/SKILL.md").to_string(),
+            body: "---\nallowedRuntimeModes: [wander, redclaw, chatroom]\nhookMode: inline\nautoActivate: false\nactivationScope: session\ncontextNote: 这是当前空间统一的写作风格底盘。只要任务进入选题 framing、完整写稿、改写、扩写或润色，就应显式激活它；非写作任务不要让它干扰其他决策。\npromptPrefix: 你当前必须遵守 writing-style。凡是涉及选题 framing、完整写稿、改写、扩写、润色或内容表达方式调整，都先按这份技能执行，避免模板化 AI 文案。\npromptSuffix: 如果当前任务不是写作，就不要让 writing-style 主导其他决策；如果当前任务是写作，标题、内容方向、正文和文案细节都必须体现这份技能的约束。\nmaxPromptChars: 2400\n---\n# Writing Style\n\n用于当前空间所有写作相关任务的统一风格底盘技能。\n\n它不只是正式成稿时才生效。只要任务已经进入选题 framing、标题拟定、内容方向判断、正文创作、改写、扩写、润色或复盘，就应该显式激活这份技能。\n\n## 强制规则\n\n- 涉及写作、改写、扩写、润色、复盘，或选题 framing 的任务，都先遵守这份技能。\n- 漫步阶段的标题和内容方向，与 RedClaw 阶段的完整稿件、标签、封面文案，使用同一套风格底盘。\n- 标题和方向先追求具体、有人味、真实张力，再追求工整。\n- 没有真实细节时，不要硬装第一手经历或情绪。\n- 如果当前任务不是写作，不要让本技能主导非写作决策。\n\n## 基础目标\n\n- 像活人说话，不像报告、客服话术或课程总结。\n- 先讲具体场景、动作、问题和处境，再讲抽象判断。\n- 可以有观点，但不要写成无懈可击的上帝视角。\n- 能承认不确定，就不要假装确定。\n\n## 选题判断\n\n先用 HKR 做快速质检。\n\n- H，是否足够有趣，让人想继续看。\n- K，是否真的有信息量，不是在重复常识。\n- R，是否有情绪、处境、冲突或共鸣点。\n\n如果素材只有主题，没有细节、冲突、观点或切口，不要硬写成空方向。标题要落到具体对象、具体处境、反差、问题，或一个可被读者立刻感知的 tension。\n\n## 语言与节奏\n\n- 长短句混用，短段优先。\n- 允许适度口语和停顿感，但不要为了口语而装腔。\n- 转场尽量自然，不要写成报告式大纲。\n\n## 绝对禁区\n\n- 禁用“首先、其次、最后”“综上所述”“值得注意的是”“不难发现”“让我们来看看”。\n- 禁用“说白了”“这意味着”“意味着什么”“本质上”“换句话说”“不可否认”。\n- 禁用“从某素材延展出的内容选题”“围绕这组素材提炼一个方向”这类 AI 占位句。\n- 不编造经历、情绪、案例，不用宏大空话开头。\n\n## 自检\n\n- 有没有具体场景、对象、动作、问题。\n- 有没有表面像人话，底层判断却很空。\n- 有没有写得太匀速、太整齐、太像模板。".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
             disabled: Some(false),
@@ -127,91 +139,16 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
     ]
 }
 
-fn ensure_frontmatter_line(body: &str, key: &str, line: &str) -> String {
-    if body.contains(key) {
-        return body.to_string();
-    }
-    let trimmed = body.trim_start();
-    let Some(rest) = trimmed.strip_prefix("---\n") else {
-        return body.to_string();
-    };
-    let Some((frontmatter, content)) = rest.split_once("\n---\n") else {
-        return body.to_string();
-    };
-    format!(
-        "---\n{}\n{}\n---\n{}",
-        frontmatter.trim_end(),
-        line,
-        content
-    )
-}
-
-fn migrate_builtin_skill_body(record: &mut SkillRecord) {
-    if !record.is_builtin.unwrap_or(false) {
-        return;
-    }
-    if record.name == "writing-style" {
-        record.body = ensure_frontmatter_line(
-            &record.body,
-            "autoActivateWhenIntents",
-            "autoActivateWhenIntents: [manuscript_creation]",
-        );
-    }
-    if record.name == "writing-style-creator" && record.body.contains("writing-style-base") {
-        record.body = record.body.replace("writing-style-base", "writing-style");
-    }
-}
-
-fn ensure_builtin_skills(store: &mut AppStore) {
-    for skill in store.skills.iter_mut() {
-        migrate_builtin_skill_body(skill);
-    }
-    if !store.skills.iter().any(|item| item.name == "writing-style") {
-        if let Some(legacy) = store
-            .skills
-            .iter_mut()
-            .find(|item| item.name == "writing-style-base" && item.is_builtin.unwrap_or(false))
-        {
-            legacy.name = "writing-style".to_string();
-            legacy.description = "当前空间唯一的系统写作风格技能".to_string();
-            legacy.location = "redbox://skills/writing-style".to_string();
-            legacy.body = include_str!("../../../builtin-skills/writing-style/SKILL.md").to_string();
-            legacy.source_scope = Some("builtin".to_string());
-            legacy.is_builtin = Some(true);
-            legacy.disabled = Some(false);
-            migrate_builtin_skill_body(legacy);
-        }
-    }
-    store
-        .skills
-        .retain(|item| !(item.name == "writing-style-base" && item.is_builtin.unwrap_or(false)));
+fn ensure_builtin_skills_present(store: &mut AppStore) {
     for builtin in builtin_skill_records() {
-        if store.skills.iter().any(|item| item.name == builtin.name) {
-            continue;
+        let exists = store
+            .skills
+            .iter()
+            .any(|skill| skill.name.eq_ignore_ascii_case(&builtin.name));
+        if !exists {
+            store.skills.push(builtin);
         }
-        store.skills.push(builtin);
     }
-}
-
-pub fn build_store_path() -> PathBuf {
-    let base = config_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let redbox_dir = base.join("RedBox");
-    let lexbox_dir = base.join("LexBox");
-    let redbox_path = redbox_dir.join("redbox-state.json");
-    let lexbox_path = lexbox_dir.join("lexbox-state.json");
-
-    if redbox_path.exists() {
-        let _ = fs::create_dir_all(&redbox_dir);
-        return redbox_path;
-    }
-    if lexbox_path.exists() {
-        let _ = fs::create_dir_all(&lexbox_dir);
-        return lexbox_path;
-    }
-
-    let _ = fs::create_dir_all(&redbox_dir);
-    redbox_path
 }
 
 pub fn default_store() -> AppStore {
@@ -247,7 +184,6 @@ pub fn default_store() -> AppStore {
         runtime_tasks: Vec::new(),
         runtime_task_traces: Vec::new(),
         debug_logs: Vec::new(),
-        capability_audit_records: Vec::new(),
         archive_profiles: Vec::new(),
         archive_samples: Vec::new(),
         memories: Vec::new(),
@@ -345,7 +281,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         Err(_) => return default_store(),
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
-    ensure_builtin_skills(&mut store);
+    ensure_builtin_skills_present(&mut store);
     store
 }
 

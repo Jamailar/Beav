@@ -15,14 +15,12 @@ mod legacy_import;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
-mod memory;
 mod memory_maintenance;
 mod official_support;
 mod persistence;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
-mod script_runtime;
 mod skills;
 mod subagents;
 mod tools;
@@ -35,8 +33,8 @@ use commands::chat_state::{
 };
 use events::{
     emit_creative_chat_checkpoint, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
-    emit_runtime_task_node_changed, emit_runtime_text_delta, emit_runtime_tool_partial,
-    emit_runtime_tool_request, emit_runtime_tool_result, split_stream_chunks,
+    emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
+    emit_runtime_tool_result, split_stream_chunks,
 };
 use persistence::{
     build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_knowledge,
@@ -44,15 +42,14 @@ use persistence::{
     with_store, with_store_mut,
 };
 use runtime::{
-    append_runtime_task_trace, append_session_checkpoint, infer_protocol,
-    next_memory_maintenance_at_ms, resolve_chat_config, resolve_runtime_mode_from_context_type,
-    role_sequence_for_route, runtime_direct_route, runtime_graph_for_route,
+    append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
+    resolve_runtime_mode_from_context_type, role_sequence_for_route,
     runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
-    set_runtime_graph_node, InteractiveToolCall, McpServerRecord, RedclawJobDefinitionRecord,
-    RedclawJobExecutionRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime,
-    RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord,
-    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState,
-    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
+    InteractiveToolCall, McpServerRecord, RedclawJobDefinitionRecord, RedclawJobExecutionRecord,
+    RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord,
+    RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord, RuntimeTaskRecord,
+    RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord,
+    SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
@@ -77,7 +74,6 @@ pub(crate) use http_utils::*;
 pub(crate) use legacy_import::*;
 pub(crate) use manuscript_package::*;
 pub(crate) use media_generation::*;
-pub(crate) use memory::*;
 pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
 pub(crate) use redclaw_profile::*;
@@ -314,7 +310,6 @@ struct AppStore {
     runtime_tasks: Vec<RuntimeTaskRecord>,
     runtime_task_traces: Vec<RuntimeTaskTraceRecord>,
     debug_logs: Vec<String>,
-    capability_audit_records: Vec<tools::capabilities::CapabilityAuditRecord>,
     archive_profiles: Vec<ArchiveProfileRecord>,
     archive_samples: Vec<ArchiveSampleRecord>,
     memories: Vec<UserMemoryRecord>,
@@ -451,14 +446,6 @@ struct UserMemoryRecord {
     canonical_key: Option<String>,
     revision: Option<i64>,
     last_conflict_at: Option<i64>,
-    summary: Option<String>,
-    scope_key: Option<String>,
-    source_session_id: Option<String>,
-    source_checkpoint_id: Option<String>,
-    source_tool_result_id: Option<String>,
-    confidence: Option<f64>,
-    expires_at: Option<i64>,
-    last_maintained_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -757,11 +744,8 @@ fn now_iso() -> String {
     now_ms().to_string()
 }
 
-static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 fn make_id(prefix: &str) -> String {
-    let sequence = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{prefix}-{}-{sequence}", now_ms())
+    format!("{prefix}-{}", now_ms())
 }
 
 fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Result<(), String> {
@@ -773,10 +757,6 @@ fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Re
         let entry = RuntimeWarmEntry {
             mode: (*mode).to_string(),
             system_prompt: interactive_runtime_system_prompt(state, mode, None),
-            context_bundle_summary:
-                crate::interactive_runtime_shared::interactive_runtime_context_snapshot(
-                    state, mode, None, None, None,
-                ),
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
             } else {
@@ -842,11 +822,11 @@ fn normalize_string(value: Option<&Value>) -> Option<String> {
         .filter(|item| !item.is_empty())
 }
 
-fn payload_field<'a>(payload: &'a Value, key: &str) -> Option<&'a Value> {
+pub(crate) fn payload_field<'a>(payload: &'a Value, key: &str) -> Option<&'a Value> {
     payload.as_object().and_then(|object| object.get(key))
 }
 
-fn payload_string(payload: &Value, key: &str) -> Option<String> {
+pub(crate) fn payload_string(payload: &Value, key: &str) -> Option<String> {
     normalize_string(payload_field(payload, key))
 }
 
@@ -888,39 +868,19 @@ fn managed_workspace_dir_candidates(store_path: &Path) -> Vec<PathBuf> {
     items
 }
 
-fn is_same_path(left: &Path, right: &Path) -> bool {
+pub(crate) fn is_same_path(left: &Path, right: &Path) -> bool {
     let left = left.to_string_lossy().replace('\\', "/");
     let right = right.to_string_lossy().replace('\\', "/");
     left == right
-}
-
-fn normalize_workspace_dir_candidate(raw: &str) -> Option<PathBuf> {
-    let candidate = raw.trim();
-    if candidate.is_empty() || candidate.len() > 512 {
-        return None;
-    }
-    if candidate.contains('\0') || candidate.contains('\n') || candidate.contains('\r') {
-        return None;
-    }
-    let path = PathBuf::from(candidate);
-    let component_count = path.components().count();
-    if component_count == 0 || component_count > 32 {
-        return None;
-    }
-    if path
-        .components()
-        .any(|component| component.as_os_str().to_string_lossy().len() > 255)
-    {
-        return None;
-    }
-    Some(path)
 }
 
 fn configured_workspace_dir(settings: &Value) -> Option<PathBuf> {
     settings
         .get("workspace_dir")
         .and_then(|value| value.as_str())
-        .and_then(normalize_workspace_dir_candidate)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn should_force_preferred_workspace_dir(configured: Option<&Path>, store_path: &Path) -> bool {
@@ -1466,7 +1426,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
 fn pick_save_file_native(
     prompt: &str,
     default_name: &str,
-    default_dir: Option<&std::path::Path>,
+    default_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -1512,10 +1472,10 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        if let Some(directory) = default_dir {
-            return Ok(Some(directory.join(default_name)));
-        }
-        Ok(Some(PathBuf::from(default_name)))
+        let _ = prompt;
+        let _ = default_name;
+        let _ = default_dir;
+        Err("RedBox save picker currently supports macOS and Windows".to_string())
     }
 }
 
@@ -1749,39 +1709,6 @@ pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Int
     });
 }
 
-fn compact_json_for_debug(value: &Value, limit: usize) -> String {
-    let text = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
-    if text.chars().count() <= limit {
-        return text;
-    }
-    let mut truncated = text.chars().take(limit).collect::<String>();
-    truncated.push_str("…");
-    truncated
-}
-
-fn append_tool_call_debug_log(
-    state: &State<'_, AppState>,
-    stage: &str,
-    runtime_mode: &str,
-    session_id: Option<&str>,
-    raw_name: &str,
-    effective_name: &str,
-    payload: Value,
-) {
-    append_debug_log_state(
-        state,
-        format!(
-            "[tool-call][{}] runtime={} session={} raw={} effective={} payload={}",
-            stage,
-            runtime_mode,
-            session_id.unwrap_or("-"),
-            raw_name,
-            effective_name,
-            compact_json_for_debug(&payload, 1600)
-        ),
-    );
-}
-
 fn log_timing_event(
     state: &State<'_, AppState>,
     scope: &str,
@@ -1990,334 +1917,6 @@ fn build_wander_long_term_context(state: &State<'_, AppState>) -> String {
     sections.join("\n\n")
 }
 
-fn emit_wander_tool_start(
-    app: &AppHandle,
-    session_id: &str,
-    name: &str,
-    input: Value,
-    description: &str,
-) {
-    let call_id = format!("wander:{}:{}", session_id, name);
-    emit_runtime_tool_request(
-        app,
-        Some(session_id),
-        &call_id,
-        name,
-        input.clone(),
-        Some(description),
-    );
-}
-
-fn emit_wander_tool_end(
-    app: &AppHandle,
-    session_id: &str,
-    name: &str,
-    success: bool,
-    content: String,
-) {
-    let call_id = format!("wander:{}:{}", session_id, name);
-    emit_runtime_tool_result(app, Some(session_id), &call_id, name, success, &content);
-}
-
-fn read_workspace_text_snippet(path: &Path, max_chars: usize) -> String {
-    fs::read_to_string(path)
-        .map(|content| content.chars().take(max_chars).collect::<String>())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
-}
-
-fn build_wander_materials_context(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: &str,
-    items: &[Value],
-) -> String {
-    let mut sections = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        let title = item
-            .get("title")
-            .and_then(|value| value.as_str())
-            .unwrap_or("Untitled");
-        let item_type = item
-            .get("type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("note");
-        let meta = item
-            .get("meta")
-            .and_then(|value| value.as_object())
-            .cloned()
-            .unwrap_or_default();
-        let source_type = meta
-            .get("sourceType")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let mut chunks = vec![format!("### 素材 {}: {}", index + 1, title)];
-        chunks.push(format!("类型: {}", item_type));
-        if !source_type.is_empty() {
-            chunks.push(format!("来源类型: {}", source_type));
-        }
-        if let Some(summary) = item.get("content").and_then(|value| value.as_str()) {
-            if !summary.trim().is_empty() {
-                chunks.push(format!(
-                    "已有摘要:\n{}",
-                    summary.chars().take(600).collect::<String>()
-                ));
-            }
-        }
-
-        if source_type == "document" {
-            let file_path = meta
-                .get("filePath")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .trim();
-            if !file_path.is_empty() {
-                emit_wander_tool_start(
-                    app,
-                    session_id,
-                    "redbox_read_path",
-                    json!({ "path": file_path, "maxChars": 2200 }),
-                    "读取文档知识源",
-                );
-                match resolve_workspace_tool_path(state, file_path) {
-                    Ok(path) => {
-                        let snippet = read_workspace_text_snippet(&path, 2200);
-                        if !snippet.is_empty() {
-                            chunks.push(format!("文档正文:\n{}", snippet));
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                true,
-                                format!("已读取文档文件：{}", path.display()),
-                            );
-                        } else {
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                false,
-                                "文档为空或无法读取".to_string(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
-                    }
-                }
-            }
-            sections.push(chunks.join("\n\n"));
-            continue;
-        }
-
-        let folder_path = meta
-            .get("folderPath")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .trim();
-        if folder_path.is_empty() {
-            sections.push(chunks.join("\n\n"));
-            continue;
-        }
-
-        emit_wander_tool_start(
-            app,
-            session_id,
-            "redbox_list_directory",
-            json!({ "path": folder_path, "limit": 20 }),
-            "列出素材目录",
-        );
-        let resolved_folder = match resolve_workspace_tool_path(state, folder_path) {
-            Ok(path) => path,
-            Err(error) => {
-                emit_wander_tool_end(app, session_id, "redbox_list_directory", false, error);
-                sections.push(chunks.join("\n\n"));
-                continue;
-            }
-        };
-        let entries = match list_directory_entries(&resolved_folder, 20) {
-            Ok(entries) => {
-                emit_wander_tool_end(
-                    app,
-                    session_id,
-                    "redbox_list_directory",
-                    true,
-                    format!("已列出目录：{}", resolved_folder.display()),
-                );
-                entries
-            }
-            Err(error) => {
-                emit_wander_tool_end(app, session_id, "redbox_list_directory", false, error);
-                sections.push(chunks.join("\n\n"));
-                continue;
-            }
-        };
-
-        let meta_entry = entries
-            .iter()
-            .find(|entry| entry.get("name").and_then(|value| value.as_str()) == Some("meta.json"));
-        let mut transcript_hint = String::new();
-        if let Some(meta_entry) = meta_entry {
-            if let Some(meta_path) = meta_entry.get("path").and_then(|value| value.as_str()) {
-                emit_wander_tool_start(
-                    app,
-                    session_id,
-                    "redbox_read_path",
-                    json!({ "path": meta_path, "maxChars": 1800 }),
-                    "读取素材 meta.json",
-                );
-                match resolve_workspace_tool_path(state, meta_path) {
-                    Ok(path) => {
-                        let snippet = read_workspace_text_snippet(&path, 1800);
-                        if !snippet.is_empty() {
-                            chunks.push(format!("meta.json:\n{}", snippet));
-                            if let Ok(parsed) = serde_json::from_str::<Value>(&snippet) {
-                                transcript_hint = payload_string(&parsed, "transcriptFile")
-                                    .or_else(|| payload_string(&parsed, "subtitleFile"))
-                                    .unwrap_or_default();
-                            }
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                true,
-                                "meta.json 读取完成".to_string(),
-                            );
-                        } else {
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                false,
-                                "meta.json 为空或无法读取".to_string(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
-                    }
-                }
-            }
-        }
-
-        let candidate_names = if item_type == "video" {
-            let mut items = Vec::new();
-            if !transcript_hint.trim().is_empty() {
-                items.push(transcript_hint.clone());
-            }
-            items.extend([
-                "transcript.txt".to_string(),
-                "transcript.md".to_string(),
-                "subtitle.txt".to_string(),
-                "subtitle.srt".to_string(),
-                "content.md".to_string(),
-            ]);
-            items
-        } else {
-            vec!["content.md".to_string(), "note.md".to_string()]
-        };
-        let content_entry = candidate_names.iter().find_map(|candidate| {
-            entries.iter().find(|entry| {
-                entry.get("name").and_then(|value| value.as_str()) == Some(candidate.as_str())
-            })
-        });
-        if let Some(content_entry) = content_entry {
-            if let Some(content_path) = content_entry.get("path").and_then(|value| value.as_str()) {
-                emit_wander_tool_start(
-                    app,
-                    session_id,
-                    "redbox_read_path",
-                    json!({ "path": content_path, "maxChars": 2600 }),
-                    "读取素材正文或转录文件",
-                );
-                match resolve_workspace_tool_path(state, content_path) {
-                    Ok(path) => {
-                        let snippet = read_workspace_text_snippet(&path, 2600);
-                        if !snippet.is_empty() {
-                            chunks.push(format!(
-                                "{}:\n{}",
-                                path.file_name()
-                                    .and_then(|value| value.to_str())
-                                    .unwrap_or("content"),
-                                snippet
-                            ));
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                true,
-                                format!("已读取文件：{}", path.display()),
-                            );
-                        } else {
-                            emit_wander_tool_end(
-                                app,
-                                session_id,
-                                "redbox_read_path",
-                                false,
-                                "正文或转录文件为空".to_string(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        emit_wander_tool_end(app, session_id, "redbox_read_path", false, error);
-                    }
-                }
-            }
-        }
-
-        sections.push(chunks.join("\n\n"));
-    }
-    sections.join("\n\n---\n\n")
-}
-
-fn build_wander_deep_agent_prompt(
-    items_text: &str,
-    long_term_context_section: &str,
-    materials_context: &str,
-    multi_choice: bool,
-) -> String {
-    let output_requirement = if multi_choice {
-        [
-            "硬性输出要求（多选题模式）：",
-            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
-            "2) JSON 顶层必须包含：thinking_process, options；",
-            "3) options 必须是长度为 3 的数组；",
-            "4) 每个 option 必须包含：content_direction, topic；",
-            "5) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "6) thinking_process 为 3-6 条简洁思考要点。",
-        ]
-        .join("\n")
-    } else {
-        [
-            "硬性输出要求（单选题模式）：",
-            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
-            "2) JSON 顶层必须包含：content_direction, thinking_process, topic；",
-            "3) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "4) thinking_process 为 3-6 条简洁思考要点；",
-            "5) content_direction 必须是可直接创作的内容方向说明。",
-        ]
-        .join("\n")
-    };
-
-    let template = load_redbox_prompt_or_embedded(
-        "runtime/wander/deep_agent_base.txt",
-        include_str!("../../prompts/library/runtime/wander/deep_agent_base.txt"),
-    );
-    render_redbox_prompt(
-        &template,
-        &[
-            ("output_requirement", output_requirement),
-            ("items_text", items_text.to_string()),
-            ("materials_context", materials_context.to_string()),
-            (
-                "long_term_context_section",
-                long_term_context_section.to_string(),
-            ),
-        ],
-    )
-}
-
 fn resolve_wander_model_config(settings: &Value) -> Value {
     let base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
     let api_key = payload_string(settings, "api_key").unwrap_or_default();
@@ -2334,13 +1933,14 @@ fn resolve_wander_model_config(settings: &Value) -> Value {
 }
 
 fn generate_wander_response(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     session_id: &str,
     config: &Value,
     prompt: &str,
 ) -> Result<String, String> {
     let turn = PreparedWanderTurn::new(session_id.to_string(), prompt.to_string(), Some(config));
-    execute_prepared_wander_turn(state, &turn).map(|execution| execution.response)
+    execute_prepared_wander_turn(app, state, &turn).map(|execution| execution.response)
 }
 
 fn write_placeholder_svg(
@@ -2404,31 +2004,6 @@ fn interactive_runtime_system_prompt(
     interactive_runtime_shared::interactive_runtime_system_prompt(state, runtime_mode, session_id)
 }
 
-fn interactive_runtime_request_system_prompt(
-    state: &State<'_, AppState>,
-    runtime_mode: &str,
-    session_id: Option<&str>,
-    request_metadata: Option<&Value>,
-    message: &str,
-) -> String {
-    let activation = crate::skills::SkillActivationContext {
-        current_message: Some(message.to_string()),
-        intent: request_metadata
-            .and_then(|value| value.get("intent"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        touched_paths: Vec::new(),
-        args: None,
-    };
-    interactive_runtime_shared::interactive_runtime_request_system_prompt(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        Some(&activation),
-    )
-}
-
 fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
     interactive_runtime_shared::parse_usize_arg(arguments, key, default, max)
 }
@@ -2460,56 +2035,8 @@ fn interactive_runtime_tools_for_mode(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
-    request_metadata: Option<&Value>,
-    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Value {
-    interactive_runtime_shared::interactive_runtime_tools_for_mode(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        activation,
-    )
-}
-
-fn resolve_mcp_server_record_from_arguments(
-    state: &State<'_, AppState>,
-    arguments: &Value,
-) -> Result<McpServerRecord, String> {
-    if let Some(server) = payload_field(arguments, "server").cloned() {
-        return serde_json::from_value(server).map_err(|error| error.to_string());
-    }
-    let requested_id = payload_string(arguments, "serverId")
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let requested_name = payload_string(arguments, "serverName")
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    with_store(state, |store| {
-        store
-            .mcp_servers
-            .iter()
-            .find(|item| {
-                requested_id
-                    .as_ref()
-                    .map(|value| item.id == *value)
-                    .unwrap_or(false)
-                    || requested_name
-                        .as_ref()
-                        .map(|value| item.name.eq_ignore_ascii_case(value))
-                        .unwrap_or(false)
-            })
-            .cloned()
-            .ok_or_else(|| {
-                if let Some(server_id) = requested_id.as_ref() {
-                    format!("MCP server not found for serverId `{server_id}`")
-                } else if let Some(server_name) = requested_name.as_ref() {
-                    format!("MCP server not found for serverName `{server_name}`")
-                } else {
-                    "server.id, server.name, serverId, or serverName is required".to_string()
-                }
-            })
-    })
+    interactive_runtime_shared::interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
 }
 
 fn resolve_editor_tool_file_path(
@@ -2568,80 +2095,20 @@ fn execute_interactive_tool_call(
     arguments: &Value,
     model_config: Option<&Value>,
 ) -> Result<Value, String> {
-    let raw_name = name.to_string();
-    let raw_arguments = arguments.clone();
-    let normalized_call = tools::compat::normalize_tool_call(name, arguments);
-    let name = normalized_call.name;
-    let arguments = &normalized_call.arguments;
-    append_tool_call_debug_log(
-        state,
-        "normalized",
-        runtime_mode,
-        session_id,
-        &raw_name,
-        if name.is_empty() { &raw_name } else { name },
-        json!({
-            "rawArguments": raw_arguments,
-            "normalizedArguments": arguments,
-        }),
-    );
-    let guard = match tools::guards::preflight_tool_call(
-        state,
-        runtime_mode,
-        session_id,
-        name,
-        arguments,
-    ) {
-        Ok(guard) => guard,
-        Err(error) => {
-            append_tool_call_debug_log(
-                state,
-                "preflight_err",
-                runtime_mode,
-                session_id,
-                &raw_name,
-                name,
-                json!({
-                    "error": error,
-                    "normalizedArguments": arguments,
-                }),
-            );
-            return Err(error);
-        }
-    };
-    append_tool_call_debug_log(
-        state,
-        "preflight",
-        runtime_mode,
-        session_id,
-        &raw_name,
-        name,
-        json!({
-            "approvalLevel": guard.approval_level,
-            "toolAction": guard.tool_action,
-            "capabilityFingerprint": guard.capability_set.fingerprint,
-            "entryKind": guard.capability_set.entry_kind,
-            "argumentsSummary": guard.arguments_summary,
-        }),
-    );
-    let call_skill_channel = |channel: &str, payload: Value| -> Result<Value, String> {
-        commands::skills_ai::handle_skills_ai_channel(app, state, channel, &payload)
-            .unwrap_or_else(|| Err(format!("Skill channel not handled: {channel}")))
-    };
-    let call_runtime_channel = |channel: &str, payload: Value| -> Result<Value, String> {
-        commands::runtime::handle_runtime_channel(app, state, channel, &payload)
-            .unwrap_or_else(|| Err(format!("Runtime channel not handled: {channel}")))
-    };
-    let call_bridge_channel = |channel: &str, payload: Value| -> Result<Value, String> {
-        commands::bridge::handle_bridge_channel(app, state, channel, &payload)
-            .unwrap_or_else(|| Err(format!("Bridge channel not handled: {channel}")))
-    };
+    let tool_executor =
+        tools::executor::InteractiveToolExecutor::new(app, state, runtime_mode, session_id);
+    let prepared = tool_executor.prepare_tool_call(name, arguments)?;
+    let name = prepared.name;
+    let arguments = &prepared.arguments;
+    if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
+        return result;
+    }
     let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
         commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
     };
 
-    let result = match name {
+    match name {
         "redbox_editor" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
             let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
@@ -3403,246 +2870,6 @@ fn execute_interactive_tool_call(
                 _ => Err(format!("unsupported redbox_editor action: {action}")),
             }
         }
-        "redbox_mcp" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            let parse_server = || resolve_mcp_server_record_from_arguments(state, arguments);
-            match action.as_str() {
-                "list" => commands::mcp_tools::mcp_list_value(state),
-                "save" => commands::mcp_tools::handle_mcp_tools_channel(
-                    app,
-                    state,
-                    "mcp:save",
-                    &json!({ "servers": payload_field(arguments, "servers").cloned().unwrap_or_else(|| json!([])) }),
-                )
-                .unwrap_or_else(|| Err("MCP channel not handled: mcp:save".to_string())),
-                "test" => commands::mcp_tools::mcp_probe_value(state, &parse_server()?),
-                "call" => commands::mcp_tools::mcp_call_value(
-                    state,
-                    &parse_server()?,
-                    &payload_string(arguments, "method").unwrap_or_default(),
-                    payload_field(arguments, "params").cloned().unwrap_or_else(|| json!({})),
-                    payload_string(arguments, "sessionId"),
-                ),
-                "list_tools" => commands::mcp_tools::mcp_call_value(
-                    state,
-                    &parse_server()?,
-                    "tools/list",
-                    json!({}),
-                    payload_string(arguments, "sessionId"),
-                ),
-                "list_resources" => commands::mcp_tools::mcp_call_value(
-                    state,
-                    &parse_server()?,
-                    "resources/list",
-                    json!({}),
-                    payload_string(arguments, "sessionId"),
-                ),
-                "list_resource_templates" => commands::mcp_tools::mcp_call_value(
-                    state,
-                    &parse_server()?,
-                    "resources/templates/list",
-                    json!({}),
-                    payload_string(arguments, "sessionId"),
-                ),
-                "sessions" => commands::mcp_tools::mcp_sessions_value(state),
-                "disconnect" => commands::mcp_tools::mcp_disconnect_value(state, &parse_server()?),
-                "disconnect_all" => commands::mcp_tools::mcp_disconnect_all_value(state),
-                "discover_local" => commands::mcp_tools::mcp_discover_local_value(),
-                "import_local" => commands::mcp_tools::mcp_import_local_value(state),
-                "oauth_status" => commands::mcp_tools::mcp_oauth_status_value(
-                    state,
-                    &payload_string(arguments, "serverId").unwrap_or_default(),
-                ),
-                _ => Err(format!("unsupported redbox_mcp action: {action}")),
-            }
-        }
-        "redbox_skill" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            match action.as_str() {
-                "list" => call_skill_channel("skills:list", json!({})),
-                "create" => call_skill_channel(
-                    "skills:create",
-                    json!({ "name": payload_string(arguments, "name").unwrap_or_default() }),
-                ),
-                "save" => call_skill_channel(
-                    "skills:save",
-                    json!({
-                        "location": payload_string(arguments, "location").unwrap_or_default(),
-                        "content": payload_string(arguments, "content").unwrap_or_default(),
-                    }),
-                ),
-                "enable" => call_skill_channel(
-                    "skills:enable",
-                    json!({ "name": payload_string(arguments, "name").unwrap_or_default() }),
-                ),
-                "disable" => call_skill_channel(
-                    "skills:disable",
-                    json!({ "name": payload_string(arguments, "name").unwrap_or_default() }),
-                ),
-                "market_install" => call_skill_channel(
-                    "skills:market-install",
-                    json!({ "slug": payload_string(arguments, "slug").unwrap_or_default() }),
-                ),
-                "invoke" => call_skill_channel(
-                    "skills:invoke",
-                    json!({
-                        "name": payload_string(arguments, "name").unwrap_or_default(),
-                        "args": payload_string(arguments, "args"),
-                    }),
-                ),
-                "preview_activation" => call_skill_channel(
-                    "skills:preview-activation",
-                    json!({
-                        "runtimeMode": payload_string(arguments, "runtimeMode").unwrap_or_else(|| "default".to_string()),
-                        "message": payload_string(arguments, "message"),
-                        "intent": payload_string(arguments, "intent"),
-                        "args": payload_string(arguments, "args"),
-                        "metadata": payload_field(arguments, "metadata").cloned().unwrap_or(Value::Null),
-                        "touchedPaths": payload_field(arguments, "touchedPaths").cloned().unwrap_or_else(|| json!([])),
-                    }),
-                ),
-                "ai_roles_list" => call_skill_channel("ai:roles:list", json!({})),
-                "detect_protocol" => call_skill_channel(
-                    "ai:detect-protocol",
-                    json!({
-                        "baseURL": payload_string(arguments, "baseURL").unwrap_or_default(),
-                        "presetId": payload_string(arguments, "presetId"),
-                        "protocol": payload_string(arguments, "protocol"),
-                    }),
-                ),
-                "test_connection" => call_skill_channel(
-                    "ai:test-connection",
-                    json!({
-                        "baseURL": payload_string(arguments, "baseURL").unwrap_or_default(),
-                        "apiKey": payload_string(arguments, "apiKey"),
-                        "presetId": payload_string(arguments, "presetId"),
-                        "protocol": payload_string(arguments, "protocol"),
-                    }),
-                ),
-                "fetch_models" => call_skill_channel(
-                    "ai:fetch-models",
-                    json!({
-                        "baseURL": payload_string(arguments, "baseURL").unwrap_or_default(),
-                        "apiKey": payload_string(arguments, "apiKey"),
-                        "presetId": payload_string(arguments, "presetId"),
-                        "protocol": payload_string(arguments, "protocol"),
-                    }),
-                ),
-                _ => Err(format!("unsupported redbox_skill action: {action}")),
-            }
-        }
-        "redbox_runtime_control" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            match action.as_str() {
-                "runtime_query" => call_runtime_channel(
-                    "runtime:query",
-                    json!({
-                        "sessionId": payload_string(arguments, "sessionId"),
-                        "message": payload_string(arguments, "message").unwrap_or_default(),
-                        "modelConfig": payload_field(arguments, "modelConfig").cloned().unwrap_or(Value::Null),
-                    }),
-                ),
-                "runtime_resume" => call_runtime_channel(
-                    "runtime:resume",
-                    json!({ "sessionId": payload_string(arguments, "sessionId").unwrap_or_default() }),
-                ),
-                "runtime_fork_session" => call_runtime_channel(
-                    "runtime:fork-session",
-                    json!({ "sessionId": payload_string(arguments, "sessionId").unwrap_or_default() }),
-                ),
-                "runtime_get_trace" => call_runtime_channel(
-                    "runtime:get-trace",
-                    json!({
-                        "sessionId": payload_string(arguments, "sessionId").unwrap_or_default(),
-                        "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(50)),
-                    }),
-                ),
-                "runtime_get_checkpoints" => call_runtime_channel(
-                    "runtime:get-checkpoints",
-                    json!({
-                        "sessionId": payload_string(arguments, "sessionId").unwrap_or_default(),
-                        "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(50)),
-                    }),
-                ),
-                "runtime_get_tool_results" => call_runtime_channel(
-                    "runtime:get-tool-results",
-                    json!({
-                        "sessionId": payload_string(arguments, "sessionId").unwrap_or_default(),
-                        "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(50)),
-                    }),
-                ),
-                "runtime_recall" => call_runtime_channel(
-                    "runtime:recall",
-                    json!({
-                        "query": payload_string(arguments, "query").unwrap_or_default(),
-                        "sessionId": payload_string(arguments, "sessionId"),
-                        "runtimeId": payload_string(arguments, "runtimeId"),
-                        "sources": payload_field(arguments, "sources").cloned().unwrap_or_else(|| json!([])),
-                        "memoryTypes": payload_field(arguments, "memoryTypes").cloned().unwrap_or_else(|| json!([])),
-                        "includeArchived": payload_field(arguments, "includeArchived").cloned().unwrap_or_else(|| json!(false)),
-                        "includeChildSessions": payload_field(arguments, "includeChildSessions").cloned().unwrap_or_else(|| json!(false)),
-                        "limit": payload_field(arguments, "limit").cloned().unwrap_or_else(|| json!(8)),
-                        "maxChars": payload_field(arguments, "maxChars").cloned().unwrap_or_else(|| json!(4000)),
-                    }),
-                ),
-                "runtime_execute_script" => call_runtime_channel(
-                    "runtime:execute-script",
-                    json!({
-                        "sessionId": payload_string(arguments, "sessionId"),
-                        "taskId": payload_string(arguments, "taskId"),
-                        "runtimeMode": payload_string(arguments, "runtimeMode"),
-                        "inputs": payload_field(arguments, "inputs").cloned().unwrap_or_else(|| json!({})),
-                        "program": payload_field(arguments, "program").cloned().unwrap_or(Value::Null),
-                        "limits": payload_field(arguments, "limits").cloned().unwrap_or(Value::Null),
-                        "reason": payload_string(arguments, "reason"),
-                    }),
-                ),
-                "tasks_create" => call_runtime_channel(
-                    "tasks:create",
-                    payload_field(arguments, "payload")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                ),
-                "tasks_list" => call_runtime_channel(
-                    "tasks:list",
-                    payload_field(arguments, "payload")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                ),
-                "tasks_get" => call_runtime_channel(
-                    "tasks:get",
-                    json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
-                ),
-                "tasks_resume" => call_runtime_channel(
-                    "tasks:resume",
-                    json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
-                ),
-                "tasks_cancel" => call_runtime_channel(
-                    "tasks:cancel",
-                    json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
-                ),
-                "background_tasks_list" => call_bridge_channel("background-tasks:list", json!({})),
-                "background_tasks_get" => call_bridge_channel(
-                    "background-tasks:get",
-                    json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
-                ),
-                "background_tasks_cancel" => call_bridge_channel(
-                    "background-tasks:cancel",
-                    json!({ "taskId": payload_string(arguments, "taskId").unwrap_or_default() }),
-                ),
-                "session_bridge_status" => call_bridge_channel("session-bridge:status", json!({})),
-                "session_bridge_list_sessions" => {
-                    call_bridge_channel("session-bridge:list-sessions", json!({}))
-                }
-                "session_bridge_get_session" => call_bridge_channel(
-                    "session-bridge:get-session",
-                    json!({ "sessionId": payload_string(arguments, "sessionId").unwrap_or_default() }),
-                ),
-                _ => Err(format!(
-                    "unsupported redbox_runtime_control action: {action}"
-                )),
-            }
-        }
         "redbox_app_query" => {
             let operation = payload_string(arguments, "operation").unwrap_or_default();
             let limit = parse_usize_arg(arguments, "limit", 8, 20);
@@ -3765,24 +2992,22 @@ fn execute_interactive_tool_call(
                         }))
                     })
                 }
-                "memory.search" => {
-                    let response = crate::runtime_recall_value(
-                        state,
-                        &json!({
-                            "query": query,
-                            "sources": ["memory"],
-                            "limit": limit,
-                            "maxChars": 5000,
-                        }),
-                    )?;
+                "memory.search" => with_store(state, |store| {
                     Ok(json!({
-                        "memories": response
-                            .get("hits")
-                            .and_then(Value::as_array)
-                            .cloned()
-                            .unwrap_or_default()
+                        "memories": store.memories
+                            .iter()
+                            .filter(|item| item.content.to_lowercase().contains(&query))
+                            .take(limit)
+                            .map(|item| json!({
+                                "id": item.id,
+                                "type": item.r#type,
+                                "content": text_snippet(&item.content, 220),
+                                "tags": item.tags,
+                                "updatedAt": item.updated_at
+                            }))
+                            .collect::<Vec<_>>()
                     }))
-                }
+                }),
                 "chat.sessions.list" => with_store(state, |store| {
                     let mut items = store.chat_sessions.clone();
                     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -3949,29 +3174,10 @@ fn execute_interactive_tool_call(
             }
         }
         other => Err(format!("unsupported interactive tool: {other}")),
-    };
-    append_tool_call_debug_log(
-        state,
-        if result.is_ok() { "result_ok" } else { "result_err" },
-        runtime_mode,
-        session_id,
-        &raw_name,
-        name,
-        match &result {
-            Ok(value) => json!({
-                "resultPreview": compact_json_for_debug(value, 2000),
-                "resultKeys": value.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
-            }),
-            Err(error) => json!({
-                "error": error,
-            }),
-        },
-    );
-    tools::guards::record_tool_execution_outcome(state, session_id, &guard, &result);
-    result
+    }
 }
 
-pub(crate) fn editor_session_prompt_context(
+fn editor_session_prompt_context(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     runtime_mode: &str,
@@ -4067,15 +3273,8 @@ fn interactive_runtime_message_bundle(
     session_id: Option<&str>,
     runtime_mode: &str,
     message: &str,
-    request_metadata: Option<&Value>,
 ) -> Result<(String, Vec<Value>, Vec<Value>), String> {
-    let mut system_prompt = interactive_runtime_request_system_prompt(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        message,
-    );
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
@@ -4343,10 +3542,8 @@ fn anthropic_tools_for_session(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
-    request_metadata: Option<&Value>,
-    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Vec<Value> {
-    interactive_runtime_tools_for_mode(state, runtime_mode, session_id, request_metadata, activation)
+    interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -4370,16 +3567,8 @@ fn gemini_tools_for_session(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
-    request_metadata: Option<&Value>,
-    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Vec<Value> {
-    let declarations = interactive_runtime_tools_for_mode(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        activation,
-    )
+    let declarations = interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -4660,35 +3849,13 @@ fn run_anthropic_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
-    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let activation = crate::skills::SkillActivationContext {
-        current_message: Some(message.to_string()),
-        intent: request_metadata
-            .and_then(|value| value.get("intent"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        touched_paths: Vec::new(),
-        args: None,
-    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(
-            state,
-            session_id,
-            runtime_mode,
-            message,
-            request_metadata,
-        )?;
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
     let mut messages = canonical_messages_to_anthropic_messages(&prompt_messages);
-    let tools = anthropic_tools_for_session(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        Some(&activation),
-    );
+    let tools = anthropic_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -5190,35 +4357,13 @@ fn run_gemini_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
-    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let activation = crate::skills::SkillActivationContext {
-        current_message: Some(message.to_string()),
-        intent: request_metadata
-            .and_then(|value| value.get("intent"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        touched_paths: Vec::new(),
-        args: None,
-    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(
-            state,
-            session_id,
-            runtime_mode,
-            message,
-            request_metadata,
-        )?;
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
     let mut contents = canonical_messages_to_gemini_contents(&prompt_messages);
-    let tools = gemini_tools_for_session(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        Some(&activation),
-    );
+    let tools = gemini_tools_for_session(state, runtime_mode, session_id);
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -5678,25 +4823,9 @@ fn run_openai_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
-    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
-    let activation = crate::skills::SkillActivationContext {
-        current_message: Some(message.to_string()),
-        intent: request_metadata
-            .and_then(|value| value.get("intent"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        touched_paths: Vec::new(),
-        args: None,
-    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(
-            state,
-            session_id,
-            runtime_mode,
-            message,
-            request_metadata,
-        )?;
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
     let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
     messages.insert(
         0,
@@ -5707,18 +4836,12 @@ fn run_openai_interactive_chat_runtime(
     );
 
     let is_wander = runtime_mode == "wander";
-    let tools = interactive_runtime_tools_for_mode(
-        state,
-        runtime_mode,
-        session_id,
-        request_metadata,
-        Some(&activation),
-    );
-    let max_turns = if is_wander { 2 } else { 6 };
+    let max_turns = if is_wander { 4 } else { 6 };
     let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
     let disable_qwen_thinking =
         is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
     let trace_id = session_id.unwrap_or(runtime_mode);
+    let mut wander_saw_tool_call = false;
     if let Some(current_session_id) = session_id {
         emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
     }
@@ -5742,15 +4865,28 @@ fn run_openai_interactive_chat_runtime(
                 "[timing][wander-runtime][{}] turn-{}-request elapsed=0ms | toolChoice={} thinkingDisabled={}",
                 trace_id,
                 turn + 1,
-                if is_wander && turn == 0 { "required" } else { "auto" },
+                if is_wander && turn == 0 {
+                    "required"
+                } else if is_wander && wander_saw_tool_call && turn + 1 == max_turns {
+                    "none"
+                } else {
+                    "auto"
+                },
                 disable_qwen_thinking
             ),
         );
+        let tool_choice = if is_wander && turn == 0 {
+            json!("required")
+        } else if is_wander && wander_saw_tool_call && turn + 1 == max_turns {
+            json!("none")
+        } else {
+            json!("auto")
+        };
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tools": tools.clone(),
-            "tool_choice": if is_wander && turn == 0 { "required" } else { "auto" },
+            "tools": interactive_runtime_tools_for_mode(state, runtime_mode, session_id),
+            "tool_choice": tool_choice,
             "stream": !is_wander
         });
         if disable_qwen_thinking {
@@ -5841,6 +4977,15 @@ fn run_openai_interactive_chat_runtime(
         );
 
         if tool_calls.is_empty() {
+            if is_wander && !wander_saw_tool_call && turn + 1 < max_turns {
+                let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
+                canonical_messages.push(canonical_text_message("user", correction.to_string()));
+                messages.push(json!({
+                    "role": "user",
+                    "content": correction
+                }));
+                continue;
+            }
             if assistant_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
@@ -5872,6 +5017,7 @@ fn run_openai_interactive_chat_runtime(
             return Ok(assistant_content);
         }
 
+        wander_saw_tool_call = true;
         if !assistant_content.trim().is_empty() {
             emit_runtime_text_delta(
                 app,

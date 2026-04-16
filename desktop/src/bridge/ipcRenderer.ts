@@ -64,38 +64,6 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:pick-attachment') {
     return { success: true, canceled: true };
   }
-  if (channel === 'runtime:recall' || channel === 'memory:recall') {
-    return {
-      success: false,
-      query: '',
-      sources: [],
-      memoryTypes: [],
-      limit: 0,
-      maxChars: 0,
-      usedChars: 0,
-      truncated: false,
-      totalHits: 0,
-      hits: [],
-    };
-  }
-  if (channel === 'runtime:execute-script') {
-    return {
-      success: false,
-      executionId: '',
-      runtimeMode: '',
-      stdout: '',
-      stdoutTruncated: false,
-      artifactPaths: [],
-      toolCallCount: 0,
-      stepCount: 0,
-      tempWorkspace: '',
-      errorSummary: `RedBox scripted execution failed: ${message}`,
-      estimatedPromptReductionChars: 0,
-      executedTools: [],
-      stepSummaries: [],
-      limitSummary: {},
-    };
-  }
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
@@ -218,9 +186,7 @@ function createIpcRenderer() {
     getSettings: () => invokeChannel('db:get-settings'),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
-      getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
-      runPhase0Smoke: () => invokeChannel('debug:run-phase0-smoke'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
     },
     sessions: {
@@ -246,28 +212,7 @@ function createIpcRenderer() {
       forkSession: (payload: { sessionId: string }) => invokeChannel('runtime:fork-session', payload),
       getTrace: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-trace', payload),
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
-      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
-      recall: (payload: {
-        query?: string;
-        sessionId?: string;
-        runtimeId?: string;
-        sources?: string[];
-        memoryTypes?: string[];
-        includeArchived?: boolean;
-        includeChildSessions?: boolean;
-        limit?: number;
-        maxChars?: number;
-      }) => invokeChannel('runtime:recall', payload)
-      ,
-      executeScript: (payload: {
-        sessionId?: string;
-        taskId?: string;
-        runtimeMode?: 'knowledge' | 'diagnostics' | 'video-editor';
-        inputs?: Record<string, unknown>;
-        program: Record<string, unknown> | string;
-        limits?: Record<string, unknown>;
-        reason?: string;
-      }) => invokeChannel('runtime:execute-script', payload)
+      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload)
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),
@@ -337,6 +282,8 @@ function createIpcRenderer() {
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
       getSessions: () => invokeChannel('chat:get-sessions'),
       createSession: (title?: string) => invokeChannel('chat:create-session', title),
+      createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) =>
+        invokeChannel('chat:create-diagnostics-session', payload || {}),
       getOrCreateContextSession: (params: Record<string, unknown>) => invokeChannel('chat:getOrCreateContextSession', params),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
@@ -385,19 +332,6 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
-    createSkill: (payload: { name: string }) => invokeChannel('skills:create', payload),
-    saveSkill: (payload: { location: string; content: string }) => invokeChannel('skills:save', payload),
-    enableSkill: (payload: { name: string }) => invokeChannel('skills:enable', payload),
-    disableSkill: (payload: { name: string }) => invokeChannel('skills:disable', payload),
-    invokeSkill: (payload: { name: string; args?: string }) => invokeChannel('skills:invoke', payload),
-    previewSkillActivation: (payload: {
-      runtimeMode: string;
-      message?: string;
-      intent?: string;
-      args?: string;
-      metadata?: Record<string, unknown>;
-      touchedPaths?: string[];
-    }) => invokeChannel('skills:preview-activation', payload),
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),
       runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),

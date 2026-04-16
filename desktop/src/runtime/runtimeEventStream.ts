@@ -37,19 +37,14 @@ export interface RuntimeEventStreamHandlers {
   onSubagentSpawned?: (payload: TaskScopedPayload & {
     roleId: string;
     runtimeMode: string;
-    childRuntimeType?: string;
     childRuntimeId?: string;
     childTaskId?: string;
     childSessionId?: string;
     parentTaskId?: string;
-    phase?: string;
-    status?: string;
-    resultSummary?: string;
   }) => void;
   onSubagentFinished?: (payload: TaskScopedPayload & {
     roleId: string;
     runtimeMode: string;
-    childRuntimeType?: string;
     status: string;
     summary: string;
     error: string;
@@ -57,8 +52,6 @@ export interface RuntimeEventStreamHandlers {
     childTaskId?: string;
     childSessionId?: string;
     parentTaskId?: string;
-    phase?: string;
-    resultSummary?: string;
   }) => void;
   onTaskCheckpointSaved?: (payload: TaskScopedPayload & {
     checkpointType: string;
@@ -269,14 +262,10 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       taskId,
       roleId: toText(payload.roleId) || 'subagent',
       runtimeMode: toText(payload.runtimeMode) || 'unknown',
-      childRuntimeType: toOptionalText(payload.childRuntimeType),
       childRuntimeId: toOptionalText(payload.childRuntimeId),
       childTaskId: toOptionalText(payload.childTaskId),
       childSessionId: toOptionalText(payload.childSessionId),
       parentTaskId: toOptionalText(payload.parentTaskId) || toOptionalText(taskId),
-      phase: toOptionalText(payload.phase),
-      status: toOptionalText(payload.status),
-      resultSummary: toOptionalText(payload.resultSummary),
     });
     return;
   }
@@ -288,7 +277,6 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       taskId,
       roleId: toText(payload.roleId) || 'subagent',
       runtimeMode: toText(payload.runtimeMode) || 'unknown',
-      childRuntimeType: toOptionalText(payload.childRuntimeType),
       status: toText(payload.status) || 'completed',
       summary: toText(payload.summary),
       error: toText(payload.error),
@@ -296,8 +284,6 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       childTaskId: toOptionalText(payload.childTaskId),
       childSessionId: toOptionalText(payload.childSessionId),
       parentTaskId: toOptionalText(payload.parentTaskId) || toOptionalText(taskId),
-      phase: toOptionalText(payload.phase),
-      resultSummary: toOptionalText(payload.resultSummary),
     });
     return;
   }

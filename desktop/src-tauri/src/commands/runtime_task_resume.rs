@@ -9,9 +9,6 @@ use crate::runtime::{
     build_repair_goal, reviewer_rejected, route_for_task_snapshot, PreparedTaskResumeExecution,
     RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent, RuntimeTaskRecord,
 };
-use crate::scheduler::{
-    agent_job_feature_enabled, enqueue_runtime_task_job_execution, run_job_queue_once,
-};
 use crate::{payload_string, AppState};
 
 pub fn prepare_task_resume_execution(
@@ -97,13 +94,18 @@ pub fn prepare_task_resume_execution(
     })
 }
 
-pub fn execute_runtime_task_resume_job(
+pub fn handle_runtime_task_resume(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    task_id: &str,
+    payload: &Value,
 ) -> Result<Value, String> {
+    let task_id = payload_string(payload, "taskId").unwrap_or_default();
     let task_snapshot = crate::persistence::with_store_mut(state, |store| {
-        Ok(crate::runtime::resume_runtime_task_snapshot(store, task_id, "route and execution plan resumed"))
+        Ok(crate::runtime::resume_runtime_task_snapshot(
+            store,
+            &task_id,
+            "route and execution plan resumed",
+        ))
     })?;
     let Some(task_snapshot) = task_snapshot else {
         return Ok(json!({ "success": false, "error": "任务不存在" }));
@@ -124,82 +126,12 @@ pub fn execute_runtime_task_resume_job(
     })?;
     emit_task_resume_events(
         app,
-        task_id,
+        &task_id,
         task_snapshot.owner_session_id.as_deref(),
         applied.runtime_node_events,
         applied.runtime_checkpoint_events,
     );
-    let output_summary = if applied
-        .response
-        .get("success")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        "runtime task completed".to_string()
-    } else {
-        applied
-            .response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("runtime task blocked")
-            .to_string()
-    };
-    let last_checkpoint = crate::persistence::with_store(state, |store| {
-        Ok(store
-            .runtime_tasks
-            .iter()
-            .find(|item| item.id == task_id)
-            .and_then(|item| item.checkpoints.last().cloned()))
-    })?;
-    Ok(json!({
-        "success": applied.response.get("success").and_then(Value::as_bool).unwrap_or(false),
-        "jobOutcome": if applied.response.get("success").and_then(Value::as_bool).unwrap_or(false) {
-            "succeeded"
-        } else {
-            "held"
-        },
-        "taskId": task_id,
-        "runtimeTaskId": task_id,
-        "sessionId": task_snapshot.owner_session_id,
-        "response": output_summary,
-        "outputSummary": output_summary,
-        "error": applied.response.get("error").cloned().unwrap_or(Value::Null),
-        "holdReason": applied.response.get("error").cloned().unwrap_or(Value::Null),
-        "artifacts": saved_artifact
-            .clone()
-            .map(|artifact| vec![serde_json::to_value(artifact).unwrap_or_else(|_| Value::Null)])
-            .unwrap_or_default(),
-        "lastArtifact": saved_artifact.map(|artifact| serde_json::to_value(artifact).unwrap_or_else(|_| Value::Null)).unwrap_or(Value::Null),
-        "lastCheckpoint": last_checkpoint,
-        "result": applied.response,
-    }))
-}
-
-pub fn handle_runtime_task_resume(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let task_id = payload_string(payload, "taskId").unwrap_or_default();
-    let agent_jobs_enabled = crate::persistence::with_store(state, |store| {
-        Ok(agent_job_feature_enabled(&store.settings))
-    })?;
-    if agent_jobs_enabled {
-        let execution_id = crate::persistence::with_store_mut(state, |store| {
-            enqueue_runtime_task_job_execution(store, &task_id, "manual-runtime-task-resume")
-        })?;
-        let result = run_job_queue_once(app, state, Some(&execution_id))?
-            .and_then(|value| value.get("result").cloned())
-            .unwrap_or_else(|| {
-                json!({
-                    "success": false,
-                    "taskId": task_id,
-                    "error": "runtime task agent job did not start"
-                })
-            });
-        return Ok(result);
-    }
-    execute_runtime_task_resume_job(app, state, &task_id)
+    Ok(applied.response)
 }
 
 pub fn maybe_save_task_resume_artifact(

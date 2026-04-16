@@ -13,9 +13,6 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::scheduler::{
-    agent_job_feature_enabled, enqueue_assistant_daemon_job_execution, run_job_queue_once,
-};
 use crate::{
     now_iso, payload_string, run_curl_json, url_encode_component, with_store, AppState,
     AssistantSidecarRuntime, AssistantStateRecord,
@@ -489,63 +486,6 @@ pub(crate) fn validate_assistant_request(
     Ok(None)
 }
 
-pub(crate) fn execute_assistant_daemon_job(
-    app: &AppHandle,
-    route_kind: &str,
-    prompt: &str,
-    request_body: Option<Value>,
-) -> Result<Value, String> {
-    let state = app.state::<AppState>();
-    let assistant_snapshot = with_store(&state, |store| Ok(store.assistant_state.clone()))?;
-    let parsed_body = request_body.unwrap_or_else(|| json!({}));
-    let session_id = assistant_session_id_for_route(route_kind);
-    let turn = PreparedSessionAgentTurn::assistant_daemon(AssistantDaemonTurn::new(
-        route_kind,
-        session_id.clone(),
-        prompt.to_string(),
-    ));
-    let execution = execute_prepared_session_agent_turn(Some(app), &state, &turn)?;
-    let delivery = if route_kind == "feishu" {
-        Some(send_feishu_text_reply(
-            &assistant_snapshot,
-            &parsed_body,
-            execution.response(),
-        )?)
-    } else {
-        None
-    };
-    emit_assistant_log(
-        app,
-        &format!("assistant daemon completed {} request", route_kind),
-    );
-    let artifacts = delivery
-        .as_ref()
-        .map(|receipt| {
-            vec![json!({
-                "kind": "external-delivery",
-                "label": format!("Assistant delivery · {}", route_kind),
-                "payload": receipt,
-            })]
-        })
-        .unwrap_or_default();
-    Ok(json!({
-        "success": true,
-        "jobOutcome": "succeeded",
-        "routeKind": route_kind,
-        "reply": execution.response(),
-        "response": execution.response(),
-        "outputSummary": execution.response().chars().take(280).collect::<String>(),
-        "sessionId": execution.session_id(),
-        "delivery": delivery,
-        "artifacts": artifacts,
-        "lastCheckpoint": {
-            "summary": format!("assistant daemon reply completed for {}", route_kind),
-            "routeKind": route_kind,
-            "sessionId": execution.session_id(),
-        }
-    }))
-}
-
 pub(crate) fn execute_assistant_message(
     app: &AppHandle,
     route_kind: &str,
@@ -569,32 +509,33 @@ pub(crate) fn execute_assistant_message(
         }));
     };
 
-    let agent_jobs_enabled = with_store(&state, |store| {
-        Ok(agent_job_feature_enabled(&store.settings))
-    })?;
-    if agent_jobs_enabled {
-        let execution_id = crate::persistence::with_store_mut(&state, |store| {
-            enqueue_assistant_daemon_job_execution(
-                store,
-                route_kind,
-                &prompt,
-                Some(parsed_body.clone()),
-                "assistant-daemon-request",
-            )
-        })?;
-        let result = run_job_queue_once(app, &state, Some(&execution_id))?
-            .and_then(|value| value.get("result").cloned())
-            .unwrap_or_else(|| {
-                json!({
-                    "success": false,
-                    "routeKind": route_kind,
-                    "error": "assistant daemon job did not start"
-                })
-            });
-        return Ok(result);
-    }
-
-    execute_assistant_daemon_job(app, route_kind, &prompt, Some(parsed_body))
+    let session_id = assistant_session_id_for_route(route_kind);
+    let turn = PreparedSessionAgentTurn::assistant_daemon(AssistantDaemonTurn::new(
+        route_kind,
+        session_id.clone(),
+        prompt.clone(),
+    ));
+    let execution = execute_prepared_session_agent_turn(Some(app), &state, &turn)?;
+    let delivery = if route_kind == "feishu" {
+        Some(send_feishu_text_reply(
+            &assistant_snapshot,
+            &parsed_body,
+            execution.response(),
+        )?)
+    } else {
+        None
+    };
+    emit_assistant_log(
+        app,
+        &format!("assistant daemon completed {} request", route_kind),
+    );
+    Ok(json!({
+        "success": true,
+        "routeKind": route_kind,
+        "reply": execution.response(),
+        "sessionId": execution.session_id(),
+        "delivery": delivery
+    }))
 }
 
 pub(crate) fn run_assistant_listener(

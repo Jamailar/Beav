@@ -53,6 +53,79 @@ fn payload_f64(payload: &Value, key: &str) -> Option<f64> {
     payload_field(payload, key).and_then(value_as_f64)
 }
 
+fn iso_time_from_value(value: Option<&Value>) -> String {
+    match value {
+        Some(raw) => raw
+            .as_str()
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(now_iso),
+        None => now_iso(),
+    }
+}
+
+fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
+    let mut deduped = std::collections::BTreeMap::<String, Value>::new();
+    for (index, item) in items.iter().filter(|value| value.is_object()).enumerate() {
+        let id = payload_string(item, "id")
+            .or_else(|| payload_string(item, "record_id"))
+            .or_else(|| payload_string(item, "log_id"))
+            .or_else(|| payload_string(item, "request_id"))
+            .unwrap_or_else(|| format!("record_{index}"));
+        let model = payload_string(item, "model")
+            .or_else(|| payload_string(item, "model_name"))
+            .or_else(|| payload_string(item, "modelId"))
+            .unwrap_or_else(|| "-".to_string());
+        let endpoint = payload_string(item, "endpoint")
+            .or_else(|| payload_string(item, "path"))
+            .or_else(|| payload_string(item, "api"))
+            .or_else(|| payload_string(item, "method"))
+            .unwrap_or_else(|| "-".to_string());
+        let tokens = item
+            .get("total_tokens")
+            .or_else(|| item.get("tokens"))
+            .or_else(|| item.get("token"))
+            .or_else(|| item.get("usage_tokens"))
+            .and_then(value_as_f64)
+            .unwrap_or(0.0);
+        let points = item
+            .get("points")
+            .or_else(|| item.get("points_cost"))
+            .or_else(|| item.get("cost_points"))
+            .or_else(|| item.get("cost"))
+            .and_then(value_as_f64)
+            .unwrap_or(0.0);
+        let status = payload_string(item, "status")
+            .or_else(|| payload_string(item, "state"))
+            .unwrap_or_else(|| "success".to_string());
+        let created_at = iso_time_from_value(
+            item.get("created_at")
+                .or_else(|| item.get("createdAt"))
+                .or_else(|| item.get("time"))
+                .or_else(|| item.get("timestamp")),
+        );
+
+        let normalized = json!({
+            "id": id,
+            "model": model,
+            "endpoint": endpoint,
+            "tokens": if tokens.is_finite() { tokens } else { 0.0 },
+            "points": if points.is_finite() { points } else { 0.0 },
+            "status": if status.trim().is_empty() { "success" } else { status.as_str() },
+            "createdAt": created_at,
+            "raw": item,
+        });
+        deduped.entry(id).or_insert(normalized);
+    }
+    deduped.into_values().take(100).collect()
+}
+
+fn normalize_official_call_records_value(value: &Value) -> Vec<Value> {
+    let items = official_response_items(value);
+    normalize_official_call_record_items(&items)
+}
+
 fn session_refresh_token(settings: &Value) -> Option<String> {
     official_settings_session(settings)
         .and_then(|session| {
@@ -237,7 +310,7 @@ fn fetch_remote_official_call_records(settings: &Value) -> Result<Vec<Value>, St
     ] {
         match run_official_json_request(settings, "GET", path, None) {
             Ok(response) => {
-                let items = official_response_items(&response);
+                let items = normalize_official_call_records_value(&response);
                 if !items.is_empty() {
                     return Ok(items);
                 }
@@ -248,7 +321,7 @@ fn fetch_remote_official_call_records(settings: &Value) -> Result<Vec<Value>, St
 
     match run_official_json_request(settings, "GET", "/users/me/points", None) {
         Ok(response) => {
-            let items = official_response_items(&response);
+            let items = normalize_official_call_records_value(&response);
             if !items.is_empty() {
                 return Ok(items);
             }
@@ -866,7 +939,9 @@ pub fn handle_official_channel(
                     if official_session_needs_refresh(&settings) {
                         let _ = refresh_official_auth_session_in_settings(&mut settings);
                     }
-                    let cached_records = official_settings_call_records_list(&settings);
+                    let cached_records = normalize_official_call_record_items(
+                        &official_settings_call_records_list(&settings),
+                    );
                     let remote = fetch_remote_official_call_records(&settings);
                     let mut error = None;
                     let records = match remote {
@@ -1169,4 +1244,54 @@ pub fn handle_official_channel(
     };
 
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_official_call_record_items_maps_legacy_fields() {
+        let records = normalize_official_call_record_items(&[json!({
+            "id": "call-1",
+            "model": "qwen3.5-plus",
+            "points_cost": 0.01,
+            "time": "2026-04-16T05:55:28.198Z",
+            "token": 0,
+        })]);
+        assert_eq!(records.len(), 1);
+        assert_eq!(payload_string(&records[0], "id").as_deref(), Some("call-1"));
+        assert_eq!(
+            payload_string(&records[0], "model").as_deref(),
+            Some("qwen3.5-plus")
+        );
+        assert_eq!(records[0].get("points").and_then(value_as_f64), Some(0.01));
+        assert_eq!(records[0].get("tokens").and_then(value_as_f64), Some(0.0));
+        assert_eq!(
+            payload_string(&records[0], "createdAt").as_deref(),
+            Some("2026-04-16T05:55:28.198Z")
+        );
+    }
+
+    #[test]
+    fn normalize_official_call_records_value_extracts_nested_records() {
+        let records = normalize_official_call_records_value(&json!({
+            "success": true,
+            "data": {
+                "records": [
+                    {
+                        "request_id": "req-1",
+                        "model_name": "gpt-4.1",
+                        "cost_points": 1.25,
+                        "total_tokens": 321,
+                        "created_at": "2026-04-16T06:00:00Z"
+                    }
+                ]
+            }
+        }));
+        assert_eq!(records.len(), 1);
+        assert_eq!(payload_string(&records[0], "id").as_deref(), Some("req-1"));
+        assert_eq!(records[0].get("points").and_then(value_as_f64), Some(1.25));
+        assert_eq!(records[0].get("tokens").and_then(value_as_f64), Some(321.0));
+    }
 }

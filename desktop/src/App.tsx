@@ -159,9 +159,17 @@ function computeMountedViews(history: ViewType[]): Set<ViewType> {
   return next;
 }
 
-function shouldRenderView(mountedViews: Set<ViewType>, currentView: ViewType, view: ViewType): boolean {
+function shouldRenderView(
+  mountedViews: Set<ViewType>,
+  currentView: ViewType,
+  persistentViews: Set<ViewType>,
+  view: ViewType,
+): boolean {
+  if (currentView === view || persistentViews.has(view)) {
+    return true;
+  }
   if (NON_CACHEABLE_VIEWS.has(view)) {
-    return currentView === view;
+    return false;
   }
   return mountedViews.has(view);
 }
@@ -173,6 +181,7 @@ function App() {
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['manuscripts']));
+  const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
   const [clipboardCandidate, setClipboardCandidate] = useState<YouTubeClipboardCandidate | null>(null);
   const [isCapturePromptOpen, setIsCapturePromptOpen] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -239,6 +248,22 @@ function App() {
   const clearPendingManuscriptFile = () => {
     setPendingManuscriptFile(null);
   };
+
+  const setViewPersistent = useCallback((view: ViewType, persistent: boolean) => {
+    setPersistentViews((prev) => {
+      const alreadyPersistent = prev.has(view);
+      if (alreadyPersistent === persistent) {
+        return prev;
+      }
+      const next = new Set(prev);
+      if (persistent) {
+        next.add(view);
+      } else {
+        next.delete(view);
+      }
+      return next;
+    });
+  }, []);
 
   const enqueueYoutubeFromClipboard = useCallback(async (candidate: YouTubeClipboardCandidate) => {
     const payload = {
@@ -345,7 +370,7 @@ function App() {
   return (
     <>
       <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={isImmersiveEditor}>
-        {shouldRenderView(mountedViews, currentView, 'chat') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
               <ChatPage
@@ -415,18 +440,19 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('wander') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'wander') && (
           <div className={currentView === 'wander' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'wander' ? <ViewLoadingFallback /> : null}>
               <WanderPage
                 onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
+                onExecutionStateChange={(active) => setViewPersistent('wander', active)}
                 isActive={currentView === 'wander'}
               />
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, 'redclaw') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw') && (
           <div className={currentView === 'redclaw' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage

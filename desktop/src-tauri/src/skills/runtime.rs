@@ -1,16 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
-use glob::Pattern;
 use serde_json::{json, Value};
+use std::path::Path;
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    apply_skill_tool_permissions, build_skill_hook_output, build_skill_matcher_hooks_for_event,
-    build_skill_watcher_snapshot_with_discovery, load_skill_bundle_sections_for_record,
-    load_skill_catalog, resolve_skill_records, skill_allows_runtime_mode, LoadedSkillRecord,
-    SkillHookMatcherRecord, SkillWatcherSnapshot,
+    apply_skill_tool_permissions, build_skill_hook_output,
+    build_skill_watcher_snapshot_with_discovery, load_skill_bundle_sections_from_sources,
+    load_skill_catalog, normalized_activation_scope, skill_allows_runtime_mode, split_skill_body,
+    LoadedSkillRecord, SkillWatcherSnapshot,
 };
+use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
 
 #[derive(Debug, Clone, Default)]
@@ -18,298 +16,45 @@ pub struct SkillRuntimeState {
     pub catalog: Vec<LoadedSkillRecord>,
     pub active_skills: Vec<LoadedSkillRecord>,
     pub allowed_tools: Vec<String>,
-    pub available_skills_section: String,
     pub prompt_prefix: String,
     pub prompt_suffix: String,
     pub context_note: String,
     pub skills_section: String,
-    pub model_override: Option<String>,
-    pub effort_override: Option<String>,
-    pub active_hooks: BTreeMap<String, Vec<SkillHookMatcherRecord>>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SkillActivationContext {
-    pub current_message: Option<String>,
-    pub intent: Option<String>,
-    pub touched_paths: Vec<String>,
-    pub args: Option<String>,
-}
-
-fn normalized_value(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-fn metadata_string(metadata: Option<&Value>, field: &str) -> Option<String> {
-    metadata
-        .and_then(|value| value.get(field))
-        .and_then(Value::as_str)
-        .map(normalized_value)
-        .filter(|value| !value.is_empty())
-}
-
-fn metadata_string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
-    let mut items = Vec::<String>::new();
-    if let Some(single) = metadata
-        .and_then(|value| value.get(field))
-        .and_then(Value::as_str)
-    {
-        let normalized = single.trim();
-        if !normalized.is_empty() {
-            items.push(normalized.to_string());
-        }
-    }
-    if let Some(array) = metadata
-        .and_then(|value| value.get(field))
-        .and_then(Value::as_array)
-    {
-        for value in array.iter().filter_map(Value::as_str) {
-            let normalized = value.trim();
-            if !normalized.is_empty() {
-                items.push(normalized.to_string());
-            }
-        }
-    }
-    let mut seen = BTreeSet::<String>::new();
-    items
-        .into_iter()
-        .filter(|item| seen.insert(item.to_ascii_lowercase()))
-        .collect()
-}
-
-fn current_activation_intent(
-    metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
-) -> Option<String> {
-    activation
-        .and_then(|item| item.intent.as_deref())
-        .map(normalized_value)
-        .filter(|value| !value.is_empty())
-        .or_else(|| metadata_string(metadata, "intent"))
-}
-
-fn current_activation_context_type(metadata: Option<&Value>) -> Option<String> {
-    metadata_string(metadata, "contextType")
-}
-
-fn candidate_paths(metadata: Option<&Value>, activation: Option<&SkillActivationContext>) -> Vec<String> {
-    let mut items = Vec::<String>::new();
-    for field in [
-        "associatedFilePath",
-        "sourceManuscriptPath",
-        "filePath",
-        "path",
-        "projectPath",
-    ] {
-        items.extend(metadata_string_list(metadata, field));
-    }
-    if let Some(activation) = activation {
-        items.extend(
-            activation
-                .touched_paths
-                .iter()
-                .map(|item| item.trim().to_string())
-                .filter(|item| !item.is_empty()),
-        );
-    }
-    let mut seen = BTreeSet::<String>::new();
-    items
-        .into_iter()
-        .map(|item| item.replace('\\', "/"))
-        .filter(|item| seen.insert(item.to_ascii_lowercase()))
-        .collect()
-}
-
-fn is_manuscript_context(metadata: Option<&Value>, activation: Option<&SkillActivationContext>) -> bool {
-    if matches!(
-        current_activation_context_type(metadata).as_deref(),
-        Some("manuscript") | Some("manuscripts")
-    ) {
-        return true;
-    }
-    candidate_paths(metadata, activation)
-        .iter()
-        .map(|value| value.to_ascii_lowercase())
-        .any(|value| value.contains("/manuscripts/") || value.ends_with(".md"))
-}
-
-fn looks_like_manuscript_request(message: Option<&str>) -> bool {
-    let normalized = message
-        .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_default();
-    if normalized.is_empty() {
-        return false;
-    }
-    [
-        "写一篇",
-        "写个",
-        "写篇",
-        "改写",
-        "扩写",
-        "润色",
-        "仿写",
-        "续写",
-        "重写",
-        "文案",
-        "文章",
-        "稿子",
-        "成稿",
-        "提纲",
-        "小红书",
-        "rewrite",
-        "polish",
-        "draft",
-        "article",
-        "essay",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-}
-
-fn activation_request_text(activation: Option<&SkillActivationContext>) -> Option<String> {
-    let mut parts = Vec::<String>::new();
-    if let Some(message) = activation
-        .and_then(|item| item.current_message.as_deref())
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-    {
-        parts.push(message.to_string());
-    }
-    if let Some(args) = activation
-        .and_then(|item| item.args.as_deref())
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-    {
-        parts.push(args.to_string());
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
-}
-
-fn path_matches_pattern(candidate: &str, pattern: &str) -> bool {
-    let normalized_candidate = candidate.replace('\\', "/");
-    let normalized_pattern = pattern.trim().replace('\\', "/");
-    if normalized_pattern.is_empty() {
-        return false;
-    }
-    let compiled = Pattern::new(&normalized_pattern);
-    if compiled
-        .as_ref()
-        .map(|compiled| compiled.matches(&normalized_candidate))
-        .unwrap_or_else(|_| normalized_candidate.contains(normalized_pattern.trim_matches('*')))
-    {
-        return true;
-    }
-    if let Ok(compiled) = compiled {
-        let segments = normalized_candidate
-            .split('/')
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>();
-        for index in 0..segments.len() {
-            let suffix = segments[index..].join("/");
-            if compiled.matches(&suffix) {
-                return true;
-            }
-        }
-    }
-    Path::new(&normalized_candidate)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| {
-            Pattern::new(&normalized_pattern)
-                .map(|compiled| compiled.matches(value))
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
-}
-
-fn matches_path_conditions(
-    skill: &LoadedSkillRecord,
-    metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
-) -> bool {
-    if skill.metadata.paths.is_empty() {
-        return true;
-    }
-    let candidates = candidate_paths(metadata, activation);
-    if candidates.is_empty() {
-        return false;
-    }
-    candidates.iter().any(|candidate| {
-        skill.metadata
-            .paths
-            .iter()
-            .any(|pattern| path_matches_pattern(candidate, pattern))
-    })
-}
-
-fn skill_matches_auto_activation(
-    skill: &LoadedSkillRecord,
-    metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
-) -> bool {
-    if !skill.metadata.auto_activate {
-        return false;
-    }
-    let requested_intents = skill
-        .metadata
-        .auto_activate_when_intents
-        .iter()
-        .map(|item| normalized_value(item))
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-    let requested_context_types = skill
-        .metadata
-        .auto_activate_when_context_types
-        .iter()
-        .map(|item| normalized_value(item))
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-
-    let matches_intent = if requested_intents.is_empty() {
-        true
-    } else {
-        let current_intent = current_activation_intent(metadata, activation);
-        requested_intents
-            .iter()
-            .any(|item| current_intent.as_deref() == Some(item.as_str()))
-            || (requested_intents.iter().any(|item| item == "manuscript_creation")
-                && (is_manuscript_context(metadata, activation)
-                    || looks_like_manuscript_request(
-                        activation_request_text(activation).as_deref(),
-                    )))
-    };
-    let matches_context_type = if requested_context_types.is_empty() {
-        true
-    } else {
-        let current_context_type = current_activation_context_type(metadata);
-        requested_context_types
-            .iter()
-            .any(|item| current_context_type.as_deref() == Some(item.as_str()))
-    };
-    matches_intent && matches_context_type && matches_path_conditions(skill, metadata, activation)
 }
 
 fn requested_skill_names(metadata: Option<&Value>) -> Vec<String> {
     let mut items = Vec::new();
     for field in ["activeSkills", "skillNames", "skills"] {
-        items.extend(metadata_string_list(metadata, field));
+        if let Some(array) = metadata
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_array)
+        {
+            for value in array.iter().filter_map(Value::as_str) {
+                let normalized = value.trim();
+                if !normalized.is_empty() {
+                    items.push(normalized.to_string());
+                }
+            }
+        }
+        if let Some(single) = metadata
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_str)
+        {
+            let normalized = single.trim();
+            if !normalized.is_empty() {
+                items.push(normalized.to_string());
+            }
+        }
     }
-    let mut seen = BTreeSet::<String>::new();
+    items.sort();
+    items.dedup();
     items
-        .into_iter()
-        .filter(|item| seen.insert(item.to_ascii_lowercase()))
-        .collect()
 }
 
 fn resolve_active_skills(
     catalog: &[LoadedSkillRecord],
     runtime_mode: &str,
     metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
 ) -> Vec<LoadedSkillRecord> {
     let requested = requested_skill_names(metadata);
     let mut active = Vec::new();
@@ -317,178 +62,191 @@ fn resolve_active_skills(
         if !skill_allows_runtime_mode(skill, runtime_mode) {
             continue;
         }
-        let requested_match = requested
-            .iter()
-            .any(|item| item.eq_ignore_ascii_case(&skill.name))
-            || skill
-                .metadata
-                .aliases
-                .iter()
-                .any(|alias| requested.iter().any(|item| item.eq_ignore_ascii_case(alias)));
-        let path_match = matches_path_conditions(skill, metadata, activation);
-        if requested_match {
-            if path_match || skill.metadata.paths.is_empty() {
-                active.push(skill.clone());
-            }
-            continue;
-        }
-        if skill_matches_auto_activation(skill, metadata, activation) {
+        let requested_match = requested.iter().any(|item| item == &skill.name);
+        let session_scoped =
+            normalized_activation_scope(skill.metadata.activation_scope.as_deref()) == "session";
+        if (requested_match && session_scoped) || skill.metadata.auto_activate {
             active.push(skill.clone());
         }
     }
     active
 }
 
-fn merge_hook_map(
-    target: &mut BTreeMap<String, Vec<SkillHookMatcherRecord>>,
-    source: &BTreeMap<String, Vec<SkillHookMatcherRecord>>,
-) {
-    for (event, items) in source {
-        target
-            .entry(event.clone())
-            .or_default()
-            .extend(items.iter().cloned());
-    }
-}
-
-fn activation_mode_label(skill: &LoadedSkillRecord) -> &str {
-    skill.metadata
-        .execution_context
-        .as_deref()
-        .or(skill.metadata.hook_mode.as_deref())
-        .unwrap_or("inline")
-}
-
-fn build_skills_section(active_skills: &[LoadedSkillRecord]) -> String {
-    let mut parts = Vec::<String>::new();
-    for skill in active_skills {
-        let bundle = load_skill_bundle_sections_for_record(skill, None);
-        let (_, main_body) = crate::skills::split_skill_body(&bundle.body);
-        let mut section_body = String::new();
-        if !main_body.trim().is_empty() {
-            section_body.push_str(main_body.trim());
-        }
-        if !bundle.references.trim().is_empty() {
-            if !section_body.is_empty() {
-                section_body.push_str("\n\n");
-            }
-            section_body.push_str("[references]\n");
-            section_body.push_str(bundle.references.trim());
-        }
-        if !bundle.rules.is_empty() {
-            if !section_body.is_empty() {
-                section_body.push_str("\n\n");
-            }
-            section_body.push_str("[rules]\n");
-            for (name, content) in &bundle.rules {
-                section_body.push_str(&format!("## {name}\n{}\n", content.trim()));
-            }
-        }
-        if !bundle.scripts.trim().is_empty() {
-            if !section_body.is_empty() {
-                section_body.push_str("\n\n");
-            }
-            section_body.push_str("[scripts]\n");
-            section_body.push_str(bundle.scripts.trim());
-        }
-        let truncated = section_body
-            .chars()
-            .take(skill.metadata.max_prompt_chars.unwrap_or(3200))
-            .collect::<String>();
-        if truncated.trim().is_empty() {
-            continue;
-        }
-        parts.push(format!(
-            "### {} [{}]\n{}",
-            skill.name,
-            activation_mode_label(skill),
-            truncated.trim()
-        ));
-    }
-    parts.join("\n\n")
-}
-
-fn build_available_skills_section(
-    catalog: &[LoadedSkillRecord],
-    runtime_mode: &str,
-) -> String {
+fn compatible_catalog(catalog: &[LoadedSkillRecord], runtime_mode: &str) -> Vec<LoadedSkillRecord> {
     catalog
         .iter()
         .filter(|skill| skill_allows_runtime_mode(skill, runtime_mode))
-        .filter(|skill| !skill.metadata.disable_model_invocation)
-        .map(|skill| {
-            let mut parts = vec![skill.description.trim().to_string()];
-            if let Some(when_to_use) = skill
-                .metadata
-                .when_to_use
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                parts.push(format!("when: {when_to_use}"));
-            }
-            if !skill.metadata.aliases.is_empty() {
-                parts.push(format!("aliases: {}", skill.metadata.aliases.join(", ")));
-            }
-            if let Some(argument_hint) = skill
-                .metadata
-                .argument_hint
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                parts.push(format!("args: {argument_hint}"));
-            } else if !skill.metadata.argument_names.is_empty() {
-                parts.push(format!("args: {}", skill.metadata.argument_names.join(", ")));
-            }
-            if let Some(context) = skill
-                .metadata
-                .execution_context
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                parts.push(format!("context: {context}"));
-            }
-            format!("- {}: {}", skill.name, parts.join(" | "))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .cloned()
+        .collect()
 }
 
-fn skill_runtime_state_from_catalog(
-    catalog: Vec<LoadedSkillRecord>,
+fn build_skill_catalog_prompt_section(
+    catalog: &[LoadedSkillRecord],
     runtime_mode: &str,
-    metadata: Option<&Value>,
-    base_tools: &[String],
-    activation: Option<&SkillActivationContext>,
-) -> SkillRuntimeState {
-    let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata, activation);
-    let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
-    let hooks = build_skill_hook_output(&active_skills);
-    let mut active_hooks = BTreeMap::<String, Vec<SkillHookMatcherRecord>>::new();
-    for skill in &active_skills {
-        merge_hook_map(&mut active_hooks, &skill.metadata.hooks);
+    can_invoke_skill: bool,
+) -> String {
+    let available = compatible_catalog(catalog, runtime_mode);
+    if available.is_empty() {
+        return "No specialized skills are currently available in this runtime.".to_string();
     }
-    SkillRuntimeState {
-        model_override: active_skills
-            .iter()
-            .rev()
-            .find_map(|skill| skill.metadata.model.clone()),
-        effort_override: active_skills
-            .iter()
-            .rev()
-            .find_map(|skill| skill.metadata.effort.clone()),
-        available_skills_section: build_available_skills_section(&catalog, runtime_mode),
-        skills_section: build_skills_section(&active_skills),
-        catalog,
-        active_skills,
-        allowed_tools,
-        prompt_prefix: hooks.prompt_prefix,
-        prompt_suffix: hooks.prompt_suffix,
-        context_note: hooks.context_note,
-        active_hooks,
+
+    let list = available
+        .iter()
+        .map(|skill| {
+            let mut item = format!("- {}: {}", skill.name, skill.description);
+            if skill.metadata.auto_activate {
+                item.push_str(" [auto]");
+            }
+            item
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if can_invoke_skill {
+        return [
+            "You have access to specialized skills in this runtime.",
+            "Keep full skill bodies out of context until they are actually needed.",
+            "When a task clearly matches one of the skills below, call `redbox_skill(action=\"invoke\", name=\"skill-name\")` to load the full instructions, references, scripts, and rules into the current session.",
+            "If the user explicitly names a skill, invoke it before proceeding.",
+            "",
+            "Available skills:",
+            &list,
+        ]
+        .join("\n");
     }
+
+    [
+        "You have access to specialized skills in this runtime.",
+        "Manual skill invocation is unavailable here, so rely on the auto-activated skills and the instructions already injected into this session.",
+        "",
+        "Available skills:",
+        &list,
+    ]
+    .join("\n")
+}
+
+fn combine_skills_section(catalog_section: &str, active_section: &str) -> String {
+    if active_section.trim().is_empty() {
+        return catalog_section.trim().to_string();
+    }
+    [
+        catalog_section.trim(),
+        "",
+        "Activated skills for this session:",
+        active_section.trim(),
+    ]
+    .join("\n")
+}
+
+fn format_optional_list(label: &str, values: &[String]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(format!("<{}>{}</{}>", label, values.join(", "), label))
+}
+
+pub fn find_catalog_skill_by_name(skills: &[SkillRecord], name: &str) -> Option<LoadedSkillRecord> {
+    let lookup = name.trim();
+    if lookup.is_empty() {
+        return None;
+    }
+    load_skill_catalog(skills)
+        .into_iter()
+        .find(|skill| skill.name.eq_ignore_ascii_case(lookup))
+}
+
+pub fn render_invoked_skill_bundle(
+    skill: &LoadedSkillRecord,
+    workspace_root: Option<&Path>,
+) -> String {
+    let bundle = load_skill_bundle_sections_from_sources(&skill.name, workspace_root);
+    let source_body = if bundle.body.trim().is_empty() {
+        skill.body.as_str()
+    } else {
+        bundle.body.as_str()
+    };
+    let (_, instructions) = split_skill_body(source_body);
+    let rules = bundle
+        .rules
+        .iter()
+        .filter_map(|(name, body)| {
+            let (_, content) = split_skill_body(body);
+            if content.trim().is_empty() {
+                None
+            } else {
+                Some(format!("## {name}\n{content}"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let metadata_lines = [
+        Some(format!("<name>{}</name>", skill.name)),
+        Some(format!("<description>{}</description>", skill.description)),
+        skill
+            .metadata
+            .hook_mode
+            .as_ref()
+            .map(|value| format!("<hook_mode>{value}</hook_mode>")),
+        Some(format!(
+            "<activation_scope>{}</activation_scope>",
+            normalized_activation_scope(skill.metadata.activation_scope.as_deref())
+        )),
+        skill
+            .source_scope
+            .as_ref()
+            .map(|value| format!("<source_scope>{value}</source_scope>")),
+        Some(format!("<is_builtin>{}</is_builtin>", skill.is_builtin)),
+        Some(format!("<disabled>{}</disabled>", skill.disabled)),
+        format_optional_list(
+            "allowed_runtime_modes",
+            &skill.metadata.allowed_runtime_modes,
+        ),
+        skill
+            .metadata
+            .allowed_tool_pack
+            .as_ref()
+            .map(|value| format!("<allowed_tool_pack>{value}</allowed_tool_pack>")),
+        format_optional_list("allowed_tools", &skill.metadata.allowed_tools),
+        format_optional_list("blocked_tools", &skill.metadata.blocked_tools),
+        skill
+            .metadata
+            .context_note
+            .as_ref()
+            .map(|value| format!("<context_note>{value}</context_note>")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    let mut parts = vec![
+        format!("<activated_skill name=\"{}\">", skill.name),
+        "<metadata>".to_string(),
+        metadata_lines,
+        "</metadata>".to_string(),
+        "<instructions>".to_string(),
+        instructions,
+        "</instructions>".to_string(),
+    ];
+
+    if !bundle.references.trim().is_empty() {
+        parts.push("<references>".to_string());
+        parts.push(bundle.references.trim().to_string());
+        parts.push("</references>".to_string());
+    }
+    if !bundle.scripts.trim().is_empty() {
+        parts.push("<scripts>".to_string());
+        parts.push(bundle.scripts.trim().to_string());
+        parts.push("</scripts>".to_string());
+    }
+    if !rules.trim().is_empty() {
+        parts.push("<rules>".to_string());
+        parts.push(rules);
+        parts.push("</rules>".to_string());
+    }
+    parts.push("</activated_skill>".to_string());
+    parts.join("\n")
 }
 
 pub fn build_skill_runtime_state(
@@ -496,36 +254,35 @@ pub fn build_skill_runtime_state(
     runtime_mode: &str,
     metadata: Option<&Value>,
     base_tools: &[String],
-    activation: Option<&SkillActivationContext>,
 ) -> SkillRuntimeState {
     let catalog = load_skill_catalog(skills);
-    skill_runtime_state_from_catalog(catalog, runtime_mode, metadata, base_tools, activation)
-}
-
-pub fn build_resolved_skill_runtime_state(
-    skills: &[SkillRecord],
-    workspace_root: Option<&Path>,
-    runtime_mode: &str,
-    metadata: Option<&Value>,
-    base_tools: &[String],
-    activation: Option<&SkillActivationContext>,
-) -> SkillRuntimeState {
-    let records = resolve_skill_records(skills, workspace_root);
-    let catalog = load_skill_catalog(&records);
-    skill_runtime_state_from_catalog(catalog, runtime_mode, metadata, base_tools, activation)
+    let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
+    let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
+    let hooks = build_skill_hook_output(&active_skills);
+    let can_invoke_skill = base_tools.iter().any(|item| item == "redbox_skill");
+    let catalog_section =
+        build_skill_catalog_prompt_section(&catalog, runtime_mode, can_invoke_skill);
+    SkillRuntimeState {
+        catalog,
+        active_skills,
+        allowed_tools,
+        prompt_prefix: hooks.prompt_prefix,
+        prompt_suffix: hooks.prompt_suffix,
+        context_note: hooks.context_note,
+        skills_section: combine_skills_section(&catalog_section, &hooks.skills_section),
+    }
 }
 
 pub fn active_skill_activation_items(
     skills: &[SkillRecord],
     runtime_mode: &str,
     metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
 ) -> Vec<(String, String)> {
     let base_tools = tool_names_for_runtime_mode(runtime_mode)
         .iter()
         .map(|item| item.to_string())
         .collect::<Vec<_>>();
-    build_skill_runtime_state(skills, runtime_mode, metadata, &base_tools, activation)
+    build_skill_runtime_state(skills, runtime_mode, metadata, &base_tools)
         .active_skills
         .into_iter()
         .map(|item| (item.name, item.description))
@@ -536,23 +293,21 @@ pub fn skills_catalog_list_value(
     skills: &[SkillRecord],
     discovery_fingerprint: Option<&str>,
 ) -> (Value, SkillWatcherSnapshot) {
-    let state = build_skill_runtime_state(skills, "default", None, &[], None);
+    let state = build_skill_runtime_state(skills, "default", None, &[]);
     let watcher = build_skill_watcher_snapshot_with_discovery(
         &state.catalog,
         discovery_fingerprint.unwrap_or_default(),
     );
     (
-        json!(state
-            .catalog
+        json!(skills
             .iter()
-            .map(|skill| {
+            .zip(state.catalog.iter())
+            .map(|(record, skill)| {
                 json!({
                     "name": skill.name,
                     "description": skill.description,
                     "location": skill.location,
-                    "body": skill.body,
-                    "baseDir": skill.base_dir,
-                    "aliases": skill.metadata.aliases,
+                    "body": record.body,
                     "sourceScope": skill.source_scope,
                     "isBuiltin": skill.is_builtin,
                     "disabled": skill.disabled,
@@ -560,15 +315,6 @@ pub fn skills_catalog_list_value(
                     "watchFingerprint": skill.fingerprint,
                     "catalogFingerprint": watcher.fingerprint,
                     "discoveryFingerprint": watcher.discovery_fingerprint,
-                    "whenToUse": skill.metadata.when_to_use,
-                    "userInvocable": skill.metadata.user_invocable,
-                    "version": skill.metadata.version,
-                    "argumentHint": skill.metadata.argument_hint,
-                    "argumentNames": skill.metadata.argument_names,
-                    "executionContext": skill.metadata.execution_context,
-                    "modelOverride": skill.metadata.model,
-                    "effortOverride": skill.metadata.effort,
-                    "paths": skill.metadata.paths,
                 })
             })
             .collect::<Vec<_>>()),
@@ -576,160 +322,32 @@ pub fn skills_catalog_list_value(
     )
 }
 
-pub fn build_skill_template_markdown(name: &str, forked: bool, note: &str) -> String {
-    let context = if forked { "fork" } else { "inline" };
-    format!(
-        "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nautoActivate: false\ncontext: {context}\nuserInvocable: true\nwhenToUse: \nargumentHint: \narguments: []\npaths: []\ncontextNote: {note}\n---\n# {name}\n\nDescribe this skill's execution contract, examples, constraints, and any reusable workflow steps here."
-    )
+pub fn build_user_skill_record(name: &str) -> SkillRecord {
+    SkillRecord {
+        name: name.to_string(),
+        description: format!("{name} skill"),
+        location: format!("redbox://skills/{}", slug_from_relative_path(name)),
+        body: format!(
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\nactivationScope: session\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
+        ),
+        source_scope: Some("user".to_string()),
+        is_builtin: Some(false),
+        disabled: Some(false),
+    }
 }
 
-fn substitute_skill_arguments(body: &str, skill: &LoadedSkillRecord, args: Option<&str>) -> String {
-    let args_text = args.unwrap_or("").trim();
-    let mut rendered = body
-        .replace("$ARGUMENTS", args_text)
-        .replace("{{ARGUMENTS}}", args_text);
-    let positional = if args_text.contains(',') {
-        args_text
-            .split(',')
-            .map(|item| item.trim().to_string())
-            .collect::<Vec<_>>()
-    } else {
-        args_text
-            .split_whitespace()
-            .map(|item| item.trim().to_string())
-            .collect::<Vec<_>>()
-    };
-    for (index, name) in skill.metadata.argument_names.iter().enumerate() {
-        if let Some(value) = positional.get(index) {
-            rendered = rendered.replace(&format!("{{{{{name}}}}}"), value);
-            rendered = rendered.replace(&format!("${name}"), value);
-        }
+pub fn build_market_skill_record(slug: &str) -> SkillRecord {
+    SkillRecord {
+        name: slug.to_string(),
+        description: format!("Installed from market: {slug}"),
+        location: format!("redbox://skills/market/{slug}"),
+        body: format!(
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: session\ncontextNote: Installed from market.\n---\n# {slug}\n\nThis skill was registered from the RedBox market installer.\n\nReplace this body with the upstream skill contract or add runtime modifiers here."
+        ),
+        source_scope: Some("user".to_string()),
+        is_builtin: Some(false),
+        disabled: Some(false),
     }
-    rendered
-}
-
-pub fn invoke_skill_value(
-    skills: &[SkillRecord],
-    workspace_root: Option<&Path>,
-    name: &str,
-    args: Option<&str>,
-) -> Result<Value, String> {
-    let resolved = resolve_skill_records(skills, workspace_root);
-    let catalog = load_skill_catalog(&resolved);
-    let Some(skill) = catalog.iter().find(|item| {
-        item.name.eq_ignore_ascii_case(name)
-            || item
-                .metadata
-                .aliases
-                .iter()
-                .any(|alias| alias.eq_ignore_ascii_case(name))
-    }) else {
-        return Err(format!("skill not found: {name}"));
-    };
-    let bundle = load_skill_bundle_sections_for_record(skill, workspace_root);
-    let (_, body) = crate::skills::split_skill_body(&bundle.body);
-    let rendered_body = substitute_skill_arguments(&body, skill, args);
-    let mut invocation = String::new();
-    invocation.push_str(&rendered_body);
-    if !bundle.references.trim().is_empty() {
-        invocation.push_str("\n\n[references]\n");
-        invocation.push_str(bundle.references.trim());
-    }
-    if !bundle.rules.is_empty() {
-        invocation.push_str("\n\n[rules]\n");
-        for (rule_name, rule_body) in &bundle.rules {
-            invocation.push_str(&format!("## {rule_name}\n{}\n", rule_body.trim()));
-        }
-    }
-    if !bundle.scripts.trim().is_empty() {
-        invocation.push_str("\n\n[scripts]\n");
-        invocation.push_str(bundle.scripts.trim());
-    }
-    Ok(json!({
-        "success": true,
-        "skill": {
-            "name": skill.name,
-            "description": skill.description,
-            "location": skill.location,
-            "sourceScope": skill.source_scope,
-            "isBuiltin": skill.is_builtin,
-            "disabled": skill.disabled,
-            "metadata": skill.metadata,
-        },
-        "invocation": {
-            "args": args.unwrap_or_default(),
-            "renderedPrompt": invocation.trim(),
-            "executionContext": skill.metadata.execution_context.clone().unwrap_or_else(|| "inline".to_string()),
-            "modelOverride": skill.metadata.model,
-            "effortOverride": skill.metadata.effort,
-            "agent": skill.metadata.agent,
-            "allowedTools": skill.metadata.allowed_tools,
-            "paths": skill.metadata.paths,
-            "hooks": skill.metadata.hooks,
-            "referencesIncluded": !bundle.references.trim().is_empty(),
-            "scriptsIncluded": !bundle.scripts.trim().is_empty(),
-            "ruleCount": bundle.rules.len(),
-        }
-    }))
-}
-
-pub fn preview_skill_activation_value(
-    skills: &[SkillRecord],
-    workspace_root: Option<&Path>,
-    runtime_mode: &str,
-    metadata: Option<&Value>,
-    activation: Option<&SkillActivationContext>,
-) -> Value {
-    let base_tools = tool_names_for_runtime_mode(runtime_mode)
-        .iter()
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let state = build_resolved_skill_runtime_state(
-        skills,
-        workspace_root,
-        runtime_mode,
-        metadata,
-        &base_tools,
-        activation,
-    );
-    json!({
-        "success": true,
-        "runtimeMode": runtime_mode,
-        "availableSkills": state.catalog.iter().filter(|item| skill_allows_runtime_mode(item, runtime_mode)).map(|item| json!({
-            "name": item.name,
-            "description": item.description,
-            "whenToUse": item.metadata.when_to_use,
-            "executionContext": item.metadata.execution_context,
-            "aliases": item.metadata.aliases,
-        })).collect::<Vec<_>>(),
-        "activeSkills": state.active_skills.iter().map(|item| json!({
-            "name": item.name,
-            "description": item.description,
-            "executionContext": item.metadata.execution_context,
-            "modelOverride": item.metadata.model,
-            "effortOverride": item.metadata.effort,
-            "paths": item.metadata.paths,
-            "whenToUse": item.metadata.when_to_use,
-        })).collect::<Vec<_>>(),
-        "allowedTools": state.allowed_tools,
-        "modelOverride": state.model_override,
-        "effortOverride": state.effort_override,
-        "activeHookEvents": state.active_hooks.keys().cloned().collect::<Vec<_>>(),
-        "activeHookCount": state
-            .active_hooks
-            .values()
-            .map(|items| items.len())
-            .sum::<usize>(),
-    })
-}
-
-pub fn active_hooks_for_event(
-    active_skills: &[LoadedSkillRecord],
-    event: &str,
-    runtime_mode: &str,
-    message: &str,
-) -> Vec<crate::skills::SkillHookActionRecord> {
-    build_skill_matcher_hooks_for_event(active_skills, event, runtime_mode, message)
 }
 
 #[cfg(test)]
@@ -742,7 +360,7 @@ mod tests {
                 name: "redclaw-project".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/redclaw-project".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_app_query, redbox_fs]\nautoActivate: true\ncontext: inline\n---\n# Skill\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_app_query, redbox_fs]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -751,7 +369,7 @@ mod tests {
                 name: "cover-builder".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_mcp]\nautoActivate: false\ncontext: fork\narguments: [topic]\n---\n# Cover\n\nUse {{topic}}".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_mcp]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -760,7 +378,7 @@ mod tests {
                 name: "remotion-best-practices".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nautoActivate: true\ncontext: inline\n---\n# Remotion\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -779,7 +397,6 @@ mod tests {
                 "redbox_fs".to_string(),
                 "redbox_mcp".to_string(),
             ],
-            None,
         );
         assert_eq!(state.active_skills.len(), 1);
         assert_eq!(
@@ -798,90 +415,106 @@ mod tests {
                 "redbox_app_query".to_string(),
                 "redbox_fs".to_string(),
                 "redbox_mcp".to_string(),
+                "redbox_skill".to_string(),
             ],
-            None,
         );
         assert_eq!(state.active_skills.len(), 2);
         assert_eq!(state.allowed_tools, Vec::<String>::new());
-        assert!(state.skills_section.contains("cover-builder [fork]"));
+        assert!(state
+            .skills_section
+            .contains("redbox_skill(action=\"invoke\""));
+        assert!(state.skills_section.contains("cover-builder [forked]"));
     }
 
     #[test]
-    fn build_skill_runtime_state_supports_request_scoped_intent_activation() {
-        let skills = vec![SkillRecord {
-            name: "writing-style".to_string(),
-            description: "desc".to_string(),
-            location: "redbox://skills/writing-style".to_string(),
-            body: "---\nallowedRuntimeModes: []\nautoActivate: true\nautoActivateWhenIntents: [manuscript_creation]\ncontext: inline\n---\n# Writing Style\n\nBody".to_string(),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled: Some(false),
-        }];
-
-        let idle_state = build_skill_runtime_state(
-            &skills,
-            "redclaw",
+    fn build_skill_runtime_state_auto_activates_video_editor_remotion_skill_only_in_video_mode() {
+        let video_state = build_skill_runtime_state(
+            &skills(),
+            "video-editor",
             None,
-            &["redbox_fs".to_string()],
-            None,
+            &[
+                "redbox_editor".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_skill".to_string(),
+            ],
         );
-        assert!(idle_state.active_skills.is_empty());
-
-        let writing_state = build_skill_runtime_state(
-            &skills,
-            "redclaw",
-            Some(&json!({ "intent": "manuscript_creation" })),
-            &["redbox_fs".to_string()],
-            None,
+        assert_eq!(video_state.active_skills.len(), 1);
+        assert_eq!(
+            video_state.active_skills[0].name,
+            "remotion-best-practices".to_string()
         );
-        assert_eq!(writing_state.active_skills.len(), 1);
+
+        let default_state = build_skill_runtime_state(
+            &skills(),
+            "default",
+            None,
+            &[
+                "redbox_editor".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_skill".to_string(),
+            ],
+        );
+        assert!(default_state.active_skills.is_empty());
     }
 
     #[test]
-    fn build_skill_runtime_state_exposes_runtime_available_skill_summary() {
+    fn build_skill_runtime_state_includes_catalog_for_matching_runtime_mode() {
         let state = build_skill_runtime_state(
             &skills(),
             "redclaw",
             None,
-            &["redbox_fs".to_string()],
-            None,
+            &[
+                "redbox_app_query".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_mcp".to_string(),
+            ],
         );
-        assert!(state.available_skills_section.contains("redclaw-project"));
-        assert!(state.available_skills_section.contains("cover-builder"));
-        assert!(!state.available_skills_section.contains("remotion-best-practices"));
+        assert!(state.skills_section.contains("redclaw-project: desc"));
+        assert!(state.skills_section.contains("cover-builder: desc"));
+        assert!(!state
+            .skills_section
+            .contains("remotion-best-practices: desc"));
     }
 
     #[test]
-    fn build_skill_runtime_state_can_match_paths() {
-        let skills = vec![SkillRecord {
-            name: "manuscript-helper".to_string(),
-            description: "desc".to_string(),
-            location: "redbox://skills/manuscript-helper".to_string(),
-            body: "---\nautoActivate: true\npaths: [manuscripts/**]\n---\n# Manuscript\n\nBody".to_string(),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled: Some(false),
-        }];
-
+    fn build_skill_runtime_state_avoids_manual_invoke_copy_when_skill_tool_is_unavailable() {
         let state = build_skill_runtime_state(
-            &skills,
-            "redclaw",
-            Some(&json!({ "associatedFilePath": "/tmp/workspace/manuscripts/test.md" })),
-            &["redbox_fs".to_string()],
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: true\nhookMode: inline\n---\n# Writing Style\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "wander",
             None,
+            &["redbox_fs".to_string()],
         );
-        assert_eq!(state.active_skills.len(), 1);
+        assert!(!state
+            .skills_section
+            .contains("redbox_skill(action=\"invoke\""));
+        assert!(state.skills_section.contains("writing-style [inline]"));
     }
 
     #[test]
-    fn invoke_skill_value_substitutes_arguments() {
-        let value = invoke_skill_value(&skills(), None, "cover-builder", Some("选题"))
-            .expect("should invoke");
-        let prompt = value
-            .get("invocation")
-            .and_then(|item| item.get("renderedPrompt"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        assert!(prompt.contains("选题"));
+    fn build_skill_runtime_state_ignores_turn_scoped_session_skill_persistence() {
+        let state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nautoActivate: false\nactivationScope: turn\nhookMode: forked\n---\n# Writing Style\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            Some(&json!({ "activeSkills": ["writing-style"] })),
+            &["redbox_fs".to_string()],
+        );
+        assert!(state.active_skills.is_empty());
+        assert!(!state.skills_section.contains("writing-style [forked]"));
     }
 }

@@ -3,9 +3,6 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{
-    build_runtime_debug_summary, ensure_phase0_settings_defaults_mut, run_phase0_smoke,
-};
 use crate::{
     log_timing_event, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
     refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
@@ -25,9 +22,7 @@ pub fn handle_system_channel(
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
-        | "debug:get-runtime-summary"
         | "debug:get-recent"
-        | "debug:run-phase0-smoke"
         | "debug:open-log-dir"
         | "clipboard:read-text"
         | "clipboard:write-html" => (|| -> Result<Value, String> {
@@ -57,10 +52,7 @@ pub fn handle_system_channel(
                 "db:get-settings" => {
                     let started_at = now_ms();
                     let request_id = format!("db:get-settings:{}", started_at);
-                    let result = with_store_mut(state, |store| {
-                        ensure_phase0_settings_defaults_mut(&mut store.settings);
-                        Ok(store.settings.clone())
-                    });
+                    let result = with_store(state, |store| Ok(store.settings.clone()));
                     log_timing_event(
                         state,
                         "settings",
@@ -74,8 +66,7 @@ pub fn handle_system_channel(
                 "db:save-settings" => {
                     let started_at = now_ms();
                     let request_id = format!("db:save-settings:{}", started_at);
-                    let (active_space_id, merged_settings) = with_store_mut(state, |store| {
-                        ensure_phase0_settings_defaults_mut(&mut store.settings);
+                    let active_space_id = with_store_mut(state, |store| {
                         if let (Some(current), Some(next)) =
                             (store.settings.as_object(), payload.as_object())
                         {
@@ -87,10 +78,9 @@ pub fn handle_system_channel(
                         } else {
                             store.settings = payload.clone();
                         }
-                        ensure_phase0_settings_defaults_mut(&mut store.settings);
-                        Ok((store.active_space_id.clone(), store.settings.clone()))
+                        Ok(store.active_space_id.clone())
                     })?;
-                    let _ = update_workspace_root_cache(state, &merged_settings, &active_space_id);
+                    let _ = update_workspace_root_cache(state, payload, &active_space_id);
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
                     let _ = app.emit(
                         "settings:updated",
@@ -112,7 +102,6 @@ pub fn handle_system_channel(
                     "enabled": true,
                     "logDirectory": store_root(state)?.display().to_string(),
                 })),
-                "debug:get-runtime-summary" => build_runtime_debug_summary(state),
                 "debug:get-recent" => {
                     let limit = payload_field(payload, "limit")
                         .and_then(|value| value.as_i64())
@@ -127,7 +116,6 @@ pub fn handle_system_channel(
                         Ok(json!({ "lines": lines }))
                     })
                 }
-                "debug:run-phase0-smoke" => run_phase0_smoke(state),
                 "debug:open-log-dir" => {
                     let path = store_root(state)?;
                     open::that(&path).map_err(|error| error.to_string())?;

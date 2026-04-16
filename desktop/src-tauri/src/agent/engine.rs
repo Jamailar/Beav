@@ -46,7 +46,6 @@ pub struct ChatExchangeRequest<'a> {
     pub display_content: String,
     pub model_config: Option<&'a Value>,
     pub attachment: Option<Value>,
-    pub request_metadata: Option<Value>,
     pub turn_kind: SessionAgentTurnKind,
     pub checkpoint_summary_override: Option<String>,
     pub session_title_override: Option<String>,
@@ -59,7 +58,6 @@ impl<'a> ChatExchangeRequest<'a> {
         display_content: String,
         model_config: Option<&'a Value>,
         attachment: Option<Value>,
-        request_metadata: Option<Value>,
     ) -> Self {
         Self {
             session_id,
@@ -67,7 +65,6 @@ impl<'a> ChatExchangeRequest<'a> {
             display_content,
             model_config,
             attachment,
-            request_metadata,
             turn_kind: SessionAgentTurnKind::ChatSend,
             checkpoint_summary_override: None,
             session_title_override: None,
@@ -79,7 +76,6 @@ impl<'a> ChatExchangeRequest<'a> {
         effective_message: String,
         display_content: String,
         model_config: Option<&'a Value>,
-        request_metadata: Option<Value>,
     ) -> Self {
         Self {
             session_id,
@@ -87,7 +83,6 @@ impl<'a> ChatExchangeRequest<'a> {
             display_content,
             model_config,
             attachment: None,
-            request_metadata,
             turn_kind: SessionAgentTurnKind::RuntimeQuery,
             checkpoint_summary_override: None,
             session_title_override: None,
@@ -101,7 +96,6 @@ impl<'a> ChatExchangeRequest<'a> {
             message,
             model_config: None,
             attachment: None,
-            request_metadata: None,
             turn_kind: SessionAgentTurnKind::SessionBridge,
             checkpoint_summary_override: None,
             session_title_override: None,
@@ -115,7 +109,6 @@ impl<'a> ChatExchangeRequest<'a> {
             message: prompt,
             model_config,
             attachment: None,
-            request_metadata: None,
             turn_kind: SessionAgentTurnKind::Wander,
             checkpoint_summary_override: Some("Wander brainstorm completed".to_string()),
             session_title_override: Some("Wander Deep Think".to_string()),
@@ -129,7 +122,6 @@ impl<'a> ChatExchangeRequest<'a> {
             message: prompt,
             model_config: None,
             attachment: None,
-            request_metadata: None,
             turn_kind: SessionAgentTurnKind::AssistantDaemon,
             checkpoint_summary_override: Some(format!("Assistant daemon handled {}", route_kind)),
             session_title_override: Some(format!("Assistant · {}", route_kind)),
@@ -143,7 +135,6 @@ impl<'a> ChatExchangeRequest<'a> {
             message: prompt,
             model_config: None,
             attachment: None,
-            request_metadata: None,
             turn_kind: SessionAgentTurnKind::RedclawRun,
             checkpoint_summary_override: Some(format!("RedClaw completed {}", source_label)),
             session_title_override: Some("RedClaw".to_string()),
@@ -204,7 +195,6 @@ pub struct ChatExchangeContext {
     pub settings_snapshot: Value,
     pub working_session_id: String,
     pub runtime_mode: String,
-    pub request_metadata: Option<Value>,
     pub should_handle_redclaw_onboarding: bool,
     pub allow_redclaw_onboarding: bool,
 }
@@ -332,19 +322,12 @@ mod tests {
     #[test]
     fn chat_exchange_request_constructors_set_expected_turn_kinds() {
         assert_eq!(
-            ChatExchangeRequest::chat_send(
-                None,
-                "m".to_string(),
-                "d".to_string(),
-                None,
-                None,
-                None,
-            )
+            ChatExchangeRequest::chat_send(None, "m".to_string(), "d".to_string(), None, None)
                 .turn_kind,
             SessionAgentTurnKind::ChatSend
         );
         assert_eq!(
-            ChatExchangeRequest::runtime_query(None, "m".to_string(), "d".to_string(), None, None,)
+            ChatExchangeRequest::runtime_query(None, "m".to_string(), "d".to_string(), None,)
                 .turn_kind,
             SessionAgentTurnKind::RuntimeQuery
         );
@@ -408,12 +391,10 @@ mod tests {
             route: crate::runtime::runtime_direct_route_record("default", "draft", None),
             route_value: serde_json::json!({ "intent": "direct_answer" }),
             orchestration: Some(serde_json::json!({ "outputs": [] })),
-            context_bundle_snapshot: Some(serde_json::json!({ "fingerprint": "ctx-1" })),
             request: ChatExchangeRequest::runtime_query(
                 Some("session-1".to_string()),
                 "effective".to_string(),
                 "display".to_string(),
-                None,
                 None,
             ),
         });
@@ -435,7 +416,6 @@ mod tests {
                 Some("context-session:redclaw:test".to_string()),
                 "message".to_string(),
                 "display".to_string(),
-                None,
                 None,
                 None,
             ),

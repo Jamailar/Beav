@@ -107,7 +107,6 @@ mod tests {
             name: name.to_string(),
             description: "desc".to_string(),
             location: format!("redbox://skills/{name}"),
-            base_dir: None,
             source_scope: Some("builtin".to_string()),
             is_builtin: true,
             disabled: false,

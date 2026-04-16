@@ -7,25 +7,9 @@ interface Skill {
     description: string;
     location: string;
     body: string;
-    baseDir?: string;
-    aliases?: string[];
     sourceScope?: string;
     isBuiltin?: boolean;
     disabled?: boolean;
-    metadata?: SkillDefinition['metadata'];
-    whenToUse?: string;
-    userInvocable?: boolean;
-    version?: string;
-    argumentHint?: string;
-    argumentNames?: string[];
-    executionContext?: string;
-    modelOverride?: string;
-    effortOverride?: string;
-    paths?: string[];
-    usage?: {
-        usageCount?: number;
-        lastUsedAt?: number | null;
-    };
 }
 
 const formatSkillSourceScope = (scope?: string) => {
@@ -36,22 +20,11 @@ const formatSkillSourceScope = (scope?: string) => {
             return '用户目录';
         case 'workspace':
             return '当前空间';
-        case 'codex-home':
-            return 'Codex 目录';
-        case 'agents-home':
-            return 'Agents 目录';
         case 'claude-home':
             return 'Claude 根目录';
         default:
             return scope || '';
     }
-};
-
-const formatLastUsed = (value?: number | null) => {
-    if (!value) return '未使用';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '未使用';
-    return date.toLocaleString('zh-CN', { hour12: false });
 };
 
 export function Skills({ isActive = true }: { isActive?: boolean }) {
@@ -60,15 +33,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
     const [isLoading, setIsLoading] = useState(true);
-    const [previewRuntimeMode, setPreviewRuntimeMode] = useState('redclaw');
-    const [previewMessage, setPreviewMessage] = useState('');
-    const [previewIntent, setPreviewIntent] = useState('');
-    const [previewTouchedPaths, setPreviewTouchedPaths] = useState('');
-    const [previewArgs, setPreviewArgs] = useState('');
-    const [activationPreview, setActivationPreview] = useState<SkillActivationPreviewResult | null>(null);
-    const [invokePreview, setInvokePreview] = useState<SkillInvokeResult | null>(null);
-    const [isPreviewing, setIsPreviewing] = useState(false);
-    const [isInvoking, setIsInvoking] = useState(false);
 
     // 创建技能相关状态
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -113,8 +77,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
         setSelectedSkill(skill);
         setEditContent(skill.body);
         setIsEditing(false);
-        setActivationPreview(null);
-        setInvokePreview(null);
     };
 
     const handleStartEdit = () => {
@@ -135,7 +97,7 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
         if (!selectedSkill) return;
 
         try {
-            await window.ipcRenderer.saveSkill({
+            await window.ipcRenderer.invoke('skills:save', {
                 location: selectedSkill.location,
                 content: editContent
             });
@@ -173,7 +135,7 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
         }
 
         try {
-            const result = await window.ipcRenderer.createSkill({ name });
+            const result = await window.ipcRenderer.invoke('skills:create', { name }) as { success: boolean; error?: string; location?: string };
 
             if (result.success) {
                 handleCloseCreateModal();
@@ -190,64 +152,14 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
     const handleToggleSkill = async () => {
         if (!selectedSkill) return;
         try {
-            const result = selectedSkill.disabled
-                ? await window.ipcRenderer.enableSkill({ name: selectedSkill.name })
-                : await window.ipcRenderer.disableSkill({ name: selectedSkill.name });
+            const channel = selectedSkill.disabled ? 'skills:enable' : 'skills:disable';
+            const result = await window.ipcRenderer.invoke(channel, { name: selectedSkill.name }) as { success?: boolean; error?: string };
             if (!result?.success) {
                 return;
             }
             await loadSkills();
         } catch (e) {
             console.error('Failed to toggle skill:', e);
-        }
-    };
-
-    const handlePreviewActivation = async () => {
-        if (!selectedSkill) return;
-        setIsPreviewing(true);
-        try {
-            const touchedPaths = previewTouchedPaths
-                .split('\n')
-                .map(item => item.trim())
-                .filter(Boolean);
-            const metadata: Record<string, unknown> = {
-                activeSkills: [selectedSkill.name]
-            };
-            if (previewIntent.trim()) {
-                metadata.intent = previewIntent.trim();
-            }
-            if (touchedPaths.length > 0) {
-                metadata.associatedFilePath = touchedPaths[0];
-            }
-            const result = await window.ipcRenderer.previewSkillActivation({
-                runtimeMode: previewRuntimeMode,
-                message: previewMessage.trim() || undefined,
-                intent: previewIntent.trim() || undefined,
-                args: previewArgs.trim() || undefined,
-                metadata,
-                touchedPaths
-            });
-            setActivationPreview(result);
-        } catch (e) {
-            console.error('Failed to preview skill activation:', e);
-        } finally {
-            setIsPreviewing(false);
-        }
-    };
-
-    const handleInvokeSkill = async () => {
-        if (!selectedSkill) return;
-        setIsInvoking(true);
-        try {
-            const result = await window.ipcRenderer.invokeSkill({
-                name: selectedSkill.name,
-                args: previewArgs.trim() || undefined
-            });
-            setInvokePreview(result);
-        } catch (e) {
-            console.error('Failed to invoke skill:', e);
-        } finally {
-            setIsInvoking(false);
         }
     };
 
@@ -322,12 +234,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
                                         <div className="text-xs text-text-tertiary truncate mt-0.5">
                                             {skill.description || '无描述'}
                                         </div>
-                                        <div className="text-[11px] text-text-tertiary mt-1 flex items-center gap-2">
-                                            {skill.executionContext && <span>{skill.executionContext}</span>}
-                                            {typeof skill.usage?.usageCount === 'number' && (
-                                                <span>使用 {skill.usage.usageCount} 次</span>
-                                            )}
-                                        </div>
                                     </div>
                                 </div>
                             </button>
@@ -355,34 +261,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
                                     )}
                                 </div>
                                 <p className="text-xs text-text-tertiary mt-0.5">{selectedSkill.description}</p>
-                                <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-text-tertiary">
-                                    {selectedSkill.executionContext && (
-                                        <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                            context: {selectedSkill.executionContext}
-                                        </span>
-                                    )}
-                                    {selectedSkill.version && (
-                                        <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                            version: {selectedSkill.version}
-                                        </span>
-                                    )}
-                                    {selectedSkill.modelOverride && (
-                                        <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                            model: {selectedSkill.modelOverride}
-                                        </span>
-                                    )}
-                                    {selectedSkill.effortOverride && (
-                                        <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                            effort: {selectedSkill.effortOverride}
-                                        </span>
-                                    )}
-                                    <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                        userInvocable: {selectedSkill.userInvocable === false ? 'false' : 'true'}
-                                    </span>
-                                    <span className="px-2 py-1 rounded-full bg-surface-secondary border border-border">
-                                        使用次数: {selectedSkill.usage?.usageCount || 0}
-                                    </span>
-                                </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
@@ -428,8 +306,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
 
                         {/* Content */}
                         <div className="flex-1 overflow-auto p-6">
-                            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6 h-full">
-                                <div className="min-h-0">
                             {isEditing ? (
                                 <textarea
                                     value={editContent}
@@ -444,141 +320,6 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
                                     </pre>
                                 </div>
                             )}
-                                </div>
-                                <div className="space-y-4 overflow-auto">
-                                    <div className="rounded-lg border border-border bg-surface-secondary/40 p-4">
-                                        <div className="text-xs font-medium text-text-secondary mb-2">触发与执行</div>
-                                        <div className="space-y-2 text-xs text-text-tertiary">
-                                            <div>whenToUse: {selectedSkill.whenToUse || '未配置'}</div>
-                                            <div>argumentHint: {selectedSkill.argumentHint || '未配置'}</div>
-                                            <div>argumentNames: {(selectedSkill.argumentNames || []).join(', ') || '无'}</div>
-                                            <div>allowedRuntimeModes: {(selectedSkill.metadata?.allowedRuntimeModes || []).join(', ') || 'all'}</div>
-                                            <div>autoActivateWhenIntents: {(selectedSkill.metadata?.autoActivateWhenIntents || []).join(', ') || '无'}</div>
-                                            <div>autoActivateWhenContextTypes: {(selectedSkill.metadata?.autoActivateWhenContextTypes || []).join(', ') || '无'}</div>
-                                            <div>paths: {(selectedSkill.paths || []).join(', ') || '无'}</div>
-                                            <div>aliases: {(selectedSkill.aliases || []).join(', ') || '无'}</div>
-                                        </div>
-                                    </div>
-                                    <div className="rounded-lg border border-border bg-surface-secondary/40 p-4">
-                                        <div className="text-xs font-medium text-text-secondary mb-2">权限与覆盖</div>
-                                        <div className="space-y-2 text-xs text-text-tertiary">
-                                            <div>allowedToolPack: {selectedSkill.metadata?.allowedToolPack || '未配置'}</div>
-                                            <div>allowedTools: {(selectedSkill.metadata?.allowedTools || []).join(', ') || '无'}</div>
-                                            <div>blockedTools: {(selectedSkill.metadata?.blockedTools || []).join(', ') || '无'}</div>
-                                            <div>agent: {selectedSkill.metadata?.agent || '未配置'}</div>
-                                            <div>shell: {selectedSkill.metadata?.shell || '未配置'}</div>
-                                        </div>
-                                    </div>
-                                    <div className="rounded-lg border border-border bg-surface-secondary/40 p-4">
-                                        <div className="text-xs font-medium text-text-secondary mb-2">来源与使用</div>
-                                        <div className="space-y-2 text-xs text-text-tertiary">
-                                            <div>location: {selectedSkill.location}</div>
-                                            {selectedSkill.baseDir && <div>baseDir: {selectedSkill.baseDir}</div>}
-                                            <div>lastUsedAt: {formatLastUsed(selectedSkill.usage?.lastUsedAt)}</div>
-                                            <div>hook groups: {Object.keys(selectedSkill.metadata?.hooks || {}).length}</div>
-                                        </div>
-                                    </div>
-                                    <div className="rounded-lg border border-border bg-surface-secondary/40 p-4">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <div className="text-xs font-medium text-text-secondary">激活预演</div>
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => void handlePreviewActivation()}
-                                                    disabled={isPreviewing}
-                                                    className="px-2 py-1 text-[11px] rounded border border-border hover:bg-surface-primary disabled:opacity-50"
-                                                >
-                                                    {isPreviewing ? '预演中...' : '预演'}
-                                                </button>
-                                                <button
-                                                    onClick={() => void handleInvokeSkill()}
-                                                    disabled={isInvoking}
-                                                    className="px-2 py-1 text-[11px] rounded border border-border hover:bg-surface-primary disabled:opacity-50"
-                                                >
-                                                    {isInvoking ? '生成中...' : '调用'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div className="space-y-2 text-xs text-text-tertiary">
-                                            <div>
-                                                <div className="mb-1">runtimeMode</div>
-                                                <select
-                                                    value={previewRuntimeMode}
-                                                    onChange={(e) => setPreviewRuntimeMode(e.target.value)}
-                                                    className="w-full bg-surface-primary border border-border rounded px-2 py-1 text-xs"
-                                                >
-                                                    {['default', 'redclaw', 'knowledge', 'video-editor', 'diagnostics'].map((mode) => (
-                                                        <option key={mode} value={mode}>{mode}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <div className="mb-1">intent</div>
-                                                <input
-                                                    value={previewIntent}
-                                                    onChange={(e) => setPreviewIntent(e.target.value)}
-                                                    placeholder="例如 manuscript_creation"
-                                                    className="w-full bg-surface-primary border border-border rounded px-2 py-1 text-xs"
-                                                />
-                                            </div>
-                                            <div>
-                                                <div className="mb-1">message</div>
-                                                <textarea
-                                                    value={previewMessage}
-                                                    onChange={(e) => setPreviewMessage(e.target.value)}
-                                                    placeholder="输入本轮请求，观察技能是否被激活"
-                                                    className="w-full min-h-20 bg-surface-primary border border-border rounded px-2 py-1 text-xs resize-y"
-                                                />
-                                            </div>
-                                            <div>
-                                                <div className="mb-1">touchedPaths</div>
-                                                <textarea
-                                                    value={previewTouchedPaths}
-                                                    onChange={(e) => setPreviewTouchedPaths(e.target.value)}
-                                                    placeholder="/workspace/manuscripts/post.md"
-                                                    className="w-full min-h-16 bg-surface-primary border border-border rounded px-2 py-1 text-xs resize-y"
-                                                />
-                                            </div>
-                                            <div>
-                                                <div className="mb-1">args</div>
-                                                <input
-                                                    value={previewArgs}
-                                                    onChange={(e) => setPreviewArgs(e.target.value)}
-                                                    placeholder={selectedSkill.argumentHint || '可选参数'}
-                                                    className="w-full bg-surface-primary border border-border rounded px-2 py-1 text-xs"
-                                                />
-                                            </div>
-                                        </div>
-                                        {activationPreview && (
-                                            <div className="mt-3 rounded border border-border bg-surface-primary p-3 text-[11px] text-text-tertiary space-y-2">
-                                                <div>activeSkills: {activationPreview.activeSkills.map(item => item.name).join(', ') || '无'}</div>
-                                                <div>selectedActive: {activationPreview.activeSkills.some(item => item.name === selectedSkill.name) ? 'true' : 'false'}</div>
-                                                <div>activeHookEvents: {(activationPreview.activeHookEvents || []).join(', ') || '无'}</div>
-                                                <div>activeHookCount: {activationPreview.activeHookCount || 0}</div>
-                                                <div>allowedTools: {activationPreview.allowedTools.join(', ') || '无'}</div>
-                                                <div>modelOverride: {activationPreview.modelOverride || '无'}</div>
-                                                <div>effortOverride: {activationPreview.effortOverride || '无'}</div>
-                                            </div>
-                                        )}
-                                        {invokePreview?.invocation?.renderedPrompt && (
-                                            <div className="mt-3 rounded border border-border bg-surface-primary p-3">
-                                                <div className="text-[11px] text-text-secondary mb-2">调用结果</div>
-                                                <div className="text-[11px] text-text-tertiary mb-2">
-                                                    executionContext: {invokePreview.invocation.executionContext || 'inline'}
-                                                    {' · '}
-                                                    rules: {invokePreview.invocation.ruleCount || 0}
-                                                    {' · '}
-                                                    refs: {invokePreview.invocation.referencesIncluded ? 'yes' : 'no'}
-                                                    {' · '}
-                                                    scripts: {invokePreview.invocation.scriptsIncluded ? 'yes' : 'no'}
-                                                </div>
-                                                <pre className="text-[11px] whitespace-pre-wrap font-mono text-text-primary bg-surface-secondary/50 p-3 rounded border border-border max-h-64 overflow-auto">
-                                                    {invokePreview.invocation.renderedPrompt}
-                                                </pre>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </>
                 ) : (

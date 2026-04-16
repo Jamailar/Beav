@@ -1,4 +1,3 @@
-use serde_json::Value;
 use tauri::State;
 
 use crate::agent::{ChatExchangeContext, SessionAgentTurnKind};
@@ -12,7 +11,6 @@ use crate::{make_id, AppState};
 pub fn resolve_chat_exchange_context(
     state: &State<'_, AppState>,
     session_id: Option<String>,
-    request_metadata: Option<Value>,
     turn_kind: SessionAgentTurnKind,
 ) -> Result<ChatExchangeContext, String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
@@ -35,7 +33,6 @@ pub fn resolve_chat_exchange_context(
         settings_snapshot,
         working_session_id,
         runtime_mode,
-        request_metadata,
         should_handle_redclaw_onboarding,
         allow_redclaw_onboarding,
     })

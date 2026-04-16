@@ -37,14 +37,6 @@ interface RedboxCallRecordItem {
   status: string;
 }
 
-interface RedboxProductItem {
-  id: string;
-  name: string;
-  amount: number;
-  pointsTopup: number;
-  raw: Record<string, unknown>;
-}
-
 interface ModelsResponseItem {
   id: string;
 }
@@ -62,7 +54,6 @@ interface RedboxPanelDisplaySnapshot {
   user: Record<string, unknown> | null;
   points: Record<string, unknown> | null;
   models: ModelsResponseItem[];
-  products: RedboxProductItem[];
   callRecords: RedboxCallRecordItem[];
   updatedAt: number;
 }
@@ -118,7 +109,6 @@ const readPanelDisplaySnapshot = (): RedboxPanelDisplaySnapshot | null => {
       user: parsed.user && typeof parsed.user === 'object' ? parsed.user : null,
       points: parsed.points && typeof parsed.points === 'object' ? parsed.points : null,
       models: Array.isArray(parsed.models) ? parsed.models : [],
-      products: Array.isArray(parsed.products) ? parsed.products : [],
       callRecords: Array.isArray(parsed.callRecords) ? parsed.callRecords : [],
       updatedAt: Number(parsed.updatedAt || Date.now()),
     };
@@ -145,138 +135,6 @@ const normalizeRechargeAmountInput = (raw: string): string => {
   const value = Number(text);
   if (!Number.isFinite(value) || value <= 0) return '';
   return value.toFixed(2);
-};
-
-const asRecord = (value: unknown): Record<string, unknown> | null => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-};
-
-const pickText = (...values: unknown[]): string => {
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (text) return text;
-  }
-  return '';
-};
-
-const pickNumber = (...values: unknown[]): number => {
-  for (const value of values) {
-    const next = Number(value);
-    if (Number.isFinite(next)) return next;
-  }
-  return 0;
-};
-
-const normalizeDateTime = (value: unknown): string => {
-  if (value === null || value === undefined || value === '') return '';
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const millis = value > 10_000_000_000 ? value : value * 1000;
-    return new Date(millis).toISOString();
-  }
-  const text = String(value).trim();
-  if (!text) return '';
-  if (/^\d+$/.test(text)) {
-    const numeric = Number(text);
-    if (Number.isFinite(numeric)) {
-      const millis = numeric > 10_000_000_000 ? numeric : numeric * 1000;
-      return new Date(millis).toISOString();
-    }
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
-};
-
-const normalizeProductItem = (value: unknown, index: number): RedboxProductItem | null => {
-  const record = asRecord(value);
-  if (!record) return null;
-  const amount = pickNumber(record.amount, record.price, record.total_amount, record.totalAmount);
-  const pointsTopup = pickNumber(
-    record.points_topup,
-    record.pointsTopup,
-    record.points,
-    record.credit,
-    record.credits,
-  );
-  const id = pickText(record.id, record.product_id, record.productId, `product-${index}`);
-  const name = pickText(
-    record.name,
-    record.title,
-    pointsTopup > 0 ? `${pointsTopup} 积分` : '',
-    amount > 0 ? `¥${amount.toFixed(2)}` : '',
-  );
-  if (amount > 0 && amount <= 1) {
-    return null;
-  }
-  return {
-    id,
-    name: name || `充值档位 ${index + 1}`,
-    amount,
-    pointsTopup,
-    raw: record,
-  };
-};
-
-const normalizeCallRecordItem = (value: unknown, index: number): RedboxCallRecordItem | null => {
-  const record = asRecord(value);
-  if (!record) return null;
-  const createdAt = normalizeDateTime(
-    record.createdAt ?? record.created_at ?? record.timestamp ?? record.called_at ?? record.call_time,
-  );
-  const tokens = pickNumber(
-    record.tokens,
-    record.total_tokens,
-    record.totalTokens,
-    record.token_count,
-    pickNumber(record.prompt_tokens, record.promptTokens) + pickNumber(record.completion_tokens, record.completionTokens),
-  );
-  const points = pickNumber(record.points, record.cost_points, record.costPoints, record.cost, record.amount);
-  const id = pickText(
-    record.id,
-    record.record_id,
-    record.recordId,
-    record.request_id,
-    record.requestId,
-    `${createdAt}-${pickText(record.model, record.model_name, record.modelName)}-${index}`,
-  );
-  return {
-    id,
-    model: pickText(record.model, record.model_name, record.modelName, record.model_id, record.modelId),
-    endpoint: pickText(record.endpoint, record.path, record.api, record.channel),
-    tokens,
-    points,
-    createdAt,
-    status: pickText(record.status, record.state, record.result, 'UNKNOWN'),
-  };
-};
-
-const normalizeOrderStatus = (value: unknown): string => {
-  const record = asRecord(value);
-  const status = pickText(
-    record?.trade_status,
-    record?.tradeStatus,
-    record?.status,
-    record?.state,
-  );
-  return status.toUpperCase();
-};
-
-const isPaidOrder = (value: unknown): boolean => {
-  const status = normalizeOrderStatus(value);
-  return ['SUCCESS', 'PAID', 'TRADE_SUCCESS', 'COMPLETED', 'FINISHED'].includes(status);
-};
-
-const getOrderPaymentForm = (value: unknown): string => {
-  const record = asRecord(value);
-  return pickText(
-    record?.payment_form,
-    record?.paymentForm,
-    record?.payment_url,
-    record?.paymentUrl,
-    record?.pay_url,
-    record?.payUrl,
-    record?.url,
-  );
 };
 
 const isLikelyImageUrl = (value: string): boolean => {
@@ -307,7 +165,6 @@ const buildWechatQrDataUrl = async (value: string): Promise<string> => {
 };
 
 const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
-  const presetRechargeOptions = [10, 20, 50, 100];
   const initialPanelSnapshot = readPanelDisplaySnapshot();
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
   const [session, setSession] = useState<RedboxAuthSession | null>(() => readDisplaySessionSnapshot());
@@ -315,11 +172,8 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [user, setUser] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.user || null);
   const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
   const [models, setModels] = useState<ModelsResponseItem[]>(() => initialPanelSnapshot?.models || []);
-  const [products, setProducts] = useState<RedboxProductItem[]>(() => initialPanelSnapshot?.products || []);
   const [callRecords, setCallRecords] = useState<RedboxCallRecordItem[]>(() => initialPanelSnapshot?.callRecords || []);
-  const [callRecordsError, setCallRecordsError] = useState('');
   const [rechargeAmount, setRechargeAmount] = useState('9.90');
-  const [selectedProductId, setSelectedProductId] = useState('');
   const [rechargeOrderNo, setRechargeOrderNo] = useState('');
   const [rechargeStatusText, setRechargeStatusText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -331,7 +185,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [wechatStatusText, setWechatStatusText] = useState<WechatStatus>('idle');
   const [wechatExpiresAt, setWechatExpiresAt] = useState<number>(0);
   const pollTimerRef = useRef<number | null>(null);
-  const orderPollTimerRef = useRef<number | null>(null);
 
   const setPanelNotice = useCallback((type: NoticeType, message: string) => {
     setNoticeType(type);
@@ -342,13 +195,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
-    }
-  }, []);
-
-  const stopOrderPolling = useCallback(() => {
-    if (orderPollTimerRef.current !== null) {
-      window.clearInterval(orderPollTimerRef.current);
-      orderPollTimerRef.current = null;
     }
   }, []);
 
@@ -370,11 +216,10 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       user,
       points,
       models,
-      products,
       callRecords,
       updatedAt: Date.now(),
     });
-  }, [callRecords, models, points, products, user]);
+  }, [callRecords, models, points, user]);
 
   const hydrateCachedSession = useCallback(async () => {
     const result = await invoke<{ success: boolean; session?: RedboxAuthSession | null; error?: string }>('redbox-auth:get-session-cached');
@@ -424,42 +269,22 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     setModels((result.models || []).filter((item) => String(item?.id || '').trim()));
   }, []);
 
-  const fetchProducts = useCallback(async () => {
-    const result = await invoke<{ success: boolean; products?: unknown[]; error?: string }>('redbox-auth:products');
-    if (!result?.success) {
-      throw new Error(result?.error || '拉取充值档位失败');
-    }
-    setProducts((result.products || [])
-      .map((item, index) => normalizeProductItem(item, index))
-      .filter((item): item is RedboxProductItem => Boolean(item)));
-  }, []);
-
   const fetchCallRecords = useCallback(async () => {
-    const result = await invoke<{ success: boolean; records?: unknown[]; error?: string }>('redbox-auth:call-records');
-    const normalized = (result.records || [])
-      .map((item, index) => normalizeCallRecordItem(item, index))
-      .filter((item): item is RedboxCallRecordItem => Boolean(item));
-    if (normalized.length) {
-      setCallRecords(normalized);
-    }
+    const result = await invoke<{ success: boolean; records?: RedboxCallRecordItem[]; error?: string }>('redbox-auth:call-records');
     if (!result?.success) {
-      setCallRecordsError(result?.error || '拉取调用记录失败');
       throw new Error(result?.error || '拉取调用记录失败');
     }
-    setCallRecordsError('');
-    setCallRecords((result.records || [])
-      .map((item, index) => normalizeCallRecordItem(item, index))
-      .filter((item): item is RedboxCallRecordItem => Boolean(item)));
+    setCallRecords((result.records || []).filter((item) => String(item?.id || '').trim()));
   }, []);
 
   const loadAuthenticatedData = useCallback(async () => {
-    await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchProducts(), fetchCallRecords()]);
-  }, [fetchCallRecords, fetchModels, fetchPoints, fetchProducts, fetchUser]);
+    await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+  }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
 
   const requestBackgroundRefresh = useCallback(async () => {
-    const result = await invoke<{ success: boolean; queued?: boolean; tokenRefreshed?: boolean; error?: string }>('redbox-auth:refresh');
+    const result = await invoke<{ success: boolean; queued?: boolean; error?: string }>('redbox-auth:refresh');
     if (!result?.success) {
-      throw new Error(result?.error || '刷新登录态失败');
+      throw new Error(result?.error || '后台刷新请求失败');
     }
     return result;
   }, []);
@@ -470,9 +295,9 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       if (!session?.accessToken) {
         throw new Error('当前未登录，请先登录官方账号');
       }
-      const refreshResult = await requestBackgroundRefresh();
       await loadAuthenticatedData();
-      setPanelNotice('success', refreshResult.tokenRefreshed ? '令牌与账户信息已刷新' : '账户信息已刷新');
+      await requestBackgroundRefresh();
+      setPanelNotice('success', '已通知后台刷新，页面会在本地缓存更新后自动同步');
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '刷新用户信息失败');
     } finally {
@@ -597,16 +422,12 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         throw new Error(result?.error || '退出登录失败');
       }
       stopWechatPolling();
-      stopOrderPolling();
       applySession(null);
       setUser(null);
       setPoints(null);
       setModels([]);
-      setProducts([]);
       setCallRecords([]);
-      setCallRecordsError('');
       writePanelDisplaySnapshot(null);
-      setSelectedProductId('');
       setRechargeOrderNo('');
       setRechargeStatusText('');
       requestSettingsRefresh();
@@ -616,29 +437,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } finally {
       setBusy(false);
     }
-  }, [applySession, requestSettingsRefresh, setPanelNotice, stopOrderPolling, stopWechatPolling]);
-
-  const startOrderStatusPolling = useCallback((outTradeNo: string) => {
-    stopOrderPolling();
-    const normalized = String(outTradeNo || '').trim();
-    if (!normalized) return;
-    orderPollTimerRef.current = window.setInterval(async () => {
-      try {
-        const result = await invoke<{ success: boolean; order?: Record<string, unknown>; error?: string }>('redbox-auth:order-status', {
-          outTradeNo: normalized,
-        });
-        if (!result?.success || !result.order) return;
-        if (isPaidOrder(result.order)) {
-          stopOrderPolling();
-          await loadAuthenticatedData();
-          setRechargeStatusText(`订单 ${normalized} 已支付，余额已同步更新。`);
-          setPanelNotice('success', '充值成功，余额已更新。');
-        }
-      } catch {
-        // keep polling quietly
-      }
-    }, 3000);
-  }, [loadAuthenticatedData, setPanelNotice, stopOrderPolling]);
+  }, [applySession, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
   const handleCreateOrderAndPay = useCallback(async () => {
     const amount = normalizeRechargeAmountInput(rechargeAmount);
@@ -648,10 +447,8 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     }
     setBusy(true);
     try {
-      const selectedProduct = products.find((item) => item.id === selectedProductId) || null;
       const orderResult = await invoke<{ success: boolean; order?: Record<string, unknown>; error?: string }>('redbox-auth:create-page-pay-order', {
-        productId: selectedProduct?.id || undefined,
-        amount: Number(amount),
+        amount: amount || undefined,
         subject: `积分充值 ¥${amount}`,
         pointsToDeduct: 0,
       });
@@ -659,18 +456,23 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         throw new Error(orderResult?.error || '创建订单失败');
       }
       const outTradeNo = String(orderResult.order.out_trade_no || orderResult.order.outTradeNo || '').trim();
-      const paymentForm = getOrderPaymentForm(orderResult.order);
+      const paymentForm = String(orderResult.order.payment_form || orderResult.order.url || '').trim();
+      console.log('[OfficialAiPanel] page-pay order created', {
+        outTradeNo,
+        orderKeys: Object.keys(orderResult.order || {}),
+        paymentFormLength: paymentForm.length,
+        paymentFormPreview: paymentForm.slice(0, 120).replace(/\s+/g, ' '),
+      });
       if (!outTradeNo || !paymentForm) {
         throw new Error('订单返回缺少支付信息');
       }
       const openResult = await invoke<{ success: boolean; error?: string }>('redbox-auth:open-payment-form', { paymentForm });
+      console.log('[OfficialAiPanel] open-payment-form result', openResult);
       if (!openResult?.success) {
         throw new Error(openResult?.error || '打开支付页面失败');
       }
-      stopOrderPolling();
       setRechargeOrderNo(outTradeNo);
-      setRechargeStatusText(`订单 ${outTradeNo} 已创建，正在等待支付结果。`);
-      startOrderStatusPolling(outTradeNo);
+      setRechargeStatusText(`订单 ${outTradeNo} 已创建。请在浏览器完成支付，支付成功后点击上方刷新余额。`);
       setPanelNotice('success', '支付页面已打开，请在浏览器完成支付。');
     } catch (error) {
       const message = error instanceof Error ? error.message : '充值失败';
@@ -679,7 +481,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } finally {
       setBusy(false);
     }
-  }, [products, rechargeAmount, selectedProductId, setPanelNotice, startOrderStatusPolling, stopOrderPolling]);
+  }, [rechargeAmount, setPanelNotice]);
 
   const userName = useMemo(() => {
     const currentUser = user || session?.user;
@@ -715,16 +517,11 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     return Number.isFinite(value) && value > 0 ? value : 100;
   }, [points]);
 
-  const selectedProduct = useMemo(() => {
-    return products.find((item) => item.id === selectedProductId) || null;
-  }, [products, selectedProductId]);
-
   const rechargePreviewPoints = useMemo(() => {
     const amount = Number(normalizeRechargeAmountInput(rechargeAmount) || 0);
     if (!Number.isFinite(amount) || amount <= 0) return 0;
-    if (selectedProduct?.pointsTopup) return selectedProduct.pointsTopup;
     return amount * pointsPerYuan;
-  }, [pointsPerYuan, rechargeAmount, selectedProduct]);
+  }, [pointsPerYuan, rechargeAmount]);
 
   useEffect(() => {
     let canceled = false;
@@ -748,22 +545,18 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     return () => {
       canceled = true;
       stopWechatPolling();
-      stopOrderPolling();
     };
-  }, [hydrateCachedSession, loadAuthenticatedData, requestSettingsRefresh, stopOrderPolling, stopWechatPolling]);
+  }, [hydrateCachedSession, loadAuthenticatedData, requestSettingsRefresh, stopWechatPolling]);
 
   useEffect(() => {
     const handleSessionUpdated = async (_event: unknown, payload?: { session?: RedboxAuthSession | null }) => {
       const nextSession = payload?.session || null;
       applySession(nextSession);
       if (!nextSession?.accessToken) {
-        stopOrderPolling();
         setUser(null);
         setPoints(null);
         setModels([]);
-        setProducts([]);
         setCallRecords([]);
-        setCallRecordsError('');
         return;
       }
       requestSettingsRefresh();
@@ -773,7 +566,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     return () => {
       window.ipcRenderer.off('redbox-auth:session-updated', handleSessionUpdated);
     };
-  }, [applySession, loadAuthenticatedData, requestSettingsRefresh, stopOrderPolling]);
+  }, [applySession, loadAuthenticatedData, requestSettingsRefresh]);
 
   useEffect(() => {
     const handleDataUpdated = async () => {
@@ -784,12 +577,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       window.ipcRenderer.off('redbox-auth:data-updated', handleDataUpdated);
     };
   }, [loadAuthenticatedData]);
-
-  useEffect(() => {
-    if (!selectedProductId) return;
-    if (products.some((item) => item.id === selectedProductId)) return;
-    setSelectedProductId('');
-  }, [products, selectedProductId]);
 
   return (
     <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 space-y-4">
@@ -982,68 +769,35 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
             <p className="text-[11px] text-text-tertiary">
               用户：{userName || '未命名用户'} · 模型 {models.length} 个 · 余额单位为积分（1 元 = {pointsPerYuan} 积分）
             </p>
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {presetRechargeOptions.map((amount) => (
-                  <button
-                    key={`preset-${amount}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedProductId('');
-                      setRechargeAmount(amount.toFixed(2));
-                    }}
-                    className={clsx(
-                      'px-3 py-1.5 text-xs border rounded transition-all',
-                      !selectedProductId && Number(rechargeAmount) === amount
-                        ? 'bg-accent-primary/10 border-accent-primary text-accent-primary'
-                        : 'border-border hover:bg-surface-secondary text-text-secondary',
-                    )}
-                  >
-                    ¥{amount}
-                  </button>
-                ))}
-              </div>
-              {products.length ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {products.map((product) => (
+            <div className="flex flex-wrap items-center gap-2">
+              {[10, 20, 50, 100].map((amount) => (
                 <button
-                  key={product.id}
+                  key={amount}
                   type="button"
-                  onClick={() => {
-                    setSelectedProductId(product.id);
-                    if (product.amount > 0) {
-                      setRechargeAmount(product.amount.toFixed(2));
-                    }
-                  }}
+                  onClick={() => setRechargeAmount(amount.toFixed(2))}
                   className={clsx(
                     'px-3 py-1.5 text-xs border rounded transition-all',
-                    selectedProductId === product.id
+                    Number(rechargeAmount) === amount
                       ? 'bg-accent-primary/10 border-accent-primary text-accent-primary'
                       : 'border-border hover:bg-surface-secondary text-text-secondary',
                   )}
                 >
-                  <span>{product.name}</span>
-                  {product.amount > 0 ? <span className="ml-1">¥{product.amount}</span> : null}
+                  ¥{amount}
                 </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="flex flex-wrap items-center gap-2">
+              ))}
+              <div className="flex items-center gap-2 ml-1">
                 <input
                   value={rechargeAmount}
-                  onChange={(e) => {
-                    setSelectedProductId('');
-                    setRechargeAmount(e.target.value);
-                  }}
+                  onChange={(e) => setRechargeAmount(e.target.value)}
                   placeholder="其他金额"
                   className="w-24 bg-surface-secondary/30 rounded border border-border px-2.5 py-1.5 text-xs focus:outline-none focus:border-accent-primary transition-colors"
                 />
                 <button
                   type="button"
-                  onClick={() => void handleCreateOrderAndPay()}
-                  disabled={busy || !normalizeRechargeAmountInput(rechargeAmount)}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs bg-accent-primary text-white rounded hover:brightness-110 shadow-sm transition-all disabled:opacity-50 disabled:grayscale"
-                >
+                    onClick={() => void handleCreateOrderAndPay()}
+                    disabled={busy || !rechargeAmount || Number(rechargeAmount) <= 0}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs bg-accent-primary text-white rounded hover:brightness-110 shadow-sm transition-all disabled:opacity-50 disabled:grayscale"
+                  >
                   <CreditCard className="w-3.5 h-3.5" />
                   立即充值
                 </button>
@@ -1074,21 +828,14 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               </button>
             </div>
             {!callRecords.length ? (
-              <div className={clsx('text-xs', callRecordsError ? 'text-amber-600' : 'text-text-tertiary')}>
-                {callRecordsError || '暂无调用记录。'}
-              </div>
+              <div className="text-xs text-text-tertiary">暂无调用记录（或后端暂未开放该接口）。</div>
             ) : (
-              <div className="space-y-2">
-                {callRecordsError ? (
-                  <div className="text-[11px] text-amber-600">{callRecordsError}</div>
-                ) : null}
-                <div className="max-h-52 overflow-auto rounded border border-border/70">
+              <div className="max-h-52 overflow-auto rounded border border-border/70">
                 <table className="w-full text-xs">
                   <thead className="bg-surface-secondary/40 text-text-tertiary">
                     <tr>
                       <th className="text-left px-2 py-1.5 font-medium">时间</th>
                       <th className="text-left px-2 py-1.5 font-medium">模型</th>
-                      <th className="text-left px-2 py-1.5 font-medium">状态</th>
                       <th className="text-right px-2 py-1.5 font-medium">积分</th>
                       <th className="text-right px-2 py-1.5 font-medium">Tokens</th>
                     </tr>
@@ -1096,16 +843,14 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                   <tbody>
                     {callRecords.slice(0, 30).map((record) => (
                       <tr key={record.id} className="border-t border-border/50">
-                        <td className="px-2 py-1.5 text-text-secondary">{record.createdAt ? new Date(record.createdAt).toLocaleString() : '-'}</td>
+                        <td className="px-2 py-1.5 text-text-secondary">{new Date(record.createdAt).toLocaleString()}</td>
                         <td className="px-2 py-1.5 text-text-secondary">{record.model || '-'}</td>
-                        <td className="px-2 py-1.5 text-text-secondary">{record.status || '-'}</td>
                         <td className="px-2 py-1.5 text-right text-text-secondary">{record.points}</td>
                         <td className="px-2 py-1.5 text-right text-text-secondary">{record.tokens}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                </div>
               </div>
             )}
           </div>

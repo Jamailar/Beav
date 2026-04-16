@@ -207,7 +207,6 @@ type RuntimeSessionListItem = {
   id: string;
   transcriptCount: number;
   checkpointCount: number;
-  lineage?: Awaited<ReturnType<typeof window.ipcRenderer.runtime.resume>>['lineage'];
   chatSession?: {
     id: string;
     title?: string;
@@ -251,8 +250,6 @@ type RuntimeSessionToolResultItem = {
   createdAt: number;
   updatedAt: number;
 };
-
-type RuntimeRecallResponse = Awaited<ReturnType<typeof window.ipcRenderer.runtime.recall>>;
 
 type RuntimeHookDefinition = {
   id: string;
@@ -339,10 +336,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [toolDiagnostics, setToolDiagnostics] = useState<ToolDiagnosticDescriptor[]>([]);
   const [toolDiagnosticResults, setToolDiagnosticResults] = useState<Record<string, ToolDiagnosticRunResult | undefined>>({});
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
-  const [runtimeDebugSummary, setRuntimeDebugSummary] = useState<RuntimeDebugSummary | null>(null);
-  const [isRuntimeDebugSummaryLoading, setIsRuntimeDebugSummaryLoading] = useState(false);
-  const [phase0SmokeResult, setPhase0SmokeResult] = useState<Phase0SmokeResult | null>(null);
-  const [isPhase0SmokeRunning, setIsPhase0SmokeRunning] = useState(false);
   const [runtimeTasks, setRuntimeTasks] = useState<AgentTaskSnapshot[]>([]);
   const [runtimeRoles, setRuntimeRoles] = useState<RoleSpec[]>([]);
   const [runtimeSessions, setRuntimeSessions] = useState<RuntimeSessionListItem[]>([]);
@@ -352,22 +345,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [runtimeSessionTranscript, setRuntimeSessionTranscript] = useState<RuntimeSessionTranscriptItem[]>([]);
   const [runtimeSessionCheckpoints, setRuntimeSessionCheckpoints] = useState<RuntimeSessionCheckpointItem[]>([]);
   const [runtimeSessionToolResults, setRuntimeSessionToolResults] = useState<RuntimeSessionToolResultItem[]>([]);
-  const [runtimeRecallQuery, setRuntimeRecallQuery] = useState('');
-  const [runtimeRecallResults, setRuntimeRecallResults] = useState<RuntimeRecallResponse | null>(null);
-  const [isRuntimeRecallLoading, setIsRuntimeRecallLoading] = useState(false);
   const [runtimeHooks, setRuntimeHooks] = useState<RuntimeHookDefinition[]>([]);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskItem[]>([]);
   const [backgroundWorkerPool, setBackgroundWorkerPool] = useState<BackgroundWorkerPoolState>({ json: [], runtime: [] });
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
-  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance'>('redclaw');
+  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
   const [isRuntimeTraceLoading, setIsRuntimeTraceLoading] = useState(false);
   const [isRuntimeSessionLoading, setIsRuntimeSessionLoading] = useState(false);
   const [isBackgroundTasksLoading, setIsBackgroundTasksLoading] = useState(false);
   const [isRuntimeCreating, setIsRuntimeCreating] = useState(false);
   const [runtimeTaskActionRunning, setRuntimeTaskActionRunning] = useState<Record<string, 'resume' | 'cancel' | undefined>>({});
-  const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | 'retry' | 'archive' | undefined>>({});
+  const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | undefined>>({});
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -1716,54 +1706,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
-  const loadRuntimeDebugSummary = useCallback(async () => {
-    setIsRuntimeDebugSummaryLoading(true);
-    try {
-      const summary = await window.ipcRenderer.debug.getRuntimeSummary();
-      setRuntimeDebugSummary(summary || null);
-    } catch (e) {
-      console.error('Failed to load runtime debug summary', e);
-    } finally {
-      setIsRuntimeDebugSummaryLoading(false);
-    }
-  }, []);
-
-  const handleRunRuntimeRecall = useCallback(async () => {
-    setIsRuntimeRecallLoading(true);
-    try {
-      const result = await window.ipcRenderer.runtime.recall({
-        query: runtimeRecallQuery.trim(),
-        sessionId: selectedRuntimeSessionId || undefined,
-        sources: ['memory', 'session', 'checkpoint', 'tool_result'],
-        limit: 8,
-        maxChars: 4000,
-      });
-      setRuntimeRecallResults(result || null);
-    } catch (error) {
-      console.error('Failed to run runtime recall', error);
-    } finally {
-      setIsRuntimeRecallLoading(false);
-    }
-  }, [runtimeRecallQuery, selectedRuntimeSessionId]);
-
-  const runPhase0Smoke = useCallback(async () => {
-    setIsPhase0SmokeRunning(true);
-    try {
-      const result = await window.ipcRenderer.debug.runPhase0Smoke();
-      setPhase0SmokeResult(result || null);
-      await loadRuntimeDebugSummary();
-    } catch (e) {
-      console.error('Failed to run phase0 smoke', e);
-    } finally {
-      setIsPhase0SmokeRunning(false);
-    }
-  }, [loadRuntimeDebugSummary]);
-
   const loadRuntimeDeveloperData = useCallback(async () => {
     await Promise.all([
       loadRuntimeRoles(),
       loadToolDiagnostics(),
-      loadRuntimeDebugSummary(),
     ]);
     await Promise.all([
       loadRuntimeTasks(),
@@ -1777,7 +1723,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
-    loadRuntimeDebugSummary,
     loadRuntimeHooks,
     loadRuntimeRoles,
     loadRuntimeSessions,
@@ -1844,30 +1789,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       await loadBackgroundTasks();
     } catch (e) {
       console.error('Failed to cancel background task', e);
-    } finally {
-      setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
-    }
-  };
-
-  const handleRetryBackgroundTask = async (taskId: string) => {
-    setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: 'retry' }));
-    try {
-      await window.ipcRenderer.backgroundTasks.retry(taskId);
-      await loadBackgroundTasks();
-    } catch (e) {
-      console.error('Failed to retry background task', e);
-    } finally {
-      setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
-    }
-  };
-
-  const handleArchiveBackgroundTask = async (taskId: string) => {
-    setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: 'archive' }));
-    try {
-      await window.ipcRenderer.backgroundTasks.archive(taskId);
-      await loadBackgroundTasks();
-    } catch (e) {
-      console.error('Failed to archive background task', e);
     } finally {
       setBackgroundTaskActionRunning((prev) => ({ ...prev, [taskId]: undefined }));
     }
@@ -2455,7 +2376,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         if (formData.developer_mode_enabled) {
           await loadToolDiagnostics();
           await loadRuntimeRoles();
-          await loadRuntimeDebugSummary();
           await Promise.all([
             loadRuntimeTasks(),
             loadRuntimeSessions(),
@@ -2492,7 +2412,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBrowserPluginStatus,
     loadMcpRuntimeData,
     loadRecentDebugLogs,
-    loadRuntimeDebugSummary,
     loadRuntimeHooks,
     loadRuntimeRoles,
     loadRuntimeSessions,
@@ -3653,10 +3572,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isInstallingTool={isInstallingTool}
                 installProgress={installProgress}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}
-                runtimeDebugSummary={runtimeDebugSummary}
-                isRuntimeDebugSummaryLoading={isRuntimeDebugSummaryLoading}
-                phase0SmokeResult={phase0SmokeResult}
-                isPhase0SmokeRunning={isPhase0SmokeRunning}
                 toolDiagnostics={toolDiagnostics}
                 toolDiagnosticResults={toolDiagnosticResults}
                 toolDiagnosticRunning={toolDiagnosticRunning}
@@ -3680,10 +3595,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 runtimeSessionTranscript={runtimeSessionTranscript}
                 runtimeSessionCheckpoints={runtimeSessionCheckpoints}
                 runtimeSessionToolResults={runtimeSessionToolResults}
-                runtimeRecallQuery={runtimeRecallQuery}
-                setRuntimeRecallQuery={setRuntimeRecallQuery}
-                runtimeRecallResults={runtimeRecallResults}
-                isRuntimeRecallLoading={isRuntimeRecallLoading}
                 runtimeHooks={runtimeHooks}
                 runtimeDraftInput={runtimeDraftInput}
                 setRuntimeDraftInput={setRuntimeDraftInput}
@@ -3697,14 +3608,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 runtimeTaskActionRunning={runtimeTaskActionRunning}
                 backgroundTaskActionRunning={backgroundTaskActionRunning}
                 handleRefreshRuntimeData={loadRuntimeDeveloperData}
-                handleRunPhase0Smoke={runPhase0Smoke}
                 handleCreateRuntimeTask={handleCreateRuntimeTask}
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
-                handleRetryBackgroundTask={handleRetryBackgroundTask}
-                handleArchiveBackgroundTask={handleArchiveBackgroundTask}
-                handleRunRuntimeRecall={handleRunRuntimeRecall}
               />
             )}
 

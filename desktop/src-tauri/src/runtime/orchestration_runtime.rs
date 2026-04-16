@@ -7,7 +7,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
     match role_id {
         "planner" => RuntimeSubagentRoleSpec {
             role_id: "planner".to_string(),
-            child_runtime_type: "editor-planner".to_string(),
             purpose: "负责拆解目标、确定阶段顺序、把任务转成明确执行步骤。".to_string(),
             handoff_contract: "把任务拆成可执行步骤，并给出下一角色所需最小输入。".to_string(),
             output_schema: "阶段计划、执行建议、关键依赖、保存策略".to_string(),
@@ -17,7 +16,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         },
         "researcher" => RuntimeSubagentRoleSpec {
             role_id: "researcher".to_string(),
-            child_runtime_type: "researcher".to_string(),
             purpose: "负责检索知识、提取证据、整理素材、形成研究摘要。".to_string(),
             handoff_contract: "输出给写作者或评审时，必须包含证据、结论和不确定项。".to_string(),
             output_schema: "证据摘要、引用来源、结论边界、待验证点".to_string(),
@@ -27,7 +25,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         },
         "copywriter" => RuntimeSubagentRoleSpec {
             role_id: "copywriter".to_string(),
-            child_runtime_type: "publisher-safe".to_string(),
             purpose: "负责产出标题、正文、发布话术、完整稿件和成品文案。".to_string(),
             handoff_contract: "完成正文后必须准备保存路径或项目归档信息。".to_string(),
             output_schema: "完整稿件、标题包、标签、发布建议".to_string(),
@@ -36,7 +33,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         },
         "image-director" => RuntimeSubagentRoleSpec {
             role_id: "image-director".to_string(),
-            child_runtime_type: "publisher-safe".to_string(),
             purpose: "负责封面、配图、海报、图片策略和视觉执行指令。".to_string(),
             handoff_contract: "给执行层的输出必须是可以直接生成或保存的结构化内容。".to_string(),
             output_schema: "封面策略、图片提示词、视觉结构、保存方案".to_string(),
@@ -46,7 +42,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         },
         "animation-director" => RuntimeSubagentRoleSpec {
             role_id: "animation-director".to_string(),
-            child_runtime_type: "editor-planner".to_string(),
             purpose: "负责视频动画方案、Remotion 场景、字幕层和镜头运动设计。".to_string(),
             handoff_contract: "必须给执行层返回可直接解析的结构化动画结果，不要只给口头建议。".to_string(),
             output_schema: "动画摘要、Remotion JSON artifact、风险说明".to_string(),
@@ -56,7 +51,6 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
         },
         "reviewer" => RuntimeSubagentRoleSpec {
             role_id: "reviewer".to_string(),
-            child_runtime_type: "reviewer".to_string(),
             purpose: "负责校验结果是否符合需求、是否保存、是否存在幻觉或遗漏。".to_string(),
             handoff_contract: "如果结果不满足交付条件，明确指出缺口并阻止宣称成功。".to_string(),
             output_schema: "评审结论、问题列表、修正建议".to_string(),
@@ -64,39 +58,8 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是质量评审代理，优先检查结果是否满足需求、是否真实落盘、是否存在伪成功。"
                     .to_string(),
         },
-        "fixer" => RuntimeSubagentRoleSpec {
-            role_id: "fixer".to_string(),
-            child_runtime_type: "fixer".to_string(),
-            purpose: "负责根据 reviewer 或 planner 的缺口执行修补、重写和结构化回填。".to_string(),
-            handoff_contract: "输出必须明确给出修复了什么、还剩什么风险、是否需要额外审批。".to_string(),
-            output_schema: "修复摘要、变更点、剩余风险、后续 handoff".to_string(),
-            system_prompt:
-                "你是修复代理，目标是针对明确缺口做最小且可验证的修补，不要重新发散整个任务。"
-                    .to_string(),
-        },
-        "editor-planner" => RuntimeSubagentRoleSpec {
-            role_id: "editor-planner".to_string(),
-            child_runtime_type: "editor-planner".to_string(),
-            purpose: "负责编辑器、工程结构、脚本与可执行 patch 的规划。".to_string(),
-            handoff_contract: "给执行层的输出必须是可以直接落到编辑器或工程文件上的结构化计划。".to_string(),
-            output_schema: "工程计划、patch 建议、执行顺序、验证点".to_string(),
-            system_prompt:
-                "你是编辑规划代理，优先把工程修改拆成宿主可执行的具体步骤，不要给抽象建议。"
-                    .to_string(),
-        },
-        "publisher-safe" => RuntimeSubagentRoleSpec {
-            role_id: "publisher-safe".to_string(),
-            child_runtime_type: "publisher-safe".to_string(),
-            purpose: "负责生成可交付内容，但不得直接执行发布、副作用发送或外部投递。".to_string(),
-            handoff_contract: "输出必须能直接交给人工或上层 runtime 审核，不得宣称已发布。".to_string(),
-            output_schema: "交付文案、发布包、待审批项、风险说明".to_string(),
-            system_prompt:
-                "你是安全发布代理，只能准备交付内容和审批清单，不能执行真实发布、发送或外部写入。"
-                    .to_string(),
-        },
         _ => RuntimeSubagentRoleSpec {
             role_id: "ops-coordinator".to_string(),
-            child_runtime_type: "fixer".to_string(),
             purpose: "负责后台任务、自动化、记忆维护和持续执行任务的推进。".to_string(),
             handoff_contract: "输出必须明确包含下一步执行条件与当前状态。".to_string(),
             output_schema: "调度动作、运行状态、恢复策略、维护结论".to_string(),

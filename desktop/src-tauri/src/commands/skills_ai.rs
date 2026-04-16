@@ -1,98 +1,79 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    build_skill_template_markdown, compute_skill_discovery_fingerprint, invoke_skill_value,
-    preview_skill_activation_value, resolve_skill_records, skill_catalog_changed,
-    skills_catalog_list_value,
+    build_market_skill_record, build_user_skill_record, compute_skill_discovery_fingerprint,
+    find_catalog_skill_by_name, normalized_activation_scope, render_invoked_skill_bundle,
+    skill_allows_runtime_mode, skill_catalog_changed, skills_catalog_list_value,
 };
 use crate::*;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-fn build_skill_usage_map(store: &AppStore) -> serde_json::Map<String, Value> {
-    let mut counts = BTreeMap::<String, (usize, Option<i64>)>::new();
-    for checkpoint in &store.session_checkpoints {
-        if checkpoint.checkpoint_type != "chat.skill_activated" {
-            continue;
-        }
-        let Some(skill_name) = checkpoint
-            .payload
-            .as_ref()
-            .and_then(|value| value.get("name"))
-            .and_then(Value::as_str)
+fn requested_skill_name(payload: &Value) -> String {
+    payload_string(payload, "name")
+        .or_else(|| payload_string(payload, "skill"))
+        .unwrap_or_default()
+}
+
+fn merge_active_skill_into_session(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    skill_name: &str,
+) -> Result<Vec<String>, String> {
+    with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
         else {
-            continue;
+            return Err(format!("session not found: {session_id}"));
         };
-        let entry = counts
-            .entry(skill_name.to_ascii_lowercase())
-            .or_insert((0, None));
-        entry.0 += 1;
-        entry.1 = Some(entry.1.map(|value| value.max(checkpoint.created_at)).unwrap_or(checkpoint.created_at));
-    }
-    counts
-        .into_iter()
-        .map(|(key, (usage_count, last_used_at))| {
-            (
-                key,
-                json!({
-                    "usageCount": usage_count,
-                    "lastUsedAt": last_used_at,
-                }),
-            )
-        })
-        .collect()
-}
-
-fn ensure_parent_dir(path: &Path) -> Result<(), String> {
-    let Some(parent) = path.parent() else {
-        return Err("invalid path".to_string());
-    };
-    fs::create_dir_all(parent).map_err(|error| error.to_string())
-}
-
-fn default_create_root(state: &State<'_, AppState>) -> PathBuf {
-    workspace_root(state)
-        .map(|root| root.join("skills"))
-        .unwrap_or_else(|_| lexbox_project_root().join("skills"))
-}
-
-fn resolve_skill_file_path(location: &str) -> PathBuf {
-    let path = PathBuf::from(location);
-    if path.is_file() {
-        return path;
-    }
-    path
-}
-
-fn write_skill_file(path: &Path, content: &str) -> Result<(), String> {
-    ensure_parent_dir(path)?;
-    fs::write(path, content).map_err(|error| error.to_string())
-}
-
-fn upsert_frontmatter_bool(body: &str, key: &str, value: bool) -> String {
-    let line = format!("{key}: {}", if value { "true" } else { "false" });
-    if let Some(rest) = body.strip_prefix("---\n") {
-        if let Some((frontmatter, content)) = rest.split_once("\n---\n") {
-            let mut updated = Vec::<String>::new();
-            let mut replaced = false;
-            for item in frontmatter.lines() {
-                let trimmed = item.trim();
-                if trimmed.to_ascii_lowercase().starts_with(&format!("{}:", key.to_ascii_lowercase())) {
-                    updated.push(line.clone());
-                    replaced = true;
-                } else {
-                    updated.push(item.to_string());
-                }
-            }
-            if !replaced {
-                updated.push(line);
-            }
-            return format!("---\n{}\n---\n{}", updated.join("\n"), content);
+        let mut metadata = session
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut active_skills = metadata
+            .get("activeSkills")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !active_skills
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(skill_name))
+        {
+            active_skills.push(skill_name.to_string());
+            active_skills.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
         }
+        metadata.insert("activeSkills".to_string(), json!(active_skills.clone()));
+        session.metadata = Some(Value::Object(metadata));
+        session.updated_at = now_iso();
+        Ok(active_skills)
+    })
+}
+
+fn effective_active_skill_names(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    skill_name: &str,
+    activation_scope: &str,
+) -> Result<(Vec<String>, bool), String> {
+    if activation_scope == "turn" {
+        return Ok((vec![skill_name.to_string()], false));
     }
-    format!("---\n{line}\n---\n{}", body.trim())
+    let active = if let Some(session_id) = session_id {
+        merge_active_skill_into_session(state, session_id, skill_name)?
+    } else {
+        vec![skill_name.to_string()]
+    };
+    Ok((active, session_id.is_some()))
 }
 
 pub fn handle_skills_ai_channel(
@@ -104,13 +85,12 @@ pub fn handle_skills_ai_channel(
     if !matches!(
         channel,
         "skills:list"
+            | "skills:invoke"
             | "skills:create"
             | "skills:save"
             | "skills:disable"
             | "skills:enable"
             | "skills:market-install"
-            | "skills:invoke"
-            | "skills:preview-activation"
             | "ai:roles:list"
             | "ai:detect-protocol"
             | "ai:test-connection"
@@ -126,29 +106,10 @@ pub fn handle_skills_ai_channel(
                 let discovery_fingerprint =
                     compute_skill_discovery_fingerprint(workspace.as_deref());
                 let (list, watcher_snapshot) = with_store(state, |store| {
-                    let resolved = resolve_skill_records(&store.skills, workspace.as_deref());
-                    let usage = build_skill_usage_map(&store);
-                    let (list, watcher) =
-                        skills_catalog_list_value(&resolved, Some(discovery_fingerprint.as_str()));
-                    let enriched = list
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|item| {
-                            let mut object = item.as_object().cloned().unwrap_or_default();
-                            let name = object
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_ascii_lowercase();
-                            if let Some(usage_value) = usage.get(&name) {
-                                object.insert("usage".to_string(), usage_value.clone());
-                            }
-                            Value::Object(object)
-                        })
-                        .collect::<Vec<_>>();
-                    Ok((Value::Array(enriched), watcher))
+                    Ok(skills_catalog_list_value(
+                        &store.skills,
+                        Some(discovery_fingerprint.as_str()),
+                    ))
                 })?;
                 let changed = {
                     let mut guard = state
@@ -164,33 +125,74 @@ pub fn handle_skills_ai_channel(
                 }
                 Ok(list)
             }
+            "skills:invoke" => {
+                let requested_name = requested_skill_name(payload);
+                if requested_name.is_empty() {
+                    return Err("技能名称不能为空".to_string());
+                }
+                let session_id = payload_string(payload, "sessionId");
+                let workspace = workspace_root(state).ok();
+                let (skill, runtime_mode) = with_store(state, |store| {
+                    let runtime_mode = session_id
+                        .as_deref()
+                        .map(|value| {
+                            super::chat_state::resolve_runtime_mode_for_session(&store, value)
+                        })
+                        .or_else(|| payload_string(payload, "runtimeMode"))
+                        .unwrap_or_else(|| "default".to_string());
+                    let Some(skill) = find_catalog_skill_by_name(&store.skills, &requested_name)
+                    else {
+                        return Err(format!("技能不存在: {requested_name}"));
+                    };
+                    Ok((skill, runtime_mode))
+                })?;
+                if skill.disabled {
+                    return Err(format!("技能已禁用: {}", skill.name));
+                }
+                if !skill_allows_runtime_mode(&skill, &runtime_mode) {
+                    return Err(format!(
+                        "技能 `{}` 不允许在 runtime mode `{}` 中激活",
+                        skill.name, runtime_mode
+                    ));
+                }
+                let activation_scope =
+                    normalized_activation_scope(skill.metadata.activation_scope.as_deref());
+                let (active_skills, persisted_to_session) = effective_active_skill_names(
+                    state,
+                    session_id.as_deref(),
+                    &skill.name,
+                    activation_scope,
+                )?;
+                let rendered = render_invoked_skill_bundle(&skill, workspace.as_deref());
+                Ok(json!({
+                    "success": true,
+                    "action": "invoke",
+                    "name": skill.name,
+                    "description": skill.description,
+                    "activationScope": activation_scope,
+                    "persistedToSession": persisted_to_session,
+                    "runtimeMode": runtime_mode,
+                    "sessionId": session_id,
+                    "activeSkills": active_skills,
+                    "activatedSkill": rendered
+                }))
+            }
             "skills:create" => {
                 let name = payload_string(payload, "name").unwrap_or_default();
                 if name.is_empty() {
                     return Ok(json!({ "success": false, "error": "技能名称不能为空" }));
                 }
-                let root = default_create_root(state);
-                let slug = slug_from_relative_path(&name);
-                let skill_file = root.join(&slug).join("SKILL.md");
-                if skill_file.exists() {
-                    return Ok(json!({ "success": false, "error": "技能已存在" }));
-                }
-                write_skill_file(
-                    &skill_file,
-                    &build_skill_template_markdown(&name, false, ""),
-                )?;
+                let created = with_store_mut(state, |store| {
+                    let item = build_user_skill_record(&name);
+                    store.skills.push(item.clone());
+                    Ok(item)
+                })?;
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                Ok(json!({ "success": true, "location": skill_file.display().to_string() }))
+                Ok(json!({ "success": true, "location": created.location }))
             }
             "skills:save" => {
                 let location = payload_string(payload, "location").unwrap_or_default();
                 let content = payload_string(payload, "content").unwrap_or_default();
-                let path = resolve_skill_file_path(&location);
-                if path.is_absolute() || path.exists() {
-                    write_skill_file(&path, &content)?;
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                    return Ok(json!({ "success": true }));
-                }
                 with_store_mut(state, |store| {
                     let Some(skill) = store
                         .skills
@@ -210,23 +212,6 @@ pub fn handle_skills_ai_channel(
             "skills:disable" | "skills:enable" => {
                 let name = payload_string(payload, "name").unwrap_or_default();
                 let disabled = channel == "skills:disable";
-                let workspace = workspace_root(state).ok();
-                let resolved = with_store(state, |store| {
-                    Ok(resolve_skill_records(&store.skills, workspace.as_deref()))
-                })?;
-                if let Some(skill) = resolved
-                    .iter()
-                    .find(|item| item.name.eq_ignore_ascii_case(&name))
-                {
-                    let path = resolve_skill_file_path(&skill.location);
-                    if path.is_absolute() || path.exists() {
-                        let body = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-                        write_skill_file(&path, &upsert_frontmatter_bool(&body, "disabled", disabled))?;
-                        let _ =
-                            refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                        return Ok(json!({ "success": true }));
-                    }
-                }
                 with_store_mut(state, |store| {
                     let Some(skill) = store.skills.iter_mut().find(|item| item.name == name) else {
                         return Ok(json!({ "success": false, "error": "技能不存在" }));
@@ -244,65 +229,13 @@ pub fn handle_skills_ai_channel(
                 if slug.is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少技能 slug" }));
                 }
-                let root = dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".codex")
-                    .join("skills");
-                let skill_file = root
-                    .join(slug_from_relative_path(&slug))
-                    .join("SKILL.md");
-                write_skill_file(
-                    &skill_file,
-                    &build_skill_template_markdown(&slug, true, "Installed from market."),
-                )?;
+                let created = with_store_mut(state, |store| {
+                    let item = build_market_skill_record(&slug);
+                    store.skills.push(item);
+                    Ok(json!({ "success": true, "displayName": slug }))
+                })?;
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                Ok(json!({
-                    "success": true,
-                    "displayName": slug,
-                    "location": skill_file.display().to_string()
-                }))
-            }
-            "skills:invoke" => {
-                let name = payload_string(payload, "name").unwrap_or_default();
-                if name.trim().is_empty() {
-                    return Ok(json!({ "success": false, "error": "缺少技能名称" }));
-                }
-                let workspace = workspace_root(state).ok();
-                with_store(state, |store| {
-                    invoke_skill_value(
-                        &store.skills,
-                        workspace.as_deref(),
-                        &name,
-                        payload_string(payload, "args").as_deref(),
-                    )
-                })
-            }
-            "skills:preview-activation" => {
-                let runtime_mode =
-                    payload_string(payload, "runtimeMode").unwrap_or_else(|| "default".to_string());
-                let workspace = workspace_root(state).ok();
-                with_store(state, |store| {
-                    Ok(preview_skill_activation_value(
-                        &store.skills,
-                        workspace.as_deref(),
-                        &runtime_mode,
-                        payload_field(payload, "metadata"),
-                        Some(&crate::skills::SkillActivationContext {
-                            current_message: payload_string(payload, "message"),
-                            intent: payload_string(payload, "intent"),
-                            touched_paths: payload_field(payload, "touchedPaths")
-                                .and_then(Value::as_array)
-                                .map(|items| {
-                                    items.iter()
-                                        .filter_map(Value::as_str)
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default(),
-                            args: payload_string(payload, "args"),
-                        }),
-                    ))
-                })
+                Ok(created)
             }
             "ai:roles:list" => Ok(json!([
                 {

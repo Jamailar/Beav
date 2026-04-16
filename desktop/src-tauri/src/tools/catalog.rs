@@ -1,37 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalLevel {
-    None,
-    Light,
-    Explicit,
-    AlwaysHold,
-}
-
-impl Default for ApprovalLevel {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-pub fn approval_level_max(left: ApprovalLevel, right: ApprovalLevel) -> ApprovalLevel {
-    if left >= right {
-        left
-    } else {
-        right
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolRiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,8 +20,6 @@ pub struct ToolDescriptor {
     pub description: &'static str,
     pub kind: ToolKind,
     pub requires_approval: bool,
-    pub default_approval: ApprovalLevel,
-    pub risk_level: ToolRiskLevel,
     pub concurrency_safe: bool,
     pub output_budget_chars: usize,
 }
@@ -66,8 +32,6 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
                 "Query app-managed RedBox data with one generic app tool. Prefer this over many specialized list/search tools.",
             kind: ToolKind::AppQuery,
             requires_approval: false,
-            default_approval: ApprovalLevel::None,
-            risk_level: ToolRiskLevel::Low,
             concurrency_safe: true,
             output_budget_chars: 12_000,
         }),
@@ -76,8 +40,6 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             description: "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
-            default_approval: ApprovalLevel::Light,
-            risk_level: ToolRiskLevel::Medium,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
@@ -86,9 +48,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             description:
                 "Read or update RedClaw long-term profile docs (Agent.md, Soul.md, user.md, CreatorProfile.md). Update only when user requests durable profile changes.",
             kind: ToolKind::ProfileDoc,
-            requires_approval: true,
-            default_approval: ApprovalLevel::Explicit,
-            risk_level: ToolRiskLevel::High,
+            requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 16_000,
         }),
@@ -96,19 +56,16 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_mcp",
             description: "Unified MCP management and call bridge.",
             kind: ToolKind::Mcp,
-            requires_approval: true,
-            default_approval: ApprovalLevel::Explicit,
-            risk_level: ToolRiskLevel::Critical,
+            requires_approval: false,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
         "redbox_skill" => Some(ToolDescriptor {
             name: "redbox_skill",
-            description: "Unified skill and AI-role management entry.",
+            description:
+                "Unified skill runtime and AI-role management entry. Use action=invoke to load a skill into the current session.",
             kind: ToolKind::Skill,
-            requires_approval: true,
-            default_approval: ApprovalLevel::Explicit,
-            risk_level: ToolRiskLevel::High,
+            requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 12_000,
         }),
@@ -116,9 +73,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_runtime_control",
             description: "Unified runtime/session/task/background control entry.",
             kind: ToolKind::RuntimeControl,
-            requires_approval: true,
-            default_approval: ApprovalLevel::Light,
-            risk_level: ToolRiskLevel::High,
+            requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
@@ -126,9 +81,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             name: "redbox_editor",
             description: "Inspect and edit the current video/audio manuscript package with a script-first workflow. Video mode now prefers project_read + ffmpeg_edit + Remotion actions.",
             kind: ToolKind::Editor,
-            requires_approval: true,
-            default_approval: ApprovalLevel::Light,
-            risk_level: ToolRiskLevel::Medium,
+            requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 24_000,
         }),
@@ -234,7 +187,6 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         },
                         "server": { "type": "object" },
                         "servers": { "type": "array", "items": { "type": "object" } },
-                        "serverName": { "type": "string" },
                         "method": { "type": "string" },
                         "params": { "type": "object" },
                         "serverId": { "type": "string" },
@@ -249,24 +201,19 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_skill",
-                "description": "Unified skill and AI-role management entry.",
+                "description": "Unified skill runtime and AI-role management entry. Use action=invoke to load a skill into the current session.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list", "create", "save", "enable", "disable", "market_install", "invoke", "preview_activation", "ai_roles_list", "detect_protocol", "test_connection", "fetch_models"]
+                            "enum": ["list", "invoke", "create", "save", "enable", "disable", "market_install", "ai_roles_list", "detect_protocol", "test_connection", "fetch_models"]
                         },
                         "name": { "type": "string" },
+                        "skill": { "type": "string" },
                         "location": { "type": "string" },
                         "content": { "type": "string" },
                         "slug": { "type": "string" },
-                        "args": { "type": "string" },
-                        "runtimeMode": { "type": "string" },
-                        "message": { "type": "string" },
-                        "intent": { "type": "string" },
-                        "metadata": { "type": "object" },
-                        "touchedPaths": { "type": "array", "items": { "type": "string" } },
                         "baseURL": { "type": "string" },
                         "apiKey": { "type": "string" },
                         "presetId": { "type": "string" },
@@ -294,8 +241,6 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "runtime_get_trace",
                                 "runtime_get_checkpoints",
                                 "runtime_get_tool_results",
-                                "runtime_recall",
-                                "runtime_execute_script",
                                 "tasks_create",
                                 "tasks_list",
                                 "tasks_get",
@@ -304,6 +249,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "background_tasks_list",
                                 "background_tasks_get",
                                 "background_tasks_cancel",
+                                "session_enter_diagnostics",
                                 "session_bridge_status",
                                 "session_bridge_list_sessions",
                                 "session_bridge_get_session"
@@ -311,34 +257,13 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         },
                         "sessionId": { "type": "string" },
                         "message": { "type": "string" },
-                        "query": { "type": "string" },
-                        "runtimeMode": { "type": "string", "enum": ["knowledge", "diagnostics", "video-editor"] },
-                        "sources": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": ["memory", "session", "checkpoint", "tool_result"]
-                            }
-                        },
-                        "memoryTypes": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": ["user_profile", "workspace_fact", "task_learning"]
-                            }
-                        },
                         "modelConfig": { "type": "object" },
                         "taskId": { "type": "string" },
+                        "title": { "type": "string" },
+                        "contextId": { "type": "string" },
+                        "contextType": { "type": "string" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
-                        "maxChars": { "type": "integer", "minimum": 400, "maximum": 10000 },
-                        "includeArchived": { "type": "boolean" },
-                        "includeChildSessions": { "type": "boolean" },
-                        "runtimeId": { "type": "string" },
-                        "payload": { "type": "object" },
-                        "inputs": { "type": "object" },
-                        "program": { "type": ["object", "string"] },
-                        "limits": { "type": "object" },
-                        "reason": { "type": "string" }
+                        "payload": { "type": "object" }
                     },
                     "required": ["action"],
                     "additionalProperties": false

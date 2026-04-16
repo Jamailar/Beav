@@ -30,7 +30,6 @@ pub fn handle_workspace_data_channel(
             | "memory:maintenance-status"
             | "memory:maintenance-run"
             | "memory:search"
-            | "memory:recall"
             | "memory:add"
             | "memory:delete"
     ) {
@@ -418,33 +417,30 @@ pub fn handle_workspace_data_channel(
             }
             "memory:maintenance-run" => run_memory_maintenance_with_reason(state, "manual"),
             "memory:search" => {
-                let query = payload_string(payload, "query").unwrap_or_default();
-                let include_archived = payload
-                    .get("includeArchived")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let limit = payload
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .map(|value| value as usize)
-                    .unwrap_or(20);
-                let response = crate::runtime_recall_value(
-                    state,
-                    &json!({
-                        "query": query,
-                        "sources": ["memory"],
-                        "includeArchived": include_archived,
-                        "limit": limit,
-                        "maxChars": 6000,
-                    }),
-                )?;
-                Ok(response.get("hits").cloned().unwrap_or_else(|| json!([])))
+                let query = payload_string(payload, "query")
+                    .unwrap_or_default()
+                    .to_lowercase();
+                with_store(state, |store| {
+                    let results: Vec<Value> = store
+                        .memories
+                        .iter()
+                        .filter(|item| item.content.to_lowercase().contains(&query))
+                        .map(|item| {
+                            let mut value = json!(item);
+                            if let Some(object) = value.as_object_mut() {
+                                object.insert("score".to_string(), json!(0.88));
+                                object.insert("matchReasons".to_string(), json!(["content"]));
+                            }
+                            value
+                        })
+                        .collect();
+                    Ok(json!(results))
+                })
             }
-            "memory:recall" => crate::runtime_recall_value(state, payload),
             "memory:add" => {
                 let content = payload_string(payload, "content").unwrap_or_default();
                 let memory_type =
-                    crate::normalize_memory_type(payload_string(payload, "type").as_deref());
+                    payload_string(payload, "type").unwrap_or_else(|| "general".to_string());
                 let tags = payload_field(payload, "tags")
                     .and_then(|value| value.as_array())
                     .map(|values| {
@@ -470,14 +466,6 @@ pub fn handle_workspace_data_channel(
                         canonical_key: None,
                         revision: Some(1),
                         last_conflict_at: None,
-                        summary: payload_string(payload, "summary"),
-                        scope_key: payload_string(payload, "scopeKey"),
-                        source_session_id: payload_string(payload, "sourceSessionId"),
-                        source_checkpoint_id: payload_string(payload, "sourceCheckpointId"),
-                        source_tool_result_id: payload_string(payload, "sourceToolResultId"),
-                        confidence: payload.get("confidence").and_then(|value| value.as_f64()),
-                        expires_at: payload.get("expiresAt").and_then(|value| value.as_i64()),
-                        last_maintained_at: Some(now_i64()),
                     };
                     store.memories.push(item.clone());
                     store.memory_history.push(MemoryHistoryRecord {

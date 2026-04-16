@@ -390,14 +390,10 @@ pub fn emit_runtime_subagent_spawned(
     session_id: Option<&str>,
     role_id: &str,
     runtime_mode: &str,
-    child_runtime_type: &str,
     child_runtime_id: Option<&str>,
     child_task_id: Option<&str>,
     child_session_id: Option<&str>,
     parent_runtime_id: Option<&str>,
-    phase: &str,
-    status: &str,
-    result_summary: Option<&str>,
 ) {
     emit_runtime_event_with_lineage(
         app,
@@ -409,14 +405,10 @@ pub fn emit_runtime_subagent_spawned(
         json!({
             "roleId": role_id,
             "runtimeMode": runtime_mode,
-            "childRuntimeType": child_runtime_type,
             "childRuntimeId": child_runtime_id,
             "childTaskId": child_task_id,
             "childSessionId": child_session_id,
             "parentTaskId": task_id,
-            "phase": phase,
-            "status": status,
-            "resultSummary": result_summary,
         }),
     );
 }
@@ -427,12 +419,10 @@ pub fn emit_runtime_subagent_finished(
     session_id: Option<&str>,
     role_id: &str,
     runtime_mode: &str,
-    child_runtime_type: &str,
     child_runtime_id: Option<&str>,
     child_task_id: Option<&str>,
     child_session_id: Option<&str>,
     parent_runtime_id: Option<&str>,
-    phase: &str,
     status: &str,
     summary: Option<&str>,
     error: Option<&str>,
@@ -447,15 +437,12 @@ pub fn emit_runtime_subagent_finished(
         json!({
             "roleId": role_id,
             "runtimeMode": runtime_mode,
-            "childRuntimeType": child_runtime_type,
             "childRuntimeId": child_runtime_id,
             "childTaskId": child_task_id,
             "childSessionId": child_session_id,
             "parentTaskId": task_id,
-            "phase": phase,
             "status": status,
             "summary": summary,
-            "resultSummary": summary,
             "error": error,
         }),
     );

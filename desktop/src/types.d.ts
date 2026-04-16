@@ -15,8 +15,6 @@ export interface ToolDiagnosticDescriptor {
   displayName: string;
   description: string;
   kind: string;
-  defaultApproval?: 'none' | 'light' | 'explicit' | 'always_hold';
-  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
   visibility: 'public' | 'developer' | 'internal';
   contexts: string[];
   availabilityStatus: 'available' | 'missing_context' | 'internal_only' | 'not_in_current_pack' | 'registration_error';
@@ -78,12 +76,6 @@ export interface IntentRouteInfo {
 
 export interface AgentTaskSnapshot {
   id: string;
-  runtimeId?: string | null;
-  parentRuntimeId?: string | null;
-  parentTaskId?: string | null;
-  rootTaskId?: string | null;
-  childTaskIds: string[];
-  aggregationStatus?: string | null;
   taskType: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   runtimeMode: string;
@@ -188,62 +180,6 @@ export interface SessionToolResultItem {
   updatedAt: number;
 }
 
-export interface SessionLineageSummary {
-  sessionId: string;
-  parentSessionId?: string | null;
-  rootSessionId?: string | null;
-  runtimeId?: string | null;
-  parentRuntimeId?: string | null;
-  sourceTaskId?: string | null;
-  forkedFromCheckpointId?: string | null;
-  resumedFromCheckpointId?: string | null;
-  compactedCheckpointId?: string | null;
-  compactRounds: number;
-  compactedMessageCount: number;
-  lastCompactedAt?: string | null;
-  lineagePath: string[];
-}
-
-export interface RuntimeRecallHit {
-  id: string;
-  sourceKind: 'memory' | 'session' | 'checkpoint' | 'tool_result' | string;
-  sourceLabel: string;
-  title?: string | null;
-  summary: string;
-  excerpt?: string | null;
-  score: number;
-  matchReasons: string[];
-  sessionId?: string | null;
-  runtimeId?: string | null;
-  sourceTaskId?: string | null;
-  memoryType?: string | null;
-  createdAt: string | number;
-  updatedAt?: string | number | null;
-  lineage?: SessionLineageSummary | null;
-  payload?: unknown;
-}
-
-export interface RuntimeRecallResponse {
-  success: boolean;
-  query: string;
-  sources: string[];
-  memoryTypes: string[];
-  limit: number;
-  maxChars: number;
-  usedChars: number;
-  truncated: boolean;
-  totalHits: number;
-  hits: RuntimeRecallHit[];
-  sessionLineage?: SessionLineageSummary | null;
-  lastCheckpoint?: SessionCheckpointRecord | null;
-  evidenceCounts?: {
-    memories: number;
-    sessions: number;
-    checkpoints: number;
-    toolResults: number;
-  };
-}
-
 export interface SessionBridgeSessionSummary {
   id: string;
   title: string;
@@ -278,9 +214,6 @@ export interface SessionBridgeSnapshot {
   tasks: AgentTaskSnapshot[];
   backgroundTasks: Array<{
     id: string;
-    definitionId?: string;
-    executionId?: string;
-    sourceTaskId?: string;
     kind: string;
     title: string;
     status: string;
@@ -302,11 +235,6 @@ export interface SessionBridgeSnapshot {
     createdAt: string;
     updatedAt: string;
     completedAt?: string;
-    lineage?: Record<string, unknown>;
-    lastCheckpoint?: Record<string, unknown>;
-    lastArtifact?: Record<string, unknown>;
-    deliveryPolicy?: Record<string, unknown>;
-    retryPolicy?: Record<string, unknown>;
     turns: Array<{
       id: string;
       at: string;
@@ -393,391 +321,13 @@ declare global {
     voicePreviewUrl?: string;
   }
 
-  interface RedBoxFeatureFlags {
-    vectorRecommendation: boolean;
-  }
-
-  interface Phase0RuntimeMetrics {
-    sessionResumeAttempts: number;
-    sessionResumeSuccesses: number;
-    smokeRuns: number;
-    smokePasses: number;
-    smokeFailures: number;
-    updatedAt?: string | null;
-  }
-
-  interface RuntimeContextScanWarning {
-    kind: string;
-    severity: string;
-    message: string;
-  }
-
-  interface RuntimeContextBundleSectionSummary {
-    id: string;
-    title: string;
-    source: string;
-    priority: number;
-    maxChars: number;
-    rawChars: number;
-    finalChars: number;
-    truncated: boolean;
-    scanWarnings: RuntimeContextScanWarning[];
-    contentPreview?: string;
-  }
-
-  interface RuntimeContextBundleSummary {
-    fingerprint?: string | null;
-    sessionId?: string | null;
-    runtimeMode?: string | null;
-    generatedAt?: string | null;
-    totalRawChars: number;
-    totalFinalChars: number;
-    renderedPromptChars: number;
-    truncatedSections: string[];
-    scanWarnings: RuntimeContextScanWarning[];
-    sections: RuntimeContextBundleSectionSummary[];
-    capabilitySet?: RuntimeCapabilitySet | null;
-  }
-
-  interface RuntimeCapabilityApprovalOverride {
-    toolName: string;
-    level: 'none' | 'light' | 'explicit' | 'always_hold';
-    reason: string;
-  }
-
-  interface RuntimeCapabilityMcpScope {
-    mode: string;
-    allowedActions: string[];
-    blockedActions: string[];
-    allowedServerIds: string[];
-    allowedServerNames: string[];
-  }
-
-  interface RuntimeCapabilitySet {
-    fingerprint: string;
-    runtimeMode: string;
-    entryKind: 'interactive' | 'background_task' | 'subagent' | 'diagnostics';
-    activeSkills: string[];
-    allowedTools: string[];
-    blockedTools: string[];
-    approvalPolicy: {
-      defaultLevel: 'none' | 'light' | 'explicit' | 'always_hold';
-      toolOverrides: RuntimeCapabilityApprovalOverride[];
-    };
-    writeScope: string[];
-    networkScope: string[];
-    mcpScope: RuntimeCapabilityMcpScope;
-    memoryWritePolicy: string;
-  }
-
-  interface RuntimeCapabilityAuditRecord {
-    id: string;
-    actor: string;
-    runtimeMode: string;
-    entryKind: 'interactive' | 'background_task' | 'subagent' | 'diagnostics';
-    sessionId?: string | null;
-    toolName: string;
-    toolAction?: string | null;
-    approvalLevel: 'none' | 'light' | 'explicit' | 'always_hold';
-    outcome: 'allowed' | 'blocked' | 'failed' | string;
-    reason: string;
-    capabilityFingerprint: string;
-    argumentsSummary?: unknown;
-    createdAt: number;
-    createdAtIso: string;
-  }
-
-  interface RuntimeWarmSummaryEntry {
-    mode: string;
-    warmedAt: number;
-    systemPromptChars: number;
-    estimatedPromptTokens: number;
-    legacySystemPromptChars?: number;
-    charReductionRatio?: number;
-    longTermContextChars: number;
-    activeSkillCount: number;
-    activeSkills: string[];
-    activeHookEvents?: string[];
-    activeHookCount?: number;
-    baseToolCount: number;
-    allowedToolCount: number;
-    allowedTools: string[];
-    modelConfigured: boolean;
-    modelName?: string | null;
-    baseUrl?: string | null;
-    protocol?: string | null;
-    contextBundleSummary?: RuntimeContextBundleSummary | null;
-    capabilitySet?: RuntimeCapabilitySet | null;
-  }
-
-  interface RuntimeDebugSummary {
-    generatedAt: string;
-    workspaceRoot?: string | null;
-    featureFlags: RedBoxFeatureFlags;
-    phase0Metrics: Phase0RuntimeMetrics;
-    sessionResumeSuccessRate: number;
-    storeCounts: {
-      sessions: number;
-      transcripts: number;
-      checkpoints: number;
-      toolResults: number;
-      runtimeTasks: number;
-      runtimeTaskTraces: number;
-      backgroundTasks: number;
-      agentJobDefinitions?: number;
-      agentJobExecutions?: number;
-      hooks: number;
-      mcpServers: number;
-      skills: number;
-      debugLogs: number;
-      memories: number;
-      memoryHistory: number;
-      capabilityAudits?: number;
-      scriptExecutions?: number;
-    };
-    memoryOverview: {
-      memoryCount: number;
-      historyCount: number;
-      byType?: {
-        userProfile: number;
-        workspaceFacts: number;
-        taskLearnings: number;
-        archived: number;
-        legacyOther: number;
-      };
-      latestMemoryUpdatedAt?: number | null;
-      latestHistoryAt?: number | null;
-    };
-    recallReadiness?: {
-      enabled: boolean;
-      structuredMemoryTypes?: Record<string, number>;
-    };
-    derivedMetrics: {
-      averageToolCallsPerSession: number;
-      averageTraceRecordsPerSession: number;
-      averageCheckpointsPerSession: number;
-      averageTaskTraceRowsPerTask: number;
-    };
-    latestContextSnapshots: Array<{
-      sessionId: string;
-      createdAt: number;
-      summary: string;
-      payload?: RuntimeContextBundleSummary | null;
-    }>;
-    recentSessionLineage?: Array<{
-      sessionId: string;
-      title: string;
-      updatedAt: string;
-      lineage: SessionLineageSummary;
-    }>;
-    recentCapabilityAudits?: RuntimeCapabilityAuditRecord[];
-    scriptRuntime?: {
-      enabled: boolean;
-      eligibleModes: string[];
-      executedCount: number;
-      recentExecutions: Array<{
-        sessionId: string;
-        createdAt: number;
-        summary: string;
-        payload?: {
-          executionId?: string;
-          runtimeMode?: string;
-          success?: boolean;
-          stdoutPreview?: string;
-          stdoutChars?: number;
-          stdoutTruncated?: boolean;
-          artifactPaths?: string[];
-          toolCallCount?: number;
-          stepCount?: number;
-          errorSummary?: string | null;
-          estimatedPromptReductionChars?: number;
-          executedTools?: string[];
-          tempWorkspace?: string;
-        } | null;
-      }>;
-    };
-    agentJobs?: {
-      enabled: boolean;
-      recentExecutions: Array<{
-        executionId: string;
-        definitionId: string;
-        status: string;
-        runtimeMode?: string | null;
-        sourceKind?: string | null;
-        title?: string | null;
-        updatedAt: string;
-        sessionId?: string | null;
-        runtimeTaskId?: string | null;
-        lastError?: string | null;
-        lastCheckpoint?: Record<string, unknown> | null;
-        lastArtifact?: Record<string, unknown> | null;
-      }>;
-    };
-    runtimeWarm: {
-      lastWarmedAt: number;
-      settingsFingerprint: string;
-      entries: RuntimeWarmSummaryEntry[];
-    };
-    configReadiness: {
-      workspaceResolved: boolean;
-      chatModelReady: boolean;
-      runtimeWarmMatchesSettings: boolean;
-    };
-  }
-
-  interface Phase0SmokeCheck {
-    name: string;
-    status: 'passed' | 'failed' | 'skipped';
-    detail: string;
-  }
-
-  interface Phase0SmokeResult {
-    ranAt: string;
-    passed: boolean;
-    failedCount: number;
-    checks: Phase0SmokeCheck[];
-  }
-
-  interface ScriptExecutionLimitOverrides {
-    timeoutMs?: number;
-    maxStdoutChars?: number;
-    maxToolCalls?: number;
-    maxArtifacts?: number;
-    maxArtifactChars?: number;
-    maxSteps?: number;
-    maxLoopItems?: number;
-    maxFsReadChars?: number;
-    maxFsListEntries?: number;
-    maxRecallChars?: number;
-    maxRecallHits?: number;
-  }
-
-  interface ScriptExecutionStepSummary {
-    id?: string | null;
-    op: string;
-    label: string;
-    status: string;
-    detail: string;
-  }
-
-  interface ScriptExecutionResult {
-    success: boolean;
-    executionId: string;
-    runtimeMode: string;
-    stdout: string;
-    stdoutTruncated: boolean;
-    artifactPaths: string[];
-    toolCallCount: number;
-    stepCount: number;
-    tempWorkspace: string;
-    errorSummary?: string | null;
-    estimatedPromptReductionChars: number;
-    executedTools: string[];
-    stepSummaries: ScriptExecutionStepSummary[];
-    limitSummary?: Record<string, unknown>;
-  }
-
   interface Window {
     ipcRenderer: {
-      saveSettings: (settings: {
-        api_endpoint?: string;
-        api_key?: string;
-        model_name?: string;
-        model_name_wander?: string;
-        model_name_chatroom?: string;
-        model_name_knowledge?: string;
-        model_name_redclaw?: string;
-        search_provider?: string;
-        search_endpoint?: string;
-        search_api_key?: string;
-        proxy_enabled?: boolean;
-        proxy_url?: string;
-        proxy_bypass?: string;
-        workspace_dir?: string;
-        active_space_id?: string;
-        role_mapping?: Record<string, string> | string;
-        transcription_model?: string;
-        transcription_endpoint?: string;
-        transcription_key?: string;
-        embedding_endpoint?: string;
-        embedding_key?: string;
-        embedding_model?: string;
-        ai_sources_json?: string;
-        default_ai_source_id?: string;
-        image_provider?: string;
-        image_endpoint?: string;
-        image_api_key?: string;
-        image_model?: string;
-        video_endpoint?: string;
-        video_api_key?: string;
-        video_model?: string;
-        image_provider_template?: string;
-        image_aspect_ratio?: string;
-        image_size?: string;
-        image_quality?: string;
-        mcp_servers_json?: string;
-        redclaw_compact_target_tokens?: number;
-        wander_deep_think_enabled?: boolean;
-        debug_log_enabled?: boolean;
-        developer_mode_enabled?: boolean;
-        developer_mode_unlocked_at?: string | null;
-        chat_max_tokens_default?: number;
-        chat_max_tokens_deepseek?: number;
-        feature_flags?: RedBoxFeatureFlags;
-        phase0_runtime_metrics?: Phase0RuntimeMetrics;
-      }) => Promise<unknown>;
-      getSettings: () => Promise<{
-        api_endpoint?: string;
-        api_key?: string;
-        model_name?: string;
-        model_name_wander?: string;
-        model_name_chatroom?: string;
-        model_name_knowledge?: string;
-        model_name_redclaw?: string;
-        search_provider?: string;
-        search_endpoint?: string;
-        search_api_key?: string;
-        proxy_enabled?: boolean;
-        proxy_url?: string;
-        proxy_bypass?: string;
-        workspace_dir?: string;
-        active_space_id?: string;
-        role_mapping?: string;
-        transcription_model?: string;
-        transcription_endpoint?: string;
-        transcription_key?: string;
-        embedding_endpoint?: string;
-        embedding_key?: string;
-        embedding_model?: string;
-        ai_sources_json?: string;
-        default_ai_source_id?: string;
-        image_provider?: string;
-        image_endpoint?: string;
-        image_api_key?: string;
-        image_model?: string;
-        video_endpoint?: string;
-        video_api_key?: string;
-        video_model?: string;
-        image_provider_template?: string;
-        image_aspect_ratio?: string;
-        image_size?: string;
-        image_quality?: string;
-        mcp_servers_json?: string;
-        redclaw_compact_target_tokens?: number;
-        wander_deep_think_enabled?: boolean;
-        debug_log_enabled?: boolean;
-        developer_mode_enabled?: boolean;
-        developer_mode_unlocked_at?: string | null;
-        chat_max_tokens_default?: number;
-        chat_max_tokens_deepseek?: number;
-        feature_flags?: RedBoxFeatureFlags;
-        phase0_runtime_metrics?: Phase0RuntimeMetrics;
-      } | undefined>;
+      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number }) => Promise<unknown>;
+      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number } | undefined>;
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
-        getRuntimeSummary: () => Promise<RuntimeDebugSummary>;
         getRecent: (limit?: number) => Promise<{ lines: string[] }>;
-        runPhase0Smoke: () => Promise<Phase0SmokeResult>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
       };
       sessions: {
@@ -785,19 +335,16 @@ declare global {
           id: string;
           transcriptCount: number;
           checkpointCount: number;
-          lineage?: SessionLineageSummary | null;
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
         }>>;
         get: (sessionId: string) => Promise<{
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
-          lineage?: SessionLineageSummary | null;
           transcript?: SessionRuntimeRecord[];
           checkpoints?: SessionCheckpointRecord[];
           toolResults?: SessionToolResultItem[];
         } | null>;
         resume: (sessionId: string) => Promise<{
           chatSession?: { id: string; title?: string; updatedAt?: string } | null;
-          lineage?: SessionLineageSummary | null;
           lastCheckpoint?: SessionCheckpointRecord | null;
         } | null>;
         fork: (sessionId: string) => Promise<{ success: boolean; session?: { id: string; transcriptCount: number; checkpointCount: number }; error?: string }>;
@@ -820,31 +367,11 @@ declare global {
       };
       runtime: {
         query: (payload: { sessionId?: string; message: string; modelConfig?: unknown }) => Promise<{ success: boolean; sessionId: string; response?: string; error?: string }>;
-        resume: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId: string; lastCheckpoint?: SessionCheckpointRecord | null; lineage?: SessionLineageSummary | null }>;
+        resume: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId: string }>;
         forkSession: (payload: { sessionId: string }) => Promise<{ success: boolean; sessionId?: string; forkedSessionId?: string }>;
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
-        recall: (payload: {
-          query?: string;
-          sessionId?: string;
-          runtimeId?: string;
-          sources?: string[];
-          memoryTypes?: string[];
-          includeArchived?: boolean;
-          includeChildSessions?: boolean;
-          limit?: number;
-          maxChars?: number;
-        }) => Promise<RuntimeRecallResponse>;
-        executeScript: (payload: {
-          sessionId?: string;
-          taskId?: string;
-          runtimeMode?: 'knowledge' | 'diagnostics' | 'video-editor';
-          inputs?: Record<string, unknown>;
-          program: Record<string, unknown> | string;
-          limits?: ScriptExecutionLimitOverrides;
-          reason?: string;
-        }) => Promise<ScriptExecutionResult>;
       };
       toolHooks: {
         list: () => Promise<unknown[]>;
@@ -1187,19 +714,6 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
-      createSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string; location?: string }>;
-      saveSkill: (payload: { location: string; content: string }) => Promise<{ success: boolean; error?: string; location?: string }>;
-      enableSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string }>;
-      disableSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string }>;
-      invokeSkill: (payload: { name: string; args?: string }) => Promise<SkillInvokeResult>;
-      previewSkillActivation: (payload: {
-        runtimeMode: string;
-        message?: string;
-        intent?: string;
-        args?: string;
-        metadata?: Record<string, unknown>;
-        touchedPaths?: string[];
-      }) => Promise<SkillActivationPreviewResult>;
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;
         runDirect: (toolName: string) => Promise<ToolDiagnosticRunResult>;
@@ -1255,6 +769,7 @@ declare global {
         confirmTool: (callId: string, confirmed: boolean) => void;
         getSessions: () => Promise<ChatSession[]>;
         createSession: (title?: string) => Promise<ChatSession>;
+        createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
         getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext: string }) => Promise<ChatSession>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
@@ -1737,96 +1252,6 @@ declare global {
     sourceScope?: string;
     isBuiltin?: boolean;
     disabled?: boolean;
-    metadata?: {
-      allowedRuntimeModes?: string[];
-      allowedToolPack?: string;
-      allowedTools?: string[];
-      blockedTools?: string[];
-      autoActivateWhenIntents?: string[];
-      autoActivateWhenContextTypes?: string[];
-      hookMode?: string;
-      autoActivate?: boolean;
-      promptPrefix?: string;
-      promptSuffix?: string;
-      contextNote?: string;
-      maxPromptChars?: number;
-      description?: string;
-      whenToUse?: string;
-      version?: string;
-      aliases?: string[];
-      argumentHint?: string;
-      argumentNames?: string[];
-      userInvocable?: boolean;
-      disableModelInvocation?: boolean;
-      model?: string;
-      effort?: string;
-      executionContext?: string;
-      agent?: string;
-      paths?: string[];
-      hooks?: Record<string, Array<{ matcher?: string; enabled?: boolean; hooks?: Array<{ type?: string; summary?: string; message?: string; once?: boolean; enabled?: boolean; payload?: unknown }> }>>;
-      shell?: string;
-      disabled?: boolean;
-    };
-    whenToUse?: string;
-    userInvocable?: boolean;
-    version?: string;
-    argumentHint?: string;
-    argumentNames?: string[];
-    executionContext?: string;
-    modelOverride?: string;
-    effortOverride?: string;
-    paths?: string[];
-    usage?: {
-      usageCount?: number;
-      lastUsedAt?: number | null;
-    };
-  }
-
-  interface SkillActivationPreviewResult {
-    success: boolean;
-    runtimeMode: string;
-    activeSkills: Array<{
-      name: string;
-      description?: string;
-      executionContext?: string;
-      modelOverride?: string;
-      effortOverride?: string;
-      paths?: string[];
-      whenToUse?: string;
-    }>;
-    allowedTools: string[];
-    modelOverride?: string | null;
-    effortOverride?: string | null;
-    activeHookEvents?: string[];
-    activeHookCount?: number;
-  }
-
-  interface SkillInvokeResult {
-    success: boolean;
-    skill?: {
-      name: string;
-      description?: string;
-      location?: string;
-      sourceScope?: string;
-      isBuiltin?: boolean;
-      disabled?: boolean;
-      metadata?: SkillDefinition['metadata'];
-    };
-    invocation?: {
-      args?: string;
-      renderedPrompt?: string;
-      executionContext?: string;
-      modelOverride?: string | null;
-      effortOverride?: string | null;
-      agent?: string | null;
-      allowedTools?: string[];
-      paths?: string[];
-      hooks?: SkillDefinition['metadata']['hooks'];
-      referencesIncluded?: boolean;
-      scriptsIncluded?: boolean;
-      ruleCount?: number;
-    };
-    error?: string;
   }
 
   interface ToolConfirmationDetails {
