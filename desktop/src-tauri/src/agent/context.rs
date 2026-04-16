@@ -28,11 +28,8 @@ struct ContextAssemblyInputs {
 }
 
 pub fn runtime_context_bundle_enabled(settings: &Value) -> bool {
-    settings
-        .get("feature_flags")
-        .and_then(|value| value.get("runtimeContextBundleV2"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
+    let _ = settings;
+    true
 }
 
 fn tool_pack_label(pack: ToolPack) -> &'static str {
@@ -238,12 +235,19 @@ fn runtime_mode_overlay_prompt(runtime_mode: &str) -> Option<String> {
 }
 
 fn build_skill_overlay_section(
+    available_skills_section: &str,
     active_skill_names: &[String],
     skills_section: &str,
     prompt_prefix: &str,
     prompt_suffix: &str,
 ) -> String {
     let mut parts = Vec::new();
+    if !available_skills_section.trim().is_empty() {
+        parts.push(format!(
+            "[availableSkills]\n{}\n\n[skillUsage]\n- Skills listed here are part of the current LexBox runtime catalog.\n- Auto-activate matching skills when the request clearly fits their contract.\n- Only inject or invoke a skill when it materially helps the current task.",
+            available_skills_section.trim()
+        ));
+    }
     if !active_skill_names.is_empty() {
         parts.push(format!("activeSkills: {}", active_skill_names.join(", ")));
     }
@@ -260,11 +264,8 @@ fn build_skill_overlay_section(
 }
 
 fn runtime_memory_recall_v2_enabled(settings: &Value) -> bool {
-    settings
-        .get("feature_flags")
-        .and_then(|value| value.get("runtimeMemoryRecallV2"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let _ = settings;
+    true
 }
 
 fn build_memory_summary_section(structured_memory_snapshot: &str, recall_enabled: bool) -> String {
@@ -425,6 +426,7 @@ pub fn build_runtime_context_bundle(
             "skills://active".to_string(),
             70,
             build_skill_overlay_section(
+                &skill_state.available_skills_section,
                 &active_skill_names,
                 &skill_state.skills_section,
                 &skill_state.prompt_prefix,
@@ -489,9 +491,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn runtime_context_bundle_enabled_defaults_true() {
+    fn runtime_context_bundle_enabled_is_always_on() {
         assert!(runtime_context_bundle_enabled(&json!({})));
-        assert!(!runtime_context_bundle_enabled(&json!({
+        assert!(runtime_context_bundle_enabled(&json!({
             "feature_flags": { "runtimeContextBundleV2": false }
         })));
     }

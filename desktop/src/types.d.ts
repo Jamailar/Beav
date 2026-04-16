@@ -395,11 +395,6 @@ declare global {
 
   interface RedBoxFeatureFlags {
     vectorRecommendation: boolean;
-    runtimeContextBundleV2: boolean;
-    runtimeMemoryRecallV2: boolean;
-    runtimeSubagentRuntimeV2: boolean;
-    runtimeExecuteScriptV1: boolean;
-    runtimeAgentJobV1: boolean;
   }
 
   interface Phase0RuntimeMetrics {
@@ -502,6 +497,8 @@ declare global {
     longTermContextChars: number;
     activeSkillCount: number;
     activeSkills: string[];
+    activeHookEvents?: string[];
+    activeHookCount?: number;
     baseToolCount: number;
     allowedToolCount: number;
     allowedTools: string[];
@@ -1800,6 +1797,8 @@ declare global {
     allowedTools: string[];
     modelOverride?: string | null;
     effortOverride?: string | null;
+    activeHookEvents?: string[];
+    activeHookCount?: number;
   }
 
   interface SkillInvokeResult {

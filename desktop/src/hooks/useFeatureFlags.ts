@@ -2,11 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 
 export interface FeatureFlags {
   vectorRecommendation: boolean;
-  runtimeContextBundleV2: boolean;
-  runtimeMemoryRecallV2: boolean;
-  runtimeSubagentRuntimeV2: boolean;
-  runtimeExecuteScriptV1: boolean;
-  runtimeAgentJobV1: boolean;
 }
 
 const STORAGE_KEY = 'redconvert:feature-flags';
@@ -14,11 +9,6 @@ const UPDATE_EVENT = 'featureflags:updated';
 
 export const DEFAULT_FLAGS: FeatureFlags = {
   vectorRecommendation: false,
-  runtimeContextBundleV2: true,
-  runtimeMemoryRecallV2: true,
-  runtimeSubagentRuntimeV2: true,
-  runtimeExecuteScriptV1: true,
-  runtimeAgentJobV1: true,
 };
 
 const normalizeFeatureFlags = (value: unknown): FeatureFlags => {
@@ -28,11 +18,6 @@ const normalizeFeatureFlags = (value: unknown): FeatureFlags => {
   const candidate = value as Record<string, unknown>;
   return {
     vectorRecommendation: candidate.vectorRecommendation === true,
-    runtimeContextBundleV2: candidate.runtimeContextBundleV2 === true,
-    runtimeMemoryRecallV2: candidate.runtimeMemoryRecallV2 === true,
-    runtimeSubagentRuntimeV2: candidate.runtimeSubagentRuntimeV2 === true,
-    runtimeExecuteScriptV1: candidate.runtimeExecuteScriptV1 === true,
-    runtimeAgentJobV1: candidate.runtimeAgentJobV1 === true,
   };
 };
 

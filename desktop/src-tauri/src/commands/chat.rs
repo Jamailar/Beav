@@ -11,7 +11,10 @@ use crate::runtime::SessionToolResultRecord;
 use crate::skills::{active_hooks_for_event, build_resolved_skill_runtime_state, resolve_skill_records};
 use crate::session_lineage_fields;
 use crate::skills::active_skill_activation_items;
-use crate::{log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string, AppState};
+use crate::{
+    append_debug_log_state, log_timing_event, make_id, now_i64, now_ms, payload_field,
+    payload_string, AppState,
+};
 
 fn merge_request_metadata(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
     match (base, overlay) {
@@ -133,6 +136,30 @@ pub fn handle_send_channel(
                 );
                 Ok((target_session_id, items, skill_state))
             })?;
+            append_debug_log_state(
+                state,
+                format!(
+                    "[skill-activation] runtime=chat session={} intent={} activeSkills={} activeHookEvents={}",
+                    active_session_id,
+                    request_metadata
+                        .as_ref()
+                        .and_then(|value| value.get("intent"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    skill_runtime_state
+                        .active_skills
+                        .iter()
+                        .map(|item| item.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    skill_runtime_state
+                        .active_hooks
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+            );
             for (name, description) in activated_skills {
                 emit_runtime_task_checkpoint_saved(
                     app,

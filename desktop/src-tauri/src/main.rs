@@ -1749,6 +1749,39 @@ pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Int
     });
 }
 
+fn compact_json_for_debug(value: &Value, limit: usize) -> String {
+    let text = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    if text.chars().count() <= limit {
+        return text;
+    }
+    let mut truncated = text.chars().take(limit).collect::<String>();
+    truncated.push_str("…");
+    truncated
+}
+
+fn append_tool_call_debug_log(
+    state: &State<'_, AppState>,
+    stage: &str,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    raw_name: &str,
+    effective_name: &str,
+    payload: Value,
+) {
+    append_debug_log_state(
+        state,
+        format!(
+            "[tool-call][{}] runtime={} session={} raw={} effective={} payload={}",
+            stage,
+            runtime_mode,
+            session_id.unwrap_or("-"),
+            raw_name,
+            effective_name,
+            compact_json_for_debug(&payload, 1600)
+        ),
+    );
+}
+
 fn log_timing_event(
     state: &State<'_, AppState>,
     scope: &str,
@@ -2439,6 +2472,46 @@ fn interactive_runtime_tools_for_mode(
     )
 }
 
+fn resolve_mcp_server_record_from_arguments(
+    state: &State<'_, AppState>,
+    arguments: &Value,
+) -> Result<McpServerRecord, String> {
+    if let Some(server) = payload_field(arguments, "server").cloned() {
+        return serde_json::from_value(server).map_err(|error| error.to_string());
+    }
+    let requested_id = payload_string(arguments, "serverId")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let requested_name = payload_string(arguments, "serverName")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    with_store(state, |store| {
+        store
+            .mcp_servers
+            .iter()
+            .find(|item| {
+                requested_id
+                    .as_ref()
+                    .map(|value| item.id == *value)
+                    .unwrap_or(false)
+                    || requested_name
+                        .as_ref()
+                        .map(|value| item.name.eq_ignore_ascii_case(value))
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .ok_or_else(|| {
+                if let Some(server_id) = requested_id.as_ref() {
+                    format!("MCP server not found for serverId `{server_id}`")
+                } else if let Some(server_name) = requested_name.as_ref() {
+                    format!("MCP server not found for serverName `{server_name}`")
+                } else {
+                    "server.id, server.name, serverId, or serverName is required".to_string()
+                }
+            })
+    })
+}
+
 fn resolve_editor_tool_file_path(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -2495,11 +2568,62 @@ fn execute_interactive_tool_call(
     arguments: &Value,
     model_config: Option<&Value>,
 ) -> Result<Value, String> {
+    let raw_name = name.to_string();
+    let raw_arguments = arguments.clone();
     let normalized_call = tools::compat::normalize_tool_call(name, arguments);
     let name = normalized_call.name;
     let arguments = &normalized_call.arguments;
-    let guard =
-        tools::guards::preflight_tool_call(state, runtime_mode, session_id, name, arguments)?;
+    append_tool_call_debug_log(
+        state,
+        "normalized",
+        runtime_mode,
+        session_id,
+        &raw_name,
+        if name.is_empty() { &raw_name } else { name },
+        json!({
+            "rawArguments": raw_arguments,
+            "normalizedArguments": arguments,
+        }),
+    );
+    let guard = match tools::guards::preflight_tool_call(
+        state,
+        runtime_mode,
+        session_id,
+        name,
+        arguments,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            append_tool_call_debug_log(
+                state,
+                "preflight_err",
+                runtime_mode,
+                session_id,
+                &raw_name,
+                name,
+                json!({
+                    "error": error,
+                    "normalizedArguments": arguments,
+                }),
+            );
+            return Err(error);
+        }
+    };
+    append_tool_call_debug_log(
+        state,
+        "preflight",
+        runtime_mode,
+        session_id,
+        &raw_name,
+        name,
+        json!({
+            "approvalLevel": guard.approval_level,
+            "toolAction": guard.tool_action,
+            "capabilityFingerprint": guard.capability_set.fingerprint,
+            "entryKind": guard.capability_set.entry_kind,
+            "argumentsSummary": guard.arguments_summary,
+        }),
+    );
     let call_skill_channel = |channel: &str, payload: Value| -> Result<Value, String> {
         commands::skills_ai::handle_skills_ai_channel(app, state, channel, &payload)
             .unwrap_or_else(|| Err(format!("Skill channel not handled: {channel}")))
@@ -3281,14 +3405,7 @@ fn execute_interactive_tool_call(
         }
         "redbox_mcp" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
-            let server_value = || {
-                payload_field(arguments, "server")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}))
-            };
-            let parse_server = || -> Result<McpServerRecord, String> {
-                serde_json::from_value(server_value()).map_err(|error| error.to_string())
-            };
+            let parse_server = || resolve_mcp_server_record_from_arguments(state, arguments);
             match action.as_str() {
                 "list" => commands::mcp_tools::mcp_list_value(state),
                 "save" => commands::mcp_tools::handle_mcp_tools_channel(
@@ -3833,6 +3950,23 @@ fn execute_interactive_tool_call(
         }
         other => Err(format!("unsupported interactive tool: {other}")),
     };
+    append_tool_call_debug_log(
+        state,
+        if result.is_ok() { "result_ok" } else { "result_err" },
+        runtime_mode,
+        session_id,
+        &raw_name,
+        name,
+        match &result {
+            Ok(value) => json!({
+                "resultPreview": compact_json_for_debug(value, 2000),
+                "resultKeys": value.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            }),
+            Err(error) => json!({
+                "error": error,
+            }),
+        },
+    );
     tools::guards::record_tool_execution_outcome(state, session_id, &guard, &result);
     result
 }

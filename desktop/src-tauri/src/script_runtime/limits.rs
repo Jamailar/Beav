@@ -23,11 +23,8 @@ pub struct ScriptExecutionLimits {
 }
 
 pub fn script_runtime_feature_enabled(settings: &Value) -> bool {
-    settings
-        .get("feature_flags")
-        .and_then(|value| value.get("runtimeExecuteScriptV1"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let _ = settings;
+    true
 }
 
 pub fn script_runtime_mode_allowed(runtime_mode: &str) -> bool {

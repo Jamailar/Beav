@@ -11,7 +11,6 @@ use crate::skills::{
     load_skill_catalog, resolve_skill_records, skill_allows_runtime_mode, LoadedSkillRecord,
     SkillHookMatcherRecord, SkillWatcherSnapshot,
 };
-use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
 
 #[derive(Debug, Clone, Default)]
@@ -19,6 +18,7 @@ pub struct SkillRuntimeState {
     pub catalog: Vec<LoadedSkillRecord>,
     pub active_skills: Vec<LoadedSkillRecord>,
     pub allowed_tools: Vec<String>,
+    pub available_skills_section: String,
     pub prompt_prefix: String,
     pub prompt_suffix: String,
     pub context_note: String,
@@ -166,6 +166,29 @@ fn looks_like_manuscript_request(message: Option<&str>) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+fn activation_request_text(activation: Option<&SkillActivationContext>) -> Option<String> {
+    let mut parts = Vec::<String>::new();
+    if let Some(message) = activation
+        .and_then(|item| item.current_message.as_deref())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        parts.push(message.to_string());
+    }
+    if let Some(args) = activation
+        .and_then(|item| item.args.as_deref())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        parts.push(args.to_string());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
 fn path_matches_pattern(candidate: &str, pattern: &str) -> bool {
     let normalized_candidate = candidate.replace('\\', "/");
     let normalized_pattern = pattern.trim().replace('\\', "/");
@@ -193,14 +216,14 @@ fn path_matches_pattern(candidate: &str, pattern: &str) -> bool {
         }
     }
     Path::new(&normalized_candidate)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(|value| {
-                Pattern::new(&normalized_pattern)
-                    .map(|compiled| compiled.matches(value))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| {
+            Pattern::new(&normalized_pattern)
+                .map(|compiled| compiled.matches(value))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 fn matches_path_conditions(
@@ -256,7 +279,7 @@ fn skill_matches_auto_activation(
             || (requested_intents.iter().any(|item| item == "manuscript_creation")
                 && (is_manuscript_context(metadata, activation)
                     || looks_like_manuscript_request(
-                        activation.and_then(|item| item.current_message.as_deref()),
+                        activation_request_text(activation).as_deref(),
                     )))
     };
     let matches_context_type = if requested_context_types.is_empty() {
@@ -385,6 +408,54 @@ fn build_skills_section(active_skills: &[LoadedSkillRecord]) -> String {
     parts.join("\n\n")
 }
 
+fn build_available_skills_section(
+    catalog: &[LoadedSkillRecord],
+    runtime_mode: &str,
+) -> String {
+    catalog
+        .iter()
+        .filter(|skill| skill_allows_runtime_mode(skill, runtime_mode))
+        .filter(|skill| !skill.metadata.disable_model_invocation)
+        .map(|skill| {
+            let mut parts = vec![skill.description.trim().to_string()];
+            if let Some(when_to_use) = skill
+                .metadata
+                .when_to_use
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                parts.push(format!("when: {when_to_use}"));
+            }
+            if !skill.metadata.aliases.is_empty() {
+                parts.push(format!("aliases: {}", skill.metadata.aliases.join(", ")));
+            }
+            if let Some(argument_hint) = skill
+                .metadata
+                .argument_hint
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                parts.push(format!("args: {argument_hint}"));
+            } else if !skill.metadata.argument_names.is_empty() {
+                parts.push(format!("args: {}", skill.metadata.argument_names.join(", ")));
+            }
+            if let Some(context) = skill
+                .metadata
+                .execution_context
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                parts.push(format!("context: {context}"));
+            }
+            format!("- {}: {}", skill.name, parts.join(" | "))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn skill_runtime_state_from_catalog(
     catalog: Vec<LoadedSkillRecord>,
     runtime_mode: &str,
@@ -408,6 +479,7 @@ fn skill_runtime_state_from_catalog(
             .iter()
             .rev()
             .find_map(|skill| skill.metadata.effort.clone()),
+        available_skills_section: build_available_skills_section(&catalog, runtime_mode),
         skills_section: build_skills_section(&active_skills),
         catalog,
         active_skills,
@@ -509,30 +581,6 @@ pub fn build_skill_template_markdown(name: &str, forked: bool, note: &str) -> St
     format!(
         "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nautoActivate: false\ncontext: {context}\nuserInvocable: true\nwhenToUse: \nargumentHint: \narguments: []\npaths: []\ncontextNote: {note}\n---\n# {name}\n\nDescribe this skill's execution contract, examples, constraints, and any reusable workflow steps here."
     )
-}
-
-pub fn build_user_skill_record(name: &str) -> SkillRecord {
-    SkillRecord {
-        name: name.to_string(),
-        description: format!("{name} skill"),
-        location: format!("redbox://skills/{}", slug_from_relative_path(name)),
-        body: build_skill_template_markdown(name, false, ""),
-        source_scope: Some("user".to_string()),
-        is_builtin: Some(false),
-        disabled: Some(false),
-    }
-}
-
-pub fn build_market_skill_record(slug: &str) -> SkillRecord {
-    SkillRecord {
-        name: slug.to_string(),
-        description: format!("Installed from market: {slug}"),
-        location: format!("redbox://skills/market/{slug}"),
-        body: build_skill_template_markdown(slug, true, "Installed from market."),
-        source_scope: Some("user".to_string()),
-        is_builtin: Some(false),
-        disabled: Some(false),
-    }
 }
 
 fn substitute_skill_arguments(body: &str, skill: &LoadedSkillRecord, args: Option<&str>) -> String {
@@ -647,6 +695,13 @@ pub fn preview_skill_activation_value(
     json!({
         "success": true,
         "runtimeMode": runtime_mode,
+        "availableSkills": state.catalog.iter().filter(|item| skill_allows_runtime_mode(item, runtime_mode)).map(|item| json!({
+            "name": item.name,
+            "description": item.description,
+            "whenToUse": item.metadata.when_to_use,
+            "executionContext": item.metadata.execution_context,
+            "aliases": item.metadata.aliases,
+        })).collect::<Vec<_>>(),
         "activeSkills": state.active_skills.iter().map(|item| json!({
             "name": item.name,
             "description": item.description,
@@ -659,6 +714,12 @@ pub fn preview_skill_activation_value(
         "allowedTools": state.allowed_tools,
         "modelOverride": state.model_override,
         "effortOverride": state.effort_override,
+        "activeHookEvents": state.active_hooks.keys().cloned().collect::<Vec<_>>(),
+        "activeHookCount": state
+            .active_hooks
+            .values()
+            .map(|items| items.len())
+            .sum::<usize>(),
     })
 }
 
@@ -774,6 +835,20 @@ mod tests {
             None,
         );
         assert_eq!(writing_state.active_skills.len(), 1);
+    }
+
+    #[test]
+    fn build_skill_runtime_state_exposes_runtime_available_skill_summary() {
+        let state = build_skill_runtime_state(
+            &skills(),
+            "redclaw",
+            None,
+            &["redbox_fs".to_string()],
+            None,
+        );
+        assert!(state.available_skills_section.contains("redclaw-project"));
+        assert!(state.available_skills_section.contains("cover-builder"));
+        assert!(!state.available_skills_section.contains("remotion-best-practices"));
     }
 
     #[test]

@@ -153,8 +153,12 @@ fn ensure_known_server_id_or_name(
     arguments: &Value,
 ) -> Result<(), String> {
     let server = payload_field(arguments, "server").unwrap_or(arguments);
-    let server_id = payload_string(server, "id").unwrap_or_default();
-    let server_name = payload_string(server, "name").unwrap_or_default();
+    let server_id = payload_string(server, "id")
+        .or_else(|| payload_string(arguments, "serverId"))
+        .unwrap_or_default();
+    let server_name = payload_string(server, "name")
+        .or_else(|| payload_string(arguments, "serverName"))
+        .unwrap_or_default();
     if server_id.trim().is_empty() && server_name.trim().is_empty() {
         return Err("server.id or server.name is required".to_string());
     }

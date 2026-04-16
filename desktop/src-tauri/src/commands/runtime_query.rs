@@ -16,8 +16,8 @@ use crate::skills::{
     resolve_skill_records,
 };
 use crate::{
-    log_timing_event, now_ms, payload_field, payload_string, resolve_runtime_mode_for_session,
-    AppState,
+    append_debug_log_state, log_timing_event, now_ms, payload_field, payload_string,
+    resolve_runtime_mode_for_session, AppState,
 };
 
 fn merge_request_metadata(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
@@ -68,6 +68,20 @@ pub fn handle_runtime_query(
         &runtime_mode,
         &message,
         payload_field(payload, "metadata"),
+    );
+    append_debug_log_state(
+        state,
+        format!(
+            "[runtime-route] runtime=query session={} mode={} source={} intent={} role={} multiAgent={} longRunning={} reasoning={}",
+            session_id.as_deref().unwrap_or("new-session"),
+            runtime_mode,
+            route.source,
+            route.intent,
+            route.recommended_role,
+            route.requires_multi_agent,
+            route.requires_long_running_task,
+            route.reasoning
+        ),
     );
     let orchestration = if route.requires_multi_agent || route.requires_long_running_task {
         Some(run_subagent_orchestration_for_task(
@@ -168,6 +182,31 @@ pub fn handle_runtime_query(
         );
         Ok((runtime_mode, items, skill_state))
     })?;
+    append_debug_log_state(
+        state,
+        format!(
+            "[skill-activation] runtime=query session={} mode={} intent={} activeSkills={} activeHookEvents={}",
+            execution.session_id(),
+            resolved_runtime_mode,
+            request_metadata
+                .as_ref()
+                .and_then(|value| value.get("intent"))
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            skill_runtime_state
+                .active_skills
+                .iter()
+                .map(|item| item.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+            skill_runtime_state
+                .active_hooks
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+    );
     for (name, description) in activated_skills {
         emit_runtime_task_checkpoint_saved(
             app,

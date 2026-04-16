@@ -23,12 +23,7 @@ const SMOKE_RUNTIME_MODES: [&str; 3] = ["chatroom", "wander", "redclaw"];
 
 pub fn default_feature_flags() -> Value {
     json!({
-        "vectorRecommendation": false,
-        "runtimeContextBundleV2": true,
-        "runtimeMemoryRecallV2": true,
-        "runtimeSubagentRuntimeV2": true,
-        "runtimeExecuteScriptV1": true,
-        "runtimeAgentJobV1": true,
+        "vectorRecommendation": false
     })
 }
 
@@ -367,6 +362,19 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
                 .iter()
                 .map(|skill| skill.name.clone())
                 .collect::<Vec<_>>(),
+            "runtimeSkillCount": skill_state.catalog.len(),
+            "runtimeSkills": skill_state
+                .catalog
+                .iter()
+                .filter(|skill| crate::skills::skill_allows_runtime_mode(skill, &entry.mode))
+                .map(|skill| skill.name.clone())
+                .collect::<Vec<_>>(),
+            "activeHookEvents": skill_state.active_hooks.keys().cloned().collect::<Vec<_>>(),
+            "activeHookCount": skill_state
+                .active_hooks
+                .values()
+                .map(|items| items.len())
+                .sum::<usize>(),
             "baseToolCount": base_tools.len(),
             "allowedToolCount": skill_state.allowed_tools.len(),
             "allowedTools": skill_state.allowed_tools,
@@ -408,10 +416,7 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             "recentExecutions": recent_script_executions,
         },
         "agentJobs": {
-            "enabled": feature_flags
-                .get("runtimeAgentJobV1")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            "enabled": true,
             "recentExecutions": recent_agent_jobs,
         },
         "runtimeWarm": {
@@ -699,10 +704,7 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(2)
         );
-        assert!(merged
-            .get("feature_flags")
-            .and_then(|value| value.get("runtimeContextBundleV2"))
-            .is_some());
+        assert!(merged.get("feature_flags").is_some());
     }
 
     #[test]

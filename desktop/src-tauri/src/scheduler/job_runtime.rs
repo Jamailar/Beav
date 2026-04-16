@@ -137,11 +137,8 @@ fn append_execution_payload_turn(
 }
 
 pub fn agent_job_feature_enabled(settings: &Value) -> bool {
-    settings
-        .get("feature_flags")
-        .and_then(|value| value.get("runtimeAgentJobV1"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let _ = settings;
+    true
 }
 
 fn active_execution_exists(store: &AppStore, definition_id: &str) -> bool {

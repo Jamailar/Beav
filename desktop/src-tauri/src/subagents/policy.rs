@@ -31,18 +31,8 @@ pub fn real_subagents_enabled(settings: &Value, metadata: Option<&Value>) -> boo
     {
         return value;
     }
-    if let Some(value) = settings
-        .get("feature_flags")
-        .and_then(|item| item.get("runtimeSubagentRuntimeV2"))
-        .and_then(Value::as_bool)
-    {
-        return value;
-    }
-    settings
-        .get("experimental")
-        .and_then(|item| item.get("realSubagentsEnabled"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let _ = settings;
+    true
 }
 
 fn role_default_tools(role_id: &str, runtime_mode: &str) -> Vec<String> {

@@ -340,17 +340,29 @@ pub fn load_skill_catalog(skills: &[SkillRecord]) -> Vec<LoadedSkillRecord> {
     skills.iter().map(load_skill_record).collect()
 }
 
+fn project_skill_root() -> PathBuf {
+    lexbox_project_root().join("skills")
+}
+
 pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let mut roots = Vec::<PathBuf>::new();
     if let Some(root) = workspace_root {
         roots.push(root.join("skills"));
     }
-    roots.push(home.join(".codex").join("skills"));
-    roots.push(home.join(".agents").join("skills"));
+    roots.push(project_skill_root());
+    let mut seen = BTreeSet::<String>::new();
     roots
         .into_iter()
         .filter(|path| path.exists() && path.is_dir())
+        .filter(|path| {
+            let normalized = path
+                .canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf())
+                .display()
+                .to_string()
+                .to_ascii_lowercase();
+            seen.insert(normalized)
+        })
         .collect()
 }
 
@@ -361,11 +373,8 @@ fn scope_for_root(root: &Path, workspace_root: Option<&Path>) -> String {
     {
         return "workspace".to_string();
     }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    if root.starts_with(home.join(".codex")) {
-        "codex-home".to_string()
-    } else if root.starts_with(home.join(".agents")) {
-        "agents-home".to_string()
+    if root.starts_with(project_skill_root()) {
+        "project".to_string()
     } else {
         "external".to_string()
     }
@@ -626,5 +635,14 @@ mod tests {
         assert!(loaded.rules.contains_key("calculate-metadata.md"));
         assert!(loaded.rules.contains_key("compositions.md"));
         assert!(loaded.rules.contains_key("timing.md"));
+    }
+
+    #[test]
+    fn skill_source_roots_stay_inside_lexbox_and_workspace() {
+        let roots = skill_source_roots(None);
+        let project_root = lexbox_project_root().join("skills");
+        assert!(roots.iter().any(|root| root == &project_root));
+        assert!(!roots.iter().any(|root| root.ends_with(".codex/skills")));
+        assert!(!roots.iter().any(|root| root.ends_with(".agents/skills")));
     }
 }

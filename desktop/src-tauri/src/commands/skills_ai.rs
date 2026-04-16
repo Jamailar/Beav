@@ -55,12 +55,7 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
 fn default_create_root(state: &State<'_, AppState>) -> PathBuf {
     workspace_root(state)
         .map(|root| root.join("skills"))
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".codex")
-                .join("skills")
-        })
+        .unwrap_or_else(|_| lexbox_project_root().join("skills"))
 }
 
 fn resolve_skill_file_path(location: &str) -> PathBuf {

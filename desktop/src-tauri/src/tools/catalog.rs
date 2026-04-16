@@ -234,6 +234,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         },
                         "server": { "type": "object" },
                         "servers": { "type": "array", "items": { "type": "object" } },
+                        "serverName": { "type": "string" },
                         "method": { "type": "string" },
                         "params": { "type": "object" },
                         "serverId": { "type": "string" },

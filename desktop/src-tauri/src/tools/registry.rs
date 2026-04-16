@@ -116,13 +116,6 @@ pub fn tool_names_for_skill_records(
         .allowed_tools
 }
 
-pub fn descriptors_for_runtime_mode(runtime_mode: &str) -> Vec<ToolDescriptor> {
-    tool_names_for_runtime_mode(runtime_mode)
-        .iter()
-        .filter_map(|name| descriptor_by_name(name))
-        .collect()
-}
-
 pub fn descriptors_for_tool_names(tool_names: &[String]) -> Vec<ToolDescriptor> {
     tool_names
         .iter()
@@ -210,23 +203,6 @@ pub fn openai_schemas_for_skill_records(
     json!(schemas)
 }
 
-pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
-    descriptors_for_runtime_mode(runtime_mode)
-        .iter()
-        .map(|item| {
-            format!(
-                "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars",
-                item.name,
-                kind_text(item.kind),
-                item.requires_approval,
-                item.concurrency_safe,
-                item.output_budget_chars
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 pub fn prompt_tool_lines_for_tool_names(tool_names: &[String]) -> String {
     descriptors_for_tool_names(tool_names)
         .iter()
@@ -242,15 +218,6 @@ pub fn prompt_tool_lines_for_tool_names(tool_names: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-pub fn prompt_tool_lines_for_session(
-    store: &AppStore,
-    runtime_mode: &str,
-    session_id: Option<&str>,
-) -> String {
-    let tool_names = tool_names_for_session(store, runtime_mode, session_id);
-    prompt_tool_lines_for_tool_names(&tool_names)
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {

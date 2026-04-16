@@ -15,11 +15,8 @@ const MAX_RECALL_LIMIT: usize = 20;
 const MAX_RECALL_CHARS: usize = 10_000;
 
 pub fn recall_query_enabled(settings: &Value) -> bool {
-    settings
-        .get("feature_flags")
-        .and_then(|value| value.get("runtimeMemoryRecallV2"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let _ = settings;
+    true
 }
 
 fn parse_request(payload: &Value) -> MemoryRecallRequest {

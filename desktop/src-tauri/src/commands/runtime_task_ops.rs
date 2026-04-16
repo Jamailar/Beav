@@ -10,7 +10,9 @@ use crate::runtime::{
     list_runtime_task_traces_value as runtime_task_traces_lookup_value, list_runtime_tasks,
     store_runtime_task,
 };
-use crate::{log_timing_event, now_ms, payload_field, payload_string, AppState};
+use crate::{
+    append_debug_log_state, log_timing_event, now_ms, payload_field, payload_string, AppState,
+};
 
 pub fn create_runtime_task_from_payload(
     state: &State<'_, AppState>,
@@ -28,6 +30,19 @@ pub fn create_runtime_task_from_payload(
         &runtime_mode,
         &user_input,
         metadata.as_ref(),
+    );
+    append_debug_log_state(
+        state,
+        format!(
+            "[runtime-route] runtime=task-create mode={} source={} intent={} role={} multiAgent={} longRunning={} reasoning={}",
+            runtime_mode,
+            route.source,
+            route.intent,
+            route.recommended_role,
+            route.requires_multi_agent,
+            route.requires_long_running_task,
+            route.reasoning
+        ),
     );
     let created = with_store_mut(state, |store| {
         Ok(store_runtime_task(

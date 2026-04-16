@@ -3766,36 +3766,6 @@ export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalS
             description: '在稿件编辑器的分栏视图中，根据当前稿件内容的向量相似度对知识库进行智能排序。',
             note: '此功能会调用 Embedding API 计算向量，可能产生额外费用。',
         },
-        {
-            key: 'runtimeContextBundleV2',
-            title: 'Context Bundle V2',
-            badge: 'Phase 1',
-            description: '启用新的 runtime context bundle 入口，为后续 prompt 成本治理和上下文分层做预留。',
-        },
-        {
-            key: 'runtimeMemoryRecallV2',
-            title: 'Memory Recall V2',
-            badge: 'Phase 2',
-            description: '启用记忆/历史/检索拆分后的新 recall 路径，作为长期记忆升级的宿主开关。',
-        },
-        {
-            key: 'runtimeSubagentRuntimeV2',
-            title: 'Child Runtime V2',
-            badge: 'Phase 4',
-            description: '为真实 child runtime 和更严格的 subagent 边界预留开关。',
-        },
-        {
-            key: 'runtimeExecuteScriptV1',
-            title: 'Execute Script V1',
-            badge: 'Phase 5',
-            description: '为程序化执行层预留开关，用于把机械多步任务压缩到脚本执行层。',
-        },
-        {
-            key: 'runtimeAgentJobV1',
-            title: 'Agent Job V1',
-            badge: 'Phase 6',
-            description: '为统一 Agent Job / Scheduler / Daemon Runtime 的新执行链路预留开关。',
-        },
     ];
 
     return (
@@ -3803,7 +3773,7 @@ export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalS
             <div>
                 <h2 className="text-lg font-medium text-text-primary mb-2">实验性功能</h2>
                 <p className="text-xs text-text-tertiary">
-                    以下功能已经接到宿主侧 `settings.feature_flags`，切换后会同时写入本地缓存和 Rust host。
+                    这里只保留仍处于实验期的能力。已经完成替代的 AI runtime 升级项不再作为用户开关暴露。
                 </p>
             </div>
 

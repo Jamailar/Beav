@@ -529,6 +529,7 @@ pub fn summarize_tool_arguments(tool_name: &str, arguments: &Value) -> Value {
         "runtimeId",
         "taskId",
         "serverId",
+        "serverName",
         "method",
         "name",
         "slug",

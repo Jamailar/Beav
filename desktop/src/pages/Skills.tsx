@@ -552,6 +552,8 @@ export function Skills({ isActive = true }: { isActive?: boolean }) {
                                             <div className="mt-3 rounded border border-border bg-surface-primary p-3 text-[11px] text-text-tertiary space-y-2">
                                                 <div>activeSkills: {activationPreview.activeSkills.map(item => item.name).join(', ') || '无'}</div>
                                                 <div>selectedActive: {activationPreview.activeSkills.some(item => item.name === selectedSkill.name) ? 'true' : 'false'}</div>
+                                                <div>activeHookEvents: {(activationPreview.activeHookEvents || []).join(', ') || '无'}</div>
+                                                <div>activeHookCount: {activationPreview.activeHookCount || 0}</div>
                                                 <div>allowedTools: {activationPreview.allowedTools.join(', ') || '无'}</div>
                                                 <div>modelOverride: {activationPreview.modelOverride || '无'}</div>
                                                 <div>effortOverride: {activationPreview.effortOverride || '无'}</div>
