@@ -45,7 +45,6 @@ import type {
 interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
-    onNavigateWorkboard?: () => void;
     isActive?: boolean;
 }
 
@@ -61,7 +60,7 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
-export function RedClaw({ pendingMessage, onPendingMessageConsumed, onNavigateWorkboard, isActive = true }: RedClawProps) {
+export function RedClaw({ pendingMessage, onPendingMessageConsumed, isActive = true }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
         console.debug(`[ui][redclaw] ${event}`, extra || {});

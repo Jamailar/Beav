@@ -19,6 +19,86 @@ pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
 }
 
+fn meta_string(meta: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| meta.get(*key).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn optional_note_asset_url(base_dir: &Path, raw: Option<&Value>) -> Option<String> {
+    optional_asset_url_from_note_path(base_dir, raw).or_else(|| {
+        raw.and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| {
+                if value.starts_with("http://")
+                    || value.starts_with("https://")
+                    || value.starts_with("data:")
+                    || value.starts_with("blob:")
+                    || value.starts_with("file:")
+                {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+    })
+}
+
+fn note_video_asset_url(note_dir: &Path, meta: &Value) -> Option<String> {
+    for key in [
+        "video",
+        "videoFile",
+        "video_file",
+        "videoPath",
+        "video_path",
+        "videoLocalPath",
+        "video_local_path",
+    ] {
+        if let Some(url) = optional_note_asset_url(note_dir, meta.get(key)) {
+            return Some(url);
+        }
+    }
+    for name in [
+        "video.mp4",
+        "video.mov",
+        "video.m4v",
+        "video.webm",
+        "video.mkv",
+        "video.avi",
+    ] {
+        let candidate = normalize_legacy_workspace_path(&note_dir.join(name));
+        if candidate.exists() {
+            return Some(file_url_for_path(&candidate));
+        }
+    }
+    None
+}
+
+fn read_note_transcript(note_dir: &Path, meta: &Value) -> Option<String> {
+    meta_string(meta, &["transcript"]).or_else(|| {
+        meta_string(meta, &["transcriptFile", "transcript_file"]).and_then(|relative_path| {
+            let transcript_path = normalize_legacy_workspace_path(&note_dir.join(relative_path));
+            let transcript = read_text_file_or_empty(&transcript_path);
+            if transcript.trim().is_empty() {
+                None
+            } else {
+                Some(transcript)
+            }
+        })
+    })
+}
+
+fn extract_note_stat(meta: &Value, key: &str) -> Option<i64> {
+    meta.get(key).and_then(|value| value.as_i64()).or_else(|| {
+        meta.get("stats")
+            .and_then(|stats| stats.get(key))
+            .and_then(|value| value.as_i64())
+    })
+}
+
 pub(crate) fn list_files_relative(root: &Path, limit: usize) -> Vec<String> {
     let mut items = Vec::new();
     if !root.exists() {
@@ -655,16 +735,27 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string)
                 .unwrap_or_else(|| read_text_file_or_empty(&content_path));
+            let video_url = meta_string(
+                &meta,
+                &[
+                    "videoUrl",
+                    "video_url",
+                    "sourceVideoUrl",
+                    "source_video_url",
+                ],
+            );
+            let video_asset_url = note_video_asset_url(&path, &meta).or_else(|| video_url.clone());
+            let transcript = read_note_transcript(&path, &meta);
             let image_urls = meta
                 .get("images")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|item| optional_asset_url_from_note_path(&path, Some(item)))
+                        .filter_map(|item| optional_note_asset_url(&path, Some(item)))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let cover_url = optional_asset_url_from_note_path(&path, meta.get("cover"))
+            let cover_url = optional_note_asset_url(&path, meta.get("cover"))
                 .or_else(|| {
                     let candidate = path.join("images").join("cover.jpg");
                     if candidate.exists() {
@@ -703,6 +794,8 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 .or_else(|| {
                     if note_type.as_deref() == Some("link-article") {
                         Some("link-article".to_string())
+                    } else if video_asset_url.is_some() || video_url.is_some() {
+                        Some("xhs-video".to_string())
                     } else if !image_urls.is_empty() {
                         Some("xhs-image".to_string())
                     } else {
@@ -715,6 +808,8 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 source_url: meta
                     .get("sourceUrl")
                     .or_else(|| meta.get("source_url"))
+                    .or_else(|| meta.get("source"))
+                    .or_else(|| meta.get("url"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
                 title: meta
@@ -751,20 +846,18 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 images: image_urls,
                 tags,
                 cover: cover_url,
-                video: None,
-                video_url: None,
-                transcript: meta
-                    .get("transcript")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
+                video: video_asset_url,
+                video_url: video_url.clone(),
+                transcript: transcript.clone(),
                 transcription_status: meta
                     .get("transcriptionStatus")
                     .or_else(|| meta.get("transcription_status"))
                     .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
+                    .map(ToString::to_string)
+                    .or_else(|| transcript.as_ref().map(|_| "completed".to_string())),
                 stats: KnowledgeNoteStatsRecord {
-                    likes: meta.get("likes").and_then(|v| v.as_i64()).unwrap_or(0),
-                    collects: meta.get("collects").and_then(|v| v.as_i64()),
+                    likes: extract_note_stat(&meta, "likes").unwrap_or(0),
+                    collects: extract_note_stat(&meta, "collects"),
                 },
                 created_at: meta
                     .get("createdAt")

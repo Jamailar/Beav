@@ -57,6 +57,8 @@ impl<'a> InteractiveToolExecutor<'a> {
         prepared: &PreparedToolCall,
     ) -> Option<Result<Value, String>> {
         match prepared.name {
+            "app_cli" => Some(self.execute_app_cli(&prepared.arguments)),
+            "bash" => Some(self.execute_bash(&prepared.arguments)),
             "redbox_mcp" => Some(self.execute_redbox_mcp(&prepared.arguments)),
             "redbox_skill" => Some(self.execute_redbox_skill(&prepared.arguments)),
             "redbox_runtime_control" => {
@@ -158,6 +160,20 @@ impl<'a> InteractiveToolExecutor<'a> {
             ),
             _ => Self::unsupported_action("redbox_skill", &action),
         }
+    }
+
+    fn execute_app_cli(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::app_cli::AppCliExecutor::new(
+            self.app,
+            self.state,
+            self.runtime_mode,
+            self.session_id,
+        )
+        .execute(arguments)
+    }
+
+    fn execute_bash(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::bash::execute_bash(arguments, self.state)
     }
 
     fn execute_redbox_mcp(&self, arguments: &Value) -> Result<Value, String> {

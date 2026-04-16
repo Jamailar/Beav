@@ -15,10 +15,13 @@
 - 前端/Prompt 只消费 registry 输出，不直接拼工具清单。
 - 运行时执行工具前必须走 guard，禁止越权调用不在 pack 内的工具。
 - 通用工具收敛到：
+  - `bash`
+  - `app_cli`
+  - `redbox_editor`（仅编辑器 runtime）
+- 兼容层保留：
   - `redbox_app_query`
   - `redbox_fs`
   - `redbox_profile_doc`
   - `redbox_mcp`
-  - `redbox_skill`：支持 `invoke` 按需加载 skill 到当前 session
-- `redbox_runtime_control`
-  - supports explicit diagnostics session entry via `session_enter_diagnostics`
+  - `redbox_skill`
+  - `redbox_runtime_control`

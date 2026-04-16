@@ -1,8 +1,10 @@
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+use crate::persistence::ensure_store_hydrated_for_subjects;
 use crate::persistence::with_store;
 use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
 use crate::skills::build_skill_runtime_state;
@@ -77,6 +79,7 @@ pub(crate) fn interactive_runtime_system_prompt(
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
+    let subjects_section = build_subjects_section(state, &workspace_root_value);
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
     if runtime_mode == "wander" {
         let mut sections = Vec::<String>::new();
@@ -87,14 +90,14 @@ pub(crate) fn interactive_runtime_system_prompt(
             [
                 "You are RedClaw's wander ideation agent inside RedBox.",
                 "Your only job is to inspect the provided material folders/files, discover hidden connections, and return strict JSON for a truly usable topic.",
-                "Use only the available redbox_* file tools in this runtime.",
+                "Use only the available inspection tools in this runtime.",
                 "You must inspect files before concluding.",
-                "Keep the process lean: use redbox_fs(action=list) to inspect folders, then redbox_fs(action=read) for exact files, synthesize, output JSON only.",
+                "Keep the process lean: prefer bash for list/read/search inside currentSpaceRoot, then synthesize and output JSON only.",
                 "The output must be publication-grade, not placeholders.",
                 "Never output generic titles such as '从某素材延展出的内容选题' or '未命名选题'.",
                 "Never output generic directions such as '围绕这组素材提炼一个方向'.",
                 "A valid content_direction must state the target audience, the core conflict/tension, the angle, and how the inspected materials support that angle.",
-                "Never suggest shell commands, app_cli, bash, workspace edits, or pseudo tools.",
+                "Do not suggest pseudo tools or imaginary commands; call only the tools actually exposed in available_tools.",
             ]
             .join(" "),
         );
@@ -145,7 +148,7 @@ pub(crate) fn interactive_runtime_system_prompt(
                 ("memory_path", workspace_root_value.clone() + "/memory"),
                 ("project_context", project_context),
                 ("skills_section", skills_section.clone()),
-                ("subjects_section", String::new()),
+                ("subjects_section", subjects_section),
                 ("current_date", now_iso()),
                 ("current_working_directory", workspace_root_value),
                 ("pi_documentation", "Tauri Rust host runtime".to_string()),
@@ -214,7 +217,7 @@ pub(crate) fn interactive_runtime_system_prompt(
             }
         }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- In this Tauri runtime, the callable tools are the `redbox_*` functions shown above.\n- Prefer `redbox_app_query` for app-managed data and `redbox_fs` for file inspection.\n- Use `redbox_profile_doc` to read/update RedClaw long-term docs (Agent.md / Soul.md / user.md / CreatorProfile.md).\n- Do not emit or assume `app_cli`, `bash`, `workspace`, shell commands, or pseudo tools like `read --path` unless they are explicitly present in available_tools.\n- To inspect material folders, use `redbox_fs` with `action=list` first, then `redbox_fs` with `action=read` on concrete files such as meta.json, content.md, transcript files.\n",
+            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` tools may still exist in diagnostics or compatibility flows, but they are no longer the default mental model.\n",
         );
         if !prompt_suffix.trim().is_empty() {
             rendered.push_str("\n\n");
@@ -230,6 +233,109 @@ If no tool is needed, answer directly and concisely. \
 When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise.",
         runtime_mode
     )
+}
+
+fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &str) -> String {
+    let subjects_root = if workspace_root_value.trim().is_empty() {
+        "subjects".to_string()
+    } else {
+        format!("{workspace_root_value}/subjects")
+    };
+
+    let _ = ensure_store_hydrated_for_subjects(state);
+    let (subjects, categories) = match with_store(state, |store| {
+        Ok((store.subjects.clone(), store.categories.clone()))
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return [
+                format!("Subjects root: {subjects_root}"),
+                format!("读取主体索引失败: {error}"),
+            ]
+            .join("\n");
+        }
+    };
+
+    if subjects.is_empty() {
+        let lines = vec![
+            "当前空间还没有注册主体。".to_string(),
+            format!("Subjects root: {subjects_root}"),
+            "如果用户提到具体人物、商品、场景，仍应优先查询主体库；若结果为空，再明确说明未找到。"
+                .to_string(),
+        ];
+        return lines.join("\n");
+    }
+
+    let category_map = categories
+        .iter()
+        .map(|item| (item.id.clone(), item.name.clone()))
+        .collect::<HashMap<_, _>>();
+
+    let subject_nodes = subjects
+        .iter()
+        .take(200)
+        .map(|subject| {
+            let category_name = subject
+                .category_id
+                .as_ref()
+                .and_then(|id| category_map.get(id))
+                .cloned()
+                .unwrap_or_else(|| {
+                    subject
+                        .category_id
+                        .clone()
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| "未分类".to_string())
+                });
+            let attribute_keys = subject
+                .attributes
+                .iter()
+                .map(|item| item.key.trim())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>();
+            let location = format!("{subjects_root}/{}/subject.json", subject.id);
+            [
+                "  <subject>".to_string(),
+                format!("    <id>{}</id>", subject.id),
+                format!("    <name>{}</name>", subject.name),
+                format!("    <category>{category_name}</category>"),
+                format!("    <tags>{}</tags>", subject.tags.join(", ")),
+                format!(
+                    "    <attribute_keys>{}</attribute_keys>",
+                    attribute_keys.join(", ")
+                ),
+                format!(
+                    "    <has_images>{}</has_images>",
+                    if subject.image_paths.is_empty() {
+                        "false"
+                    } else {
+                        "true"
+                    }
+                ),
+                format!(
+                    "    <has_voice_reference>{}</has_voice_reference>",
+                    if subject.voice_path.is_some() {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                ),
+                format!("    <location>{location}</location>"),
+                "  </subject>".to_string(),
+            ]
+            .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    [
+        "These subject names have reference materials in the current space.",
+        "When the user mentions one of these names or a close combination of them, inspect the subject library before answering.",
+        "<available_subjects>",
+        &subject_nodes,
+        "</available_subjects>",
+    ]
+    .join("\n")
 }
 
 fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {

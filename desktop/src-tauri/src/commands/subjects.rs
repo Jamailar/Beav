@@ -22,6 +22,7 @@ pub fn handle_subjects_channel(
             })
         }
         "subjects:get" => {
+            let _ = ensure_store_hydrated_for_subjects(state);
             let Some(id) = payload_string(payload, "id") else {
                 return Some(Ok(json!({ "success": false, "error": "缺少主体 id" })));
             };
@@ -34,6 +35,7 @@ pub fn handle_subjects_channel(
         "subjects:update" => handle_subject_update(payload.clone(), state),
         "subjects:delete" => handle_subject_delete(payload.clone(), state),
         "subjects:search" => {
+            let _ = ensure_store_hydrated_for_subjects(state);
             let query = payload_string(payload, "query")
                 .unwrap_or_default()
                 .to_lowercase();
@@ -66,9 +68,12 @@ pub fn handle_subjects_channel(
                 Ok(json!({ "success": true, "subjects": subjects }))
             })
         }
-        "subjects:categories:list" => with_store(state, |store| {
-            Ok(json!({ "success": true, "categories": store.categories.clone() }))
-        }),
+        "subjects:categories:list" => {
+            let _ = ensure_store_hydrated_for_subjects(state);
+            with_store(state, |store| {
+                Ok(json!({ "success": true, "categories": store.categories.clone() }))
+            })
+        }
         "subjects:categories:create" => handle_subject_category_create(payload.clone(), state),
         "subjects:categories:update" => handle_subject_category_update(payload.clone(), state),
         "subjects:categories:delete" => handle_subject_category_delete(payload.clone(), state),

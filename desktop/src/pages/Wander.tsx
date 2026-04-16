@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, PenLine, Dices, Lightbulb, FileText, Play } from 'lucide-react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
@@ -260,30 +260,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       .trim()
       .slice(0, 80) || 'wander-draft';
     return `wander/${safeName}.md`;
-  };
-
-  // 去创作：创建稿件并跳转
-  const goCreate = async () => {
-    if (!parsedResult || !onNavigateToManuscript) return;
-    const selectedOption = parsedResult.options?.[selectedOptionIndex];
-    const activeTopic = selectedOption?.topic || parsedResult.topic;
-    const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
-    const title = activeTopic.title;
-    // 兼容旧字段名 connections 和新字段名 content_direction
-    const direction = activeDirection || (parsedResult as any).connections || '';
-    const content = `# ${title}\n\n## 内容方向\n\n${direction}\n\n## 正文\n\n`;
-
-    const result = await window.ipcRenderer.invoke('manuscripts:create-file', {
-      parentPath: '',
-      name: title,
-      content
-    }) as { success: boolean; path?: string; error?: string };
-
-    if (result.success && result.path) {
-      onNavigateToManuscript(result.path);
-    } else {
-      console.error('Failed to create manuscript:', result.error);
-    }
   };
 
   const startCreateInRedClaw = () => {
@@ -666,52 +642,52 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
   return (
     <div className="h-full flex flex-col bg-surface-primary overflow-hidden">
-      <div className="px-6 py-2.5 border-b border-border bg-surface-primary flex items-center justify-between gap-4 shrink-0">
-        <div className="min-w-0 flex items-center gap-2.5">
-          <h1 className="min-w-0 text-sm font-semibold text-text-primary flex items-center gap-2 truncate">
-            <Dices className="w-4 h-4 text-brand-red shrink-0" />
-            <span className="truncate">漫步模式</span>
+      <div className="px-6 py-3 border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px] flex items-center justify-between gap-4 shrink-0 z-30">
+        <div className="min-w-0 flex items-center gap-3">
+          <h1 className="min-w-0 text-[14px] font-extrabold text-text-primary flex items-center gap-2 truncate tracking-tight">
+            <Dices className="w-4 h-4 text-accent-primary shrink-0" />
+            <span className="truncate">灵感漫步</span>
           </h1>
-          <span className="hidden md:block text-[11px] text-text-tertiary truncate">
-            随机抽取知识库内容，快速碰撞新选题
+          <div className="w-[1px] h-3.5 bg-black/[0.06] hidden md:block" />
+          <span className="hidden md:block text-[11px] font-bold text-text-tertiary/60 uppercase tracking-widest truncate">
+            Random Inspiration Collision
           </span>
         </div>
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {phase !== 'idle' && (
             <>
               <button
                 onClick={() => { void loadHistoryList(); setShowHistory(true); }}
-                className="flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:bg-surface-secondary rounded-lg transition-colors"
+                className="flex items-center gap-2 px-3.5 py-1.5 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all active:scale-95"
               >
-                <History className="w-4 h-4" />
-                历史记录
+                <History className="w-3.5 h-3.5" />
+                历史
               </button>
               <button
                 onClick={startWander}
                 disabled={loading}
-                className="flex items-center gap-2 px-3 py-2 bg-surface-secondary hover:bg-surface-hover text-text-primary text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-3.5 py-1.5 bg-black/[0.03] hover:bg-black/[0.06] text-text-primary text-[12px] font-bold rounded-xl transition-all disabled:opacity-40 active:scale-95"
               >
                 <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
                 再次漫步
               </button>
             </>
           )}
-          <div className={clsx('flex items-center gap-2.5', phase !== 'idle' && 'ml-1 pl-3 border-l border-border')}>
-            <div className="text-[11px] text-text-tertiary whitespace-nowrap">
-              多选题模式
+          <div className={clsx('flex items-center gap-3', phase !== 'idle' && 'ml-1 pl-4 border-l border-black/[0.06]')}>
+            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
+              多选题
             </div>
             <button
               type="button"
               onClick={() => void handleToggleMultiChoice()}
               disabled={isSavingMode || loading}
-              className="ui-switch-track w-11 h-6 shrink-0 disabled:opacity-50"
+              className="ui-switch-track w-9 h-5 shrink-0 disabled:opacity-50"
               data-state={multiChoiceEnabled ? 'on' : 'off'}
-              title={multiChoiceEnabled ? '已开启：一次生成 3 个方向' : '已关闭：一次生成 1 个方向'}
             >
               <div
                 className={clsx(
-                  'ui-switch-thumb top-1 w-4 h-4',
-                  multiChoiceEnabled ? 'translate-x-6' : 'translate-x-1'
+                  'ui-switch-thumb top-0.5 w-3.5 h-3.5',
+                  multiChoiceEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
                 )}
               />
             </button>
@@ -720,77 +696,105 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       </div>
 
       {phase === 'idle' ? (
-        <div className="flex-1 flex flex-col items-center justify-center space-y-6">
-          <div className="p-4 bg-accent-primary/10 rounded-full">
-            <Dices className="w-12 h-12 text-accent-primary opacity-80" />
-          </div>
-          <div className="text-center space-y-2 max-w-md">
-            <h2 className="text-lg font-semibold text-text-primary">开启一次随机漫步</h2>
-            <p className="text-sm text-text-tertiary">
-              系统将从您的知识库中随机抽取内容，
-              <br />
-              寻找它们之间的隐秘关联，激发新的创作灵感。
-            </p>
-          </div>
-          <button
-            onClick={startWander}
-            className="group px-6 py-2.5 bg-accent-primary hover:bg-accent-hover text-white rounded-lg font-medium transition-all flex items-center gap-2 shadow-sm"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>开始漫步</span>
-          </button>
+        <div className="flex-1 flex flex-col items-center justify-center p-8 relative">
+            {/* 饰品背景 */}
+            <div className="absolute inset-0 pointer-events-none overflow-hidden opacity-30">
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-accent-primary/5 rounded-full blur-[120px]" />
+                <div className="absolute top-1/4 left-1/3 w-32 h-32 bg-blue-500/5 rounded-full blur-[60px]" />
+            </div>
+
+            <div className="relative flex flex-col items-center max-w-lg text-center animate-in fade-in zoom-in-95 duration-700">
+                <div className="relative mb-10">
+                    <div className="absolute inset-0 bg-accent-primary/10 rounded-[32px] blur-2xl animate-pulse" />
+                    <div className="relative flex h-24 w-24 items-center justify-center rounded-[32px] bg-white shadow-[0_24px_48px_-12px_rgba(0,0,0,0.12)] border border-white/60">
+                        <Dices className="w-10 h-10 text-accent-primary" />
+                    </div>
+                </div>
+                
+                <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">开启一次随机漫步</h2>
+                <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8">
+                    系统将从您的知识库中随机抽取内容，
+                    寻找它们之间的隐秘关联，激发前所未有的创作灵感。
+                </p>
+
+                <button
+                    onClick={startWander}
+                    className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95"
+                >
+                    <Sparkles className="w-5 h-5 text-accent-primary group-hover:animate-pulse" />
+                    <span>开始灵感碰撞</span>
+                </button>
+            </div>
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto p-8">
-            <div className="max-w-4xl mx-auto space-y-8">
+          <div className="flex-1 overflow-y-auto px-6 py-10 custom-scrollbar">
+            <div className="max-w-4xl mx-auto space-y-10">
               {loading && (
-                <div className="flex flex-col items-center justify-center gap-4 py-20 animate-in fade-in duration-500">
-                  <div className="relative">
-                    <div className="w-12 h-12 rounded-full border-2 border-surface-secondary"></div>
-                    <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-2 border-brand-red border-t-transparent animate-spin"></div>
+                <div className="flex flex-col items-center justify-center min-h-[60vh] py-10 animate-in fade-in zoom-in-[0.98] duration-1000">
+                  <div className="relative mb-12">
+                    <div className="w-20 h-20 rounded-[28px] border-[3px] border-black/[0.03]"></div>
+                    <div className="absolute top-0 left-0 w-20 h-20 rounded-[28px] border-[3px] border-accent-primary border-t-transparent animate-spin"></div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <Sparkles className="w-8 h-8 text-accent-primary animate-pulse" />
+                    </div>
                   </div>
-                  <div className="w-full max-w-2xl">
-                    <div className="rounded-xl border border-border bg-surface-primary px-4 py-3 shadow-sm">
-                      <div className="text-[11px] text-text-tertiary mb-1">当前进度</div>
-                      <div
-                        className="text-sm text-text-primary whitespace-pre-line"
-                        style={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                        }}
-                      >
-                        {liveStatus || '正在漫步并寻找灵感...'}
+                  
+                  <div className="w-full max-w-xl space-y-6">
+                    <div className="text-center space-y-2">
+                        <h3 className="text-lg font-extrabold tracking-tight text-text-primary uppercase tracking-[0.2em]">Deep Thinking</h3>
+                        <p className="text-[13px] font-bold text-text-tertiary/60 uppercase">Searching for Hidden Connections</p>
+                    </div>
+
+                    <div className="rounded-3xl border border-white/60 bg-white/40 p-1 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.08)] backdrop-blur-xl">
+                      <div className="bg-white/80 rounded-[22px] px-6 py-5 border border-black/[0.02]">
+                        <div className="text-[10px] font-black text-accent-primary/60 uppercase tracking-widest mb-2">Live Status</div>
+                        <div
+                            className="text-[15px] font-bold text-text-primary leading-relaxed h-12"
+                            style={{
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            }}
+                        >
+                            {liveStatus || '正在初始化量子灵感引擎...'}
+                        </div>
                       </div>
                     </div>
+
                     {progressCards.length > 0 && (
-                      <div className="mt-4 grid gap-3">
+                      <div className="grid gap-2.5">
                         {progressCards.map((card) => (
-                          <div key={card.phase} className="rounded-xl border border-border bg-surface-primary px-4 py-3 shadow-sm">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium text-text-primary">
-                                  {card.stepIndex ? `${card.stepIndex}. ` : ''}{card.title}
+                          <div key={card.phase} className={clsx(
+                            "rounded-2xl border px-5 py-4 transition-all duration-500 flex items-center justify-between gap-4",
+                            card.status === 'running' ? "bg-white border-accent-primary/20 shadow-lg ring-1 ring-accent-primary/5" : "bg-black/[0.02] border-transparent"
+                          )}>
+                            <div className="min-w-0 flex items-center gap-4">
+                                <div className={clsx(
+                                    "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors",
+                                    card.status === 'completed' ? "bg-emerald-500 text-white" : card.status === 'running' ? "bg-accent-primary text-white" : "bg-black/[0.05] text-text-tertiary"
+                                )}>
+                                    {card.status === 'completed' ? <X className="w-4 h-4 rotate-45" /> : <div className="text-[11px] font-black">{card.stepIndex || '•'}</div>}
                                 </div>
-                                <div className="mt-1 text-xs text-text-tertiary whitespace-pre-line">
-                                  {card.detail}
+                                <div className="min-w-0">
+                                    <div className={clsx("text-[13px] font-extrabold tracking-tight", card.status === 'running' ? "text-text-primary" : "text-text-tertiary")}>
+                                        {card.title}
+                                    </div>
+                                    {card.status === 'running' && (
+                                        <div className="mt-0.5 text-[11px] font-bold text-text-tertiary truncate max-w-[300px]">
+                                            {card.detail}
+                                        </div>
+                                    )}
                                 </div>
-                              </div>
-                              <span
-                                className={clsx(
-                                  'shrink-0 text-[10px] px-2 py-1 rounded-full',
-                                  card.status === 'completed'
-                                    ? 'bg-emerald-50 text-emerald-600'
-                                    : card.status === 'error'
-                                      ? 'bg-red-50 text-red-600'
-                                      : 'bg-amber-50 text-amber-700'
-                                )}
-                              >
-                                {card.status === 'completed' ? '完成' : card.status === 'error' ? '失败' : '进行中'}
-                              </span>
                             </div>
+                            {card.status === 'running' && (
+                                <div className="flex gap-1">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.3s]" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.15s]" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce" />
+                                </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -800,10 +804,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
               )}
 
               {showFinal && parsedResult && (
-                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                   {Array.isArray(parsedResult.options) && parsedResult.options.length > 1 && (
-                    <div className="bg-surface-primary border border-border rounded-xl p-5 shadow-sm">
-                      <div className="text-sm font-medium text-text-primary mb-3">请选择一个选题方向</div>
+                    <div className="space-y-4">
+                      <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest px-1">灵感候选方案 ({parsedResult.options.length})</div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         {parsedResult.options.slice(0, 3).map((option, index) => {
                           const selected = index === selectedOptionIndex;
@@ -813,19 +817,24 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                               type="button"
                               onClick={() => setSelectedOptionIndex(index)}
                               className={clsx(
-                                'text-left rounded-lg border p-3 transition-colors',
+                                'text-left rounded-2xl border p-4 transition-all duration-300 relative group active:scale-[0.98]',
                                 selected
-                                  ? 'border-accent-primary bg-accent-primary/5'
-                                  : 'border-border hover:bg-surface-secondary/40'
+                                  ? 'border-accent-primary bg-white shadow-[0_12px_32px_-8px_rgba(var(--color-accent-primary),0.15)] ring-1 ring-accent-primary/10'
+                                  : 'border-black/[0.04] bg-black/[0.01] hover:bg-white hover:border-black/[0.1] hover:shadow-md'
                               )}
                             >
-                              <div className="text-xs text-text-tertiary mb-1">方向 {index + 1}</div>
-                              <div className="text-sm font-medium text-text-primary line-clamp-2 mb-1.5">
+                              <div className={clsx("text-[9px] font-black uppercase tracking-tighter mb-2", selected ? "text-accent-primary" : "text-text-tertiary/60")}>Option {index + 1}</div>
+                              <div className={clsx("text-[13px] font-extrabold tracking-tight line-clamp-2 mb-2 transition-colors", selected ? "text-text-primary" : "text-text-secondary")}>
                                 {option.topic.title}
                               </div>
-                              <div className="text-xs text-text-secondary line-clamp-3">
+                              <div className="text-[11px] font-bold text-text-tertiary/80 line-clamp-2 leading-relaxed">
                                 {option.content_direction}
                               </div>
+                              {selected && (
+                                <div className="absolute top-4 right-4">
+                                    <div className="w-2 h-2 rounded-full bg-accent-primary shadow-[0_0_8px_rgba(var(--color-accent-primary),0.6)] animate-pulse" />
+                                </div>
+                              )}
                             </button>
                           );
                         })}
@@ -833,113 +842,117 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                     </div>
                   )}
 
-                  {/* 选题结果 */}
-                  <div className="bg-surface-primary border border-border rounded-xl p-6 shadow-sm">
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-2 text-brand-red mb-2">
-                        <Lightbulb className="w-5 h-5" />
-                        <span className="text-sm font-medium">灵感生成</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={startCreateInRedClaw}
-                          disabled={!onNavigateToRedClaw}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent-primary hover:bg-accent-primary/90 text-white text-xs font-medium rounded-md transition-colors disabled:opacity-50"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          开始创作
-                        </button>
-                        <button
-                          onClick={goCreate}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-red hover:bg-brand-red-text text-white text-xs font-medium rounded-md transition-colors"
-                        >
-                          <PenLine className="w-3.5 h-3.5" />
-                          去创作
-                        </button>
-                      </div>
-                    </div>
+                  {/* 核心选题卡片 */}
+                  <div className="space-y-8">
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                            <div className="flex items-center gap-2.5">
+                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-primary text-white shadow-lg shadow-accent-primary/20">
+                                    <Sparkles className="w-4.5 h-4.5" />
+                                </div>
+                                <div>
+                                    <div className="text-[15px] font-black text-text-primary tracking-tight">灵感选题</div>
+                                    <div className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest">Selected Inspiration Result</div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={startCreateInRedClaw}
+                                    disabled={!onNavigateToRedClaw}
+                                    className="flex h-10 items-center gap-2 px-5 bg-accent-primary text-white text-[13px] font-extrabold rounded-xl shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95 disabled:opacity-40"
+                                >
+                                    <MessageSquarePlus className="w-4 h-4" />
+                                    AI创作
+                                </button>
+                            </div>
+                        </div>
 
-                    <h2 className="text-xl font-bold text-text-primary mb-4 leading-tight">
-                      {(parsedResult.options?.[selectedOptionIndex]?.topic.title || parsedResult.topic.title)}
-                    </h2>
+                        <div className="space-y-6">
+                            <h2 className="text-3xl font-black text-text-primary leading-[1.15] tracking-tight">
+                                {(parsedResult.options?.[selectedOptionIndex]?.topic.title || parsedResult.topic.title)}
+                            </h2>
 
-                    <div className="bg-surface-secondary/50 rounded-lg p-4 border border-border/50">
-                      <div className="text-sm text-text-secondary leading-relaxed">
-                        <span className="text-text-primary font-medium mr-2">内容方向:</span>
-                        {(parsedResult.options?.[selectedOptionIndex]?.content_direction || parsedResult.content_direction)}
-                      </div>
-                    </div>
+                            <div className="flex items-start gap-3">
+                                <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-primary shrink-0" />
+                                <div className="text-[15px] font-bold text-text-secondary leading-relaxed">
+                                    {(parsedResult.options?.[selectedOptionIndex]?.content_direction || parsedResult.content_direction)}
+                                </div>
+                            </div>
+                        </div>
 
-                    {parseError && (
-                      <div className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2 mt-4">
-                        {parseError}
-                      </div>
-                    )}
+                        {parseError && (
+                            <div className="mt-6 flex items-center gap-2 text-[12px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+                                <X className="w-4 h-4 shrink-0" />
+                                {parseError}
+                            </div>
+                        )}
                   </div>
 
-                  {/* 知识库卡片 */}
-                  <div>
-                    <h3 className="text-sm font-medium text-text-tertiary uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <Dices className="w-4 h-4" /> 参考素材
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* 关联素材展示 */}
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between px-1">
+                        <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest">灵感来源素材 (Wander Sources)</div>
+                        <div className="h-[1px] flex-1 bg-black/[0.04] ml-6" />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                       {items.map((item, index) => {
                         const activeConnections = parsedResult.options?.[selectedOptionIndex]?.topic.connections || parsedResult.topic.connections || [];
                         const isConnected = activeConnections.includes(index + 1);
                         const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
-                        const itemBadge = item.type === 'video' ? '视频' : (isDocItem ? '文档' : '笔记');
+                        const itemBadge = item.type === 'video' ? 'VIDEO' : (isDocItem ? 'DOCUMENT' : 'NOTE');
+                        
                         return (
                           <div
                             key={item.id}
                             className={clsx(
-                              "group relative flex flex-col rounded-lg overflow-hidden border transition-all duration-300 bg-surface-primary",
+                              "group relative flex flex-col rounded-2xl overflow-hidden border transition-all duration-500 bg-white",
                               isConnected
-                                ? "border-brand-red/40 ring-1 ring-brand-red/10 shadow-sm"
-                                : "border-border hover:border-border/80"
+                                ? "border-accent-primary/30 shadow-[0_16px_40px_-12px_rgba(var(--color-accent-primary),0.1)] ring-1 ring-accent-primary/5"
+                                : "border-black/[0.04] opacity-70 grayscale-[0.3] hover:opacity-100 hover:grayscale-0 hover:border-black/[0.1]"
                             )}
                           >
                             {/* 封面图 */}
-                            <div className="aspect-video bg-surface-secondary relative overflow-hidden">
+                            <div className="aspect-[16/10] bg-black/[0.02] relative overflow-hidden">
                               {item.cover ? (
                                 <img
                                   src={resolveAssetUrl(item.cover)}
                                   alt={item.title}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                                 />
                               ) : (
-                                <div className="w-full h-full flex items-center justify-center text-text-tertiary/30">
-                                  {item.type === 'video' ? <Play className="w-8 h-8" /> : <FileText className="w-8 h-8" />}
+                                <div className="w-full h-full flex items-center justify-center text-text-tertiary/20">
+                                  {item.type === 'video' ? <Play className="w-10 h-10" /> : <FileText className="w-10 h-10" />}
                                 </div>
                               )}
 
-                              {/* 关联标记 */}
-                              {isConnected && (
-                                <div className="absolute top-2 right-2 bg-brand-red text-white text-[10px] px-2 py-0.5 rounded shadow-sm font-medium">
-                                  关联
-                                </div>
-                              )}
-                            </div>
-
-                            {/* 内容区域 */}
-                            <div className="p-3 flex-1 flex flex-col">
-                              <div className="flex items-center gap-2 mb-2">
+                              <div className="absolute top-3 left-3 flex gap-2">
                                 <span className={clsx(
-                                  "text-[10px] px-1.5 py-0.5 rounded font-medium",
-                                  item.type === 'video'
-                                    ? "bg-red-50 text-red-600"
-                                    : isDocItem
-                                      ? 'bg-violet-50 text-violet-700'
-                                      : "bg-blue-50 text-blue-600"
+                                    "text-[9px] px-2 py-1 rounded-lg font-black tracking-widest backdrop-blur-md border border-white/20 shadow-sm",
+                                    item.type === 'video' ? "bg-red-500/80 text-white" : isDocItem ? 'bg-violet-500/80 text-white' : "bg-blue-500/80 text-white"
                                 )}>
-                                  {itemBadge}
+                                    {itemBadge}
                                 </span>
                               </div>
 
-                              <h4 className="text-sm font-medium text-text-primary line-clamp-2 mb-2 group-hover:text-brand-red transition-colors">
+                              {isConnected && (
+                                <div className="absolute top-3 right-3 bg-accent-primary text-white text-[9px] px-2 py-1 rounded-lg shadow-lg font-black uppercase tracking-widest animate-in zoom-in duration-300">
+                                  CORE REF
+                                </div>
+                              )}
+                              
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+
+                            {/* 内容区域 */}
+                            <div className="p-4 flex-1 flex flex-col">
+                              <h4 className={clsx(
+                                  "text-[13px] font-extrabold leading-tight tracking-tight line-clamp-2 mb-2.5 transition-colors",
+                                  isConnected ? "text-text-primary" : "text-text-secondary"
+                              )}>
                                 {item.title}
                               </h4>
 
-                              <p className="text-xs text-text-tertiary line-clamp-3 leading-relaxed mt-auto">
+                              <p className="text-[11px] font-bold text-text-tertiary/70 line-clamp-3 leading-relaxed mt-auto">
                                 {item.content}
                               </p>
                             </div>
@@ -963,22 +976,28 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
       {/* 历史记录弹窗 */}
       {showHistory && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowHistory(false)}>
-          <div className="bg-surface-primary rounded-xl border border-border shadow-2xl w-full max-w-md max-h-[70vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-              <h3 className="font-semibold text-text-primary text-sm">灵感历史</h3>
-              <button onClick={() => setShowHistory(false)} className="text-text-tertiary hover:text-text-primary transition-colors">
-                <X className="w-4 h-4" />
-              </button>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-[6px] flex items-center justify-center z-[100] animate-in fade-in duration-300" onClick={() => setShowHistory(false)}>
+          <div className="bg-white rounded-[28px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] w-full max-w-lg max-h-[75vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-7 py-6 border-b border-black/[0.04] shrink-0">
+                <div>
+                    <h3 className="text-[17px] font-black text-text-primary tracking-tight">灵感历史</h3>
+                    <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mt-0.5">Wander Inspiration Vault</p>
+                </div>
+                <button onClick={() => setShowHistory(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
+                    <X className="w-4.5 h-4.5" />
+                </button>
             </div>
-            <div className="overflow-y-auto flex-1 p-2 space-y-1">
+            <div className="overflow-y-auto flex-1 p-3 space-y-1.5 custom-scrollbar">
               {historyList.length === 0 ? (
-                <div className="p-8 text-center text-text-tertiary text-xs">
-                  暂无历史记录
+                <div className="p-12 text-center">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.02] text-text-tertiary/20 mx-auto mb-4">
+                        <History className="w-8 h-8" />
+                    </div>
+                    <p className="text-[13px] font-bold text-text-tertiary/60">暂无漫步历史记录</p>
                 </div>
               ) : (
                 historyList.map(record => {
-                  let title = '未知选题';
+                  let title = '未命名选题';
                   try {
                     const parsed = JSON.parse(record.result);
                     title = parsed.topic?.title || title;
@@ -987,30 +1006,39 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                   return (
                     <div
                       key={record.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => loadHistory(record)}
                       className={clsx(
-                        "px-4 py-3 cursor-pointer rounded-lg transition-all flex items-center justify-between group",
-                        isActive ? "bg-brand-red/5" : "hover:bg-surface-secondary"
+                        "px-5 py-4 cursor-pointer rounded-2xl transition-all flex items-center justify-between group relative overflow-hidden",
+                        isActive 
+                            ? "bg-accent-primary/5 ring-1 ring-accent-primary/10" 
+                            : "hover:bg-black/[0.02] border border-transparent"
                       )}
                     >
                       <div className="flex-1 min-w-0">
-                        <div className={clsx("text-sm font-medium truncate mb-0.5", isActive ? "text-brand-red" : "text-text-primary")}>
+                        <div className={clsx("text-[14px] font-extrabold truncate mb-1 tracking-tight", isActive ? "text-accent-primary" : "text-text-primary")}>
                           {title}
                         </div>
-                        <div className="text-[10px] text-text-tertiary">
-                          {formatDate(record.created_at)}
+                        <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter flex items-center gap-2">
+                          <span>{formatDate(record.created_at)}</span>
+                          {isActive && <span className="w-1 h-1 rounded-full bg-accent-primary" />}
+                          {isActive && <span className="text-accent-primary font-black">CURRENT</span>}
                         </div>
                       </div>
                       <button
                         onClick={(e) => deleteHistory(record.id, e)}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-text-tertiary hover:text-red-500 hover:bg-red-50 rounded transition-all"
+                        className="opacity-0 group-hover:opacity-100 p-2 text-text-tertiary hover:text-red-500 hover:bg-red-50 rounded-xl transition-all active:scale-90"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   );
                 })
               )}
+            </div>
+            <div className="px-7 py-5 border-t border-black/[0.03] bg-black/[0.01]">
+                <p className="text-[9px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.2em]">Stored Locally in your Workspace</p>
             </div>
           </div>
         </div>

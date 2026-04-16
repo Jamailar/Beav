@@ -15,7 +15,11 @@ interface IndexingStatusData {
   };
 }
 
-export function IndexingStatus() {
+interface IndexingStatusProps {
+  compact?: boolean;
+}
+
+export function IndexingStatus({ compact = false }: IndexingStatusProps) {
   const [status, setStatus] = useState<IndexingStatusData | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -48,13 +52,21 @@ export function IndexingStatus() {
 
   if (!status) return null;
 
+  const statusLabel = status.isIndexing
+    ? `处理中... (剩余 ${status.activeItems.length + status.totalQueueLength} 个)`
+    : `已索引 ${status.totalStats.documents} 个文档`;
+
   return (
     <div className="relative">
       {/* Status Bar Item */}
       <button
         onClick={() => setShowDetails(!showDetails)}
+        title={statusLabel}
+        aria-label={statusLabel}
         className={clsx(
-          "flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-all w-full",
+          compact
+            ? 'h-10 w-10 rounded-xl inline-flex items-center justify-center transition-all'
+            : 'flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-all w-full',
           status.isIndexing
             ? "bg-accent-primary/10 text-accent-primary"
             : "text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary"
@@ -66,11 +78,11 @@ export function IndexingStatus() {
           <Database className="w-3.5 h-3.5" />
         )}
 
-        <span className="font-medium truncate flex-1 text-left">
-          {status.isIndexing
-            ? `处理中... (剩余 ${status.activeItems.length + status.totalQueueLength} 个)`
-            : `已索引 ${status.totalStats.documents} 个文档`}
-        </span>
+        {!compact && (
+          <span className="font-medium truncate flex-1 text-left">
+            {statusLabel}
+          </span>
+        )}
       </button>
 
       {/* Details Popover */}
@@ -80,7 +92,12 @@ export function IndexingStatus() {
             className="fixed inset-0 z-40"
             onClick={() => setShowDetails(false)}
           />
-          <div className="absolute bottom-full left-0 mb-2 w-72 bg-surface-primary border border-border rounded-xl shadow-xl z-50 p-0 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200 flex flex-col">
+          <div
+            className={clsx(
+              'absolute w-72 bg-surface-primary border border-border rounded-xl shadow-xl z-50 p-0 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200 flex flex-col',
+              compact ? 'bottom-0 left-full ml-2' : 'bottom-full left-0 mb-2'
+            )}
+          >
 
             {/* Header */}
             <div className="p-3 border-b border-border bg-surface-secondary/30 flex items-center justify-between">

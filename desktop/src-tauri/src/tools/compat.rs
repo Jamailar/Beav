@@ -7,6 +7,8 @@ pub struct NormalizedToolCall {
 
 pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall {
     match name {
+        "app_cli" => passthrough("app_cli", arguments),
+        "bash" => passthrough("bash", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
         "redbox_search_knowledge" => app_query("knowledge.search", arguments),

@@ -13,6 +13,7 @@ import {
     Grid2X2,
     Image as ImageIcon,
     ImagePlus,
+    Loader2,
     Plus,
     Play,
     RefreshCw,

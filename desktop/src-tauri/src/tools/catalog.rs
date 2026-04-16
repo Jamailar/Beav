@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
+    AppCli,
+    Bash,
     AppQuery,
     FileSystem,
     ProfileDoc,
@@ -26,6 +28,24 @@ pub struct ToolDescriptor {
 
 pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
     match name {
+        "app_cli" => Some(ToolDescriptor {
+            name: "app_cli",
+            description:
+                "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.",
+            kind: ToolKind::AppCli,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 20_000,
+        }),
+        "bash" => Some(ToolDescriptor {
+            name: "bash",
+            description:
+                "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands.",
+            kind: ToolKind::Bash,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 20_000,
+        }),
         "redbox_app_query" => Some(ToolDescriptor {
             name: "redbox_app_query",
             description:
@@ -91,6 +111,39 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
 
 pub fn schema_for_tool(name: &str) -> Option<Value> {
     match name {
+        "app_cli" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "app_cli",
+                "description": "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" },
+                        "payload": { "type": "object" }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "bash" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" },
+                        "cwd": { "type": "string" },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        })),
         "redbox_app_query" => Some(json!({
             "type": "function",
             "function": {

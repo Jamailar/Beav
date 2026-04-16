@@ -106,7 +106,7 @@ fn build_skill_catalog_prompt_section(
         return [
             "You have access to specialized skills in this runtime.",
             "Keep full skill bodies out of context until they are actually needed.",
-            "When a task clearly matches one of the skills below, call `redbox_skill(action=\"invoke\", name=\"skill-name\")` to load the full instructions, references, scripts, and rules into the current session.",
+            "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.",
             "If the user explicitly names a skill, invoke it before proceeding.",
             "",
             "Available skills:",
@@ -259,7 +259,9 @@ pub fn build_skill_runtime_state(
     let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
     let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
     let hooks = build_skill_hook_output(&active_skills);
-    let can_invoke_skill = base_tools.iter().any(|item| item == "redbox_skill");
+    let can_invoke_skill = base_tools
+        .iter()
+        .any(|item| item == "redbox_skill" || item == "app_cli");
     let catalog_section =
         build_skill_catalog_prompt_section(&catalog, runtime_mode, can_invoke_skill);
     SkillRuntimeState {
@@ -360,7 +362,7 @@ mod tests {
                 name: "redclaw-project".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/redclaw-project".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_app_query, redbox_fs]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, app_cli]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -369,7 +371,7 @@ mod tests {
                 name: "cover-builder".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_mcp]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [app_cli]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -378,7 +380,7 @@ mod tests {
                 name: "remotion-best-practices".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, app_cli, redbox_editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -392,16 +394,12 @@ mod tests {
             &skills(),
             "redclaw",
             None,
-            &[
-                "redbox_app_query".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_mcp".to_string(),
-            ],
+            &["bash".to_string(), "app_cli".to_string()],
         );
         assert_eq!(state.active_skills.len(), 1);
         assert_eq!(
             state.allowed_tools,
-            vec!["redbox_app_query".to_string(), "redbox_fs".to_string()]
+            vec!["bash".to_string(), "app_cli".to_string()]
         );
     }
 

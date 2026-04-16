@@ -458,7 +458,6 @@ function App() {
               <RedClawPage
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
-                onNavigateWorkboard={() => setCurrentView('workboard')}
                 isActive={currentView === 'redclaw'}
               />
             </Suspense>

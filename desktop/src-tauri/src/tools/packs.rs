@@ -36,43 +36,15 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
-        ToolPack::Wander => &["redbox_fs"],
-        ToolPack::Chatroom => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Knowledge => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Redclaw => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::BackgroundMaintenance => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_mcp",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Editor => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_editor",
-            "redbox_runtime_control",
-        ],
+        ToolPack::Wander => &["bash"],
+        ToolPack::Chatroom => &["bash", "app_cli"],
+        ToolPack::Knowledge => &["bash", "app_cli"],
+        ToolPack::Redclaw => &["bash", "app_cli"],
+        ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
+        ToolPack::Editor => &["bash", "app_cli", "redbox_editor"],
         ToolPack::Diagnostics => &[
+            "bash",
+            "app_cli",
             "redbox_app_query",
             "redbox_fs",
             "redbox_profile_doc",

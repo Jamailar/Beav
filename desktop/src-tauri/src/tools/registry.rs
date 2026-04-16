@@ -7,6 +7,8 @@ use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
+        crate::tools::catalog::ToolKind::AppCli => "app_cli",
+        crate::tools::catalog::ToolKind::Bash => "bash",
         crate::tools::catalog::ToolKind::AppQuery => "app_query",
         crate::tools::catalog::ToolKind::FileSystem => "file_system",
         crate::tools::catalog::ToolKind::ProfileDoc => "profile_doc",
@@ -14,6 +16,18 @@ fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
         crate::tools::catalog::ToolKind::Skill => "skill",
         crate::tools::catalog::ToolKind::RuntimeControl => "runtime_control",
         crate::tools::catalog::ToolKind::Editor => "editor",
+    }
+}
+
+fn normalize_requested_tool_name(name: &str) -> &str {
+    match name {
+        "redbox_app_query"
+        | "redbox_profile_doc"
+        | "redbox_skill"
+        | "redbox_runtime_control"
+        | "redbox_mcp" => "app_cli",
+        "redbox_fs" => "bash",
+        other => other,
     }
 }
 
@@ -34,6 +48,7 @@ pub fn base_tool_names_for_session_metadata(
                 .filter_map(Value::as_str)
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
+                .map(normalize_requested_tool_name)
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         })
@@ -41,10 +56,14 @@ pub fn base_tool_names_for_session_metadata(
     if requested.is_empty() {
         return base;
     }
-    requested
+    let filtered = requested
         .into_iter()
         .filter(|item| base.iter().any(|allowed| allowed == item))
-        .collect()
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        return base;
+    }
+    filtered
 }
 
 pub fn tool_names_for_session(
@@ -171,6 +190,8 @@ pub fn prompt_tool_lines_for_session(
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
     [
+        "bash",
+        "app_cli",
         "redbox_app_query",
         "redbox_fs",
         "redbox_profile_doc",

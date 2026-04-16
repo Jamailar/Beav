@@ -205,9 +205,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isSubtitleLoading, setIsSubtitleLoading] = useState(false);
     const [isRefreshingYoutubeSummaries, setIsRefreshingYoutubeSummaries] = useState(false);
+    const [isSelectedNoteVideoPlaying, setIsSelectedNoteVideoPlaying] = useState(false);
     const [embeddedViewportWidth, setEmbeddedViewportWidth] = useState(0);
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
+    const selectedNoteVideoRef = useRef<HTMLVideoElement>(null);
     const notesRef = useRef<Note[]>([]);
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
@@ -692,6 +694,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         });
     };
 
+    const getNoteCoverImage = (note: Note) => {
+        const orderedImages = orderImages(note.images || []);
+        return note.cover || orderedImages[0] || '';
+    };
+
     const knowledgeItems = useMemo<KnowledgeCardItem[]>(() => {
         const noteItems: KnowledgeCardItem[] = notes.map((note) => {
             const orderedImages = orderImages(note.images || []);
@@ -820,8 +827,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setSelectedImageIndex(0);
             setIsImagePreviewOpen(false);
             setShowTranscript(false);
+            setIsSelectedNoteVideoPlaying(false);
         }
     }, [selectedNote]);
+
+    useEffect(() => {
+        if (!isSelectedNoteVideoPlaying) return;
+        selectedNoteVideoRef.current?.play().catch(() => {});
+    }, [isSelectedNoteVideoPlaying]);
 
     useEffect(() => {
         if (selectedVideo) {
@@ -1215,10 +1228,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         )}
                         <button
                             onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded hover:bg-surface-hover transition-colors"
+                            className="inline-flex h-9 items-center gap-2 rounded-xl bg-amber-500 px-3.5 text-[12px] font-bold text-white shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-600 active:scale-95"
                             title="保存封面为模板"
                         >
-                            <BookmarkPlus className="w-3 h-3" />
+                            <BookmarkPlus className="w-3.5 h-3.5" />
                             存为封面模板
                         </button>
                         {selectedNote.video && !selectedNote.transcript && (
@@ -1243,19 +1256,43 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 
                 {selectedNote.video && (
                     <div className="relative mx-auto w-full mb-4">
-                        <div className="relative rounded-lg overflow-hidden border border-border bg-surface-secondary">
-                            <video
-                                src={resolveAssetUrl(selectedNote.video)}
-                                className="block w-full h-auto max-h-[300px] object-contain"
-                                controls
-                                playsInline
-                                preload="metadata"
-                            />
+                        <div className="flex justify-center">
+                        <div className="relative inline-flex max-w-full overflow-hidden rounded-lg border border-border bg-black">
+                            {isSelectedNoteVideoPlaying || !getNoteCoverImage(selectedNote) ? (
+                                <video
+                                    ref={selectedNoteVideoRef}
+                                    src={resolveAssetUrl(selectedNote.video)}
+                                    className="block max-h-[300px] w-auto max-w-full object-contain"
+                                    controls
+                                    autoPlay
+                                    playsInline
+                                    preload="metadata"
+                                />
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSelectedNoteVideoPlaying(true)}
+                                    className="group relative block h-full w-full"
+                                >
+                                    <img
+                                        src={resolveAssetUrl(getNoteCoverImage(selectedNote))}
+                                        alt={selectedNote.title}
+                                        className="block max-h-[300px] w-auto max-w-full object-contain"
+                                    />
+                                    <div className="absolute inset-0 bg-black/20 transition-all group-hover:bg-black/30" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-xl backdrop-blur-md transition-transform group-hover:scale-105">
+                                            <Play className="ml-1 h-7 w-7 fill-current" />
+                                        </div>
+                                    </div>
+                                </button>
+                            )}
+                        </div>
                         </div>
                     </div>
                 )}
 
-                {selectedNote.images && selectedNote.images.length > 0 && (() => {
+                {!selectedNote.video && selectedNote.images && selectedNote.images.length > 0 && (() => {
                    const orderedImages = orderImages(selectedNote.images);
                    const currentImage = orderedImages[selectedImageIndex];
                    return (
@@ -1972,6 +2009,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     <MessageCircle className="w-4 h-4" />
                                     对话
                                 </button>
+                                <button
+                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-amber-500 text-white text-[13px] font-extrabold shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all active:scale-95"
+                                >
+                                    <BookmarkPlus className="w-4 h-4" />
+                                    存为封面模板
+                                </button>
                                 {SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(selectedNote) && onNavigateToRedClaw && (
                                     <button
                                         onClick={() => handleExpandToWechat(selectedNote)}
@@ -1993,12 +2037,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         <div className="flex-1 overflow-y-auto px-8 py-8 space-y-8 custom-scrollbar bg-white">
                             <div className="flex flex-wrap items-center gap-2">
                                 <button
-                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
-                                >
-                                    <BookmarkPlus className="w-3.5 h-3.5" /> 存为封面模板
-                                </button>
-                                <button
                                     onClick={() => void handleShowInFolder(selectedNote.folderPath)}
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
                                 >
@@ -2018,19 +2056,43 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                             {selectedNote.video && (
                                 <div className="relative mx-auto w-full max-w-[640px]">
-                                    <div className="relative rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl aspect-video">
-                                        <video
-                                            src={resolveAssetUrl(selectedNote.video)}
-                                            className="w-full h-full object-contain"
-                                            controls
-                                            playsInline
-                                            preload="metadata"
-                                        />
+                                    <div className="flex justify-center">
+                                    <div className="relative inline-flex max-w-full rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl">
+                                        {isSelectedNoteVideoPlaying || !getNoteCoverImage(selectedNote) ? (
+                                            <video
+                                                ref={selectedNoteVideoRef}
+                                                src={resolveAssetUrl(selectedNote.video)}
+                                                className="block max-h-[60vh] w-auto max-w-full object-contain"
+                                                controls
+                                                autoPlay
+                                                playsInline
+                                                preload="metadata"
+                                            />
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsSelectedNoteVideoPlaying(true)}
+                                                className="group relative block h-full w-full"
+                                            >
+                                                <img
+                                                    src={resolveAssetUrl(getNoteCoverImage(selectedNote))}
+                                                    alt={selectedNote.title}
+                                                    className="block max-h-[60vh] w-auto max-w-full object-contain"
+                                                />
+                                                <div className="absolute inset-0 bg-black/20 transition-all group-hover:bg-black/35" />
+                                                <div className="absolute inset-0 flex items-center justify-center">
+                                                    <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-2xl backdrop-blur-md transition-transform duration-300 group-hover:scale-110">
+                                                        <Play className="ml-1 h-8 w-8 fill-current" />
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        )}
+                                    </div>
                                     </div>
                                 </div>
                             )}
 
-                            {!showRichArticle && selectedNote.images && selectedNote.images.length > 0 && (() => {
+                            {!showRichArticle && !selectedNote.video && selectedNote.images && selectedNote.images.length > 0 && (() => {
                                 const orderedImages = orderImages(selectedNote.images);
                                 return (
                                     <div className="relative group">

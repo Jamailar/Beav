@@ -134,6 +134,10 @@ select {
   backdrop-filter: saturate(1.05) blur(8px);
 }
 
+.app-sidebar-shell--animating {
+  backdrop-filter: none;
+}
+
 [data-theme='dark'] .app-sidebar-shell {
   background:
     linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.9) 100%);

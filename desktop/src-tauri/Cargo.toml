@@ -17,6 +17,7 @@ open = "5.3.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
+shell-words = "1.1.0"
 tauri = { version = "2.0.0", features = ["protocol-asset"] }
 
 [features]
