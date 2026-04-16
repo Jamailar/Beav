@@ -314,6 +314,15 @@ fn validate_tool_arguments(
                         return Err("slug is required for market_install".to_string());
                     }
                 }
+                "invoke" => {
+                    if payload_string(arguments, "name")
+                        .map(|value| value.trim().is_empty())
+                        .unwrap_or(true)
+                    {
+                        return Err("name is required for skill invoke".to_string());
+                    }
+                }
+                "preview_activation" => {}
                 "detect_protocol" | "test_connection" | "fetch_models" => {
                     let has_endpoint = payload_string(arguments, "baseURL")
                         .map(|value| !value.trim().is_empty())

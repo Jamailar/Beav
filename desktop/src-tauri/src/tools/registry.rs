@@ -1,9 +1,9 @@
 use serde_json::{json, Value};
 
-use crate::skills::build_skill_runtime_state;
+use crate::skills::{build_skill_runtime_state, SkillActivationContext};
 use crate::tools::catalog::{descriptor_by_name, schema_for_tool, ToolDescriptor};
 use crate::tools::packs::tool_names_for_runtime_mode;
-use crate::AppStore;
+use crate::{AppStore, SkillRecord};
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
@@ -52,16 +52,68 @@ pub fn tool_names_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Vec<String> {
+    tool_names_for_request(store, runtime_mode, session_id, None, None)
+}
+
+fn merge_metadata(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
+    match (base, overlay) {
+        (Some(Value::Object(mut base_map)), Some(Value::Object(overlay_map))) => {
+            for (key, value) in overlay_map {
+                base_map.insert(key, value);
+            }
+            Some(Value::Object(base_map))
+        }
+        (_, Some(overlay)) => Some(overlay),
+        (Some(base), None) => Some(base),
+        (None, None) => None,
+    }
+}
+
+pub fn tool_names_for_request(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
+) -> Vec<String> {
     let metadata = session_id.and_then(|id| {
         store
             .chat_sessions
             .iter()
             .find(|item| item.id == id)
-            .and_then(|item| item.metadata.as_ref())
+            .and_then(|item| item.metadata.clone())
     });
-    let base = base_tool_names_for_session_metadata(runtime_mode, metadata);
-    let skill_state = build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base);
+    let merged_metadata = merge_metadata(metadata, metadata_override.cloned());
+    let base = base_tool_names_for_session_metadata(runtime_mode, merged_metadata.as_ref());
+    let skill_state = build_skill_runtime_state(
+        &store.skills,
+        runtime_mode,
+        merged_metadata.as_ref(),
+        &base,
+        activation,
+    );
     skill_state.allowed_tools
+}
+
+pub fn tool_names_for_skill_records(
+    skills: &[SkillRecord],
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
+) -> Vec<String> {
+    let metadata = session_id.and_then(|id| {
+        store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == id)
+            .and_then(|item| item.metadata.clone())
+    });
+    let merged_metadata = merge_metadata(metadata, metadata_override.cloned());
+    let base = base_tool_names_for_session_metadata(runtime_mode, merged_metadata.as_ref());
+    build_skill_runtime_state(skills, runtime_mode, merged_metadata.as_ref(), &base, activation)
+        .allowed_tools
 }
 
 pub fn descriptors_for_runtime_mode(runtime_mode: &str) -> Vec<ToolDescriptor> {
@@ -119,10 +171,42 @@ pub fn openai_schemas_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Value {
-    let schemas = tool_names_for_session(store, runtime_mode, session_id)
+    openai_schemas_for_request(store, runtime_mode, session_id, None, None)
+}
+
+pub fn openai_schemas_for_request(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
+) -> Value {
+    let schemas = tool_names_for_request(store, runtime_mode, session_id, metadata_override, activation)
         .iter()
         .filter_map(|name| schema_for_tool(name))
         .collect::<Vec<_>>();
+    json!(schemas)
+}
+
+pub fn openai_schemas_for_skill_records(
+    skills: &[SkillRecord],
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
+) -> Value {
+    let schemas = tool_names_for_skill_records(
+        skills,
+        store,
+        runtime_mode,
+        session_id,
+        metadata_override,
+        activation,
+    )
+    .iter()
+    .filter_map(|name| schema_for_tool(name))
+    .collect::<Vec<_>>();
     json!(schemas)
 }
 

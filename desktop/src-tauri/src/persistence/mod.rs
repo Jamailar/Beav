@@ -127,7 +127,45 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
     ]
 }
 
+fn ensure_frontmatter_line(body: &str, key: &str, line: &str) -> String {
+    if body.contains(key) {
+        return body.to_string();
+    }
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---\n") else {
+        return body.to_string();
+    };
+    let Some((frontmatter, content)) = rest.split_once("\n---\n") else {
+        return body.to_string();
+    };
+    format!(
+        "---\n{}\n{}\n---\n{}",
+        frontmatter.trim_end(),
+        line,
+        content
+    )
+}
+
+fn migrate_builtin_skill_body(record: &mut SkillRecord) {
+    if !record.is_builtin.unwrap_or(false) {
+        return;
+    }
+    if record.name == "writing-style" {
+        record.body = ensure_frontmatter_line(
+            &record.body,
+            "autoActivateWhenIntents",
+            "autoActivateWhenIntents: [manuscript_creation]",
+        );
+    }
+    if record.name == "writing-style-creator" && record.body.contains("writing-style-base") {
+        record.body = record.body.replace("writing-style-base", "writing-style");
+    }
+}
+
 fn ensure_builtin_skills(store: &mut AppStore) {
+    for skill in store.skills.iter_mut() {
+        migrate_builtin_skill_body(skill);
+    }
     if !store.skills.iter().any(|item| item.name == "writing-style") {
         if let Some(legacy) = store
             .skills
@@ -141,6 +179,7 @@ fn ensure_builtin_skills(store: &mut AppStore) {
             legacy.source_scope = Some("builtin".to_string());
             legacy.is_builtin = Some(true);
             legacy.disabled = Some(false);
+            migrate_builtin_skill_body(legacy);
         }
     }
     store

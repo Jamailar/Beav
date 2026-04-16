@@ -13,8 +13,12 @@ pub fn execute_prepared_wander_turn(
 ) -> Result<SessionAgentTurnExecution, String> {
     let turn = PreparedSessionAgentTurn::wander(turn.clone());
     let request = turn.request_cloned();
-    let context =
-        resolve_chat_exchange_context(state, request.session_id.clone(), request.turn_kind)?;
+    let context = resolve_chat_exchange_context(
+        state,
+        request.session_id.clone(),
+        None,
+        request.turn_kind,
+    )?;
     let _ = update_chat_runtime_state(
         state,
         &context.working_session_id,

@@ -1190,6 +1190,19 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
+      createSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string; location?: string }>;
+      saveSkill: (payload: { location: string; content: string }) => Promise<{ success: boolean; error?: string; location?: string }>;
+      enableSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string }>;
+      disableSkill: (payload: { name: string }) => Promise<{ success: boolean; error?: string }>;
+      invokeSkill: (payload: { name: string; args?: string }) => Promise<SkillInvokeResult>;
+      previewSkillActivation: (payload: {
+        runtimeMode: string;
+        message?: string;
+        intent?: string;
+        args?: string;
+        metadata?: Record<string, unknown>;
+        touchedPaths?: string[];
+      }) => Promise<SkillActivationPreviewResult>;
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;
         runDirect: (toolName: string) => Promise<ToolDiagnosticRunResult>;
@@ -1727,6 +1740,94 @@ declare global {
     sourceScope?: string;
     isBuiltin?: boolean;
     disabled?: boolean;
+    metadata?: {
+      allowedRuntimeModes?: string[];
+      allowedToolPack?: string;
+      allowedTools?: string[];
+      blockedTools?: string[];
+      autoActivateWhenIntents?: string[];
+      autoActivateWhenContextTypes?: string[];
+      hookMode?: string;
+      autoActivate?: boolean;
+      promptPrefix?: string;
+      promptSuffix?: string;
+      contextNote?: string;
+      maxPromptChars?: number;
+      description?: string;
+      whenToUse?: string;
+      version?: string;
+      aliases?: string[];
+      argumentHint?: string;
+      argumentNames?: string[];
+      userInvocable?: boolean;
+      disableModelInvocation?: boolean;
+      model?: string;
+      effort?: string;
+      executionContext?: string;
+      agent?: string;
+      paths?: string[];
+      hooks?: Record<string, Array<{ matcher?: string; enabled?: boolean; hooks?: Array<{ type?: string; summary?: string; message?: string; once?: boolean; enabled?: boolean; payload?: unknown }> }>>;
+      shell?: string;
+      disabled?: boolean;
+    };
+    whenToUse?: string;
+    userInvocable?: boolean;
+    version?: string;
+    argumentHint?: string;
+    argumentNames?: string[];
+    executionContext?: string;
+    modelOverride?: string;
+    effortOverride?: string;
+    paths?: string[];
+    usage?: {
+      usageCount?: number;
+      lastUsedAt?: number | null;
+    };
+  }
+
+  interface SkillActivationPreviewResult {
+    success: boolean;
+    runtimeMode: string;
+    activeSkills: Array<{
+      name: string;
+      description?: string;
+      executionContext?: string;
+      modelOverride?: string;
+      effortOverride?: string;
+      paths?: string[];
+      whenToUse?: string;
+    }>;
+    allowedTools: string[];
+    modelOverride?: string | null;
+    effortOverride?: string | null;
+  }
+
+  interface SkillInvokeResult {
+    success: boolean;
+    skill?: {
+      name: string;
+      description?: string;
+      location?: string;
+      sourceScope?: string;
+      isBuiltin?: boolean;
+      disabled?: boolean;
+      metadata?: SkillDefinition['metadata'];
+    };
+    invocation?: {
+      args?: string;
+      renderedPrompt?: string;
+      executionContext?: string;
+      modelOverride?: string | null;
+      effortOverride?: string | null;
+      agent?: string | null;
+      allowedTools?: string[];
+      paths?: string[];
+      hooks?: SkillDefinition['metadata']['hooks'];
+      referencesIncluded?: boolean;
+      scriptsIncluded?: boolean;
+      ruleCount?: number;
+    };
+    error?: string;
   }
 
   interface ToolConfirmationDetails {

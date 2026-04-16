@@ -8,7 +8,8 @@ use crate::agent::{
 };
 use crate::persistence::with_store;
 use crate::redclaw_profile::load_redclaw_profile_prompt_bundle;
-use crate::skills::build_skill_runtime_state;
+use crate::skills::build_resolved_skill_runtime_state;
+use crate::skills::SkillActivationContext;
 use crate::tools::packs::{pack_for_runtime_mode, ToolPack};
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, prompt_tool_lines_for_tool_names,
@@ -89,6 +90,7 @@ fn assemble_section(
 fn collect_context_inputs(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
+    metadata_override: Option<&Value>,
 ) -> Result<ContextAssemblyInputs, String> {
     with_store(state, |store| {
         let metadata = session_id.and_then(|id| {
@@ -98,6 +100,7 @@ fn collect_context_inputs(
                 .find(|item| item.id == id)
                 .and_then(|item| item.metadata.clone())
         });
+        let metadata = merge_metadata(metadata, metadata_override.cloned());
         Ok(ContextAssemblyInputs {
             settings: store.settings.clone(),
             metadata,
@@ -105,6 +108,20 @@ fn collect_context_inputs(
             structured_memory_snapshot: build_prompt_memory_snapshot(&store, 2_000),
         })
     })
+}
+
+fn merge_metadata(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
+    match (base, overlay) {
+        (Some(Value::Object(mut base_map)), Some(Value::Object(overlay_map))) => {
+            for (key, value) in overlay_map {
+                base_map.insert(key, value);
+            }
+            Some(Value::Object(base_map))
+        }
+        (_, Some(overlay)) => Some(overlay),
+        (Some(base), None) => Some(base),
+        (None, None) => None,
+    }
 }
 
 fn build_identity_section(runtime_mode: &str) -> String {
@@ -342,14 +359,22 @@ pub fn build_runtime_context_bundle(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
 ) -> Result<ContextBundle, String> {
-    let inputs = collect_context_inputs(state, session_id)?;
+    let inputs = collect_context_inputs(state, session_id, metadata_override)?;
     let workspace_root_path = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root_value = workspace_root_path.display().to_string();
     let metadata_ref = inputs.metadata.as_ref();
     let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata_ref);
-    let skill_state =
-        build_skill_runtime_state(&inputs.skills, runtime_mode, metadata_ref, &base_tools);
+    let skill_state = build_resolved_skill_runtime_state(
+        &inputs.skills,
+        Some(&workspace_root_path),
+        runtime_mode,
+        metadata_ref,
+        &base_tools,
+        activation,
+    );
     let tool_lines = prompt_tool_lines_for_tool_names(&skill_state.allowed_tools);
     let pack = pack_for_runtime_mode(runtime_mode);
     let active_skill_names = skill_state

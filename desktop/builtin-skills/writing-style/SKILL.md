@@ -4,6 +4,7 @@ allowedTools: []
 blockedTools: []
 hookMode: inline
 autoActivate: true
+autoActivateWhenIntents: [manuscript_creation]
 contextNote: 这是系统自带且长期维护的唯一写作风格技能。只要当前任务涉及写作、改写、扩写、润色、复盘或风格沉淀，就必须先遵守它；非写作任务不要让它干扰其他决策。
 promptPrefix: 你当前必须遵守 writing-style。凡是涉及写作、改写、扩写、润色、复盘或风格沉淀的任务，都先按这份技能的风格底盘、禁区和自检流程执行。
 promptSuffix: 这不是一次性风格方案，而是当前空间长期使用的唯一写作风格技能。新的写作反馈、复盘结论和稳定观察，应优先写回这份技能，而不是另建平行技能。

@@ -64,6 +64,7 @@ pub fn build_runtime_query_turn<'a>(
     context_bundle_snapshot: Option<Value>,
     display_content: &str,
     model_config: Option<&'a Value>,
+    request_metadata: Option<Value>,
 ) -> PreparedRuntimeQueryTurn<'a> {
     let prepared = prepare_runtime_query_execution(route, orchestration, display_content);
     let route_value = prepared.route.clone().into_value();
@@ -72,6 +73,7 @@ pub fn build_runtime_query_turn<'a>(
         prepared.effective_message,
         display_content.to_string(),
         model_config,
+        request_metadata,
     );
     PreparedRuntimeQueryTurn {
         route: prepared.route,
@@ -144,6 +146,7 @@ mod tests {
             Some(json!({ "fingerprint": "abc" })),
             "help me",
             None,
+            None,
         );
 
         assert_eq!(turn.request.session_id.as_deref(), Some("session-1"));
@@ -173,6 +176,7 @@ mod tests {
             })),
             Some(json!({ "fingerprint": "abc" })),
             "help me",
+            None,
             None,
         );
         let bundle = build_runtime_query_checkpoint_bundle(&turn);

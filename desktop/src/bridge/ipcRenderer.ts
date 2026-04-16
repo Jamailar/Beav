@@ -385,6 +385,19 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
+    createSkill: (payload: { name: string }) => invokeChannel('skills:create', payload),
+    saveSkill: (payload: { location: string; content: string }) => invokeChannel('skills:save', payload),
+    enableSkill: (payload: { name: string }) => invokeChannel('skills:enable', payload),
+    disableSkill: (payload: { name: string }) => invokeChannel('skills:disable', payload),
+    invokeSkill: (payload: { name: string; args?: string }) => invokeChannel('skills:invoke', payload),
+    previewSkillActivation: (payload: {
+      runtimeMode: string;
+      message?: string;
+      intent?: string;
+      args?: string;
+      metadata?: Record<string, unknown>;
+      touchedPaths?: string[];
+    }) => invokeChannel('skills:preview-activation', payload),
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),
       runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),

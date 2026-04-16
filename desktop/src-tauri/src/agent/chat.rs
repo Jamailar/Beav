@@ -28,6 +28,7 @@ pub fn build_chat_send_turn<'a>(
     display_content: String,
     model_config: Option<&'a Value>,
     attachment: Option<Value>,
+    request_metadata: Option<Value>,
 ) -> PreparedChatSendTurn<'a> {
     let is_redclaw_session = session_id
         .as_deref()
@@ -40,6 +41,7 @@ pub fn build_chat_send_turn<'a>(
             display_content.clone(),
             model_config,
             attachment,
+            request_metadata,
         ),
         is_redclaw_session,
     }
@@ -142,6 +144,7 @@ mod tests {
             "hello display".to_string(),
             Some(&model_config),
             Some(json!({"kind": "file"})),
+            None,
         );
 
         assert!(turn.is_redclaw_session);
@@ -151,7 +154,8 @@ mod tests {
 
     #[test]
     fn build_chat_send_turn_defaults_non_redclaw_sessions() {
-        let turn = build_chat_send_turn(None, "hello".to_string(), "hello".to_string(), None, None);
+        let turn =
+            build_chat_send_turn(None, "hello".to_string(), "hello".to_string(), None, None, None);
         assert!(!turn.is_redclaw_session);
     }
 

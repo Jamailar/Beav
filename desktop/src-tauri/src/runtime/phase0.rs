@@ -8,8 +8,8 @@ use crate::scheduler::{
     derived_background_tasks, enqueue_runtime_task_job_execution, ensure_runtime_task_job_definition,
 };
 use crate::script_runtime::{script_runtime_feature_enabled, SCRIPT_RUNTIME_ELIGIBLE_MODES};
-use crate::skills::build_skill_runtime_state;
-use crate::tools::capabilities::resolve_capability_set_for_store;
+use crate::skills::build_resolved_skill_runtime_state;
+use crate::tools::capabilities::resolve_capability_set;
 use crate::tools::registry::base_tool_names_for_session_metadata;
 use crate::{
     commands::runtime_routing::route_runtime_intent_with_settings, memory_type_counts_value,
@@ -329,12 +329,17 @@ pub fn build_runtime_debug_summary(state: &State<'_, AppState>) -> Result<Value,
             continue;
         };
         let base_tools = base_tool_names_for_session_metadata(&entry.mode, None);
-        let skill_state = build_skill_runtime_state(&skills, &entry.mode, None, &base_tools);
+        let skill_state = build_resolved_skill_runtime_state(
+            &skills,
+            workspace.as_deref(),
+            &entry.mode,
+            None,
+            &base_tools,
+            None,
+        );
         let model_config = resolve_chat_config(&settings_only, entry.model_config.as_ref());
         let prompt_chars = entry.system_prompt.chars().count();
-        let capability_set = with_store(state, |store| {
-            Ok(resolve_capability_set_for_store(&store, &entry.mode, None))
-        })?;
+        let capability_set = resolve_capability_set(state, &entry.mode, None)?;
         let legacy_prompt_chars =
             legacy_interactive_runtime_system_prompt(state, &entry.mode, None)
                 .chars()

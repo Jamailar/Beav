@@ -5,11 +5,11 @@ use std::hash::{Hash, Hasher};
 use tauri::State;
 
 use crate::persistence::{with_store, with_store_mut};
-use crate::skills::build_skill_runtime_state;
+use crate::skills::{build_skill_runtime_state, resolve_skill_records};
 use crate::tools::catalog::{approval_level_max, ApprovalLevel, ToolDescriptor};
 use crate::tools::packs::tool_names_for_runtime_mode;
 use crate::tools::registry::base_tool_names_for_session_metadata;
-use crate::{make_id, now_i64, now_iso, payload_field, payload_string, AppState, AppStore};
+use crate::{make_id, now_i64, now_iso, payload_field, payload_string, workspace_root, AppState, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -382,7 +382,8 @@ pub fn resolve_capability_set_for_store(
 ) -> CapabilitySet {
     let metadata = metadata_for_session(store, session_id);
     let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
-    let skill_state = build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
+    let skill_state =
+        build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools, None);
     let entry_kind = resolve_entry_kind(runtime_mode, metadata);
     let original_allowed_tools = skill_state.allowed_tools.clone();
     let mut allowed_tools = unique_sorted(skill_state.allowed_tools);
@@ -433,12 +434,63 @@ pub fn resolve_capability_set(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Result<CapabilitySet, String> {
+    let workspace = workspace_root(state).ok();
     with_store(state, |store| {
-        Ok(resolve_capability_set_for_store(
-            &store,
+        let resolved_skills = resolve_skill_records(&store.skills, workspace.as_deref());
+        let metadata = metadata_for_session(&store, session_id);
+        let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
+        let skill_state = build_skill_runtime_state(
+            &resolved_skills,
             runtime_mode,
-            session_id,
-        ))
+            metadata,
+            &base_tools,
+            None,
+        );
+        let entry_kind = resolve_entry_kind(runtime_mode, metadata);
+        let original_allowed_tools = skill_state.allowed_tools.clone();
+        let mut allowed_tools = unique_sorted(skill_state.allowed_tools);
+        let entry_kind_for_set = resolve_entry_kind(runtime_mode, metadata);
+        let mut blocked_tools = tool_names_for_runtime_mode(runtime_mode)
+            .iter()
+            .filter(|item| !allowed_tools.iter().any(|allowed| allowed == **item))
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>();
+        if matches!(
+            entry_kind,
+            CapabilityEntryKind::Subagent | CapabilityEntryKind::BackgroundTask
+        ) {
+            for blocked in ["redbox_profile_doc", "redbox_skill"] {
+                if allowed_tools.iter().any(|item| item == blocked) {
+                    allowed_tools.retain(|item| item != blocked);
+                    blocked_tools.push(blocked.to_string());
+                }
+            }
+        }
+        let approval_policy = approval_policy_for_entry(&entry_kind, &allowed_tools);
+        let mcp_scope = mcp_scope_for_entry(&store, &entry_kind);
+        let network_scope = network_scope_for_entry(&entry_kind_for_set, &allowed_tools);
+        let mut set = CapabilitySet {
+            fingerprint: String::new(),
+            runtime_mode: runtime_mode.to_string(),
+            entry_kind,
+            active_skills: unique_sorted(
+                skill_state
+                    .active_skills
+                    .iter()
+                    .map(|item| item.name.clone())
+                    .collect(),
+            ),
+            allowed_tools,
+            blocked_tools: unique_sorted(blocked_tools),
+            approval_policy,
+            write_scope: write_scope_for_runtime_mode(runtime_mode, &entry_kind_for_set),
+            network_scope,
+            mcp_scope,
+            memory_write_policy: memory_write_policy_for_entry(&entry_kind_for_set),
+        };
+        let _ = original_allowed_tools;
+        set.fingerprint = fingerprint_capability_set(&set);
+        Ok(set)
     })
 }
 

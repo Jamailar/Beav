@@ -83,6 +83,7 @@ pub fn persist_chat_exchange(
                 "displayContent": display_content,
                 "attachment": attachment,
                 "runtimeMode": runtime_mode.clone(),
+                "requestMetadata": context.request_metadata.clone(),
             })),
         );
         append_session_transcript(
@@ -98,7 +99,11 @@ pub fn persist_chat_exchange(
             &final_session_id,
             turn_kind.checkpoint_type(),
             checkpoint_summary,
-            Some(exchange_checkpoint_payload(response, &runtime_mode)),
+            Some(exchange_checkpoint_payload(
+                response,
+                &runtime_mode,
+                context.request_metadata.as_ref(),
+            )),
         );
         let _ = update_session_context_record(store, &final_session_id, "auto", false);
         bundle_messages_snapshot = chat_messages_for_session(store, &final_session_id)
@@ -164,10 +169,15 @@ pub fn update_post_exchange_maintenance(
     })
 }
 
-fn exchange_checkpoint_payload(response: &str, runtime_mode: &str) -> Value {
+fn exchange_checkpoint_payload(
+    response: &str,
+    runtime_mode: &str,
+    request_metadata: Option<&Value>,
+) -> Value {
     json!({
         "responsePreview": response.chars().take(80).collect::<String>(),
         "runtimeMode": runtime_mode,
+        "requestMetadata": request_metadata.cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -214,7 +224,7 @@ mod tests {
 
     #[test]
     fn exchange_checkpoint_payload_truncates_preview_and_keeps_runtime_mode() {
-        let payload = exchange_checkpoint_payload(&"a".repeat(120), "chatroom");
+        let payload = exchange_checkpoint_payload(&"a".repeat(120), "chatroom", None);
         assert_eq!(
             payload
                 .get("responsePreview")

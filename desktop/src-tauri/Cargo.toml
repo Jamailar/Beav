@@ -12,9 +12,11 @@ tauri-build = { version = "2.0.0", features = [] }
 arboard = "3.4.1"
 base64 = "0.22.1"
 dirs = "5.0.1"
+glob = "0.3.1"
 open = "5.3.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 tauri = { version = "2.0.0", features = ["protocol-asset"] }
 
 [features]

@@ -775,7 +775,7 @@ fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Re
             system_prompt: interactive_runtime_system_prompt(state, mode, None),
             context_bundle_summary:
                 crate::interactive_runtime_shared::interactive_runtime_context_snapshot(
-                    state, mode, None,
+                    state, mode, None, None, None,
                 ),
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
@@ -2371,6 +2371,31 @@ fn interactive_runtime_system_prompt(
     interactive_runtime_shared::interactive_runtime_system_prompt(state, runtime_mode, session_id)
 }
 
+fn interactive_runtime_request_system_prompt(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    request_metadata: Option<&Value>,
+    message: &str,
+) -> String {
+    let activation = crate::skills::SkillActivationContext {
+        current_message: Some(message.to_string()),
+        intent: request_metadata
+            .and_then(|value| value.get("intent"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        touched_paths: Vec::new(),
+        args: None,
+    };
+    interactive_runtime_shared::interactive_runtime_request_system_prompt(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        Some(&activation),
+    )
+}
+
 fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
     interactive_runtime_shared::parse_usize_arg(arguments, key, default, max)
 }
@@ -2402,8 +2427,16 @@ fn interactive_runtime_tools_for_mode(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    request_metadata: Option<&Value>,
+    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Value {
-    interactive_runtime_shared::interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
+    interactive_runtime_shared::interactive_runtime_tools_for_mode(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        activation,
+    )
 }
 
 fn resolve_editor_tool_file_path(
@@ -3333,6 +3366,24 @@ fn execute_interactive_tool_call(
                     "skills:market-install",
                     json!({ "slug": payload_string(arguments, "slug").unwrap_or_default() }),
                 ),
+                "invoke" => call_skill_channel(
+                    "skills:invoke",
+                    json!({
+                        "name": payload_string(arguments, "name").unwrap_or_default(),
+                        "args": payload_string(arguments, "args"),
+                    }),
+                ),
+                "preview_activation" => call_skill_channel(
+                    "skills:preview-activation",
+                    json!({
+                        "runtimeMode": payload_string(arguments, "runtimeMode").unwrap_or_else(|| "default".to_string()),
+                        "message": payload_string(arguments, "message"),
+                        "intent": payload_string(arguments, "intent"),
+                        "args": payload_string(arguments, "args"),
+                        "metadata": payload_field(arguments, "metadata").cloned().unwrap_or(Value::Null),
+                        "touchedPaths": payload_field(arguments, "touchedPaths").cloned().unwrap_or_else(|| json!([])),
+                    }),
+                ),
                 "ai_roles_list" => call_skill_channel("ai:roles:list", json!({})),
                 "detect_protocol" => call_skill_channel(
                     "ai:detect-protocol",
@@ -3882,8 +3933,15 @@ fn interactive_runtime_message_bundle(
     session_id: Option<&str>,
     runtime_mode: &str,
     message: &str,
+    request_metadata: Option<&Value>,
 ) -> Result<(String, Vec<Value>, Vec<Value>), String> {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
+    let mut system_prompt = interactive_runtime_request_system_prompt(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        message,
+    );
     system_prompt.push_str(&editor_session_prompt_context(
         state,
         session_id,
@@ -4151,8 +4209,10 @@ fn anthropic_tools_for_session(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    request_metadata: Option<&Value>,
+    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Vec<Value> {
-    interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
+    interactive_runtime_tools_for_mode(state, runtime_mode, session_id, request_metadata, activation)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -4176,8 +4236,16 @@ fn gemini_tools_for_session(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    request_metadata: Option<&Value>,
+    activation: Option<&crate::skills::SkillActivationContext>,
 ) -> Vec<Value> {
-    let declarations = interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
+    let declarations = interactive_runtime_tools_for_mode(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        activation,
+    )
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -4458,13 +4526,35 @@ fn run_anthropic_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
+    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
+    let activation = crate::skills::SkillActivationContext {
+        current_message: Some(message.to_string()),
+        intent: request_metadata
+            .and_then(|value| value.get("intent"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        touched_paths: Vec::new(),
+        args: None,
+    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+        interactive_runtime_message_bundle(
+            state,
+            session_id,
+            runtime_mode,
+            message,
+            request_metadata,
+        )?;
     let mut messages = canonical_messages_to_anthropic_messages(&prompt_messages);
-    let tools = anthropic_tools_for_session(state, runtime_mode, session_id);
+    let tools = anthropic_tools_for_session(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        Some(&activation),
+    );
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -4966,13 +5056,35 @@ fn run_gemini_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
+    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
+    let activation = crate::skills::SkillActivationContext {
+        current_message: Some(message.to_string()),
+        intent: request_metadata
+            .and_then(|value| value.get("intent"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        touched_paths: Vec::new(),
+        args: None,
+    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+        interactive_runtime_message_bundle(
+            state,
+            session_id,
+            runtime_mode,
+            message,
+            request_metadata,
+        )?;
     let mut contents = canonical_messages_to_gemini_contents(&prompt_messages);
-    let tools = gemini_tools_for_session(state, runtime_mode, session_id);
+    let tools = gemini_tools_for_session(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        Some(&activation),
+    );
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -5432,9 +5544,25 @@ fn run_openai_interactive_chat_runtime(
     config: &ResolvedChatConfig,
     message: &str,
     runtime_mode: &str,
+    request_metadata: Option<&Value>,
 ) -> Result<String, String> {
+    let activation = crate::skills::SkillActivationContext {
+        current_message: Some(message.to_string()),
+        intent: request_metadata
+            .and_then(|value| value.get("intent"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        touched_paths: Vec::new(),
+        args: None,
+    };
     let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+        interactive_runtime_message_bundle(
+            state,
+            session_id,
+            runtime_mode,
+            message,
+            request_metadata,
+        )?;
     let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
     messages.insert(
         0,
@@ -5445,6 +5573,13 @@ fn run_openai_interactive_chat_runtime(
     );
 
     let is_wander = runtime_mode == "wander";
+    let tools = interactive_runtime_tools_for_mode(
+        state,
+        runtime_mode,
+        session_id,
+        request_metadata,
+        Some(&activation),
+    );
     let max_turns = if is_wander { 2 } else { 6 };
     let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
     let disable_qwen_thinking =
@@ -5480,7 +5615,7 @@ fn run_openai_interactive_chat_runtime(
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tools": interactive_runtime_tools_for_mode(state, runtime_mode, session_id),
+            "tools": tools.clone(),
             "tool_choice": if is_wander && turn == 0 { "required" } else { "auto" },
             "stream": !is_wander
         });

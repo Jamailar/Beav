@@ -188,7 +188,7 @@ fn agent_job_attached_skills(
     metadata: Option<&Value>,
 ) -> Vec<String> {
     let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
-    build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools)
+    build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools, None)
         .active_skills
         .into_iter()
         .map(|skill| skill.name)

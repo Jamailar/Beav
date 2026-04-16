@@ -254,12 +254,18 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list", "create", "save", "enable", "disable", "market_install", "ai_roles_list", "detect_protocol", "test_connection", "fetch_models"]
+                            "enum": ["list", "create", "save", "enable", "disable", "market_install", "invoke", "preview_activation", "ai_roles_list", "detect_protocol", "test_connection", "fetch_models"]
                         },
                         "name": { "type": "string" },
                         "location": { "type": "string" },
                         "content": { "type": "string" },
                         "slug": { "type": "string" },
+                        "args": { "type": "string" },
+                        "runtimeMode": { "type": "string" },
+                        "message": { "type": "string" },
+                        "intent": { "type": "string" },
+                        "metadata": { "type": "object" },
+                        "touchedPaths": { "type": "array", "items": { "type": "string" } },
                         "baseURL": { "type": "string" },
                         "apiKey": { "type": "string" },
                         "presetId": { "type": "string" },

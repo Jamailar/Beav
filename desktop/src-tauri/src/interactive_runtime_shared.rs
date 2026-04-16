@@ -9,8 +9,12 @@ use crate::agent::{
 };
 use crate::persistence::with_store;
 use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
+use crate::skills::{resolve_skill_records, SkillActivationContext};
 use crate::tools::capabilities::resolve_capability_set_value;
-use crate::tools::registry::{openai_schemas_for_runtime_mode, openai_schemas_for_session};
+use crate::tools::registry::{
+    openai_schemas_for_runtime_mode, openai_schemas_for_session,
+    openai_schemas_for_skill_records,
+};
 use crate::{lexbox_project_root, workspace_root, AppState};
 
 pub(crate) fn legacy_interactive_runtime_system_prompt(
@@ -58,7 +62,26 @@ pub(crate) fn interactive_runtime_system_prompt(
     if !runtime_context_bundle_enabled(&settings_snapshot) {
         return legacy_interactive_runtime_system_prompt(state, runtime_mode, session_id);
     }
-    build_runtime_context_bundle(state, runtime_mode, session_id)
+    build_runtime_context_bundle(state, runtime_mode, session_id, None, None)
+        .map(|bundle| render_runtime_context_bundle_prompt(&bundle))
+        .unwrap_or_else(|_| {
+            legacy_interactive_runtime_system_prompt(state, runtime_mode, session_id)
+        })
+}
+
+pub(crate) fn interactive_runtime_request_system_prompt(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
+) -> String {
+    let settings_snapshot =
+        with_store(state, |store| Ok(store.settings.clone())).unwrap_or_default();
+    if !runtime_context_bundle_enabled(&settings_snapshot) {
+        return legacy_interactive_runtime_system_prompt(state, runtime_mode, session_id);
+    }
+    build_runtime_context_bundle(state, runtime_mode, session_id, metadata_override, activation)
         .map(|bundle| render_runtime_context_bundle_prompt(&bundle))
         .unwrap_or_else(|_| {
             legacy_interactive_runtime_system_prompt(state, runtime_mode, session_id)
@@ -69,12 +92,14 @@ pub(crate) fn interactive_runtime_context_snapshot(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
 ) -> Option<Value> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone())).ok()?;
     if !runtime_context_bundle_enabled(&settings_snapshot) {
         return None;
     }
-    build_runtime_context_bundle(state, runtime_mode, session_id)
+    build_runtime_context_bundle(state, runtime_mode, session_id, metadata_override, activation)
         .ok()
         .map(|bundle| {
             let mut payload = context_bundle_checkpoint_payload(&bundle);
@@ -210,9 +235,24 @@ pub(crate) fn interactive_runtime_tools_for_mode(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    metadata_override: Option<&Value>,
+    activation: Option<&SkillActivationContext>,
 ) -> Value {
+    let workspace = workspace_root(state).ok();
     with_store(state, |store| {
-        Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
+        Ok(if metadata_override.is_some() || activation.is_some() {
+            let resolved_skills = resolve_skill_records(&store.skills, workspace.as_deref());
+            openai_schemas_for_skill_records(
+                &resolved_skills,
+                &store,
+                runtime_mode,
+                session_id,
+                metadata_override,
+                activation,
+            )
+        } else {
+            openai_schemas_for_session(&store, runtime_mode, session_id)
+        })
     })
     .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
 }

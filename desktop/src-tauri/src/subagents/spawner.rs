@@ -726,6 +726,7 @@ fn execute_subagent_config(
         None,
         &child_prompt,
         config.model_config.as_ref(),
+        None,
     ));
     emit_runtime_task_node_changed(
         &app,
