@@ -2871,8 +2871,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
             {activeTab === 'remote' && (
               <RemoteConnectionSettingsSection
-                formData={formData}
-                setFormData={setFormData}
                 assistantDaemonStatus={assistantDaemonStatus}
                 assistantDaemonDraft={assistantDaemonDraft}
                 setAssistantDaemonDraft={setAssistantDaemonDraft}
@@ -3615,15 +3613,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         <button
                           type="button"
                           onClick={() => setFormData((d) => ({ ...d, wander_deep_think_enabled: !d.wander_deep_think_enabled }))}
-                          className="ui-switch-track w-11 h-6 shrink-0 mt-0.5"
+                          className="ui-switch-track shrink-0 mt-0.5"
+                          data-size="md"
                           data-state={formData.wander_deep_think_enabled ? 'on' : 'off'}
                         >
-                          <div
-                            className={clsx(
-                              'ui-switch-thumb top-1 w-4 h-4',
-                              formData.wander_deep_think_enabled ? 'translate-x-6' : 'translate-x-1'
-                            )}
-                          />
+                          <div className="ui-switch-thumb" />
                         </button>
                       </div>
                     </div>

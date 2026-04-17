@@ -101,18 +101,43 @@ fn build_skill_catalog_prompt_section(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let available_names = available
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<Vec<_>>();
+    let mut preflight_rules = Vec::<&str>::new();
+    if available_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("image-prompt-optimizer"))
+    {
+        preflight_rules.push(
+            "Before any `app_cli(command=\"image generate ...\")`, you must first call `app_cli(command=\"skills invoke --name image-prompt-optimizer\")` in the same turn, then use that skill's instructions to prepare the final image prompt.",
+        );
+    }
+    if available_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("redbox-video-director"))
+    {
+        preflight_rules.push(
+            "Before any `app_cli(command=\"video generate ...\")`, you must first call `app_cli(command=\"skills invoke --name redbox-video-director\")` in the same turn, then follow its script-confirmation workflow before generating video.",
+        );
+    }
 
     if can_invoke_skill {
-        return [
-            "You have access to specialized skills in this runtime.",
-            "Keep full skill bodies out of context until they are actually needed.",
-            "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.",
-            "If the user explicitly names a skill, invoke it before proceeding.",
-            "",
-            "Available skills:",
-            &list,
-        ]
-        .join("\n");
+        let mut sections = vec![
+            "You have access to specialized skills in this runtime.".to_string(),
+            "Keep full skill bodies out of context until they are actually needed.".to_string(),
+            "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
+            "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
+        ];
+        if !preflight_rules.is_empty() {
+            sections.push("Mandatory preflight rules:".to_string());
+            sections.extend(preflight_rules.into_iter().map(ToString::to_string));
+        }
+        sections.push(String::new());
+        sections.push("Available skills:".to_string());
+        sections.push(list);
+        return sections.join("\n");
     }
 
     [
@@ -420,7 +445,7 @@ mod tests {
         assert_eq!(state.allowed_tools, Vec::<String>::new());
         assert!(state
             .skills_section
-            .contains("redbox_skill(action=\"invoke\""));
+            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
 
@@ -492,7 +517,7 @@ mod tests {
         );
         assert!(!state
             .skills_section
-            .contains("redbox_skill(action=\"invoke\""));
+            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
         assert!(state.skills_section.contains("writing-style [inline]"));
     }
 
@@ -514,5 +539,33 @@ mod tests {
         );
         assert!(state.active_skills.is_empty());
         assert!(!state.skills_section.contains("writing-style [forked]"));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_lists_turn_scoped_image_skill_in_chatroom_catalog() {
+        let state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "image-prompt-optimizer".to_string(),
+                description: "image desc".to_string(),
+                location: "redbox://skills/image-prompt-optimizer".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "chatroom",
+            None,
+            &["app_cli".to_string()],
+        );
+        assert!(state.active_skills.is_empty());
+        assert!(state
+            .skills_section
+            .contains("image-prompt-optimizer: image desc"));
+        assert!(state
+            .skills_section
+            .contains("Before any `app_cli(command=\"image generate ...\")`"));
+        assert!(state
+            .skills_section
+            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
     }
 }

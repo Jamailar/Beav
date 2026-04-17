@@ -6,6 +6,10 @@ interface ThinkingBubbleProps {
     isActive?: boolean;
 }
 
+interface ThinkingIndicatorProps {
+    label?: string;
+}
+
 export function ThinkingBubble({ content, isActive = true }: ThinkingBubbleProps) {
     return (
         <div className={clsx(
@@ -17,6 +21,19 @@ export function ThinkingBubble({ content, isActive = true }: ThinkingBubbleProps
             <p className="text-sm text-text-secondary leading-relaxed whitespace-pre-wrap break-words">
                 {content}
             </p>
+        </div>
+    );
+}
+
+export function ThinkingIndicator({ label = '正在思考' }: ThinkingIndicatorProps) {
+    return (
+        <div className="chat-thinking-indicator" role="status" aria-live="polite" aria-label={label}>
+            <span className="chat-thinking-indicator__text">{label}</span>
+            <span className="chat-thinking-indicator__dots" aria-hidden="true">
+                <span className="chat-thinking-indicator__dot" />
+                <span className="chat-thinking-indicator__dot" />
+                <span className="chat-thinking-indicator__dot" />
+            </span>
         </div>
     );
 }

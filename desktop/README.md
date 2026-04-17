@@ -1,13 +1,13 @@
-# LexBox
+# RedBox
 
-`LexBox/` 是 RedConvert 桌面端迁移到 Tauri v2 + Rust 宿主的独立工作区。
+`RedBox/` 是 RedConvert 桌面端迁移到 Tauri v2 + Rust 宿主的独立工作区。
 
 ## Boundaries
 
-- 只在 `LexBox/` 内开发、运行和构建。
-- `desktop/` 只作为只读参考源，不参与 `LexBox` 运行时与构建。
-- 前端源码在 `LexBox/src/` 独立维护。
-- 宿主源码在 `LexBox/src-tauri/` 独立维护。
+- 只在 `RedBox/` 内开发、运行和构建。
+- `desktop/` 只作为只读参考源，不参与 `RedBox` 运行时与构建。
+- 前端源码在 `RedBox/src/` 独立维护。
+- 宿主源码在 `RedBox/src-tauri/` 独立维护。
 - 前端兼容面仍暴露 `window.ipcRenderer`，内部统一路由到 Tauri command/event。
 
 ## Commands
@@ -23,7 +23,7 @@
 - 前端 IPC channel 已全量有 Rust host 路由。
 - Tauri debug build 已通过。
 - macOS `.app` bundle 已启用。
-- `LexBox/src-tauri/src/main.rs` 目前承载 Rust host 内核：
+- `RedBox/src-tauri/src/main.rs` 目前承载 Rust host 内核：
   - app / settings / spaces / subjects
   - manuscripts / media / cover / knowledge
   - chat / runtime / sessions / tasks / background
@@ -53,4 +53,4 @@
 
 当前调试产物：
 
-- `LexBox/src-tauri/target/debug/lexbox`
+- `RedBox/src-tauri/target/debug/redbox`

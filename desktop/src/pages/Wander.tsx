@@ -28,9 +28,10 @@ interface WanderResult {
 
 interface WanderHistoryRecord {
   id: string;
-  items: string;
-  result: string;
-  created_at: number;
+  items: string | WanderItem[] | unknown;
+  result: string | WanderResult | Record<string, unknown> | unknown;
+  created_at?: number;
+  createdAt?: number;
 }
 
 interface WanderProgressCard {
@@ -225,6 +226,126 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
   }
 
+  function normalizeWanderConnections(raw: unknown): number[] {
+    if (!Array.isArray(raw)) {
+      return [1];
+    }
+    const normalized = raw
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item))
+      .map((item) => Math.max(1, Math.min(3, item)));
+    const deduped = Array.from(new Set(normalized));
+    return deduped.length > 0 ? deduped : [1];
+  }
+
+  function normalizeWanderOption(raw: unknown) {
+    const payload = raw && typeof raw === 'object'
+      ? raw as Record<string, unknown>
+      : {};
+    const topicPayload = payload.topic && typeof payload.topic === 'object'
+      ? payload.topic as Record<string, unknown>
+      : {};
+    const title = String(
+      topicPayload.title
+      || payload.title
+      || '未命名选题'
+    ).trim() || '未命名选题';
+    const contentDirection = String(
+      payload.content_direction
+      || payload.direction
+      || payload.contentDirection
+      || ''
+    ).trim();
+    return {
+      content_direction: contentDirection,
+      topic: {
+        title,
+        connections: normalizeWanderConnections(topicPayload.connections ?? payload.connections),
+      },
+    };
+  }
+
+  function normalizeWanderItemsPayload(raw: unknown): WanderItem[] {
+    const parsed = Array.isArray(raw)
+      ? raw
+      : (typeof raw === 'string' ? parseJsonPayload<unknown>(raw) : null);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((item): WanderItem | null => {
+        const payload = item && typeof item === 'object'
+          ? item as Record<string, unknown>
+          : null;
+        if (!payload) return null;
+        const type = payload.type === 'video' ? 'video' : 'note';
+        return {
+          id: String(payload.id || ''),
+          type,
+          title: String(payload.title || '').trim(),
+          content: String(payload.content || '').trim(),
+          cover: typeof payload.cover === 'string' ? payload.cover : undefined,
+          meta: payload.meta && typeof payload.meta === 'object'
+            ? payload.meta as Record<string, unknown>
+            : undefined,
+        };
+      })
+      .filter((item): item is WanderItem => Boolean(item?.id));
+  }
+
+  function normalizeWanderResultPayload(raw: unknown): WanderResult | null {
+    const parsed = typeof raw === 'string'
+      ? parseJsonPayload<unknown>(raw)
+      : raw;
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    const payload = parsed as Record<string, unknown>;
+    const rawOptions = Array.isArray(payload.options)
+      ? payload.options
+      : (Array.isArray(payload.choices) ? payload.choices : []);
+    const normalizedOptions = rawOptions.map((option) => normalizeWanderOption(option));
+    const primary = (payload.topic || payload.content_direction || payload.direction || payload.contentDirection || payload.title)
+      ? normalizeWanderOption(payload)
+      : (normalizedOptions[0] || null);
+    if (!primary) {
+      return null;
+    }
+
+    const thinkingProcessRaw = Array.isArray(payload.thinking_process)
+      ? payload.thinking_process
+      : (Array.isArray(payload.thinkingProcess) ? payload.thinkingProcess : []);
+    return repairWanderResult({
+      content_direction: primary.content_direction,
+      thinking_process: thinkingProcessRaw.map((item) => String(item || '').trim()).filter(Boolean),
+      topic: primary.topic,
+      options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
+      selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
+        ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
+        : 0,
+    });
+  }
+
+  function resolveSelectedOptionIndex(result: WanderResult | null): number {
+    const rawIndex = Number(result?.selected_index);
+    const normalizedIndex = Number.isFinite(rawIndex) ? Math.max(0, rawIndex) : 0;
+    const maxIndex = Math.max(0, (result?.options?.length || 1) - 1);
+    return Math.min(normalizedIndex, maxIndex);
+  }
+
+  function getHistoryCreatedAt(record: WanderHistoryRecord): number {
+    const timestamp = Number(record.createdAt ?? record.created_at);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  function getHistoryTitle(record: WanderHistoryRecord): string {
+    const parsed = normalizeWanderResultPayload(record.result);
+    return parsed?.options?.[resolveSelectedOptionIndex(parsed)]?.topic.title
+      || parsed?.topic?.title
+      || '未命名选题';
+  }
+
   const buildKnowledgeFolderReference = (item: WanderItem) => {
     const meta = (item.meta || {}) as Record<string, unknown>;
     if (meta.sourceType === 'document') {
@@ -368,13 +489,20 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   // 加载单条历史记录
   const loadHistory = (record: WanderHistoryRecord) => {
     try {
-      const parsedItems = JSON.parse(record.items) as WanderItem[];
-      const parsedRes = repairWanderResult(JSON.parse(record.result) as WanderResult);
+      const parsedItems = normalizeWanderItemsPayload(record.items);
+      const parsedRes = normalizeWanderResultPayload(record.result);
+      if (!parsedRes) {
+        setParsedResult(null);
+        setParseError('历史结果解析失败');
+        setPhase('done');
+        setShowFinal(true);
+        setCurrentHistoryId(record.id);
+        setShowHistory(false);
+        return;
+      }
       setItems(parsedItems);
       setParsedResult(parsedRes);
-      setSelectedOptionIndex(
-        Number.isFinite(Number(parsedRes.selected_index)) ? Math.max(0, Number(parsedRes.selected_index)) : 0
-      );
+      setSelectedOptionIndex(resolveSelectedOptionIndex(parsedRes));
       setParseError(null);
       setPhase('done');
       setShowFinal(true);
@@ -506,13 +634,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
           ? data.result.trim()
           : '';
         const historyId = String(data.historyId || '').trim();
-        const parsed = parseJsonPayload<WanderResult>(resultText);
-        if (parsed && parsed.topic) {
-          const repaired = repairWanderResult(parsed);
-          setParsedResult(repaired);
-          setSelectedOptionIndex(
-            Number.isFinite(Number(repaired.selected_index)) ? Math.max(0, Number(repaired.selected_index)) : 0
-          );
+        const normalizedResult = normalizeWanderResultPayload(resultText);
+        if (normalizedResult) {
+          setParsedResult(normalizedResult);
+          setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
           setItems(activeItemsRef.current);
           setLiveStatus(toStableTwoLineText('漫步完成'));
           if (historyId) {
@@ -631,6 +756,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   };
 
   const formatDate = (timestamp: number) => {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return '最近';
+    }
     const date = new Date(timestamp);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
@@ -682,15 +810,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
               type="button"
               onClick={() => void handleToggleMultiChoice()}
               disabled={isSavingMode || loading}
-              className="ui-switch-track w-9 h-5 shrink-0 disabled:opacity-50"
+              className="ui-switch-track shrink-0 disabled:opacity-50"
+              data-size="sm"
               data-state={multiChoiceEnabled ? 'on' : 'off'}
             >
-              <div
-                className={clsx(
-                  'ui-switch-thumb top-0.5 w-3.5 h-3.5',
-                  multiChoiceEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
-                )}
-              />
+              <div className="ui-switch-thumb" />
             </button>
           </div>
         </div>
@@ -998,11 +1122,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                 </div>
               ) : (
                 historyList.map(record => {
-                  let title = '未命名选题';
-                  try {
-                    const parsed = JSON.parse(record.result);
-                    title = parsed.topic?.title || title;
-                  } catch {}
+                  const title = getHistoryTitle(record);
                   const isActive = currentHistoryId === record.id;
                   return (
                     <div
@@ -1022,7 +1142,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                           {title}
                         </div>
                         <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter flex items-center gap-2">
-                          <span>{formatDate(record.created_at)}</span>
+                          <span>{formatDate(getHistoryCreatedAt(record))}</span>
                           {isActive && <span className="w-1 h-1 rounded-full bg-accent-primary" />}
                           {isActive && <span className="text-accent-primary font-black">CURRENT</span>}
                         </div>

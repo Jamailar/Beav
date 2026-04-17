@@ -9,13 +9,13 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     commands::manuscripts::timeline_clip_duration_ms, get_default_package_entry,
-    get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative,
-    lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
-    package_assets_path, package_cover_path, package_editor_project_path, package_entry_path,
-    package_images_path, package_manifest_path, package_remotion_input_props_path,
-    package_remotion_path, package_scene_ui_path, package_timeline_path, package_track_ui_path,
-    parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
-    title_from_relative_path, write_json_value, write_text_file, AppState,
+    get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative, make_id,
+    normalize_relative_path, now_i64, now_iso, now_ms, package_assets_path, package_cover_path,
+    package_editor_project_path, package_entry_path, package_images_path, package_manifest_path,
+    package_remotion_input_props_path, package_remotion_path, package_scene_ui_path,
+    package_timeline_path, package_track_ui_path, parse_json_value_from_text, read_json_value_or,
+    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
+    write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -2403,7 +2403,7 @@ pub(crate) fn render_remotion_video(
     app: Option<&AppHandle>,
     file_path: Option<&str>,
 ) -> Result<Value, String> {
-    let project_root = lexbox_project_root();
+    let project_root = redbox_project_root();
     let script_path = project_root.join("remotion").join("render.mjs");
     if !script_path.exists() {
         return Err(format!(
@@ -2411,7 +2411,7 @@ pub(crate) fn render_remotion_video(
             script_path.display()
         ));
     }
-    let temp_config_path = std::env::temp_dir().join(format!("lexbox-remotion-{}.json", now_ms()));
+    let temp_config_path = std::env::temp_dir().join(format!("redbox-remotion-{}.json", now_ms()));
     write_json_value(&temp_config_path, config)?;
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -3323,7 +3323,7 @@ mod tests {
 
     #[test]
     fn ensure_editor_project_rehydrates_motion_projection_from_remotion_scene() {
-        let package_path = std::env::temp_dir().join(format!("lexbox-remotion-heal-{}", now_ms()));
+        let package_path = std::env::temp_dir().join(format!("redbox-remotion-heal-{}", now_ms()));
         fs::create_dir_all(&package_path).expect("create package dir");
         write_json_value(
             &package_editor_project_path(&package_path),

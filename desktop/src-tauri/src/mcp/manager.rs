@@ -321,7 +321,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        path.push(format!("lexbox-mcp-test-{}.py", unique));
+        path.push(format!("redbox-mcp-test-{}.py", unique));
         fs::write(
             &path,
             r#"import json

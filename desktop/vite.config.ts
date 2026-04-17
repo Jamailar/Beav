@@ -17,7 +17,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src/vendor/freecut'),
-      '@lexbox': path.resolve(__dirname, 'src'),
+      '@redbox': path.resolve(__dirname, 'src'),
     },
   },
   envPrefix: ['VITE_', 'TAURI_'],

@@ -24,11 +24,11 @@ import {
 } from './editorProject';
 import { resolveAssetUrl } from '../../utils/pathManager';
 
-export type LexBoxPackageStateLike = Record<string, unknown> & {
+export type RedBoxPackageStateLike = Record<string, unknown> & {
     timelineSummary?: Record<string, unknown>;
 };
 
-export type LexBoxTimelineProjection = {
+export type RedBoxTimelineProjection = {
     tracks: TimelineTrack[];
     items: TimelineItem[];
     markers: ProjectMarker[];
@@ -229,7 +229,7 @@ export function projectDurationMs(project: EditorProjectFile): number {
 export function projectToFreecutTimeline(
     project: EditorProjectFile,
     trackUiOverride?: Record<string, EditorTrack['ui']>,
-): LexBoxTimelineProjection {
+): RedBoxTimelineProjection {
     const fps = Math.max(1, project.project.fps || 30);
     const assetMap = Object.fromEntries(project.assets.map((asset) => [asset.id, asset]));
     const tracks = project.tracks
@@ -266,7 +266,7 @@ export function projectToFreecutTimeline(
 
 export function freecutTimelineToProject(
     baseProject: EditorProjectFile,
-    snapshot: Pick<LexBoxTimelineProjection, 'tracks' | 'items' | 'markers' | 'transitions' | 'keyframes'>,
+    snapshot: Pick<RedBoxTimelineProjection, 'tracks' | 'items' | 'markers' | 'transitions' | 'keyframes'>,
 ): EditorProjectFile {
     const fps = Math.max(1, baseProject.project.fps || 30);
     const trackById = new Map(baseProject.tracks.map((track) => [track.id, track]));
@@ -303,9 +303,9 @@ export function freecutTimelineToProject(
 }
 
 export function buildOptimisticPackageState(
-    packageState: LexBoxPackageStateLike | null | undefined,
+    packageState: RedBoxPackageStateLike | null | undefined,
     nextProject: EditorProjectFile,
-): LexBoxPackageStateLike {
+): RedBoxPackageStateLike {
     const trackUi = deriveTrackUiMap(nextProject);
     return {
         ...(packageState || {}),

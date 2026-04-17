@@ -11,7 +11,7 @@ pub(crate) fn write_base64_payload_to_file(
     encoded: &str,
     output_path: &Path,
 ) -> Result<(), String> {
-    let encoded_path = std::env::temp_dir().join(format!("lexbox-audio-{}.b64", now_ms()));
+    let encoded_path = std::env::temp_dir().join(format!("redbox-audio-{}.b64", now_ms()));
     fs::write(&encoded_path, encoded).map_err(|error| error.to_string())?;
     let output = std::process::Command::new("base64")
         .arg("-D")

@@ -762,7 +762,7 @@ pub(crate) fn save_youtube_note(
         space_id: None,
         kind: "youtube-video".to_string(),
         source: KnowledgeSourceInput {
-            app_id: Some("lexbox".to_string()),
+            app_id: Some("redbox".to_string()),
             plugin_id: None,
             external_id: Some(input.video_id.clone()),
             source_url: Some(input.video_url.clone()),
@@ -1012,7 +1012,7 @@ pub(crate) fn import_document_files(
         space_id: None,
         kind: "copied-file".to_string(),
         source: KnowledgeSourceInput {
-            app_id: Some("lexbox".to_string()),
+            app_id: Some("redbox".to_string()),
             ..Default::default()
         },
         name: Some(display_name.to_string()),

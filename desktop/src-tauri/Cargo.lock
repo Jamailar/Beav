@@ -1838,25 +1838,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "lexbox"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "dirs 5.0.1",
- "glob",
- "open",
- "serde",
- "serde_json",
- "serde_yaml",
- "shell-words",
- "tauri",
- "tauri-build",
- "url",
- "urlencoding",
-]
-
-[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2813,6 +2794,25 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
+name = "redbox"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "dirs 5.0.1",
+ "glob",
+ "open",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shell-words",
+ "tauri",
+ "tauri-build",
+ "url",
+ "urlencoding",
+]
 
 [[package]]
 name = "redox_syscall"

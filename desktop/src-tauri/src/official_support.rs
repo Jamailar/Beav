@@ -8,6 +8,7 @@ use crate::{
 };
 
 pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
+const REDBOX_APP_SLUG: &str = "redbox";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 
@@ -466,9 +467,59 @@ pub(crate) fn official_settings_models(settings: &Value) -> Vec<Value> {
 }
 
 pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
-    payload_string(settings, "redbox_official_base_url")
+    fn normalize_gateway_root(value: &str) -> String {
+        let normalized = normalize_base_url(value);
+        if normalized.is_empty() {
+            return "https://api.ziz.hk".to_string();
+        }
+
+        if let Ok(mut url) = url::Url::parse(&normalized) {
+            let mut pathname = url.path().trim_end_matches('/').to_string();
+            for suffix in [
+                format!("/{REDBOX_APP_SLUG}/v1"),
+                format!("/{REDBOX_APP_SLUG}"),
+                "/api/v1".to_string(),
+                "/v1".to_string(),
+            ] {
+                if pathname.eq_ignore_ascii_case(&suffix) {
+                    pathname.clear();
+                    break;
+                }
+                let lower = pathname.to_lowercase();
+                let suffix_lower = suffix.to_lowercase();
+                if lower.ends_with(&suffix_lower) {
+                    pathname.truncate(pathname.len() - suffix.len());
+                    pathname = pathname.trim_end_matches('/').to_string();
+                    break;
+                }
+            }
+            url.set_path(if pathname.is_empty() { "/" } else { &pathname });
+            url.set_query(None);
+            url.set_fragment(None);
+            return normalize_base_url(url.as_str());
+        }
+
+        for suffix in [
+            format!("/{REDBOX_APP_SLUG}/v1"),
+            format!("/{REDBOX_APP_SLUG}"),
+            "/api/v1".to_string(),
+            "/v1".to_string(),
+        ] {
+            if normalized.to_lowercase().ends_with(&suffix.to_lowercase()) {
+                return normalize_base_url(&normalized[..normalized.len() - suffix.len()]);
+            }
+        }
+
+        normalized
+    }
+
+    let configured = payload_string(settings, "redbox_official_base_url")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string())
+        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string());
+    format!(
+        "{}/{REDBOX_APP_SLUG}/v1",
+        normalize_gateway_root(&configured)
+    )
 }
 
 pub(crate) fn official_auth_token_from_settings(settings: &Value) -> Option<String> {
@@ -532,6 +583,15 @@ pub(crate) fn run_official_json_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
+    run_official_json_request_response(settings, method, path, body).map(|response| response.body)
+}
+
+pub(crate) fn run_official_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
     let base_url = official_base_url_from_settings(settings);
     let api_key = official_auth_token_from_settings(settings);
     let endpoint = format!(
@@ -539,7 +599,7 @@ pub(crate) fn run_official_json_request(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    run_curl_json(method, &endpoint, api_key.as_deref(), &[], body)
+    crate::run_curl_json_response(method, &endpoint, api_key.as_deref(), &[], body, None)
 }
 
 pub(crate) fn run_official_public_json_request(

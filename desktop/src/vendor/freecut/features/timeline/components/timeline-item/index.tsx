@@ -66,7 +66,7 @@ import { useTimelineItemDropHandlers } from './use-timeline-item-drop-handlers';
 import { AnchorDragGhost, FollowerDragGhost } from './drag-ghosts';
 import { DragBlockedTooltip } from './drag-blocked-tooltip';
 import { ItemContextMenu } from './item-context-menu';
-import { LEXBOX_FREECUT_TIMELINE_CAPABILITIES } from '@lexbox/components/manuscripts/freecutTimelineCapabilities';
+import { LEXBOX_FREECUT_TIMELINE_CAPABILITIES } from '@redbox/components/manuscripts/freecutTimelineCapabilities';
 import { getRazorSplitPosition } from '../../utils/razor-snap';
 import type { RazorSnapTarget } from '../../utils/razor-snap';
 import { getFilteredItemSnapEdges } from '../../utils/timeline-snap-utils';

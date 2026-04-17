@@ -1634,9 +1634,9 @@ mod tests {
             updated_at: 1,
         });
 
-        assert!(trace_value_for_session(&store, "session-1", false).is_array());
-        assert!(tool_results_value_for_session(&store, "session-1", false, None).is_array());
-        assert!(checkpoints_value_for_session(&store, "session-1", false, None).is_array());
+        assert!(trace_value_for_session(&store, "session-1", false, None).is_array());
+        assert!(tool_results_value_for_session(&store, "session-1", false, None, None).is_array());
+        assert!(checkpoints_value_for_session(&store, "session-1", false, None, None).is_array());
     }
 
     #[test]
@@ -1682,7 +1682,7 @@ mod tests {
                 created_at: 2,
             });
 
-        let traces = trace_value_for_session(&store, "session-parent", true);
+        let traces = trace_value_for_session(&store, "session-parent", true, None);
         assert_eq!(traces.as_array().map(|items| items.len()), Some(2));
     }
 

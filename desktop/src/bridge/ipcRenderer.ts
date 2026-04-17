@@ -193,6 +193,10 @@ function createIpcRenderer() {
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
       openLogDir: () => invokeChannel('debug:open-log-dir')
     },
+    officialAuth: {
+      bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
+      refresh: () => invokeChannel('redbox-auth:refresh')
+    },
     sessions: {
       list: () => invokeChannel('sessions:list'),
       get: (sessionId: string) => invokeChannel('sessions:get', { sessionId }),

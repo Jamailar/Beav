@@ -1,12 +1,12 @@
 # FreeCut Attribution
 
 This subtree contains source vendored from the FreeCut project and adapted for
-LexBox integration.
+RedBox integration.
 
 ## Scope
 
 - Vendored path: `src/vendor/freecut/**`
-- Primary LexBox integration points:
+- Primary RedBox integration points:
   - `src/components/manuscripts/VendoredFreecutTimeline.tsx`
   - `src/components/manuscripts/freecutTimelineBridge.ts`
   - `src/vendor/freecut/features/timeline/deps/*`
@@ -47,8 +47,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## LexBox Note
+## RedBox Note
 
 This file is an attribution marker for the vendored subtree only. It does not
-change LexBox ownership for surrounding integration code outside
+change RedBox ownership for surrounding integration code outside
 `src/vendor/freecut/**`.

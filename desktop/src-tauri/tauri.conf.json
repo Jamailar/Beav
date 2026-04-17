@@ -28,9 +28,7 @@
           "$HOME/.redbox/**",
           "$HOME/.redconvert/**",
           "$HOME/.redconvert.migrated-*/**",
-          "$APPDATA/LexBox/**",
           "$APPDATA/RedBox/**",
-          "$HOME/Library/Application Support/LexBox/**",
           "$HOME/Library/Application Support/RedBox/**"
         ]
       }
@@ -39,7 +37,10 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "nsis"],
-    "resources": ["resources/knowledge-api-guide.html"],
+    "resources": [
+      "resources/knowledge-api-guide.html",
+      "../builtin-skills"
+    ],
     "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

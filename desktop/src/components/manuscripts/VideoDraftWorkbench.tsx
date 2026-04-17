@@ -3449,7 +3449,7 @@ export function VideoDraftWorkbench({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#111113] text-white">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#141417] px-5 py-3">
           <div className="min-w-0">
-            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-200/65">LexBox Editor</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-200/65">RedBox Editor</div>
             <div className="mt-1 truncate text-lg font-semibold text-white">{title}</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">

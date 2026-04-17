@@ -56,7 +56,7 @@ use runtime::{
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -652,6 +652,7 @@ struct AppState {
     store: Mutex<AppStore>,
     workspace_root_cache: Mutex<PathBuf>,
     store_persist_version: Arc<AtomicU64>,
+    official_auth_refresh_lock: Mutex<()>,
     mcp_manager: mcp::McpManager,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
     editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
@@ -3851,6 +3852,198 @@ fn run_openai_streaming_chat_completion(
     Ok(result)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GeneratedMediaPreview {
+    id: String,
+    preview_url: String,
+}
+
+fn generated_media_kind_from_tool_result(
+    tool_name: &str,
+    tool_arguments: &Value,
+    result_value: &Value,
+) -> Option<&'static str> {
+    if tool_name != "app_cli" {
+        return None;
+    }
+
+    let declared_kind = result_value
+        .get("kind")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            result_value
+                .get("data")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("");
+    match declared_kind {
+        "generated-images" => return Some("image"),
+        "generated-videos" => return Some("video"),
+        _ => {}
+    }
+
+    let command = payload_string(tool_arguments, "command")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if command.starts_with("image generate") {
+        return Some("image");
+    }
+    if command.starts_with("video generate") {
+        return Some("video");
+    }
+    None
+}
+
+fn media_preview_matches_kind(url_or_path: &str, media_kind: &str) -> bool {
+    let normalized = url_or_path.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    let video_hints = [".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"];
+    let image_hints = [
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".avif",
+    ];
+    match media_kind {
+        "video" => video_hints.iter().any(|ext| normalized.contains(ext)),
+        "image" => image_hints.iter().any(|ext| normalized.contains(ext)),
+        _ => false,
+    }
+}
+
+fn asset_preview_url_from_result(asset: &Value, media_kind: &str) -> Option<String> {
+    let preview_url = asset
+        .get("previewUrl")
+        .or_else(|| asset.get("preview_url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(url) = preview_url.filter(|value| media_preview_matches_kind(value, media_kind)) {
+        return Some(url.to_string());
+    }
+
+    let absolute_path = asset
+        .get("absolutePath")
+        .or_else(|| asset.get("absolute_path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(path) = absolute_path.filter(|value| media_preview_matches_kind(value, media_kind))
+    {
+        return Some(file_url_for_path(Path::new(path)));
+    }
+
+    None
+}
+
+fn extract_generated_media_previews_from_tool_result(
+    tool_name: &str,
+    tool_arguments: &Value,
+    result_value: &Value,
+) -> (Vec<GeneratedMediaPreview>, Vec<GeneratedMediaPreview>) {
+    let Some(media_kind) =
+        generated_media_kind_from_tool_result(tool_name, tool_arguments, result_value)
+    else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let assets = result_value
+        .get("assets")
+        .and_then(Value::as_array)
+        .or_else(|| {
+            result_value
+                .get("data")
+                .and_then(|value| value.get("assets"))
+                .and_then(Value::as_array)
+        });
+    let Some(assets) = assets else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let previews = assets
+        .iter()
+        .filter_map(|asset| {
+            let preview_url = asset_preview_url_from_result(asset, media_kind)?;
+            let id = asset
+                .get("id")
+                .or_else(|| asset.get("assetId"))
+                .or_else(|| asset.get("relativePath"))
+                .or_else(|| asset.get("absolutePath"))
+                .or_else(|| asset.get("previewUrl"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(preview_url.as_str())
+                .to_string();
+            Some(GeneratedMediaPreview { id, preview_url })
+        })
+        .collect::<Vec<_>>();
+
+    if media_kind == "image" {
+        (previews, Vec::new())
+    } else {
+        (Vec::new(), previews)
+    }
+}
+
+fn has_generated_media_embed(content: &str, preview_url: &str) -> bool {
+    let normalized = content.trim();
+    let url = preview_url.trim();
+    if normalized.is_empty() || url.is_empty() {
+        return false;
+    }
+    normalized.contains(&format!("]({url})"))
+        || normalized.contains(&format!("src=\"{url}\""))
+        || normalized.contains(&format!("src='{url}'"))
+}
+
+fn append_generated_media_markdown(
+    content: &str,
+    heading: &str,
+    items: &[GeneratedMediaPreview],
+) -> String {
+    let normalized = content.trim().to_string();
+    let mut seen = HashSet::<String>::new();
+    let unique_items = items
+        .iter()
+        .filter(|item| !item.id.trim().is_empty() && !item.preview_url.trim().is_empty())
+        .filter(|item| seen.insert(item.preview_url.clone()))
+        .filter(|item| !has_generated_media_embed(&normalized, &item.preview_url))
+        .cloned()
+        .collect::<Vec<_>>();
+    if unique_items.is_empty() {
+        return normalized;
+    }
+
+    let gallery = [
+        heading.to_string(),
+        unique_items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| format!("![generated-{}]({})", index + 1, item.preview_url))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    ]
+    .join("\n\n");
+
+    if normalized.is_empty() {
+        gallery
+    } else {
+        format!("{normalized}\n\n{gallery}")
+    }
+}
+
+fn append_generated_media_sections(
+    content: &str,
+    images: &[GeneratedMediaPreview],
+    videos: &[GeneratedMediaPreview],
+) -> String {
+    let with_images = append_generated_media_markdown(content, "## 生成图片", images);
+    append_generated_media_markdown(&with_images, "## 生成视频", videos)
+}
+
 fn run_anthropic_interactive_chat_runtime(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -3868,6 +4061,8 @@ fn run_anthropic_interactive_chat_runtime(
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
+    let mut generated_images = Vec::<GeneratedMediaPreview>::new();
+    let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     if let Some(current_session_id) = session_id {
         emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
     }
@@ -4167,10 +4362,15 @@ fn run_anthropic_interactive_chat_runtime(
         );
 
         if tool_calls.is_empty() {
-            if assistant_text.trim().is_empty() {
+            let final_content = append_generated_media_sections(
+                &assistant_text,
+                &generated_images,
+                &generated_videos,
+            );
+            if final_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
-            canonical_messages.push(canonical_text_message("assistant", assistant_text.clone()));
+            canonical_messages.push(canonical_text_message("assistant", final_content.clone()));
             save_runtime_session_bundle(
                 state,
                 session_id,
@@ -4186,10 +4386,10 @@ fn run_anthropic_interactive_chat_runtime(
                     Some(current_session_id),
                     "chat.response_end",
                     "chat response completed",
-                    Some(json!({ "content": assistant_text })),
+                    Some(json!({ "content": final_content.clone() })),
                 );
             }
-            return Ok(assistant_text);
+            return Ok(final_content);
         }
 
         if !assistant_text.trim().is_empty() {
@@ -4257,6 +4457,14 @@ fn run_anthropic_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let (image_previews, video_previews) =
+                        extract_generated_media_previews_from_tool_result(
+                            &call.name,
+                            &call.arguments,
+                            &result_value,
+                        );
+                    generated_images.extend(image_previews);
+                    generated_videos.extend(video_previews);
                     let raw_result_text = serde_json::to_string_pretty(&result_value)
                         .unwrap_or_else(|_| result_value.to_string());
                     let (result_text, result_truncated) = tools::guards::apply_output_budget(
@@ -4376,6 +4584,8 @@ fn run_gemini_interactive_chat_runtime(
     let is_wander = runtime_mode == "wander";
     let max_turns = if is_wander { 2 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
+    let mut generated_images = Vec::<GeneratedMediaPreview>::new();
+    let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     if let Some(current_session_id) = session_id {
         emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
     }
@@ -4633,10 +4843,15 @@ fn run_gemini_interactive_chat_runtime(
         );
 
         if tool_calls.is_empty() {
-            if assistant_text.trim().is_empty() {
+            let final_content = append_generated_media_sections(
+                &assistant_text,
+                &generated_images,
+                &generated_videos,
+            );
+            if final_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
-            canonical_messages.push(canonical_text_message("assistant", assistant_text.clone()));
+            canonical_messages.push(canonical_text_message("assistant", final_content.clone()));
             save_runtime_session_bundle(
                 state,
                 session_id,
@@ -4652,10 +4867,10 @@ fn run_gemini_interactive_chat_runtime(
                     Some(current_session_id),
                     "chat.response_end",
                     "chat response completed",
-                    Some(json!({ "content": assistant_text })),
+                    Some(json!({ "content": final_content.clone() })),
                 );
             }
-            return Ok(assistant_text);
+            return Ok(final_content);
         }
 
         if !assistant_text.trim().is_empty() {
@@ -4722,6 +4937,14 @@ fn run_gemini_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let (image_previews, video_previews) =
+                        extract_generated_media_previews_from_tool_result(
+                            &call.name,
+                            &call.arguments,
+                            &result_value,
+                        );
+                    generated_images.extend(image_previews);
+                    generated_videos.extend(video_previews);
                     let raw_result_text = serde_json::to_string_pretty(&result_value)
                         .unwrap_or_else(|_| result_value.to_string());
                     let (result_text, result_truncated) = tools::guards::apply_output_budget(
@@ -4851,6 +5074,8 @@ fn run_openai_interactive_chat_runtime(
         is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut wander_saw_tool_call = false;
+    let mut generated_images = Vec::<GeneratedMediaPreview>::new();
+    let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     if let Some(current_session_id) = session_id {
         emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
     }
@@ -4986,6 +5211,11 @@ fn run_openai_interactive_chat_runtime(
         );
 
         if tool_calls.is_empty() {
+            let final_content = append_generated_media_sections(
+                &assistant_content,
+                &generated_images,
+                &generated_videos,
+            );
             if is_wander && !wander_saw_tool_call && turn + 1 < max_turns {
                 let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 canonical_messages.push(canonical_text_message("user", correction.to_string()));
@@ -4995,13 +5225,10 @@ fn run_openai_interactive_chat_runtime(
                 }));
                 continue;
             }
-            if assistant_content.trim().is_empty() {
+            if final_content.trim().is_empty() {
                 return Err("interactive runtime returned an empty final response".to_string());
             }
-            canonical_messages.push(canonical_text_message(
-                "assistant",
-                assistant_content.clone(),
-            ));
+            canonical_messages.push(canonical_text_message("assistant", final_content.clone()));
             save_runtime_session_bundle(
                 state,
                 session_id,
@@ -5012,28 +5239,39 @@ fn run_openai_interactive_chat_runtime(
             )?;
             if streaming_enabled {
                 if let Some(current_session_id) = session_id {
-                    let final_content = assistant_content.clone();
                     emit_runtime_task_checkpoint_saved(
                         app,
                         None,
                         Some(current_session_id),
                         "chat.response_end",
                         "chat response completed",
-                        Some(json!({ "content": final_content })),
+                        Some(json!({ "content": final_content.clone() })),
                     );
                 }
             }
-            return Ok(assistant_content);
+            return Ok(final_content);
         }
 
         wander_saw_tool_call = true;
-        if !assistant_content.trim().is_empty() {
+        if !streaming_enabled && !assistant_content.trim().is_empty() {
             emit_runtime_text_delta(
                 app,
                 session_id.unwrap_or_default(),
                 "thought",
                 &assistant_content,
             );
+        }
+        if !streaming_enabled {
+            if let Some(current_session_id) = session_id {
+                emit_runtime_task_checkpoint_saved(
+                    app,
+                    None,
+                    Some(current_session_id),
+                    "chat.thought_end",
+                    "thought stream completed",
+                    None,
+                );
+            }
         }
         canonical_messages.push(canonical_assistant_message(
             assistant_content.clone(),
@@ -5079,6 +5317,14 @@ fn run_openai_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let (image_previews, video_previews) =
+                        extract_generated_media_previews_from_tool_result(
+                            effective_tool_name,
+                            &effective_arguments,
+                            &result_value,
+                        );
+                    generated_images.extend(image_previews);
+                    generated_videos.extend(video_previews);
                     let raw_result_text = serde_json::to_string_pretty(&result_value)
                         .unwrap_or_else(|_| result_value.to_string());
                     let (result_text, result_truncated) = tools::guards::apply_output_budget(
@@ -5665,11 +5911,7 @@ async fn ipc_invoke(
 }
 
 #[tauri::command]
-async fn ipc_send(
-    app: AppHandle,
-    channel: String,
-    payload: Option<Value>,
-) -> Result<(), String> {
+async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Result<(), String> {
     let payload = payload.unwrap_or(Value::Null);
     if channel == "chat:send-message"
         || channel == "ai:start-chat"
@@ -5777,7 +6019,7 @@ async fn ipc_send(
     }
 }
 
-const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(180);
+const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
     thread::spawn(move || loop {
@@ -5813,6 +6055,7 @@ fn main() {
             store: Mutex::new(store),
             workspace_root_cache: Mutex::new(initial_workspace_root),
             store_persist_version: Arc::new(AtomicU64::new(0)),
+            official_auth_refresh_lock: Mutex::new(()),
             mcp_manager: mcp::McpManager::default(),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
@@ -5839,6 +6082,21 @@ fn main() {
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
             {
                 eprintln!("[RedBox runtime warmup] {error}");
+            }
+            {
+                let auth_bootstrap_app = app.handle().clone();
+                thread::spawn(move || {
+                    let state = auth_bootstrap_app.state::<AppState>();
+                    if let Err(error) = commands::official::bootstrap_official_auth_session(
+                        &auth_bootstrap_app,
+                        &state,
+                        "app-setup",
+                    ) {
+                        if error != "官方账号未登录" {
+                            eprintln!("[RedBox official auth bootstrap] {error}");
+                        }
+                    }
+                });
             }
             let _ = run_official_cache_refresher(app.handle().clone());
             Ok(())

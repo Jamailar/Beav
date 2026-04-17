@@ -182,7 +182,7 @@ pub(crate) fn parse_json_value_from_text(raw: &str) -> Option<Value> {
     serde_json::from_str::<Value>(&trimmed[first..=last]).ok()
 }
 
-pub(crate) fn lexbox_project_root() -> PathBuf {
+pub(crate) fn redbox_project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
@@ -190,7 +190,7 @@ pub(crate) fn lexbox_project_root() -> PathBuf {
 }
 
 pub(crate) fn redbox_prompt_library_root() -> PathBuf {
-    lexbox_project_root().join("prompts").join("library")
+    redbox_project_root().join("prompts").join("library")
 }
 
 pub(crate) fn load_redbox_prompt(relative_path: &str) -> Option<String> {

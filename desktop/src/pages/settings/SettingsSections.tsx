@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, AlertCircle, ChevronDown, Database, Download, FolderOpen, Globe, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, AlertCircle, ChevronDown, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -173,8 +173,6 @@ interface GeneralSettingsSectionProps {
 }
 
 interface RemoteConnectionSettingsSectionProps {
-    formData: SettingsFormData;
-    setFormData: Dispatch<SetStateAction<any>>;
     assistantDaemonStatus: AssistantDaemonStatus | null;
     assistantDaemonDraft: AssistantDaemonDraft;
     setAssistantDaemonDraft: Dispatch<SetStateAction<AssistantDaemonDraft>>;
@@ -320,6 +318,50 @@ function GeneralSettingsSectionInner({
             </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div>
+                    <h3 className="text-sm font-medium text-text-primary">全局网络代理</h3>
+                    <p className="text-xs text-text-tertiary mt-1">
+                        用于扫码登录、远程请求和需要走代理的外部连接。
+                    </p>
+                </div>
+                <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-text-secondary">启用全局代理</label>
+                    <button
+                        type="button"
+                        onClick={() => setFormData((prev: any) => ({ ...prev, proxy_enabled: !prev.proxy_enabled }))}
+                        className="ui-switch-track"
+                        data-size="lg"
+                        data-state={formData.proxy_enabled ? 'on' : 'off'}
+                    >
+                        <span className="ui-switch-thumb" />
+                    </button>
+                </div>
+                <div>
+                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">代理地址</label>
+                    <input
+                        type="text"
+                        value={formData.proxy_url}
+                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
+                        placeholder="http://127.0.0.1:7890"
+                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                    />
+                </div>
+                <div>
+                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">直连白名单</label>
+                    <input
+                        type="text"
+                        value={formData.proxy_bypass}
+                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
+                        placeholder="localhost,127.0.0.1,::1"
+                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                    />
+                </div>
+                <p className="text-[10px] text-text-tertiary">
+                    默认保留 `localhost`、`127.0.0.1` 和 `::1` 直连。
+                </p>
+            </div>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
@@ -330,12 +372,11 @@ function GeneralSettingsSectionInner({
                     <button
                         type="button"
                         onClick={() => setFormData((prev: any) => ({ ...prev, debug_log_enabled: !prev.debug_log_enabled }))}
-                        className="ui-switch-track h-7 w-12"
+                        className="ui-switch-track"
+                        data-size="lg"
                         data-state={formData.debug_log_enabled ? 'on' : 'off'}
                     >
-                        <span
-                            className={clsx('ui-switch-thumb inline-block h-5 w-5', formData.debug_log_enabled ? 'translate-x-6' : 'translate-x-1')}
-                        />
+                        <span className="ui-switch-thumb" />
                     </button>
                 </div>
                 <div className="flex items-center gap-2">
@@ -367,8 +408,8 @@ function GeneralSettingsSectionInner({
 
 export const GeneralSettingsSection = memo(GeneralSettingsSectionInner);
 
-type RemoteConnectionSubTab = 'webui' | 'channels';
-type RemoteChannelId = 'feishu' | 'knowledge' | 'weixin';
+type RemoteConnectionSubTab = 'api' | 'channels';
+type RemoteChannelId = 'feishu' | 'weixin';
 type RemotePlatformLogoId = 'telegram' | 'lark' | 'dingtalk' | 'weixin' | 'wecom' | 'slack' | 'discord';
 
 const REMOTE_PLATFORM_LOGO_PATHS: Record<RemotePlatformLogoId, { path: string; alt: string }> = {
@@ -382,13 +423,8 @@ const REMOTE_PLATFORM_LOGO_PATHS: Record<RemotePlatformLogoId, { path: string; a
 };
 
 const REMOTE_CHANNEL_TAB_LOGO_IDS: RemotePlatformLogoId[] = [
-    'telegram',
     'lark',
-    'dingtalk',
     'weixin',
-    'wecom',
-    'slack',
-    'discord',
 ];
 
 const resolveRemotePlatformLogo = (id: RemotePlatformLogoId) => {
@@ -403,7 +439,6 @@ interface RemoteChannelCardProps {
     id: RemoteChannelId;
     title: string;
     description: string;
-    statusLabel: string;
     enabled: boolean;
     expanded: boolean;
     onToggleExpanded: (id: RemoteChannelId) => void;
@@ -417,11 +452,64 @@ interface RemoteChannelCardProps {
     children: ReactNode;
 }
 
+type ApiSectionId = 'overview' | 'knowledge' | 'daemon' | 'listen' | 'status' | 'logs';
+
+interface ApiSectionCardProps {
+    title: string;
+    eyebrow?: string;
+    description: string;
+    expanded: boolean;
+    onToggle: () => void;
+    actions?: ReactNode;
+    children?: ReactNode;
+}
+
+function ApiSectionCard({
+    title,
+    eyebrow,
+    description,
+    expanded,
+    onToggle,
+    actions,
+    children,
+}: ApiSectionCardProps) {
+    return (
+        <section className={clsx(
+            'overflow-hidden rounded-[22px] border border-border bg-surface-primary/90 shadow-[0_14px_32px_rgba(15,23,42,0.045)] transition-colors',
+            expanded && 'border-accent-primary/30',
+        )}>
+            <div className="flex items-start gap-3 px-4 py-3.5 sm:px-5">
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                >
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                        <ChevronDown className={clsx('h-4 w-4 transition-transform', expanded ? 'rotate-0' : '-rotate-90')} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                        {eyebrow && (
+                            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-tertiary">{eyebrow}</div>
+                        )}
+                        <h3 className="mt-1 text-sm font-medium text-text-primary">{title}</h3>
+                        <p className="mt-1 text-xs leading-5 text-text-secondary">{description}</p>
+                    </div>
+                </button>
+                {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+            </div>
+            {expanded && children && (
+                <div className="border-t border-border/70 bg-surface-secondary/10 px-4 py-4 sm:px-5">
+                    {children}
+                </div>
+            )}
+        </section>
+    );
+}
+
 function RemoteChannelCard({
     id,
     title,
     description,
-    statusLabel,
     enabled,
     expanded,
     onToggleExpanded,
@@ -471,25 +559,18 @@ function RemoteChannelCard({
                     </div>
                 </button>
                 <div className="flex shrink-0 items-center gap-1.5">
-                    <span className={clsx(
-                        'hidden sm:inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                        enabled
-                            ? 'border-emerald-300/60 bg-emerald-500/10 text-emerald-700'
-                            : 'border-border bg-surface-secondary/50 text-text-tertiary',
-                    )}>
-                        {statusLabel}
-                    </span>
                     {showToggle && (
                         <button
                             type="button"
                             onClick={onToggleEnabled}
                             disabled={toggleDisabled || !onToggleEnabled}
-                            className="ui-switch-track h-6 w-11 disabled:cursor-not-allowed disabled:opacity-55"
+                            className="ui-switch-track disabled:cursor-not-allowed disabled:opacity-55"
+                            data-size="md"
                             data-state={enabled ? 'on' : 'off'}
                             aria-label={`${title} 开关`}
                             aria-disabled={toggleDisabled || !onToggleEnabled ? true : undefined}
                         >
-                            <span className={clsx('ui-switch-thumb inline-block h-4.5 w-4.5', enabled ? 'translate-x-5.5' : 'translate-x-1')} />
+                            <span className="ui-switch-thumb" />
                         </button>
                     )}
                 </div>
@@ -505,8 +586,6 @@ function RemoteChannelCard({
 }
 
 function RemoteConnectionSettingsSectionInner({
-    formData,
-    setFormData,
     assistantDaemonStatus,
     assistantDaemonDraft,
     setAssistantDaemonDraft,
@@ -524,12 +603,23 @@ function RemoteConnectionSettingsSectionInner({
 }: RemoteConnectionSettingsSectionProps) {
     const [activeSubTab, setActiveSubTab] = useState<RemoteConnectionSubTab>('channels');
     const [expandedChannelId, setExpandedChannelId] = useState<RemoteChannelId | null>('weixin');
+    const [expandedApiSections, setExpandedApiSections] = useState<Record<ApiSectionId, boolean>>({
+        overview: true,
+        knowledge: true,
+        daemon: true,
+        listen: true,
+        status: true,
+        logs: true,
+    });
     const assistantDaemonLogText = useMemo(
         () => (assistantDaemonLogs.length ? assistantDaemonLogs.join('\n') : '暂无 daemon 日志。'),
         [assistantDaemonLogs],
     );
     const handleToggleExpandedChannel = (id: RemoteChannelId) => {
         setExpandedChannelId((current) => current === id ? null : id);
+    };
+    const handleToggleApiSection = (id: ApiSectionId) => {
+        setExpandedApiSections((current) => ({ ...current, [id]: !current[id] }));
     };
 
     return (
@@ -538,16 +628,16 @@ function RemoteConnectionSettingsSectionInner({
                 <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/40 p-1 shadow-sm">
                     <button
                         type="button"
-                        onClick={() => setActiveSubTab('webui')}
+                        onClick={() => setActiveSubTab('api')}
                         className={clsx(
                             'inline-flex items-center gap-2 rounded-full px-5 py-2 text-xs transition-colors',
-                            activeSubTab === 'webui'
+                            activeSubTab === 'api'
                                 ? 'border border-border bg-surface-primary text-text-primary shadow-sm'
                                 : 'text-text-secondary hover:text-text-primary',
                         )}
                     >
-                        <Globe className="h-4 w-4" />
-                        WebUI
+                        <Database className="h-4 w-4" />
+                        API
                     </button>
                     <button
                         type="button"
@@ -580,243 +670,272 @@ function RemoteConnectionSettingsSectionInner({
                 </div>
             </div>
 
-            {activeSubTab === 'webui' ? (
-                <div className="space-y-5">
-                    <div className="grid gap-5 xl:grid-cols-[1.12fr_0.88fr]">
-                        <div className="rounded-[24px] border border-border bg-surface-primary/90 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.05)]">
-                            <div className="flex items-start justify-between gap-4">
-                                <div>
-                                    <h3 className="text-base font-medium text-text-primary">WebUI 与后台值守</h3>
-                                    <p className="mt-2 text-sm leading-6 text-text-secondary">
-                                        后续真正的远程链路会从这里承接。当前先把状态、入口和配置壳做好，风格对齐 AionUi 的 `WebUI` 面板。
-                                    </p>
-                                </div>
+            {activeSubTab === 'api' ? (
+                <div className="space-y-4">
+                    <ApiSectionCard
+                        title="远程 API 与后台值守"
+                        eyebrow="概览"
+                        description="配置 Knowledge API、后台运行方式和监听地址。"
+                        expanded={expandedApiSections.overview}
+                        onToggle={() => handleToggleApiSection('overview')}
+                        actions={(
+                            <>
                                 <button
                                     type="button"
                                     onClick={() => void handleReloadAssistantDaemonStatus()}
-                                    className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-secondary/50 px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary"
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-3 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary"
                                 >
-                                    <RefreshCw className="h-3.5 w-3.5" />
+                                    <RefreshCw className="h-3 w-3" />
                                     刷新
                                 </button>
-                            </div>
-
-                            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                                <div className="rounded-2xl border border-border bg-surface-secondary/30 p-4">
-                                    <div className="text-[11px] uppercase tracking-[0.16em] text-text-tertiary">入口地址</div>
-                                    <div className="mt-2 text-sm font-medium text-text-primary">
-                                        {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
-                                    </div>
-                                    <p className="mt-1 text-xs text-text-tertiary">WebUI、Webhook 与频道接入入口都会挂在这里。</p>
-                                </div>
-                                <div className="rounded-2xl border border-border bg-surface-secondary/30 p-4">
-                                    <div className="text-[11px] uppercase tracking-[0.16em] text-text-tertiary">任务负载</div>
-                                    <div className="mt-2 text-sm font-medium text-text-primary">
-                                        {assistantDaemonStatus?.activeTaskCount ?? 0} 处理中 / {assistantDaemonStatus?.queuedPeerCount ?? 0} 排队
-                                    </div>
-                                    <p className="mt-1 text-xs text-text-tertiary">用于观察远程消息进来后的会话堆积情况。</p>
-                                </div>
-                            </div>
-
-                            {assistantDaemonStatus?.blockedBy && (
-                                <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">
-                                    当前实例未持有后台锁：{assistantDaemonStatus.blockedBy}
-                                </div>
-                            )}
-                            {assistantDaemonStatus?.lastError && (
-                                <div className="mt-4 rounded-2xl border border-red-300 bg-red-500/10 px-4 py-3 text-xs text-red-600">
-                                    最近错误：{assistantDaemonStatus.lastError}
-                                </div>
-                            )}
-
-                            <div className="mt-5 flex flex-wrap items-center gap-2">
-                                {assistantDaemonStatus?.enabled ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleStopAssistantDaemon()}
-                                        disabled={assistantDaemonBusy}
-                                        className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
-                                    >
-                                        停止值守
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleStartAssistantDaemon()}
-                                        disabled={assistantDaemonBusy}
-                                        className="rounded-full bg-accent-primary px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                                    >
-                                        启动值守
-                                    </button>
-                                )}
                                 <button
                                     type="button"
                                     onClick={() => void handleSaveAssistantDaemonConfig()}
                                     disabled={assistantDaemonBusy}
-                                    className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-secondary/50 px-4 py-2 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                    className="inline-flex items-center gap-1.5 rounded-full bg-accent-primary px-3 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                                 >
-                                    <Save className="h-3.5 w-3.5" />
-                                    保存远程配置
+                                    <Save className="h-3 w-3" />
+                                    保存
+                                </button>
+                            </>
+                        )}
+                    >
+                        <div className="flex flex-wrap gap-2">
+                            <span className={clsx(
+                                'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                                assistantDaemonDraft.knowledgeApi.enabled
+                                    ? 'border-emerald-300/70 bg-emerald-500/10 text-emerald-700'
+                                    : 'border-border bg-surface-secondary/60 text-text-tertiary',
+                            )}>
+                                Knowledge API {assistantDaemonDraft.knowledgeApi.enabled ? '已启用' : '已关闭'}
+                            </span>
+                            <span className={clsx(
+                                'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                                assistantDaemonDraft.enabled
+                                    ? 'border-sky-300/70 bg-sky-500/10 text-sky-700'
+                                    : 'border-border bg-surface-secondary/60 text-text-tertiary',
+                            )}>
+                                后台值守 {assistantDaemonDraft.enabled ? '已开启' : '已关闭'}
+                            </span>
+                            <span className="inline-flex items-center rounded-full border border-border bg-surface-secondary/50 px-2.5 py-1 text-[10px] font-medium text-text-secondary">
+                                监听 {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
+                            </span>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="Knowledge API"
+                        eyebrow="Step 1"
+                        description="控制对外知识库 API 是否开放，并配置访问路径和凭据。"
+                        expanded={expandedApiSections.knowledge}
+                        onToggle={() => handleToggleApiSection('knowledge')}
+                        actions={(
+                            <button
+                                type="button"
+                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, enabled: !prev.knowledgeApi.enabled } }))}
+                                className="ui-switch-track"
+                                data-size="md"
+                                data-state={assistantDaemonDraft.knowledgeApi.enabled ? 'on' : 'off'}
+                                aria-label="Knowledge API 开关"
+                            >
+                                <span className="ui-switch-thumb" />
+                            </button>
+                        )}
+                    >
+                        <div className="rounded-[18px] border border-border bg-surface-secondary/20 p-3.5">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">当前入口</div>
+                            <div className="mt-1.5 break-all text-sm font-medium text-text-primary">
+                                {assistantDaemonStatus?.knowledgeApi?.webhookUrl || 'HTTP 未生成'}
+                            </div>
+                            <div className="mt-2 text-[11px] leading-5 text-text-tertiary">
+                                健康检查：
+                                <code className="ml-1 rounded bg-surface-secondary px-1.5 py-0.5">
+                                    {(assistantDaemonStatus?.knowledgeApi?.webhookUrl || assistantDaemonDraft.knowledgeApi.endpointPath)}/health
+                                </code>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 space-y-3">
+                            <div>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">API 根路径</label>
+                                <input
+                                    type="text"
+                                    value={assistantDaemonDraft.knowledgeApi.endpointPath}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, endpointPath: e.target.value } }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Bearer Token</label>
+                                <PasswordInput
+                                    value={assistantDaemonDraft.knowledgeApi.authToken}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, authToken: e.target.value } }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
+                            </div>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="后台值守"
+                        eyebrow="Step 2"
+                        description="控制后台进程常驻、任务处理与远程入口的长期运行方式。"
+                        expanded={expandedApiSections.daemon}
+                        onToggle={() => handleToggleApiSection('daemon')}
+                        actions={(
+                            <button
+                                type="button"
+                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, enabled: !prev.enabled }))}
+                                className="ui-switch-track"
+                                data-size="md"
+                                data-state={assistantDaemonDraft.enabled ? 'on' : 'off'}
+                                aria-label="后台值守开关"
+                            >
+                                <span className="ui-switch-thumb" />
+                            </button>
+                        )}
+                    >
+                        <div className="space-y-2.5">
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div>
+                                    <div className="text-sm font-medium text-text-primary">开机自动启用</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">适合长期运行的本机环境。</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, autoStart: !prev.autoStart }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.autoStart ? 'on' : 'off'}
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div>
+                                    <div className="text-sm font-medium text-text-primary">关闭窗口后继续后台运行</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">适合扫码接入和常驻消息处理。</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, keepAliveWhenNoWindow: !prev.keepAliveWhenNoWindow }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.keepAliveWhenNoWindow ? 'on' : 'off'}
+                                >
+                                    <span className="ui-switch-thumb" />
                                 </button>
                             </div>
                         </div>
 
-                        <div className="rounded-[24px] border border-border bg-surface-primary/90 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.05)]">
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                            {assistantDaemonStatus?.enabled ? (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleStopAssistantDaemon()}
+                                    disabled={assistantDaemonBusy}
+                                    className="rounded-full border border-red-300 px-3.5 py-1.5 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
+                                >
+                                    停止值守
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleStartAssistantDaemon()}
+                                    disabled={assistantDaemonBusy}
+                                    className="rounded-full bg-accent-primary px-3.5 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                >
+                                    启动值守
+                                </button>
+                            )}
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="监听配置"
+                        eyebrow="Step 3"
+                        description="API、Webhook 和频道接入都复用这组监听地址。"
+                        expanded={expandedApiSections.listen}
+                        onToggle={() => handleToggleApiSection('listen')}
+                    >
+                        <div className="space-y-3">
                             <div>
-                                <h3 className="text-base font-medium text-text-primary">全局网络代理</h3>
-                                <p className="mt-2 text-sm leading-6 text-text-secondary">
-                                    扫码登录、模型请求、飞书和微信网关流量都会经过这里。把代理收进远程连接页，比放在常规设置里更符合心智模型。
-                                </p>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听地址</label>
+                                <input
+                                    type="text"
+                                    value={assistantDaemonDraft.host}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, host: e.target.value }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
                             </div>
-                            <div className="mt-5 space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <label className="text-xs font-medium text-text-secondary">启用全局代理</label>
-                                    <button
-                                        type="button"
-                                        onClick={() => setFormData((prev: any) => ({ ...prev, proxy_enabled: !prev.proxy_enabled }))}
-                                        className="ui-switch-track h-7 w-12"
-                                        data-state={formData.proxy_enabled ? 'on' : 'off'}
-                                    >
-                                        <span className={clsx('ui-switch-thumb inline-block h-5 w-5', formData.proxy_enabled ? 'translate-x-6' : 'translate-x-1')} />
-                                    </button>
-                                </div>
-                                <div>
-                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">代理地址</label>
-                                    <input
-                                        type="text"
-                                        value={formData.proxy_url}
-                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
-                                        placeholder="http://127.0.0.1:7890"
-                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">直连白名单</label>
-                                    <input
-                                        type="text"
-                                        value={formData.proxy_bypass}
-                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
-                                        placeholder="localhost,127.0.0.1,::1"
-                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                                    />
-                                </div>
-                                <p className="text-[11px] leading-5 text-text-tertiary">
-                                    保存后立即生效。默认保留 `localhost`、`127.0.0.1` 和 `::1` 直连，避免本地服务与 daemon 回环流量再走代理。
-                                </p>
+                            <div>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听端口</label>
+                                <input
+                                    type="number"
+                                    value={assistantDaemonDraft.port}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, port: e.target.value }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
                             </div>
                         </div>
-                    </div>
+                    </ApiSectionCard>
 
-                    <div className="rounded-[24px] border border-border bg-surface-primary/90 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.05)]">
-                        <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-                            <div className="space-y-4">
-                                <div className="rounded-2xl border border-border bg-surface-secondary/25 p-4">
-                                    <div className="flex items-center justify-between">
-                                        <label className="text-xs font-medium text-text-secondary">启用 daemon</label>
-                                        <button
-                                            type="button"
-                                            onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, enabled: !prev.enabled }))}
-                                            className="ui-switch-track h-7 w-12"
-                                            data-state={assistantDaemonDraft.enabled ? 'on' : 'off'}
-                                        >
-                                            <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.enabled ? 'translate-x-6' : 'translate-x-1')} />
-                                        </button>
-                                    </div>
-                                    <div className="mt-4 space-y-3">
-                                        <div className="flex items-center justify-between">
-                                            <label className="text-xs font-medium text-text-secondary">开机自动启用</label>
-                                            <button
-                                                type="button"
-                                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, autoStart: !prev.autoStart }))}
-                                                className="ui-switch-track h-7 w-12"
-                                                data-state={assistantDaemonDraft.autoStart ? 'on' : 'off'}
-                                            >
-                                                <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.autoStart ? 'translate-x-6' : 'translate-x-1')} />
-                                            </button>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <label className="text-xs font-medium text-text-secondary">关闭窗口后继续后台运行</label>
-                                            <button
-                                                type="button"
-                                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, keepAliveWhenNoWindow: !prev.keepAliveWhenNoWindow }))}
-                                                className="ui-switch-track h-7 w-12"
-                                                data-state={assistantDaemonDraft.keepAliveWhenNoWindow ? 'on' : 'off'}
-                                            >
-                                                <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.keepAliveWhenNoWindow ? 'translate-x-6' : 'translate-x-1')} />
-                                            </button>
-                                        </div>
-                                    </div>
+                    <ApiSectionCard
+                        title="运行状态"
+                        eyebrow="Step 4"
+                        description="观察当前值守实例、监听状态和任务负载。"
+                        expanded={expandedApiSections.status}
+                        onToggle={() => handleToggleApiSection('status')}
+                    >
+                        <div className="flex flex-wrap gap-2.5">
+                            <div className="min-w-[200px] flex-1 rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">入口地址</div>
+                                <div className="mt-1.5 break-all text-sm font-medium text-text-primary">
+                                    {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
                                 </div>
-
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                    <div>
-                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听地址</label>
-                                        <input
-                                            type="text"
-                                            value={assistantDaemonDraft.host}
-                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, host: e.target.value }))}
-                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听端口</label>
-                                        <input
-                                            type="number"
-                                            value={assistantDaemonDraft.port}
-                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, port: e.target.value }))}
-                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                        />
-                                    </div>
-                                </div>
+                                <p className="mt-1 text-[11px] text-text-tertiary">
+                                    {assistantDaemonStatus?.listening ? '监听中' : '未监听'}
+                                </p>
                             </div>
-
-                            <div className="grid gap-3 sm:grid-cols-3">
-                                <div className="rounded-2xl border border-border bg-surface-secondary/25 p-4">
-                                    <div className="text-[11px] uppercase tracking-[0.16em] text-text-tertiary">飞书</div>
-                                    <div className="mt-2 text-sm font-medium text-text-primary">
-                                        {assistantDaemonDraft.feishu.receiveMode === 'websocket'
-                                            ? assistantDaemonStatus?.feishu?.websocketRunning ? '长连已建立' : '长连待启动'
-                                            : assistantDaemonStatus?.feishu?.webhookUrl || 'Webhook 未生成'}
-                                    </div>
-                                    <div className="mt-1 text-xs text-text-tertiary">
-                                        {assistantDaemonDraft.feishu.enabled ? '已启用' : '未启用'}
-                                    </div>
+                            <div className="min-w-[200px] flex-1 rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">任务负载</div>
+                                <div className="mt-1.5 text-sm font-medium text-text-primary">
+                                    {assistantDaemonStatus?.activeTaskCount ?? 0} 处理中 / {assistantDaemonStatus?.queuedPeerCount ?? 0} 排队
                                 </div>
-                                <div className="rounded-2xl border border-border bg-surface-secondary/25 p-4">
-                                    <div className="text-[11px] uppercase tracking-[0.16em] text-text-tertiary">Knowledge API</div>
-                                    <div className="mt-2 text-sm font-medium text-text-primary">
-                                        {assistantDaemonStatus?.knowledgeApi?.webhookUrl || 'HTTP 未生成'}
-                                    </div>
-                                    <div className="mt-1 text-xs text-text-tertiary">
-                                        {assistantDaemonDraft.knowledgeApi.enabled ? '已启用' : '未启用'}
-                                    </div>
-                                </div>
-                                <div className="rounded-2xl border border-border bg-surface-secondary/25 p-4">
-                                    <div className="text-[11px] uppercase tracking-[0.16em] text-text-tertiary">微信 sidecar</div>
-                                    <div className="mt-2 text-sm font-medium text-text-primary">
-                                        {assistantDaemonStatus?.weixin?.sidecarRunning ? `运行中 (pid ${assistantDaemonStatus.weixin?.sidecarPid})` : '未运行'}
-                                    </div>
-                                    <div className="mt-1 text-xs text-text-tertiary">
-                                        {assistantDaemonStatus?.weixin?.connected ? `已登录${assistantDaemonStatus.weixin?.accountId ? ` · ${assistantDaemonStatus.weixin.accountId}` : ''}` : '未登录'}
-                                    </div>
-                                </div>
+                                <p className="mt-1 text-[11px] text-text-tertiary">当前任务状态。</p>
                             </div>
                         </div>
-                    </div>
 
-                    <details className="rounded-[24px] border border-border bg-surface-primary/90 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.05)]">
-                        <summary className="cursor-pointer list-none text-sm font-medium text-text-primary">最近 daemon 日志</summary>
-                        <pre className="mt-4 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-2xl border border-border bg-surface-secondary/25 p-4 text-[11px] leading-5 text-text-secondary">
+                        {assistantDaemonStatus?.blockedBy && (
+                            <div className="mt-3 rounded-[16px] border border-amber-300 bg-amber-500/10 px-3.5 py-3 text-[11px] text-amber-700">
+                                当前实例未持有后台锁：{assistantDaemonStatus.blockedBy}
+                            </div>
+                        )}
+                        {assistantDaemonStatus?.lastError && (
+                            <div className="mt-3 rounded-[16px] border border-red-300 bg-red-500/10 px-3.5 py-3 text-[11px] text-red-600">
+                                最近错误：{assistantDaemonStatus.lastError}
+                            </div>
+                        )}
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="最近 daemon 日志"
+                        eyebrow="Step 5"
+                        description="只保留最近的后台日志，便于快速定位远程连接问题。"
+                        expanded={expandedApiSections.logs}
+                        onToggle={() => handleToggleApiSection('logs')}
+                    >
+                        <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-[16px] border border-border bg-surface-secondary/25 p-3 text-[11px] leading-5 text-text-secondary">
                             {assistantDaemonLogText}
                         </pre>
-                    </details>
+                    </ApiSectionCard>
                 </div>
             ) : (
                 <div className="space-y-4">
                     <div className="px-1 pb-2 pt-1">
                         <h3 className="text-[28px] font-medium tracking-[0.01em] text-text-primary">渠道配置</h3>
                         <p className="mt-8 text-lg leading-8 text-text-secondary">
-                            连接飞书、微信和其他接入渠道，在外部消息入口中与 LexBox 交互。
+                            连接飞书、微信等渠道。
                         </p>
                         <div className="mt-6 flex flex-col gap-3 text-sm text-text-secondary md:flex-row md:flex-wrap md:items-center md:gap-6">
                             <div className="flex items-center gap-3">
@@ -833,8 +952,7 @@ function RemoteConnectionSettingsSectionInner({
                     <RemoteChannelCard
                         id="feishu"
                         title="飞书"
-                        description="支持 Webhook 和官方 WebSocket 两种接收模式。当前先保留完整表单，后续直接接入渠道协议。"
-                        statusLabel={assistantDaemonDraft.feishu.enabled ? '已启用' : '未启用'}
+                        description="配置飞书接入参数。"
                         enabled={assistantDaemonDraft.feishu.enabled}
                         expanded={expandedChannelId === 'feishu'}
                         onToggleExpanded={handleToggleExpandedChannel}
@@ -846,8 +964,8 @@ function RemoteConnectionSettingsSectionInner({
                             <div className="rounded-2xl border border-border bg-surface-primary/70 p-4 text-xs leading-6 text-text-secondary">
                                 {assistantDaemonDraft.feishu.receiveMode === 'websocket'
                                     ? assistantDaemonStatus?.feishu?.websocketRunning
-                                        ? '当前使用官方长连接，连接已建立。'
-                                        : `当前使用官方长连接，等待启动${assistantDaemonStatus?.feishu?.websocketReconnectAt ? `；下次重连 ${new Date(assistantDaemonStatus.feishu.websocketReconnectAt).toLocaleString()}` : '。'}`
+                                        ? '长连接已建立。'
+                                        : `等待建立长连接${assistantDaemonStatus?.feishu?.websocketReconnectAt ? `；下次重连 ${new Date(assistantDaemonStatus.feishu.websocketReconnectAt).toLocaleString()}` : '。'}`
                                     : `当前 Webhook 地址：${assistantDaemonStatus?.feishu?.webhookUrl || '未生成'}`}
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
@@ -918,50 +1036,9 @@ function RemoteConnectionSettingsSectionInner({
                     </RemoteChannelCard>
 
                     <RemoteChannelCard
-                        id="knowledge"
-                        title="Knowledge API"
-                        description="给插件、浏览器扩展和其他本地工具使用的开放入口。UI 先做成标准频道卡，后端实现再接鉴权和配对。"
-                        statusLabel={assistantDaemonDraft.knowledgeApi.enabled ? '已启用' : '未启用'}
-                        enabled={assistantDaemonDraft.knowledgeApi.enabled}
-                        expanded={expandedChannelId === 'knowledge'}
-                        onToggleExpanded={handleToggleExpandedChannel}
-                        onToggleEnabled={() => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, enabled: !prev.knowledgeApi.enabled } }))}
-                        iconNode={<Database className="h-4 w-4" />}
-                    >
-                        <div className="space-y-4">
-                            <div className="rounded-2xl border border-border bg-surface-primary/70 p-4 text-xs leading-6 text-text-secondary">
-                                健康检查地址：
-                                <code className="ml-1 rounded bg-surface-secondary px-1.5 py-0.5">
-                                    {(assistantDaemonStatus?.knowledgeApi?.webhookUrl || assistantDaemonDraft.knowledgeApi.endpointPath)}/health
-                                </code>
-                            </div>
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <div>
-                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">API 根路径</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.knowledgeApi.endpointPath}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, endpointPath: e.target.value } }))}
-                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Bearer Token</label>
-                                    <PasswordInput
-                                        value={assistantDaemonDraft.knowledgeApi.authToken}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, authToken: e.target.value } }))}
-                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </RemoteChannelCard>
-
-                    <RemoteChannelCard
                         id="weixin"
                         title="微信 sidecar"
-                        description="扫码登录 + 高级参数折叠，这一张卡基本复刻 AionUi 那种“先概览，再展开细配”的交互方式。"
-                        statusLabel={assistantDaemonDraft.weixin.enabled ? '已启用' : '未启用'}
+                        description="扫码登录并配置微信接入。"
                         enabled={assistantDaemonDraft.weixin.enabled}
                         expanded={expandedChannelId === 'weixin'}
                         onToggleExpanded={handleToggleExpandedChannel}
@@ -970,10 +1047,6 @@ function RemoteConnectionSettingsSectionInner({
                         iconAlt="微信"
                     >
                         <div className="space-y-4">
-                            <div className="rounded-2xl border border-border bg-surface-primary/70 p-4 text-xs leading-6 text-text-secondary">
-                                连接方式：应用会调用 `@weixin-claw/core` 访问腾讯 iLink 网关拉取登录二维码。扫码成功后，本地会保存 bot token 和 accountId，后续由内置 sidecar 长连收发消息。
-                            </div>
-
                             <div className="flex flex-wrap items-center gap-2">
                                 <button
                                     type="button"
@@ -1008,7 +1081,7 @@ function RemoteConnectionSettingsSectionInner({
 
                             {!assistantDaemonWeixinLogin?.qrcodeUrl && (
                                 <p className="text-[11px] leading-5 text-text-tertiary">
-                                    如果这里直接报 `fetch failed`，通常不是扫码逻辑本身有问题，而是当前机器访问 `https://ilinkai.weixin.qq.com` 失败。先在 `WebUI` 页里配好全局代理，再保存设置后重试。
+                                    如果这里直接报 `fetch failed`，通常不是扫码逻辑本身有问题，而是当前机器访问 `https://ilinkai.weixin.qq.com` 失败。先在“常规设置”里配好全局代理，再保存设置后重试。
                                 </p>
                             )}
 
@@ -1082,7 +1155,7 @@ function RemoteConnectionSettingsSectionInner({
                                             type="text"
                                             value={assistantDaemonDraft.weixin.accountId}
                                             onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, accountId: e.target.value } }))}
-                                            placeholder="扫码成功后会自动写入，也可以手动指定"
+                                            placeholder="可手动填写"
                                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
                                         />
                                     </div>
@@ -1138,9 +1211,6 @@ function RemoteConnectionSettingsSectionInner({
                                 </div>
                             </details>
 
-                            <p className="text-[11px] leading-5 text-text-tertiary">
-                                已改为使用正式版 `@weixin-claw/core`。默认直接复用当前 Electron 39 / Node 22 运行时，不再要求单独安装 `node22`。
-                            </p>
                         </div>
                     </RemoteChannelCard>
                 </div>
@@ -3082,15 +3152,11 @@ export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalS
                         <button
                             type="button"
                             onClick={() => updateFlag('vectorRecommendation', !flags.vectorRecommendation)}
-                            className="ui-switch-track w-11 h-6 shrink-0"
+                            className="ui-switch-track shrink-0"
+                            data-size="md"
                             data-state={flags.vectorRecommendation ? 'on' : 'off'}
                         >
-                            <div
-                                className={clsx(
-                                    'ui-switch-thumb top-1 w-4 h-4',
-                                    flags.vectorRecommendation ? 'translate-x-6' : 'translate-x-1'
-                                )}
-                            />
+                            <div className="ui-switch-thumb" />
                         </button>
                     </div>
                 </div>

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-type LexBoxMediaItem = {
+type RedBoxMediaItem = {
   id: string;
   name: string;
   src: string;
@@ -20,14 +20,14 @@ type MediaPlacementHandle = {
   fileHandle?: FileSystemFileHandle | null;
 };
 
-type LexBoxMediaLibraryState = {
-  mediaItems: LexBoxMediaItem[];
-  mediaById: Record<string, LexBoxMediaItem>;
+type RedBoxMediaLibraryState = {
+  mediaItems: RedBoxMediaItem[];
+  mediaById: Record<string, RedBoxMediaItem>;
   importHandlesForPlacement: Record<string, MediaPlacementHandle>;
 };
 
-type LexBoxMediaLibraryActions = {
-  syncMediaItems: (items: LexBoxMediaItem[]) => void;
+type RedBoxMediaLibraryActions = {
+  syncMediaItems: (items: RedBoxMediaItem[]) => void;
 };
 
 export type CompositionDragData = {
@@ -50,7 +50,7 @@ export type ExtractedMediaFileEntry = {
   label: string;
 };
 
-export const useMediaLibraryStore = create<LexBoxMediaLibraryState & LexBoxMediaLibraryActions>((set) => ({
+export const useMediaLibraryStore = create<RedBoxMediaLibraryState & RedBoxMediaLibraryActions>((set) => ({
   mediaItems: [],
   mediaById: {},
   importHandlesForPlacement: {},
@@ -60,7 +60,7 @@ export const useMediaLibraryStore = create<LexBoxMediaLibraryState & LexBoxMedia
   }),
 }));
 
-export function syncLexBoxMediaLibrary(items: LexBoxMediaItem[]) {
+export function syncRedBoxMediaLibrary(items: RedBoxMediaItem[]) {
   useMediaLibraryStore.getState().syncMediaItems(items);
 }
 

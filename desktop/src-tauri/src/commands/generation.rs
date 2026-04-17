@@ -1,12 +1,231 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{with_store, with_store_mut};
+use crate::skills::{
+    load_skill_bundle_sections_from_root, load_skill_bundle_sections_from_sources,
+    split_skill_body, SkillBundleSections,
+};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
+
+const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
+const DEFAULT_IMAGE_PROMPT_MAX_CHARS: usize = 2200;
+
+fn load_image_prompt_optimizer_bundle(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> SkillBundleSections {
+    let workspace = workspace_root(state).ok();
+    let direct_bundle = load_skill_bundle_sections_from_sources(
+        IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
+        workspace.as_deref(),
+    );
+    if !direct_bundle.body.trim().is_empty() {
+        return direct_bundle;
+    }
+    let Ok(resource_dir) = app.path().resource_dir() else {
+        return direct_bundle;
+    };
+    let bundled_root = resource_dir
+        .join("builtin-skills")
+        .join(IMAGE_PROMPT_OPTIMIZER_SKILL_NAME);
+    let bundled =
+        load_skill_bundle_sections_from_root(IMAGE_PROMPT_OPTIMIZER_SKILL_NAME, &bundled_root);
+    if !bundled.body.trim().is_empty() {
+        return bundled;
+    }
+    direct_bundle
+}
+
+fn build_image_prompt_optimizer_system_prompt(bundle: &SkillBundleSections) -> (String, usize) {
+    let (metadata, skill_body) = split_skill_body(&bundle.body);
+    let max_chars = metadata
+        .max_prompt_chars
+        .unwrap_or(DEFAULT_IMAGE_PROMPT_MAX_CHARS);
+    let mut sections = vec![
+        "你是 RedBox 内置的 image-prompt-optimizer。你的任务是把用户原始需求整理成一段可直接发送给图片模型的最终提示词。".to_string(),
+        "输出必须是严格 JSON，格式为 {\"optimizedPrompt\":\"...\"}。不要输出 Markdown，不要解释，不要附加多余字段。".to_string(),
+    ];
+    if !skill_body.trim().is_empty() {
+        sections.push(format!("## Loaded skill\n{}", skill_body.trim()));
+    }
+    for (rule_name, rule_body) in &bundle.rules {
+        let (_, content) = split_skill_body(rule_body);
+        if content.trim().is_empty() {
+            continue;
+        }
+        sections.push(format!("## Loaded rule: {rule_name}\n{}", content.trim()));
+    }
+    (sections.join("\n\n"), max_chars)
+}
+
+fn build_image_prompt_optimizer_user_prompt(
+    payload: &Value,
+    raw_prompt: &str,
+    title: Option<&str>,
+    aspect_ratio: Option<&str>,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> String {
+    let generation_mode =
+        payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
+    let reference_count = payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0)
+        .min(4);
+    [
+        format!("原始提示词：{}", raw_prompt.trim()),
+        format!("标题：{}", title.unwrap_or("(无标题)")),
+        format!("生成模式：{}", generation_mode),
+        format!("参考图数量：{}", reference_count),
+        format!("画幅比例：{}", aspect_ratio.unwrap_or("未指定")),
+        format!("尺寸：{}", size.unwrap_or("未指定")),
+        format!("质量：{}", quality.unwrap_or("未指定")),
+        "请按已加载 skill 和 rules，把上面的原始需求整理成一段最终生图提示词。".to_string(),
+        "要求：保留用户主体意图；参考图模式优先保留主体身份、构图重心与色彩关系；默认补足构图、镜头、光线、材质、环境和完成度；不要把提示词原文、布局标签、水印或 AI 标签直接画进图里；不要输出负向提示词字段，不要输出解释。".to_string(),
+    ]
+    .join("\n")
+}
+
+fn extract_optimized_prompt(raw_response: &str) -> Option<String> {
+    let parsed = parse_json_value_from_text(raw_response)?;
+    for key in [
+        "optimizedPrompt",
+        "effectivePrompt",
+        "finalPrompt",
+        "prompt",
+    ] {
+        let value = parsed
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(value) = value {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn build_fallback_optimized_image_prompt(
+    payload: &Value,
+    raw_prompt: &str,
+    title: Option<&str>,
+    aspect_ratio: Option<&str>,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> String {
+    let trimmed = raw_prompt.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let generation_mode =
+        payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
+    let reference_count = payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0)
+        .min(4);
+    let mut parts = Vec::<String>::new();
+    if let Some(title) = title.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(format!("主题：{title}"));
+    }
+    parts.push(trimmed.to_string());
+    match generation_mode.as_str() {
+        "reference-guided" => {
+            parts.push("保持参考图主体身份、核心轮廓、构图重心与主色调一致".to_string());
+            parts.push("在不跑偏换主体的前提下补足场景、光线、材质与完成度".to_string());
+        }
+        "image-to-image" => {
+            parts.push("保留原图主体、姿态和核心轮廓，只做受控风格增强".to_string());
+            parts.push("重点优化光线、背景、材质细节与画面完成度".to_string());
+        }
+        _ => {
+            parts.push("主体清晰，构图稳定，镜头明确，光线自然，材质细节可读".to_string());
+        }
+    }
+    if reference_count > 0 {
+        parts.push(format!("参考图约束生效，共 {} 张", reference_count));
+    }
+    if let Some(aspect_ratio) = aspect_ratio
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("画幅比例 {aspect_ratio}"));
+    }
+    if let Some(size) = size.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(format!("输出尺寸倾向 {size}"));
+    }
+    parts.push("画面中不要出现提示词原文、布局标注、水印或 AI 标签".to_string());
+    match quality.map(str::trim).unwrap_or_default() {
+        "high" | "hd" => parts.push("高完成度，边缘干净，细节密度高".to_string()),
+        "standard" => parts.push("细节清楚，视觉中心明确，背景不过载".to_string()),
+        _ => {}
+    }
+    truncate_chars(&parts.join("，"), 900)
+}
+
+fn optimize_image_generation_prompt(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings_snapshot: &Value,
+    payload: &Value,
+    raw_prompt: &str,
+    title: Option<&str>,
+    aspect_ratio: Option<&str>,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> String {
+    let fallback = build_fallback_optimized_image_prompt(
+        payload,
+        raw_prompt,
+        title,
+        aspect_ratio,
+        size,
+        quality,
+    );
+    let bundle = load_image_prompt_optimizer_bundle(app, state);
+    if bundle.body.trim().is_empty() {
+        return if fallback.trim().is_empty() {
+            raw_prompt.trim().to_string()
+        } else {
+            fallback
+        };
+    }
+    let (system_prompt, max_chars) = build_image_prompt_optimizer_system_prompt(&bundle);
+    let user_prompt = build_image_prompt_optimizer_user_prompt(
+        payload,
+        raw_prompt,
+        title,
+        aspect_ratio,
+        size,
+        quality,
+    );
+    if let Ok(raw_response) = generate_structured_response_with_settings(
+        settings_snapshot,
+        None,
+        &system_prompt,
+        &user_prompt,
+        true,
+    ) {
+        if let Some(optimized) = extract_optimized_prompt(&raw_response) {
+            let normalized = truncate_chars(optimized.trim(), max_chars);
+            if !normalized.trim().is_empty() {
+                return normalized;
+            }
+        }
+    }
+    if fallback.trim().is_empty() {
+        raw_prompt.trim().to_string()
+    } else {
+        fallback
+    }
+}
 
 pub fn handle_generation_channel(
-    _app: &AppHandle,
+    app: &AppHandle,
     state: &State<'_, AppState>,
     channel: &str,
     payload: &Value,
@@ -43,6 +262,23 @@ pub fn handle_generation_channel(
         };
         let real_video_config = if channel == "video-gen:generate" {
             resolve_video_generation_settings(&settings_snapshot)
+        } else {
+            None
+        };
+        let effective_image_prompt = if channel == "image-gen:generate" {
+            prompt.clone().map(|raw| {
+                optimize_image_generation_prompt(
+                    app,
+                    state,
+                    &settings_snapshot,
+                    payload,
+                    &raw,
+                    title.as_deref(),
+                    aspect_ratio.as_deref(),
+                    size.as_deref(),
+                    quality.as_deref(),
+                )
+            })
         } else {
             None
         };
@@ -130,7 +366,11 @@ pub fn handle_generation_channel(
                         fs::write(&absolute_path, fallback_note)
                             .map_err(|error| error.to_string())?;
                     }
-                    None
+                    if wrote_real_asset {
+                        Some(file_url_for_path(&absolute_path))
+                    } else {
+                        None
+                    }
                 } else {
                     let mut wrote_real_asset = false;
                     if let Some((
@@ -145,7 +385,7 @@ pub fn handle_generation_channel(
                         if let Some(object) = effective_payload.as_object_mut() {
                             object.insert(
                                 "prompt".to_string(),
-                                json!(prompt.clone().unwrap_or_default()),
+                                json!(effective_image_prompt.clone().unwrap_or_default()),
                             );
                         }
                         if let Ok(response) = run_image_generation_request(
@@ -172,7 +412,7 @@ pub fn handle_generation_channel(
                         write_placeholder_svg(
                             &absolute_path,
                             &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
-                            &prompt
+                            &effective_image_prompt
                                 .clone()
                                 .unwrap_or_default()
                                 .chars()
@@ -201,7 +441,11 @@ pub fn handle_generation_channel(
                                 item
                             }
                         }),
-                    prompt: prompt.clone(),
+                    prompt: if channel == "image-gen:generate" {
+                        effective_image_prompt.clone()
+                    } else {
+                        prompt.clone()
+                    },
                     provider: provider.clone(),
                     provider_template: provider_template.clone(),
                     model: model.clone(),
@@ -244,7 +488,11 @@ pub fn handle_generation_channel(
                             .to_string()
                     },
                 )),
-                prompt.clone(),
+                if channel == "image-gen:generate" {
+                    effective_image_prompt.clone()
+                } else {
+                    prompt.clone()
+                },
                 project_id.clone().map(|value| {
                     json!({
                         "projectId": value,
@@ -263,4 +511,36 @@ pub fn handle_generation_channel(
         persist_media_workspace_catalog(state)?;
         Ok(json!({ "success": true, "assets": created }))
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_optimized_prompt_prefers_structured_json_field() {
+        let optimized =
+            extract_optimized_prompt(r#"{"optimizedPrompt":"主体清晰，晨光客厅，真实摄影"}"#);
+        assert_eq!(optimized.as_deref(), Some("主体清晰，晨光客厅，真实摄影"));
+    }
+
+    #[test]
+    fn fallback_optimizer_adds_mode_specific_guidance() {
+        let payload = json!({
+            "generationMode": "reference-guided",
+            "referenceImages": ["a", "b"],
+        });
+        let prompt = build_fallback_optimized_image_prompt(
+            &payload,
+            "一只橘猫坐在木椅上",
+            Some("猫咪写真"),
+            Some("3:4"),
+            None,
+            Some("high"),
+        );
+        assert!(prompt.contains("保持参考图主体身份"));
+        assert!(prompt.contains("画幅比例 3:4"));
+        assert!(prompt.contains("不要出现提示词原文"));
+        assert!(prompt.contains("高完成度"));
+    }
 }

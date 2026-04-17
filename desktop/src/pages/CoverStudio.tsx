@@ -843,17 +843,13 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                                         [item.key]: !prev[item.key],
                                                     }));
                                                 }}
-                                                className="ui-switch-track h-6 w-11"
+                                                className="ui-switch-track"
+                                                data-size="md"
                                                 data-state={promptSwitches[item.key] ? 'on' : 'off'}
                                                 aria-label={item.label}
                                                 aria-pressed={Boolean(promptSwitches[item.key])}
                                             >
-                                                <span
-                                                    className={clsx(
-                                                        'ui-switch-thumb left-0.5 top-0.5 h-5 w-5',
-                                                        promptSwitches[item.key] ? 'translate-x-5' : 'translate-x-0'
-                                                    )}
-                                                />
+                                                <span className="ui-switch-thumb" />
                                             </button>
                                         </div>
                                     ))}

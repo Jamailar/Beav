@@ -1377,6 +1377,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "media delete --asset-id <assetId>",
         ],
         "image" => vec![
+            "skills invoke --name image-prompt-optimizer  # before the first image generate in chat-driven workflows",
             "image generate --prompt \"...\" [--mode reference-guided] [--reference-images /abs/a.png,/abs/b.png]",
             "image generate --prompt \"...\" [--subject-ids subject_a,subject_b]",
             "image history list",

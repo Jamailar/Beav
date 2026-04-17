@@ -94,7 +94,7 @@ async function stageLocalAssetsForRender(compositionConfig) {
 
   const tempRootDir = path.join(
     process.env.TMPDIR || process.env.TEMP || '/tmp',
-    `lexbox-remotion-public-${Date.now()}`,
+    `redbox-remotion-public-${Date.now()}`,
   );
   const assetDir = path.join(tempRootDir, 'redbox-assets');
   await fs.mkdir(assetDir, { recursive: true });

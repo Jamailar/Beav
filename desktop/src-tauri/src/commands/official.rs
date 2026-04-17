@@ -10,10 +10,35 @@ use crate::{
     official_settings_call_records_list, official_settings_models, official_settings_orders,
     official_settings_points, official_settings_session, official_settings_wechat_login,
     official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
-    payload_field, payload_string, run_official_json_request, run_official_public_json_request,
+    payload_field, payload_string, run_official_public_json_request,
     upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
     AppState, REDBOX_OFFICIAL_BASE_URL,
 };
+
+const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
+const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
+const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
+const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 19] = [
+    "redbox_auth_session_json",
+    "redbox_auth_api_keys_json",
+    "redbox_auth_orders_json",
+    "redbox_auth_points_json",
+    "redbox_official_models_json",
+    "redbox_auth_call_records_json",
+    "redbox_auth_wechat_login_json",
+    "ai_sources_json",
+    "default_ai_source_id",
+    "api_endpoint",
+    "api_key",
+    "model_name",
+    "model_name_wander",
+    "model_name_chatroom",
+    "model_name_knowledge",
+    "model_name_redclaw",
+    "video_endpoint",
+    "video_api_key",
+    "video_model",
+];
 
 fn cached_official_user(settings: &Value) -> Value {
     official_settings_session(settings)
@@ -21,8 +46,143 @@ fn cached_official_user(settings: &Value) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
+fn normalize_official_points_payload(payload: &Value) -> Option<Value> {
+    if !payload.is_object() || official_response_is_unauthorized(200, payload) {
+        return None;
+    }
+
+    let balance = [
+        "points",
+        "balance",
+        "pointsBalance",
+        "current_points",
+        "currentPoints",
+        "available_points",
+        "availablePoints",
+    ]
+    .into_iter()
+    .find_map(|key| payload_f64(payload, key));
+    let total_earned =
+        payload_f64(payload, "total_earned").or_else(|| payload_f64(payload, "totalEarned"));
+    let total_spent =
+        payload_f64(payload, "total_spent").or_else(|| payload_f64(payload, "totalSpent"));
+
+    if balance.is_none() && total_earned.is_none() && total_spent.is_none() {
+        return None;
+    }
+
+    let balance = balance.unwrap_or(0.0);
+    let pricing_source = payload.get("pricing");
+    let points_per_yuan = pricing_source
+        .and_then(|value| payload_f64(value, "points_per_yuan"))
+        .or_else(|| pricing_source.and_then(|value| payload_f64(value, "pointsPerYuan")))
+        .or_else(|| payload_f64(payload, "points_per_yuan"))
+        .or_else(|| payload_f64(payload, "pointsPerYuan"))
+        .unwrap_or(100.0);
+    let refreshed_at_ms = payload_i64(payload, "refreshedAtMs").unwrap_or_else(|| now_ms() as i64);
+    let refreshed_at = payload_string(payload, "refreshedAt").unwrap_or_else(now_iso);
+    let pricing = json!({
+        "unit": pricing_source
+            .and_then(|value| payload_string(value, "unit"))
+            .unwrap_or_else(|| "points".to_string()),
+        "rules": pricing_source
+            .and_then(|value| value.get("rules").cloned())
+            .unwrap_or_else(|| json!({})),
+        "text_chat_cost": pricing_source
+            .and_then(|value| payload_field(value, "text_chat_cost").cloned())
+            .unwrap_or(Value::Null),
+        "voice_chat_cost": pricing_source
+            .and_then(|value| payload_field(value, "voice_chat_cost").cloned())
+            .unwrap_or(Value::Null),
+        "points_per_yuan": points_per_yuan,
+    });
+
+    Some(json!({
+        "points": balance,
+        "balance": balance,
+        "pointsBalance": balance,
+        "currentPoints": balance,
+        "availablePoints": balance,
+        "totalEarned": total_earned,
+        "totalSpent": total_spent,
+        "appId": payload_string(payload, "app_id"),
+        "userId": payload_string(payload, "user_id"),
+        "sourceUpdatedAt": payload_string(payload, "sourceUpdatedAt")
+            .or_else(|| payload_string(payload, "updated_at"))
+            .or_else(|| payload_string(payload, "updatedAt")),
+        "refreshedAt": refreshed_at,
+        "refreshedAtMs": refreshed_at_ms,
+        "pricing": pricing,
+    }))
+}
+
 fn cached_official_points(settings: &Value) -> Value {
-    official_settings_points(settings).unwrap_or_else(|| official_points_snapshot(settings))
+    official_settings_points(settings)
+        .and_then(|payload| normalize_official_points_payload(&payload))
+        .unwrap_or_else(|| {
+            normalize_official_points_payload(&official_points_snapshot(settings))
+                .unwrap_or_else(|| official_points_snapshot(settings))
+        })
+}
+
+fn official_points_need_silent_refresh(settings: &Value) -> bool {
+    if !official_session_logged_in(settings) {
+        return false;
+    }
+
+    match official_settings_points(settings)
+        .and_then(|payload| normalize_official_points_payload(&payload))
+    {
+        Some(points) => match payload_i64(&points, "refreshedAtMs") {
+            Some(refreshed_at) if refreshed_at > 0 => {
+                (now_ms() as i64).saturating_sub(refreshed_at)
+                    >= OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS
+            }
+            _ => true,
+        },
+        None => true,
+    }
+}
+
+fn session_access_token(settings: &Value) -> Option<String> {
+    official_settings_session(settings)
+        .and_then(|session| {
+            payload_string(&session, "accessToken")
+                .or_else(|| payload_string(&session, "access_token"))
+        })
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn session_created_at(settings: &Value) -> Option<i64> {
+    official_settings_session(settings).and_then(|session| {
+        session
+            .get("createdAt")
+            .or_else(|| session.get("updatedAt"))
+            .and_then(value_as_i64)
+    })
+}
+
+fn session_refresh_window_ms(settings: &Value) -> i64 {
+    let expires_at = session_expires_at(settings).unwrap_or_default();
+    let created_at = session_created_at(settings).unwrap_or_else(|| (now_ms() as i64) - 900_000);
+    let ttl_ms = expires_at.saturating_sub(created_at);
+    let dynamic_window = ttl_ms / 5;
+    dynamic_window.clamp(
+        OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS,
+        OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS,
+    )
+}
+
+fn session_refresh_deadline(settings: &Value) -> Option<i64> {
+    session_expires_at(settings).map(|expires_at| expires_at - session_refresh_window_ms(settings))
+}
+
+fn official_session_recoverable(settings: &Value) -> bool {
+    session_refresh_token(settings).is_some()
+}
+
+fn official_session_logged_in(settings: &Value) -> bool {
+    session_access_token(settings).is_some() || official_session_recoverable(settings)
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
@@ -51,6 +211,75 @@ fn value_as_i64(value: &Value) -> Option<i64> {
 
 fn payload_f64(payload: &Value, key: &str) -> Option<f64> {
     payload_field(payload, key).and_then(value_as_f64)
+}
+
+fn payload_i64(payload: &Value, key: &str) -> Option<i64> {
+    payload_field(payload, key).and_then(value_as_i64)
+}
+
+fn response_error_message(response: &Value) -> String {
+    for key in ["message", "error", "msg", "detail", "reason"] {
+        if let Some(value) = payload_string(response, key).filter(|item| !item.trim().is_empty()) {
+            return value;
+        }
+    }
+
+    if let Some(data) = response.get("data") {
+        for key in ["message", "error", "msg", "detail", "reason"] {
+            if let Some(value) = payload_string(data, key).filter(|item| !item.trim().is_empty()) {
+                return value;
+            }
+        }
+    }
+
+    "登录态已失效".to_string()
+}
+
+fn response_code_text(response: &Value) -> String {
+    for key in ["code", "errorCode", "error_code", "status", "statusCode"] {
+        if let Some(value) = payload_field(response, key) {
+            if let Some(code) = value.as_i64() {
+                return code.to_string();
+            }
+            if let Some(code) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+            {
+                return code.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn official_response_is_unauthorized(status: u16, response: &Value) -> bool {
+    if status == 401 {
+        return true;
+    }
+
+    let code = response_code_text(response).to_uppercase();
+    if matches!(
+        code.as_str(),
+        "401"
+            | "40101"
+            | "UNAUTHORIZED"
+            | "TOKEN_EXPIRED"
+            | "ACCESS_TOKEN_EXPIRED"
+            | "AUTH_EXPIRED"
+    ) {
+        return true;
+    }
+
+    let message = response_error_message(response).to_lowercase();
+    message.contains("unauthorized")
+        || message.contains("token expired")
+        || message.contains("invalid token")
+        || message.contains("access token")
+        || message.contains("jwt")
+        || message.contains("登录过期")
+        || message.contains("重新登录")
+        || message.contains("鉴权")
 }
 
 fn iso_time_from_value(value: Option<&Value>) -> String {
@@ -121,8 +350,50 @@ fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
     deduped.into_values().take(100).collect()
 }
 
+fn extract_official_call_record_rows(payload: &Value) -> Vec<Value> {
+    const ARRAY_KEYS: [&str; 10] = [
+        "items",
+        "records",
+        "usage_records",
+        "call_records",
+        "inference_records",
+        "logs",
+        "list",
+        "data",
+        "transactions",
+        "recent_records",
+    ];
+
+    fn collect_rows(node: &Value, rows: &mut Vec<Value>) {
+        if let Some(items) = node.as_array() {
+            rows.extend(items.iter().filter(|item| item.is_object()).cloned());
+            return;
+        }
+
+        let Some(object) = node.as_object() else {
+            return;
+        };
+
+        for key in ARRAY_KEYS {
+            let Some(value) = object.get(key) else {
+                continue;
+            };
+            if value.is_array() {
+                collect_rows(value, rows);
+            } else if value.is_object() {
+                collect_rows(value, rows);
+            }
+        }
+    }
+
+    let mut rows = Vec::new();
+    collect_rows(payload, &mut rows);
+    rows
+}
+
 fn normalize_official_call_records_value(value: &Value) -> Vec<Value> {
-    let items = official_response_items(value);
+    let payload = official_unwrap_response_payload(value);
+    let items = extract_official_call_record_rows(&payload);
     normalize_official_call_record_items(&items)
 }
 
@@ -141,9 +412,22 @@ fn session_expires_at(settings: &Value) -> Option<i64> {
 }
 
 fn official_session_needs_refresh(settings: &Value) -> bool {
-    session_expires_at(settings)
-        .map(|expires_at| expires_at <= (now_ms() as i64) + 60_000)
-        .unwrap_or(false)
+    if official_settings_session(settings).is_none() {
+        return false;
+    }
+
+    if session_access_token(settings).is_none() {
+        return official_session_recoverable(settings);
+    }
+
+    if !official_session_recoverable(settings) {
+        return false;
+    }
+
+    match session_refresh_deadline(settings) {
+        Some(refresh_at) => refresh_at <= now_ms() as i64,
+        None => true,
+    }
 }
 
 fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
@@ -187,6 +471,67 @@ fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
     session_object.insert("updatedAt".to_string(), json!(now_ms() as i64));
 }
 
+fn sync_official_route_credentials(settings: &mut Value) {
+    let token = official_auth_token_from_settings(settings).unwrap_or_default();
+    let base_url = payload_string(settings, "redbox_official_base_url")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string());
+    let mut sources = payload_string(settings, "ai_sources_json")
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default();
+    let mut changed = false;
+
+    for source in &mut sources {
+        let source_id = source
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if source_id != "redbox_official_auto" {
+            continue;
+        }
+        if let Some(object) = source.as_object_mut() {
+            object.insert("apiKey".to_string(), json!(token));
+            object.insert("baseURL".to_string(), json!(base_url));
+            changed = true;
+        }
+    }
+
+    if let Some(object) = settings.as_object_mut() {
+        if changed {
+            object.insert(
+                "ai_sources_json".to_string(),
+                json!(serde_json::to_string(&sources).unwrap_or_else(|_| "[]".to_string())),
+            );
+        }
+        object.insert("api_key".to_string(), json!(token.clone()));
+        object.insert("video_api_key".to_string(), json!(token));
+        object.insert("api_endpoint".to_string(), json!(base_url));
+    }
+}
+
+fn clear_official_auth_state(settings: &mut Value) {
+    upsert_official_settings_session(settings, None);
+    sync_official_route_credentials(settings);
+    if let Some(object) = settings.as_object_mut() {
+        object.insert("redbox_auth_points_json".to_string(), json!(""));
+        object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
+        object.insert("redbox_auth_wechat_login_json".to_string(), json!(""));
+    }
+}
+
+fn merge_official_settings(settings: &mut Value, source: &Value) {
+    let Some(target) = settings.as_object_mut() else {
+        *settings = source.clone();
+        return;
+    };
+    let source_object = source.as_object().cloned().unwrap_or_default();
+    for key in OFFICIAL_SETTINGS_SYNC_KEYS {
+        if let Some(value) = source_object.get(key) {
+            target.insert(key.to_string(), value.clone());
+        }
+    }
+}
+
 fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Value, String> {
     let refresh_token =
         session_refresh_token(settings).ok_or_else(|| "当前会话缺少 refresh token".to_string())?;
@@ -225,6 +570,7 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
                 Ok(mut session) => {
                     merge_session_with_existing(existing_session.as_ref(), &mut session);
                     upsert_official_settings_session(settings, Some(&session));
+                    sync_official_route_credentials(settings);
                     return Ok(session);
                 }
                 Err(error) => {
@@ -238,6 +584,136 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
     }
 
     Err(last_error.unwrap_or_else(|| "刷新登录态失败".to_string()))
+}
+
+fn apply_official_settings_update(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &Value,
+    source: &str,
+    data_payload: Option<Value>,
+) -> Result<(), String> {
+    with_store_mut(state, |store| {
+        merge_official_settings(&mut store.settings, settings);
+        Ok(())
+    })?;
+    let _ = app.emit(
+        "settings:updated",
+        json!({
+            "updatedAt": now_iso(),
+            "source": source,
+        }),
+    );
+    emit_redbox_auth_session_updated(app, official_settings_session(settings));
+    if let Some(payload) = data_payload {
+        emit_redbox_auth_data_updated(app, payload);
+    }
+    Ok(())
+}
+
+fn refresh_official_auth_session_with_lock(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    force: bool,
+    reason: &str,
+) -> Result<Option<Value>, String> {
+    let _guard = state
+        .official_auth_refresh_lock
+        .lock()
+        .map_err(|_| "官方登录态刷新锁已损坏".to_string())?;
+    let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    merge_official_settings(settings, &latest_settings);
+
+    if official_settings_session(settings).is_none() {
+        return Err("官方账号未登录".to_string());
+    }
+    if !force && !official_session_needs_refresh(settings) {
+        return Ok(official_settings_session(settings));
+    }
+
+    match refresh_official_auth_session_in_settings(settings) {
+        Ok(session) => {
+            apply_official_settings_update(
+                app,
+                state,
+                settings,
+                &format!("official-auth-refresh:{reason}"),
+                None,
+            )?;
+            Ok(Some(session))
+        }
+        Err(error) => {
+            clear_official_auth_state(settings);
+            let _ = apply_official_settings_update(
+                app,
+                state,
+                settings,
+                "official-auth-refresh-failed",
+                None,
+            );
+            Err(error)
+        }
+    }
+}
+
+fn run_authenticated_official_request(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    if official_session_needs_refresh(settings) {
+        refresh_official_auth_session_with_lock(app, state, settings, false, "preflight")?;
+    }
+
+    let response = crate::run_official_json_request_response(settings, method, path, body.clone())?;
+    if !official_response_is_unauthorized(response.status, &response.body) {
+        return Ok(response.body);
+    }
+
+    refresh_official_auth_session_with_lock(app, state, settings, true, "retry")?;
+    let retry = crate::run_official_json_request_response(settings, method, path, body)?;
+    if !official_response_is_unauthorized(retry.status, &retry.body) {
+        return Ok(retry.body);
+    }
+
+    clear_official_auth_state(settings);
+    let _ =
+        apply_official_settings_update(app, state, settings, "official-auth-unauthorized", None);
+    Err(response_error_message(&retry.body))
+}
+
+fn fetch_official_models_with_recovery(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+) -> Vec<Value> {
+    match run_authenticated_official_request(app, state, settings, "GET", "/models", None) {
+        Ok(remote) => {
+            let items = official_response_items(&remote);
+            if items.is_empty() {
+                official_settings_models(settings)
+            } else {
+                items
+            }
+        }
+        Err(_) => official_settings_models(settings),
+    }
+}
+
+fn fetch_remote_official_points(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+) -> Result<Value, String> {
+    let response =
+        run_authenticated_official_request(app, state, settings, "GET", "/users/me/points", None)?;
+    let payload = official_unwrap_response_payload(&response);
+    normalize_official_points_payload(&payload)
+        .ok_or_else(|| "官方积分接口返回了无法识别的数据结构".to_string())
 }
 
 fn sync_remote_orders_into_settings(settings: &mut Value, order: &Value) {
@@ -265,20 +741,29 @@ fn sync_remote_orders_into_settings(settings: &mut Value, order: &Value) {
     write_settings_json_array(settings, "redbox_auth_orders_json", &orders);
 }
 
-fn query_remote_order_status(settings: &Value, out_trade_no: &str) -> Option<Value> {
+fn query_remote_order_status(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    out_trade_no: &str,
+) -> Option<Value> {
     let normalized = out_trade_no.trim();
     if normalized.is_empty() {
         return None;
     }
     let encoded = normalized.replace(' ', "%20");
-    let remote = run_official_json_request(
+    let remote = run_authenticated_official_request(
+        app,
+        state,
         settings,
         "GET",
         &format!("/payments/orders/status?out_trade_no={encoded}"),
         None,
     )
     .or_else(|_| {
-        run_official_json_request(
+        run_authenticated_official_request(
+            app,
+            state,
             settings,
             "GET",
             &format!("/payments/orders/{encoded}"),
@@ -286,7 +771,9 @@ fn query_remote_order_status(settings: &Value, out_trade_no: &str) -> Option<Val
         )
     })
     .or_else(|_| {
-        run_official_json_request(
+        run_authenticated_official_request(
+            app,
+            state,
             settings,
             "GET",
             &format!("/billing/orders/status?out_trade_no={encoded}"),
@@ -294,45 +781,47 @@ fn query_remote_order_status(settings: &Value, out_trade_no: &str) -> Option<Val
         )
     })
     .or_else(|_| {
-        run_official_json_request(settings, "GET", &format!("/billing/orders/{encoded}"), None)
+        run_authenticated_official_request(
+            app,
+            state,
+            settings,
+            "GET",
+            &format!("/billing/orders/{encoded}"),
+            None,
+        )
     })
-    .or_else(|_| run_official_json_request(settings, "GET", &format!("/orders/{encoded}"), None))
+    .or_else(|_| {
+        run_authenticated_official_request(
+            app,
+            state,
+            settings,
+            "GET",
+            &format!("/orders/{encoded}"),
+            None,
+        )
+    })
     .ok()?;
     Some(official_unwrap_response_payload(&remote))
 }
 
-fn fetch_remote_official_call_records(settings: &Value) -> Result<Vec<Value>, String> {
-    let mut errors = Vec::new();
-    for path in [
-        "/users/me/ai-usage-logs?page=1&limit=50",
-        "/users/me/records",
-        "/users/me/logs",
-    ] {
-        match run_official_json_request(settings, "GET", path, None) {
-            Ok(response) => {
-                let items = normalize_official_call_records_value(&response);
-                if !items.is_empty() {
-                    return Ok(items);
-                }
-            }
-            Err(error) => errors.push(format!("{path}: {error}")),
-        }
+fn fetch_remote_official_call_records(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+) -> Result<Vec<Value>, String> {
+    let response = run_authenticated_official_request(
+        app,
+        state,
+        settings,
+        "GET",
+        "/users/me/ai-usage-logs",
+        None,
+    )?;
+    let items = normalize_official_call_records_value(&response);
+    if items.is_empty() {
+        return Err("官方调用记录接口返回了无法识别的数据结构".to_string());
     }
-
-    match run_official_json_request(settings, "GET", "/users/me/points", None) {
-        Ok(response) => {
-            let items = normalize_official_call_records_value(&response);
-            if !items.is_empty() {
-                return Ok(items);
-            }
-        }
-        Err(error) => errors.push(format!("/users/me/points: {error}")),
-    }
-
-    Err(format!(
-        "官方后端未提供调用记录接口：{}",
-        errors.join(" | ")
-    ))
+    Ok(items)
 }
 
 fn update_official_session_user(settings: &mut Value, user: &Value) {
@@ -345,48 +834,48 @@ fn update_official_session_user(settings: &mut Value, user: &Value) {
     });
     if let Some(session_value) = next_session.as_ref() {
         upsert_official_settings_session(settings, Some(session_value));
+        sync_official_route_credentials(settings);
     }
 }
 
-fn refresh_official_cached_data_into_settings(settings: &mut Value) -> Result<Value, String> {
-    if official_settings_session(settings).is_none()
-        || official_auth_token_from_settings(settings).is_none()
-    {
+fn refresh_official_cached_data_into_settings(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+) -> Result<Value, String> {
+    if !official_session_logged_in(settings) {
         return Err("官方账号未登录".to_string());
     }
 
     let mut refreshed = false;
 
     if official_session_needs_refresh(settings) {
-        let _ = refresh_official_auth_session_in_settings(settings);
+        refresh_official_auth_session_with_lock(app, state, settings, false, "cache-refresh")?;
     }
 
-    if let Ok(response) = run_official_json_request(settings, "GET", "/users/me", None) {
+    if let Ok(response) =
+        run_authenticated_official_request(app, state, settings, "GET", "/users/me", None)
+    {
         let user = official_unwrap_response_payload(&response);
         update_official_session_user(settings, &user);
         refreshed = true;
     }
 
-    if let Ok(response) = run_official_json_request(settings, "GET", "/users/me/points", None) {
-        let points = official_unwrap_response_payload(&response);
+    if let Ok(points) = fetch_remote_official_points(app, state, settings) {
         write_settings_json_value(settings, "redbox_auth_points_json", &points);
         refreshed = true;
     }
 
-    let models = fetch_official_models_for_settings(settings);
+    let models = fetch_official_models_with_recovery(app, state, settings);
     if !models.is_empty() {
         write_settings_json_array(settings, "redbox_official_models_json", &models);
         official_sync_source_into_settings(settings, &models);
         refreshed = true;
     }
 
-    if let Ok(records) = fetch_remote_official_call_records(settings) {
+    if let Ok(records) = fetch_remote_official_call_records(app, state, settings) {
         write_settings_json_array(settings, "redbox_auth_call_records_json", &records);
         refreshed = true;
-    }
-
-    if !refreshed {
-        return Err("官方数据刷新失败".to_string());
     }
 
     Ok(json!({
@@ -395,6 +884,7 @@ fn refresh_official_cached_data_into_settings(settings: &mut Value) -> Result<Va
         "models": official_settings_models(settings),
         "records": official_settings_call_records_list(settings),
         "refreshedAt": now_iso(),
+        "stale": !refreshed,
     }))
 }
 
@@ -403,56 +893,57 @@ pub(crate) fn refresh_official_cached_data(
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    if official_settings_session(&settings_snapshot).is_none()
-        || official_auth_token_from_settings(&settings_snapshot).is_none()
-    {
+    if !official_session_logged_in(&settings_snapshot) {
         return Err("官方账号未登录".to_string());
     }
 
     let mut updated_settings = settings_snapshot.clone();
-    let refreshed = refresh_official_cached_data_into_settings(&mut updated_settings)?;
-
-    with_store_mut(state, |store| {
-        let Some(target) = store.settings.as_object_mut() else {
-            store.settings = updated_settings.clone();
-            return Ok(());
-        };
-        let source: serde_json::Map<String, Value> =
-            updated_settings.as_object().cloned().unwrap_or_default();
-        for key in [
-            "redbox_auth_session_json",
-            "redbox_auth_points_json",
-            "redbox_official_models_json",
-            "redbox_auth_call_records_json",
-            "ai_sources_json",
-            "default_ai_source_id",
-            "api_endpoint",
-            "api_key",
-            "model_name",
-            "model_name_wander",
-            "model_name_chatroom",
-            "model_name_knowledge",
-            "model_name_redclaw",
-            "video_endpoint",
-            "video_api_key",
-            "video_model",
-        ] {
-            if let Some(value) = source.get(key) {
-                target.insert(key.to_string(), value.clone());
-            }
-        }
-        Ok(())
-    })?;
-
-    let _ = app.emit(
-        "settings:updated",
-        json!({
-            "updatedAt": now_iso(),
-            "source": "official-background-refresh",
-        }),
-    );
-    emit_redbox_auth_data_updated(app, refreshed.clone());
+    let refreshed = refresh_official_cached_data_into_settings(app, state, &mut updated_settings)?;
+    apply_official_settings_update(
+        app,
+        state,
+        &updated_settings,
+        "official-background-refresh",
+        Some(refreshed.clone()),
+    )?;
     Ok(refreshed)
+}
+
+pub(crate) fn bootstrap_official_auth_session(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    reason: &str,
+) -> Result<Value, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    if !official_session_logged_in(&settings_snapshot) {
+        let mut cleaned_settings = settings_snapshot.clone();
+        clear_official_auth_state(&mut cleaned_settings);
+        let _ = apply_official_settings_update(
+            app,
+            state,
+            &cleaned_settings,
+            "official-bootstrap-cleared",
+            None,
+        );
+        return Ok(json!({
+            "success": true,
+            "loggedIn": false,
+            "session": Value::Null,
+            "reason": reason,
+        }));
+    }
+
+    let refreshed = refresh_official_cached_data(app, state)?;
+    let session = with_store(state, |store| {
+        Ok(official_settings_session(&store.settings))
+    })?;
+    Ok(json!({
+        "success": true,
+        "loggedIn": session.is_some(),
+        "session": session,
+        "data": refreshed,
+        "reason": reason,
+    }))
 }
 
 pub(crate) fn trigger_official_cached_data_refresh(app: AppHandle) {
@@ -472,6 +963,7 @@ pub fn handle_official_channel(
 ) -> Option<Result<Value, String>> {
     let result = match channel {
         "redbox-auth:get-config"
+        | "redbox-auth:bootstrap"
         | "redbox-auth:get-session-cached"
         | "redbox-auth:get-session"
         | "redbox-auth:logout"
@@ -516,47 +1008,20 @@ pub fn handle_official_channel(
                         "session": official_settings_session(&store.settings)
                     }))
                 }),
+                "redbox-auth:bootstrap" => {
+                    let reason =
+                        payload_string(payload, "reason").unwrap_or_else(|| "manual".to_string());
+                    bootstrap_official_auth_session(app, state, &reason)
+                }
                 "redbox-auth:get-session" => {
-                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                    let mut settings = settings_snapshot.clone();
-                    let session = official_settings_session(&settings);
-                    let models = if session.is_some() {
-                        fetch_official_models_for_settings(&settings)
-                    } else {
-                        official_settings_models(&settings)
-                    };
-                    write_settings_json_array(
-                        &mut settings,
-                        "redbox_official_models_json",
-                        &models,
-                    );
-                    if session.is_some() && !models.is_empty() {
-                        official_sync_source_into_settings(&mut settings, &models);
-                    }
-                    with_store_mut(state, |store| {
-                        store.settings = settings.clone();
-                        Ok(())
-                    })?;
-                    Ok(json!({
-                        "success": true,
-                        "session": official_settings_session(&settings),
-                        "routeSynced": session.is_some(),
-                    }))
+                    bootstrap_official_auth_session(app, state, "get-session")
                 }
                 "redbox-auth:logout" => {
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
-                        upsert_official_settings_session(&mut settings, None);
-                        if let Some(object) = settings.as_object_mut() {
-                            object.insert("api_key".to_string(), json!(""));
-                            object.insert("redbox_auth_points_json".to_string(), json!(""));
-                            object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
-                        }
-                        store.settings = settings;
-                        Ok(json!({ "success": true, "routing": { "cleared": true } }))
-                    })?;
-                    emit_redbox_auth_session_updated(app, None);
-                    Ok(response)
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    clear_official_auth_state(&mut settings);
+                    apply_official_settings_update(app, state, &settings, "official-logout", None)?;
+                    Ok(json!({ "success": true, "routing": { "cleared": true } }))
                 }
                 "redbox-auth:send-sms-code" => {
                     let phone = payload_string(payload, "phone").unwrap_or_default();
@@ -603,7 +1068,8 @@ pub fn handle_official_channel(
                         )?;
                         let session = normalize_official_auth_session(&response)?;
                         upsert_official_settings_session(&mut settings, Some(&session));
-                        let models = fetch_official_models_for_settings(&settings);
+                        sync_official_route_credentials(&mut settings);
+                        let models = official_settings_models(&settings);
                         write_settings_json_array(
                             &mut settings,
                             "redbox_official_models_json",
@@ -690,6 +1156,7 @@ pub fn handle_official_channel(
                         };
                         if let Some(ref session_value) = session {
                             upsert_official_settings_session(&mut settings, Some(session_value));
+                            sync_official_route_credentials(&mut settings);
                             let models = fetch_official_models_for_settings(&settings);
                             write_settings_json_array(
                                 &mut settings,
@@ -743,6 +1210,7 @@ pub fn handle_official_channel(
                         )?;
                         let session = normalize_official_auth_session(&response)?;
                         upsert_official_settings_session(&mut settings, Some(&session));
+                        sync_official_route_credentials(&mut settings);
                         let models = fetch_official_models_for_settings(&settings);
                         write_settings_json_array(
                             &mut settings,
@@ -760,46 +1228,36 @@ pub fn handle_official_channel(
                     Ok(response)
                 }
                 "redbox-auth:refresh" => {
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
-                        if official_settings_session(&settings).is_none() {
-                            return Ok(json!({ "success": false, "error": "官方账号未登录" }));
-                        }
-                        let mut token_refreshed = false;
-                        match refresh_official_auth_session_in_settings(&mut settings) {
-                            Ok(_) => {
-                                token_refreshed = true;
-                            }
-                            Err(error) => {
-                                if official_session_needs_refresh(&settings) {
-                                    return Ok(json!({ "success": false, "error": error }));
-                                }
-                            }
-                        }
-                        let refreshed = refresh_official_cached_data_into_settings(&mut settings)?;
-                        let session = official_settings_session(&settings);
-                        store.settings = settings;
-                        Ok(json!({
-                            "success": true,
-                            "queued": false,
-                            "tokenRefreshed": token_refreshed,
-                            "requestedAt": now_iso(),
-                            "session": session,
-                            "data": refreshed,
-                        }))
-                    })?;
-                    if response.get("success").and_then(|value| value.as_bool()) == Some(true) {
-                        emit_redbox_auth_session_updated(
-                            app,
-                            response
-                                .get("session")
-                                .cloned()
-                                .filter(|value| !value.is_null()),
-                        );
-                        if let Some(data) = response.get("data").cloned() {
-                            emit_redbox_auth_data_updated(app, data);
-                        }
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    if !official_session_logged_in(&settings_snapshot) {
+                        return Ok(json!({ "success": false, "error": "官方账号未登录" }));
                     }
+                    let mut settings = settings_snapshot.clone();
+                    let token_refreshed = refresh_official_auth_session_with_lock(
+                        app,
+                        state,
+                        &mut settings,
+                        true,
+                        "manual-refresh",
+                    )
+                    .is_ok();
+                    let refreshed =
+                        refresh_official_cached_data_into_settings(app, state, &mut settings)?;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-manual-refresh",
+                        Some(refreshed.clone()),
+                    )?;
+                    let response = json!({
+                        "success": true,
+                        "queued": false,
+                        "tokenRefreshed": token_refreshed,
+                        "requestedAt": now_iso(),
+                        "session": official_settings_session(&settings),
+                        "data": refreshed,
+                    });
                     Ok(response)
                 }
                 "redbox-auth:me" => with_store(state, |store| {
@@ -808,12 +1266,40 @@ pub fn handle_official_channel(
                         "user": cached_official_user(&store.settings),
                     }))
                 }),
-                "redbox-auth:points" => with_store(state, |store| {
+                "redbox-auth:points" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let cached_points = cached_official_points(&settings);
+                    let stale = official_points_need_silent_refresh(&settings);
+                    let mut error = None;
+                    let points = match fetch_remote_official_points(app, state, &mut settings) {
+                        Ok(points) => {
+                            write_settings_json_value(
+                                &mut settings,
+                                "redbox_auth_points_json",
+                                &points,
+                            );
+                            points
+                        }
+                        Err(next_error) => {
+                            error = Some(next_error);
+                            cached_points
+                        }
+                    };
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-points-query",
+                        None,
+                    )?;
                     Ok(json!({
-                        "success": true,
-                        "points": cached_official_points(&store.settings),
+                        "success": error.is_none() || points.is_object(),
+                        "points": points,
+                        "stale": stale,
+                        "error": error,
                     }))
-                }),
+                }
                 "redbox-auth:models" => with_store(state, |store| {
                     Ok(json!({
                         "success": true,
@@ -892,6 +1378,7 @@ pub fn handle_official_channel(
                         );
                         if let Some(ref session_value) = session {
                             upsert_official_settings_session(&mut settings, Some(session_value));
+                            sync_official_route_credentials(&mut settings);
                             if !models.is_empty() {
                                 official_sync_source_into_settings(&mut settings, &models);
                             }
@@ -911,42 +1398,59 @@ pub fn handle_official_channel(
                     trigger_official_cached_data_refresh(app.clone());
                     Ok(response)
                 }
-                "redbox-auth:products" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
-                    if official_session_needs_refresh(&settings) {
-                        let _ = refresh_official_auth_session_in_settings(&mut settings);
-                    }
-                    let remote =
-                        run_official_json_request(&settings, "GET", "/payments/products", None)
-                            .or_else(|_| {
-                                run_official_json_request(
-                                    &settings,
-                                    "GET",
-                                    "/billing/products",
-                                    None,
-                                )
-                            })
-                            .or_else(|_| {
-                                run_official_json_request(&settings, "GET", "/products", None)
-                            })
-                            .ok();
+                "redbox-auth:products" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let remote = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
+                        "GET",
+                        "/payments/products",
+                        None,
+                    )
+                    .or_else(|_| {
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "GET",
+                            "/billing/products",
+                            None,
+                        )
+                    })
+                    .or_else(|_| {
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "GET",
+                            "/products",
+                            None,
+                        )
+                    })
+                    .ok();
                     let products = remote
                         .as_ref()
                         .map(official_response_items)
                         .filter(|items| !items.is_empty())
                         .unwrap_or_else(official_fallback_products);
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-products",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "products": products }))
-                }),
-                "redbox-auth:call-records" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
-                    if official_session_needs_refresh(&settings) {
-                        let _ = refresh_official_auth_session_in_settings(&mut settings);
-                    }
+                }
+                "redbox-auth:call-records" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let cached_records = normalize_official_call_record_items(
                         &official_settings_call_records_list(&settings),
                     );
-                    let remote = fetch_remote_official_call_records(&settings);
+                    let remote = fetch_remote_official_call_records(app, state, &mut settings);
                     let mut error = None;
                     let records = match remote {
                         Ok(records) => {
@@ -962,7 +1466,13 @@ pub fn handle_official_channel(
                             cached_records
                         }
                     };
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-call-records",
+                        None,
+                    )?;
                     if let Some(message) = error {
                         let has_records = !records.is_empty();
                         return Ok(json!({
@@ -972,17 +1482,17 @@ pub fn handle_official_channel(
                         }));
                     }
                     Ok(json!({ "success": true, "records": records }))
-                }),
-                "redbox-auth:create-page-pay-order" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
-                    if official_session_needs_refresh(&settings) {
-                        let _ = refresh_official_auth_session_in_settings(&mut settings);
-                    }
+                }
+                "redbox-auth:create-page-pay-order" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let amount = payload_f64(payload, "amount").unwrap_or(9.9);
                     let subject = payload_string(payload, "subject")
                         .unwrap_or_else(|| format!("积分充值 ¥{amount:.2}"));
-                    let order = run_official_json_request(
-                        &settings,
+                    let order = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
                         "POST",
                         "/payments/orders/page-pay",
                         Some(json!({
@@ -992,8 +1502,8 @@ pub fn handle_official_channel(
                             "amount_yuan": amount,
                             "subject": subject,
                             "title": subject,
-                            "points_to_deduct": payload_field(payload, "pointsToDeduct").and_then(|value| value.as_i64()).unwrap_or(0),
-                            "pointsToDeduct": payload_field(payload, "pointsToDeduct").and_then(|value| value.as_i64()).unwrap_or(0),
+                            "points_to_deduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
+                            "pointsToDeduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
                         })),
                     )
                     .map(|response| official_unwrap_response_payload(&response))
@@ -1015,18 +1525,24 @@ pub fn handle_official_channel(
                     let mut orders = official_settings_orders(&settings);
                     orders.insert(0, order.clone());
                     write_settings_json_array(&mut settings, "redbox_auth_orders_json", &orders);
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-order-create",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "order": order }))
-                }),
-                "redbox-auth:create-wechat-native-order" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
-                    if official_session_needs_refresh(&settings) {
-                        let _ = refresh_official_auth_session_in_settings(&mut settings);
-                    }
+                }
+                "redbox-auth:create-wechat-native-order" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let amount = payload_f64(payload, "amount").unwrap_or(9.9);
                     let out_trade_no = make_id("wxpay");
-                    let order = run_official_json_request(
-                        &settings,
+                    let order = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
                         "POST",
                         "/payments/orders/wechat-native",
                         Some(json!({
@@ -1038,8 +1554,10 @@ pub fn handle_official_channel(
                         })),
                     )
                     .or_else(|_| {
-                        run_official_json_request(
-                            &settings,
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
                             "POST",
                             "/wechat/pay/native",
                             Some(json!({
@@ -1064,17 +1582,21 @@ pub fn handle_official_channel(
                     let mut orders = official_settings_orders(&settings);
                     orders.insert(0, order.clone());
                     write_settings_json_array(&mut settings, "redbox_auth_orders_json", &orders);
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-wechat-order-create",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "order": order }))
-                }),
-                "redbox-auth:order-status" => with_store_mut(state, |store| {
+                }
+                "redbox-auth:order-status" => {
                     let out_trade_no = payload_string(payload, "outTradeNo").unwrap_or_default();
-                    let mut settings = store.settings.clone();
-                    if official_session_needs_refresh(&settings) {
-                        let _ = refresh_official_auth_session_in_settings(&mut settings);
-                    }
-                    let order =
-                        query_remote_order_status(&settings, &out_trade_no).unwrap_or_else(|| {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let order = query_remote_order_status(app, state, &mut settings, &out_trade_no)
+                        .unwrap_or_else(|| {
                             official_settings_orders(&settings)
                                 .into_iter()
                                 .find(|item| {
@@ -1093,9 +1615,15 @@ pub fn handle_official_channel(
                                 })
                         });
                     sync_remote_orders_into_settings(&mut settings, &order);
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-order-status",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "order": order }))
-                }),
+                }
                 "redbox-auth:open-payment-form" => {
                     let payment_form = payload_string(payload, "paymentForm").unwrap_or_default();
                     match open_payment_form(&payment_form) {
@@ -1107,43 +1635,47 @@ pub fn handle_official_channel(
                     let session = official_settings_session(&store.settings);
                     Ok(json!({ "success": true, "session": session }))
                 }),
-                "official:auth:set-session" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
+                "official:auth:set-session" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let session = payload_field(payload, "session")
                         .cloned()
                         .unwrap_or(payload.clone());
-                    if let Some(object) = settings.as_object_mut() {
-                        object.insert(
-                            "redbox_auth_session_json".to_string(),
-                            json!(serde_json::to_string(&session)
-                                .unwrap_or_else(|_| "{}".to_string())),
-                        );
-                    }
+                    upsert_official_settings_session(&mut settings, Some(&session));
+                    sync_official_route_credentials(&mut settings);
                     let models = official_settings_models(&settings);
                     if !models.is_empty() {
                         official_sync_source_into_settings(&mut settings, &models);
                     }
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-auth-set-session",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "session": session }))
-                }),
-                "official:auth:clear-session" => with_store_mut(state, |store| {
-                    let mut settings = store.settings.clone();
-                    if let Some(object) = settings.as_object_mut() {
-                        object.insert("redbox_auth_session_json".to_string(), json!(""));
-                    }
-                    store.settings = settings;
+                }
+                "official:auth:clear-session" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    clear_official_auth_state(&mut settings);
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-auth-clear-session",
+                        None,
+                    )?;
                     Ok(json!({ "success": true }))
-                }),
-                "official:models:list" => with_store_mut(state, |store| {
-                    let mut models = official_settings_models(&store.settings);
+                }
+                "official:models:list" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let mut models = official_settings_models(&settings);
                     if models.is_empty() {
-                        if let Ok(remote) =
-                            run_official_json_request(&store.settings, "GET", "/models", None)
-                        {
-                            models = official_response_items(&remote);
-                        }
+                        models = fetch_official_models_with_recovery(app, state, &mut settings);
                     }
-                    let mut settings = store.settings.clone();
                     if let Some(object) = settings.as_object_mut() {
                         object.insert(
                             "redbox_official_models_json".to_string(),
@@ -1155,31 +1687,70 @@ pub fn handle_official_channel(
                     if !models.is_empty() {
                         official_sync_source_into_settings(&mut settings, &models);
                     }
-                    store.settings = settings;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-models-list",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "models": models }))
-                }),
-                "official:account:summary" => with_store(state, |store| {
-                    let models = official_settings_models(&store.settings);
-                    let remote =
-                        run_official_json_request(&store.settings, "GET", "/account", None)
-                            .or_else(|_| {
-                                run_official_json_request(&store.settings, "GET", "/me", None)
-                            })
-                            .ok();
+                }
+                "official:account:summary" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let models = official_settings_models(&settings);
+                    let remote = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
+                        "GET",
+                        "/account",
+                        None,
+                    )
+                    .or_else(|_| {
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "GET",
+                            "/me",
+                            None,
+                        )
+                    })
+                    .ok();
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-account-summary",
+                        None,
+                    )?;
                     Ok(json!({
                         "success": true,
-                        "summary": remote.unwrap_or_else(|| official_account_summary_local(&store.settings, &models))
+                        "summary": remote.unwrap_or_else(|| official_account_summary_local(&settings, &models))
                     }))
-                }),
-                "official:billing:products" => with_store(state, |store| {
-                    let remote = run_official_json_request(
-                        &store.settings,
+                }
+                "official:billing:products" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let remote = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
                         "GET",
                         "/billing/products",
                         None,
                     )
                     .or_else(|_| {
-                        run_official_json_request(&store.settings, "GET", "/products", None)
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "GET",
+                            "/products",
+                            None,
+                        )
                     })
                     .ok();
                     let products = remote
@@ -1187,22 +1758,53 @@ pub fn handle_official_channel(
                         .map(official_response_items)
                         .filter(|items| !items.is_empty())
                         .unwrap_or_else(official_fallback_products);
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-billing-products",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "products": products }))
-                }),
-                "official:billing:list-orders" => with_store(state, |store| {
-                    let remote =
-                        run_official_json_request(&store.settings, "GET", "/billing/orders", None)
-                            .or_else(|_| {
-                                run_official_json_request(&store.settings, "GET", "/orders", None)
-                            })
-                            .ok();
+                }
+                "official:billing:list-orders" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let remote = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
+                        "GET",
+                        "/billing/orders",
+                        None,
+                    )
+                    .or_else(|_| {
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "GET",
+                            "/orders",
+                            None,
+                        )
+                    })
+                    .ok();
                     let orders = remote
                         .as_ref()
                         .map(official_response_items)
                         .unwrap_or_default();
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-billing-list-orders",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "orders": orders }))
-                }),
-                "official:billing:create-order" => with_store(state, |store| {
+                }
+                "official:billing:create-order" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
                     let product_id = payload_string(payload, "productId").unwrap_or_default();
                     let amount = payload_f64(payload, "amount");
                     let body = json!({
@@ -1211,14 +1813,23 @@ pub fn handle_official_channel(
                         "amount": amount,
                         "currency": payload_string(payload, "currency").unwrap_or_else(|| "CNY".to_string()),
                     });
-                    let order = run_official_json_request(
-                        &store.settings,
+                    let order = run_authenticated_official_request(
+                        app,
+                        state,
+                        &mut settings,
                         "POST",
                         "/billing/orders",
                         Some(body.clone()),
                     )
                     .or_else(|_| {
-                        run_official_json_request(&store.settings, "POST", "/orders", Some(body))
+                        run_authenticated_official_request(
+                            app,
+                            state,
+                            &mut settings,
+                            "POST",
+                            "/orders",
+                            Some(body),
+                        )
                     })
                     .unwrap_or_else(|_| {
                         json!({
@@ -1231,16 +1842,32 @@ pub fn handle_official_channel(
                             "created_at": now_iso(),
                         })
                     });
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-billing-create-order",
+                        None,
+                    )?;
                     Ok(json!({ "success": true, "order": order }))
-                }),
-                "official:billing:list-calls" => with_store(state, |store| {
-                    match fetch_remote_official_call_records(&store.settings) {
-                        Ok(records) => Ok(json!({ "success": true, "records": records })),
-                        Err(error) => {
-                            Ok(json!({ "success": false, "records": [], "error": error }))
-                        }
-                    }
-                }),
+                }
+                "official:billing:list-calls" => {
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let result = match fetch_remote_official_call_records(app, state, &mut settings)
+                    {
+                        Ok(records) => json!({ "success": true, "records": records }),
+                        Err(error) => json!({ "success": false, "records": [], "error": error }),
+                    };
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-billing-list-calls",
+                        None,
+                    )?;
+                    Ok(result)
+                }
                 _ => unreachable!("channel prefiltered"),
             }
         })(),
@@ -1297,5 +1924,137 @@ mod tests {
         assert_eq!(payload_string(&records[0], "id").as_deref(), Some("req-1"));
         assert_eq!(records[0].get("points").and_then(value_as_f64), Some(1.25));
         assert_eq!(records[0].get("tokens").and_then(value_as_f64), Some(321.0));
+    }
+
+    #[test]
+    fn normalize_official_call_records_value_merges_multiple_payload_arrays() {
+        let records = normalize_official_call_records_value(&json!({
+            "data": {
+                "records": [
+                    {
+                        "request_id": "req-1",
+                        "model_name": "gpt-4.1",
+                        "cost_points": 1.25,
+                        "total_tokens": 321,
+                        "created_at": "2026-04-16T06:00:00Z"
+                    }
+                ],
+                "logs": [
+                    {
+                        "log_id": "req-2",
+                        "model": "gpt-4.1-mini",
+                        "points_cost": 0.5,
+                        "token": 120,
+                        "time": "2026-04-16T07:00:00Z"
+                    }
+                ]
+            }
+        }));
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(payload_string(&records[0], "id").as_deref(), Some("req-1"));
+        assert_eq!(payload_string(&records[1], "id").as_deref(), Some("req-2"));
+    }
+
+    #[test]
+    fn session_without_expiry_but_with_refresh_token_requires_refresh() {
+        let settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1",
+                "refreshToken": "refresh-1",
+                "createdAt": now_ms() as i64,
+            }))
+            .unwrap(),
+        });
+
+        assert!(official_session_needs_refresh(&settings));
+    }
+
+    #[test]
+    fn session_refresh_window_uses_twenty_percent_with_bounds() {
+        let created_at = 1_000_000_i64;
+        let settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1",
+                "refreshToken": "refresh-1",
+                "createdAt": created_at,
+                "expiresAt": created_at + (30 * 60 * 1000),
+            }))
+            .unwrap(),
+        });
+
+        assert_eq!(session_refresh_window_ms(&settings), 5 * 60_000);
+    }
+
+    #[test]
+    fn unauthorized_detection_accepts_http_status_and_error_message() {
+        assert!(official_response_is_unauthorized(401, &json!({})));
+        assert!(official_response_is_unauthorized(
+            200,
+            &json!({
+                "success": false,
+                "message": "Access token expired, please login again",
+            })
+        ));
+        assert!(!official_response_is_unauthorized(
+            200,
+            &json!({
+                "success": false,
+                "message": "network timeout",
+            })
+        ));
+    }
+
+    #[test]
+    fn normalize_official_points_payload_maps_balance_response() {
+        let normalized = normalize_official_points_payload(&json!({
+            "app_id": "app-1",
+            "user_id": "user-1",
+            "balance": 1296.06,
+            "total_earned": 4970,
+            "total_spent": 3673.94,
+            "updated_at": "2026-04-17T02:26:18.038Z",
+            "pricing": {
+                "unit": "points",
+                "points_per_yuan": 100
+            }
+        }))
+        .expect("points payload should normalize");
+
+        assert_eq!(
+            normalized.get("balance").and_then(value_as_f64),
+            Some(1296.06)
+        );
+        assert_eq!(
+            normalized.get("points").and_then(value_as_f64),
+            Some(1296.06)
+        );
+        assert_eq!(
+            normalized
+                .pointer("/pricing/points_per_yuan")
+                .and_then(value_as_f64),
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn cached_official_points_ignores_unauthorized_error_payload() {
+        let settings = json!({
+            "redbox_auth_points_json": serde_json::to_string(&json!({
+                "code": 401,
+                "message": "Token expired",
+            }))
+            .unwrap(),
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "user": {
+                    "pointsBalance": 88.5
+                }
+            }))
+            .unwrap(),
+        });
+
+        let cached = cached_official_points(&settings);
+        assert_eq!(cached.get("balance").and_then(value_as_f64), Some(88.5));
+        assert_eq!(cached.get("points").and_then(value_as_f64), Some(88.5));
     }
 }

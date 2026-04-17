@@ -344,6 +344,25 @@ declare global {
         getRecent: (limit?: number) => Promise<{ lines: string[] }>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
       };
+      officialAuth: {
+        bootstrap: (payload?: { reason?: string }) => Promise<{
+          success: boolean;
+          loggedIn?: boolean;
+          session?: Record<string, unknown> | null;
+          data?: Record<string, unknown> | null;
+          reason?: string;
+          error?: string;
+        }>;
+        refresh: () => Promise<{
+          success: boolean;
+          queued?: boolean;
+          tokenRefreshed?: boolean;
+          requestedAt?: string;
+          session?: Record<string, unknown> | null;
+          data?: Record<string, unknown> | null;
+          error?: string;
+        }>;
+      };
       sessions: {
         list: () => Promise<Array<{
           id: string;

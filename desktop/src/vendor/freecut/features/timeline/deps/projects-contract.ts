@@ -6,20 +6,20 @@ type ProjectMetadata = {
   fps: number;
 };
 
-type LexBoxProjectState = {
+type RedBoxProjectState = {
   currentProject: {
     id: string;
     metadata: ProjectMetadata;
   } | null;
 };
 
-type LexBoxProjectActions = {
-  syncCurrentProject: (project: LexBoxProjectState['currentProject']) => void;
+type RedBoxProjectActions = {
+  syncCurrentProject: (project: RedBoxProjectState['currentProject']) => void;
 };
 
-export const useProjectStore = create<LexBoxProjectState & LexBoxProjectActions>((set) => ({
+export const useProjectStore = create<RedBoxProjectState & RedBoxProjectActions>((set) => ({
   currentProject: {
-    id: 'lexbox-project',
+    id: 'redbox-project',
     metadata: {
       width: 1080,
       height: 1920,
@@ -29,6 +29,6 @@ export const useProjectStore = create<LexBoxProjectState & LexBoxProjectActions>
   syncCurrentProject: (currentProject) => set({ currentProject }),
 }));
 
-export function syncLexBoxTimelineProject(project: LexBoxProjectState['currentProject']) {
+export function syncRedBoxTimelineProject(project: RedBoxProjectState['currentProject']) {
   useProjectStore.getState().syncCurrentProject(project);
 }

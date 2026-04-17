@@ -13,7 +13,7 @@ use crate::tools::registry::{
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
 };
 use crate::{
-    lexbox_project_root, load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso,
+    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, redbox_project_root,
     render_redbox_prompt, truncate_chars, workspace_root, AppState,
 };
 
@@ -419,7 +419,7 @@ pub(crate) fn resolve_workspace_tool_path(
         return Err("path is required".to_string());
     }
     if let Some(relative) = trimmed.strip_prefix("builtin-skills/") {
-        let builtin_root = lexbox_project_root().join("builtin-skills");
+        let builtin_root = redbox_project_root().join("builtin-skills");
         let candidate = builtin_root.join(relative);
         let normalized = candidate.canonicalize().unwrap_or(candidate.clone());
         let builtin_normalized = builtin_root.canonicalize().unwrap_or(builtin_root);

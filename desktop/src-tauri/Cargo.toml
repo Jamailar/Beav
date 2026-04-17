@@ -1,5 +1,5 @@
 [package]
-name = "lexbox"
+name = "redbox"
 version = "0.1.0"
 description = "Rust host for the RedConvert desktop migration"
 authors = ["Codex"]

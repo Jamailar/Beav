@@ -1,6 +1,12 @@
 use base64::Engine;
 use serde_json::{json, Value};
 
+#[derive(Debug, Clone)]
+pub(crate) struct HttpJsonResponse {
+    pub status: u16,
+    pub body: Value,
+}
+
 pub(crate) fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
@@ -71,6 +77,20 @@ pub(crate) fn run_curl_json_with_timeout(
     body: Option<Value>,
     max_time_seconds: Option<u64>,
 ) -> Result<Value, String> {
+    run_curl_json_response(method, url, api_key, extra_headers, body, max_time_seconds)
+        .map(|response| response.body)
+}
+
+pub(crate) fn run_curl_json_response(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+) -> Result<HttpJsonResponse, String> {
+    const STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
+
     let mut command = build_curl_json_command(
         method,
         url,
@@ -80,6 +100,9 @@ pub(crate) fn run_curl_json_with_timeout(
         max_time_seconds,
         false,
     )?;
+    command
+        .arg("-w")
+        .arg(format!("\n{STATUS_MARKER}%{{http_code}}"));
     let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -89,11 +112,30 @@ pub(crate) fn run_curl_json_with_timeout(
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        return Ok(json!({}));
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let (body_text, status_text) = stdout
+        .rsplit_once(STATUS_MARKER)
+        .ok_or_else(|| "Invalid HTTP response trailer".to_string())?;
+    let status = status_text
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("Invalid HTTP status code: {error}"))?;
+    let normalized_body = body_text.trim();
+
+    if normalized_body.is_empty() {
+        return Ok(HttpJsonResponse {
+            status,
+            body: json!({}),
+        });
     }
-    serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))
+
+    let parsed = serde_json::from_str(normalized_body)
+        .map_err(|error| format!("Invalid JSON response: {error}"))?;
+    Ok(HttpJsonResponse {
+        status,
+        body: parsed,
+    })
 }
 
 pub(crate) fn run_curl_json(

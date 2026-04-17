@@ -81,17 +81,11 @@ pub fn build_store_path() -> PathBuf {
     let base = config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let redbox_dir = base.join("RedBox");
-    let lexbox_dir = base.join("LexBox");
     let redbox_path = redbox_dir.join("redbox-state.json");
-    let lexbox_path = lexbox_dir.join("lexbox-state.json");
 
     if redbox_path.exists() {
         let _ = fs::create_dir_all(&redbox_dir);
         return redbox_path;
-    }
-    if lexbox_path.exists() {
-        let _ = fs::create_dir_all(&lexbox_dir);
-        return lexbox_path;
     }
 
     let _ = fs::create_dir_all(&redbox_dir);
@@ -123,6 +117,45 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
             description: "视频编辑内置 Remotion 官方最佳实践技能".to_string(),
             location: "redbox://skills/remotion-best-practices".to_string(),
             body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, app_cli, redbox_editor]\nhookMode: inline\nautoActivate: true\ncontextNote: 当前视频运行时默认启用 Remotion 官方最佳实践知识包。优先按 Composition / Sequence / timing / assets 的思路设计动画，但最终仍以 remotion.scene.json 为宿主真相层，并以 baseMedia.outputPath 作为基础视频。\npromptPrefix: 你当前必须遵守 remotion-best-practices：先读取当前 Remotion 工程状态，再决定 composition/scene 边界、主体 element、timing 与 assets；不要直接虚构任意 React 代码或 CSS 动画。\npromptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落地结果。若官方 Remotion 能力超出宿主范围，必须显式降级为可预览的 scene patch，而不是假装已实现。\n---\n# Remotion Best Practices\n\n用于 `video-editor` 运行时的内置 Remotion 官方最佳实践技能。\n\n- 先 `redbox_editor(action=project_read)` 了解当前视频工程，再 `redbox_editor(action=remotion_read)` 读取当前 Remotion 工程状态。\n- 运行时会自动加载 compositions / animations / sequencing / timing / assets / text-animations / subtitles / transitions / calculate-metadata。\n- 先明确 Composition / scene 边界，再确定主体 element、timing、assets、字幕与导出默认项。\n- 结果必须回写 `remotion.scene.json`，不要退化成脱离宿主的自由 TSX 代码。\n- 若脚本没有明确要求屏幕文字，默认不要生成 `overlayTitle`、`overlayBody`、`overlays` 或解释性 `text` entity；优先只保留动画主体。\n- 不要调用旧时间轴动作编辑视频；基础视频剪辑走 `ffmpeg_edit`，图层动画走 `remotion_*`。\n- 禁止使用 CSS transition、CSS animation 或 Tailwind animate 类名来实现 Remotion 动画。".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "redbox-video-director".to_string(),
+            description: "短视频生成导演技能，用于 RedBox 官方视频 API 的分镜脚本确认、参考图引导、首尾帧过渡和多镜头生成。".to_string(),
+            location: "redbox://skills/redbox-video-director".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/redbox-video-director/SKILL.md"
+            ))
+            .to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "skill-creator".to_string(),
+            description: "技能创建指导技能，用于创建或更新 SKILL.md、脚本、参考文档、资源和 agents/openai.yaml。".to_string(),
+            location: "redbox://skills/skill-creator".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/skill-creator/SKILL.md"
+            ))
+            .to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "image-prompt-optimizer".to_string(),
+            description: "当任务准备调用 app_cli(image generate) 做文生图、参考图引导或图生图时，先用它整理最终提示词，避免主体跑偏、风格失控和把说明文字画进图里。".to_string(),
+            location: "redbox://skills/image-prompt-optimizer".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/image-prompt-optimizer/SKILL.md"
+            ))
+            .to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
             disabled: Some(false),

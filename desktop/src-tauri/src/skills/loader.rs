@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::lexbox_project_root;
+use crate::redbox_project_root;
 use crate::runtime::SkillRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -281,9 +281,36 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
 }
 
 fn builtin_skill_root(skill_name: &str) -> PathBuf {
-    lexbox_project_root()
+    redbox_project_root()
         .join("builtin-skills")
         .join(skill_name)
+}
+
+pub fn load_skill_bundle_sections_from_root(
+    skill_name: &str,
+    skill_root: &Path,
+) -> SkillBundleSections {
+    let skill_file = skill_root.join("SKILL.md");
+    if !skill_file.exists() || !skill_file.is_file() {
+        return SkillBundleSections {
+            skill_name: skill_name.to_string(),
+            body: String::new(),
+            references: String::new(),
+            scripts: String::new(),
+            rules: BTreeMap::new(),
+        };
+    }
+    let body = fs::read_to_string(&skill_file).unwrap_or_default();
+    let references = load_section_folder(&skill_root.join("references"));
+    let scripts = load_section_folder(&skill_root.join("scripts"));
+    let rules = load_named_markdown_folder(&skill_root.join("rules"));
+    SkillBundleSections {
+        skill_name: skill_name.to_string(),
+        body,
+        references,
+        scripts,
+        rules,
+    }
 }
 
 pub fn load_skill_bundle_sections_from_sources(
@@ -291,37 +318,16 @@ pub fn load_skill_bundle_sections_from_sources(
     workspace_root: Option<&Path>,
 ) -> SkillBundleSections {
     let builtin_root = builtin_skill_root(skill_name);
-    let builtin_skill_file = builtin_root.join("SKILL.md");
-    if builtin_skill_file.exists() && builtin_skill_file.is_file() {
-        let body = fs::read_to_string(&builtin_skill_file).unwrap_or_default();
-        let references = load_section_folder(&builtin_root.join("references"));
-        let scripts = load_section_folder(&builtin_root.join("scripts"));
-        let rules = load_named_markdown_folder(&builtin_root.join("rules"));
-        return SkillBundleSections {
-            skill_name: skill_name.to_string(),
-            body,
-            references,
-            scripts,
-            rules,
-        };
+    let builtin_bundle = load_skill_bundle_sections_from_root(skill_name, &builtin_root);
+    if !builtin_bundle.body.trim().is_empty() {
+        return builtin_bundle;
     }
     for root in skill_source_roots(workspace_root) {
         let skill_root = root.join(skill_name);
-        let skill_file = skill_root.join("SKILL.md");
-        if !skill_file.exists() || !skill_file.is_file() {
-            continue;
+        let bundle = load_skill_bundle_sections_from_root(skill_name, &skill_root);
+        if !bundle.body.trim().is_empty() {
+            return bundle;
         }
-        let body = fs::read_to_string(&skill_file).unwrap_or_default();
-        let references = load_section_folder(&skill_root.join("references"));
-        let scripts = load_section_folder(&skill_root.join("scripts"));
-        let rules = load_named_markdown_folder(&skill_root.join("rules"));
-        return SkillBundleSections {
-            skill_name: skill_name.to_string(),
-            body,
-            references,
-            scripts,
-            rules,
-        };
     }
     SkillBundleSections {
         skill_name: skill_name.to_string(),

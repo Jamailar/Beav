@@ -3,6 +3,7 @@ import { Link2, Loader2 } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
+import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -175,6 +176,8 @@ function shouldRenderView(
 }
 
 function App() {
+  useOfficialAuthLifecycle();
+
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
   const [isImmersiveEditor, setIsImmersiveEditor] = useState(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
@@ -381,21 +384,21 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('creative-chat') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'creative-chat') && (
           <div className={currentView === 'creative-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'creative-chat' ? <ViewLoadingFallback /> : null}>
               <CreativeChatPage isActive={currentView === 'creative-chat'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('skills') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
               <SkillsPage isActive={currentView === 'skills'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('knowledge') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'knowledge') && (
           <div className={currentView === 'knowledge' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'knowledge' ? <ViewLoadingFallback /> : null}>
               <KnowledgePage
@@ -406,21 +409,21 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('advisors') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'advisors') && (
           <div className={currentView === 'advisors' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'advisors' ? <ViewLoadingFallback /> : null}>
               <AdvisorsPage isActive={currentView === 'advisors'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('settings') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'settings') && (
           <div className={currentView === 'settings' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
               <SettingsPage isActive={currentView === 'settings'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('manuscripts') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'manuscripts') && (
           <div className={currentView === 'manuscripts' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'manuscripts' ? <ViewLoadingFallback /> : null}>
               <ManuscriptsPage
@@ -433,7 +436,7 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('archives') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'archives') && (
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
               <ArchivesPage isActive={currentView === 'archives'} />
@@ -463,28 +466,28 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('subjects') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
           <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
               <SubjectsPage isActive={currentView === 'subjects'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('media-library') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'media-library') && (
           <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
               <MediaLibraryPage isActive={currentView === 'media-library'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('cover-studio') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'cover-studio') && (
           <div className={currentView === 'cover-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'cover-studio' ? <ViewLoadingFallback /> : null}>
               <CoverStudioPage isActive={currentView === 'cover-studio'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('workboard') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'workboard') && (
           <div className={currentView === 'workboard' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'workboard' ? <ViewLoadingFallback /> : null}>
               <WorkboardPage isActive={currentView === 'workboard'} />

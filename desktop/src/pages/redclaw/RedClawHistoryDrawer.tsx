@@ -165,7 +165,7 @@ export function RedClawHistoryDrawer({
                             {/* Footer hint */}
                             <div className="px-5 py-3 border-t border-black/[0.02]">
                                 <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
-                                    LexBox Engine
+                                    RedBox Engine
                                 </p>
                             </div>
                         </div>

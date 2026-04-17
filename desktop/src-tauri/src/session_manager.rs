@@ -783,7 +783,7 @@ mod tests {
     #[test]
     fn persisted_store_can_resume_and_continue_session_after_reload() {
         let path =
-            std::env::temp_dir().join(format!("lexbox-session-manager-{}.json", crate::now_ms()));
+            std::env::temp_dir().join(format!("redbox-session-manager-{}.json", crate::now_ms()));
         let mut store = AppStore::default();
         let session = create_context_session(
             &mut store,
