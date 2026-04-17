@@ -469,6 +469,21 @@ pub fn emit_runtime_task_checkpoint_saved(
     );
 }
 
+pub fn emit_manuscript_write_proposal_changed(
+    app: &AppHandle,
+    file_path: &str,
+    proposal: Option<Value>,
+) {
+    let _ = app.emit(
+        "manuscripts:write-proposal",
+        json!({
+            "filePath": file_path,
+            "proposal": proposal,
+            "timestamp": now_i64(),
+        }),
+    );
+}
+
 pub fn emit_creative_chat_checkpoint(
     app: &AppHandle,
     room_id: &str,

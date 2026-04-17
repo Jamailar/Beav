@@ -231,6 +231,7 @@ pub fn default_store() -> AppStore {
         chat_sessions: Vec::new(),
         chat_messages: Vec::new(),
         session_context_records: Vec::new(),
+        manuscript_write_proposals: Vec::new(),
         youtube_videos: Vec::new(),
         knowledge_notes: Vec::new(),
         document_sources: Vec::new(),

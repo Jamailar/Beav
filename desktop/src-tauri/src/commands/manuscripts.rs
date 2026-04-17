@@ -555,6 +555,127 @@ fn persist_package_script_body(
     ))
 }
 
+pub(crate) fn save_manuscript_content(
+    state: &State<'_, AppState>,
+    target: &str,
+    content: &str,
+    metadata: Option<&serde_json::Map<String, Value>>,
+    source: &str,
+) -> Result<Value, String> {
+    let path = resolve_manuscript_path(state, target)?;
+    if path.is_dir()
+        && is_manuscript_package_name(
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(""),
+        )
+    {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let (next_state, script_state) =
+            persist_package_script_body(&path, file_name, content, metadata, source)?;
+        return Ok(json!({
+            "success": true,
+            "state": next_state,
+            "script": script_state,
+            "content": content,
+        }));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(&path, content).map_err(|error| error.to_string())?;
+    Ok(json!({
+        "success": true,
+        "content": content,
+    }))
+}
+
+fn manuscript_write_proposal_by_file_path(
+    store: &AppStore,
+    file_path: &str,
+) -> Option<ManuscriptWriteProposalRecord> {
+    let normalized = normalize_relative_path(file_path);
+    store
+        .manuscript_write_proposals
+        .iter()
+        .find(|item| normalize_relative_path(&item.file_path) == normalized)
+        .cloned()
+}
+
+pub(crate) fn get_manuscript_write_proposal(
+    state: &State<'_, AppState>,
+    file_path: &str,
+) -> Result<Option<ManuscriptWriteProposalRecord>, String> {
+    with_store(state, |store| {
+        Ok(manuscript_write_proposal_by_file_path(&store, file_path))
+    })
+}
+
+pub(crate) fn upsert_manuscript_write_proposal(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    proposal: ManuscriptWriteProposalRecord,
+) -> Result<ManuscriptWriteProposalRecord, String> {
+    let saved = with_store_mut(state, |store| {
+        let normalized = normalize_relative_path(&proposal.file_path);
+        store
+            .manuscript_write_proposals
+            .retain(|item| normalize_relative_path(&item.file_path) != normalized);
+        store.manuscript_write_proposals.push(proposal.clone());
+        Ok(proposal.clone())
+    })?;
+    crate::events::emit_manuscript_write_proposal_changed(
+        app,
+        &saved.file_path,
+        Some(json!(saved.clone())),
+    );
+    Ok(saved)
+}
+
+pub(crate) fn reject_manuscript_write_proposal(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    file_path: &str,
+) -> Result<bool, String> {
+    let normalized = normalize_relative_path(file_path);
+    let removed = with_store_mut(state, |store| {
+        let before = store.manuscript_write_proposals.len();
+        store
+            .manuscript_write_proposals
+            .retain(|item| normalize_relative_path(&item.file_path) != normalized);
+        Ok(before != store.manuscript_write_proposals.len())
+    })?;
+    if removed {
+        crate::events::emit_manuscript_write_proposal_changed(app, file_path, None);
+    }
+    Ok(removed)
+}
+
+pub(crate) fn accept_manuscript_write_proposal(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    file_path: &str,
+) -> Result<Value, String> {
+    let proposal = get_manuscript_write_proposal(state, file_path)?
+        .ok_or_else(|| "未找到待审改稿提案".to_string())?;
+    let saved = save_manuscript_content(
+        state,
+        &proposal.file_path,
+        &proposal.proposed_content,
+        proposal.metadata.as_ref().and_then(Value::as_object),
+        "ai-proposal-accepted",
+    )?;
+    let _ = reject_manuscript_write_proposal(app, state, &proposal.file_path)?;
+    let mut object = saved.as_object().cloned().unwrap_or_default();
+    object.insert("proposalId".to_string(), json!(proposal.id));
+    object.insert("filePath".to_string(), json!(proposal.file_path));
+    object.insert("content".to_string(), json!(proposal.proposed_content));
+    Ok(Value::Object(object))
+}
+
 fn default_clip_duration_ms_for_asset(asset: &MediaAssetRecord) -> i64 {
     if media_asset_kind(asset) == "image" {
         IMAGE_TIMELINE_CLIP_MS
@@ -3187,36 +3308,39 @@ pub fn handle_manuscripts_channel(
             "manuscripts:save" => {
                 let target = payload_string(&payload, "path").unwrap_or_default();
                 let content = payload_string(&payload, "content").unwrap_or_default();
-                let path = resolve_manuscript_path(state, &target)?;
-                if path.is_dir()
-                    && is_manuscript_package_name(
-                        path.file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(""),
-                    )
-                {
-                    let file_name = path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("");
-                    let (next_state, script_state) = persist_package_script_body(
-                        &path,
-                        file_name,
-                        &content,
-                        payload_field(&payload, "metadata").and_then(Value::as_object),
-                        "user",
-                    )?;
-                    return Ok(json!({
-                        "success": true,
-                        "state": next_state,
-                        "script": script_state
-                    }));
-                }
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                }
-                fs::write(&path, content).map_err(|error| error.to_string())?;
-                Ok(json!({ "success": true }))
+                save_manuscript_content(
+                    state,
+                    &target,
+                    &content,
+                    payload_field(&payload, "metadata").and_then(Value::as_object),
+                    "user",
+                )
+            }
+            "manuscripts:get-write-proposal" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                let proposal = get_manuscript_write_proposal(state, &file_path)?;
+                Ok(json!({
+                    "success": true,
+                    "proposal": proposal,
+                }))
+            }
+            "manuscripts:accept-write-proposal" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                accept_manuscript_write_proposal(app, state, &file_path)
+            }
+            "manuscripts:reject-write-proposal" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                let removed = reject_manuscript_write_proposal(app, state, &file_path)?;
+                Ok(json!({
+                    "success": true,
+                    "removed": removed,
+                }))
             }
             "manuscripts:create-folder" => {
                 let parent_path = payload_string(&payload, "parentPath").unwrap_or_default();

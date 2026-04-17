@@ -7,12 +7,16 @@ use crate::events::{
     emit_runtime_task_checkpoint_saved, emit_runtime_tool_partial, emit_runtime_tool_request,
     emit_runtime_tool_result,
 };
-use crate::helpers::{ensure_manuscript_file_name, normalize_relative_path, VIDEO_DRAFT_EXTENSION};
+use crate::helpers::{
+    compose_markdown_with_frontmatter, ensure_manuscript_file_name,
+    extract_markdown_frontmatter_block, get_draft_type_from_file_name, normalize_relative_path,
+    strip_markdown_frontmatter, VIDEO_DRAFT_EXTENSION,
+};
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
 use crate::runtime::SkillRecord;
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
-use crate::{make_id, payload_field, payload_string, AppState};
+use crate::{make_id, now_iso, payload_field, payload_string, AppState};
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
@@ -36,6 +40,13 @@ struct VideoStoryboardShot {
     picture: String,
     sound: String,
     shot: String,
+}
+
+#[derive(Debug, Clone)]
+struct BoundWritingSessionTarget {
+    file_path: String,
+    draft_type: String,
+    title: Option<String>,
 }
 
 impl CliArgs {
@@ -293,6 +304,14 @@ impl<'a> AppCliExecutor<'a> {
                             json!(args.string(&["content"]).unwrap_or_default()),
                         );
                     }
+                }
+                let maybe_proposal = self.maybe_queue_writing_manuscript_proposal(
+                    &path,
+                    payload_string(&merged, "content").unwrap_or_default(),
+                    payload_field(&merged, "metadata"),
+                )?;
+                if let Some(result) = maybe_proposal {
+                    return Ok(result);
                 }
                 self.call_channel("manuscripts:save", merged)
             }
@@ -1373,6 +1392,92 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return result;
         }
         Err(format!("app_cli channel not handled: {channel}"))
+    }
+
+    fn bound_writing_session_target(&self) -> Option<BoundWritingSessionTarget> {
+        let session_id = self.session_id?;
+        with_store(self.state, |store| {
+            let metadata = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|session| session.metadata.as_ref());
+            let Some(metadata) = metadata else {
+                return Ok(None);
+            };
+            let file_path = payload_string(metadata, "associatedFilePath").unwrap_or_default();
+            let draft_type = payload_string(metadata, "associatedPackageKind")
+                .or_else(|| payload_string(metadata, "draftType"))
+                .unwrap_or_else(|| get_draft_type_from_file_name(&file_path).to_string());
+            if file_path.trim().is_empty()
+                || !matches!(draft_type.as_str(), "longform" | "richpost")
+            {
+                return Ok(None);
+            }
+            Ok(Some(BoundWritingSessionTarget {
+                file_path,
+                draft_type,
+                title: payload_string(metadata, "associatedPackageTitle"),
+            }))
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn maybe_queue_writing_manuscript_proposal(
+        &self,
+        target_path: &str,
+        content: String,
+        metadata: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        let Some(target) = self.bound_writing_session_target() else {
+            return Ok(None);
+        };
+        let normalized_target_path = normalize_relative_path(target_path);
+        if normalize_relative_path(&target.file_path) != normalized_target_path {
+            return Ok(None);
+        }
+        let current =
+            self.call_channel("manuscripts:read", json!(normalized_target_path.clone()))?;
+        let current_content = payload_string(&current, "content").unwrap_or_default();
+        let frontmatter_block = extract_markdown_frontmatter_block(&current_content);
+        let proposed_body = strip_markdown_frontmatter(&content);
+        let proposed_content =
+            compose_markdown_with_frontmatter(&proposed_body, frontmatter_block.as_deref());
+        if proposed_content == current_content {
+            return Ok(Some(json!({
+                "success": true,
+                "proposalCreated": false,
+                "unchanged": true,
+                "filePath": normalized_target_path,
+                "message": "AI 返回的稿件与当前内容一致，没有生成新的改稿提案。"
+            })));
+        }
+        let timestamp = now_iso();
+        let proposal = crate::ManuscriptWriteProposalRecord {
+            id: make_id("manuscript-proposal"),
+            file_path: normalized_target_path.clone(),
+            session_id: self.session_id.map(ToString::to_string),
+            tool_call_id: self.tool_call_id.map(ToString::to_string),
+            draft_type: Some(target.draft_type),
+            title: target.title,
+            metadata: metadata.cloned(),
+            base_content: current_content,
+            proposed_content,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        let saved = commands::manuscripts::upsert_manuscript_write_proposal(
+            self.app, self.state, proposal,
+        )?;
+        Ok(Some(json!({
+            "success": true,
+            "proposalCreated": true,
+            "requiresReview": true,
+            "filePath": saved.file_path,
+            "proposal": saved,
+            "message": "已生成待审改稿提案。请在稿件编辑器里查看 diff，并手动接受或拒绝。"
+        })))
     }
 }
 

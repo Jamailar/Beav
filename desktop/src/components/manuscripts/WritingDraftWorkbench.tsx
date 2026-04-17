@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { CodeMirrorEditor } from './CodeMirrorEditor';
 import { MarkdownItPreview } from './MarkdownItPreview';
+import { WritingDiffProposalPanel } from './WritingDiffProposalPanel';
 import { resolveAssetUrl } from '../../utils/pathManager';
 
 const ChatWorkspace = lazy(async () => ({
@@ -31,8 +32,17 @@ export interface WritingDraftWorkbenchProps {
   title: string;
   filePath: string;
   editorBody: string;
+  writeProposal?: {
+    id: string;
+    createdAt?: string | null;
+    baseBody: string;
+    proposedBody: string;
+    isStale?: boolean;
+  } | null;
   editorBodyDirty: boolean;
   isSavingEditorBody: boolean;
+  isApplyingWriteProposal?: boolean;
+  isRejectingWriteProposal?: boolean;
   editorChatSessionId: string | null;
   isActive?: boolean;
   previewHtml?: string | null;
@@ -40,6 +50,8 @@ export interface WritingDraftWorkbenchProps {
   coverAsset?: MediaAssetLike | null;
   imageAssets?: MediaAssetLike[];
   onEditorBodyChange: (value: string) => void;
+  onAcceptWriteProposal?: () => void;
+  onRejectWriteProposal?: () => void;
 }
 
 const LONGFORM_SHORTCUTS = [
@@ -165,11 +177,36 @@ function LongformPreview({
 
 function ManuscriptEditor({
   editorBody,
+  writeProposal,
+  isApplyingWriteProposal = false,
+  isRejectingWriteProposal = false,
   onEditorBodyChange,
+  onAcceptWriteProposal,
+  onRejectWriteProposal,
 }: {
   editorBody: string;
+  writeProposal?: WritingDraftWorkbenchProps['writeProposal'];
+  isApplyingWriteProposal?: boolean;
+  isRejectingWriteProposal?: boolean;
   onEditorBodyChange: (value: string) => void;
+  onAcceptWriteProposal?: () => void;
+  onRejectWriteProposal?: () => void;
 }) {
+  if (writeProposal) {
+    return (
+      <WritingDiffProposalPanel
+        createdAt={writeProposal.createdAt}
+        baseBody={writeProposal.baseBody}
+        proposedBody={writeProposal.proposedBody}
+        isStale={writeProposal.isStale}
+        isApplying={isApplyingWriteProposal}
+        isRejecting={isRejectingWriteProposal}
+        onAccept={() => onAcceptWriteProposal?.()}
+        onReject={() => onRejectWriteProposal?.()}
+      />
+    );
+  }
+
   return (
     <div className="h-full min-h-0 overflow-hidden px-8 py-8">
       <div className="h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-surface-primary">
@@ -188,8 +225,11 @@ export function WritingDraftWorkbench({
   title,
   filePath,
   editorBody,
+  writeProposal = null,
   editorBodyDirty,
   isSavingEditorBody,
+  isApplyingWriteProposal = false,
+  isRejectingWriteProposal = false,
   editorChatSessionId,
   isActive = false,
   previewHtml,
@@ -197,6 +237,8 @@ export function WritingDraftWorkbench({
   coverAsset = null,
   imageAssets = [],
   onEditorBodyChange,
+  onAcceptWriteProposal,
+  onRejectWriteProposal,
 }: WritingDraftWorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WritingWorkbenchTab>('manuscript');
 
@@ -247,7 +289,15 @@ export function WritingDraftWorkbench({
 
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab === 'manuscript' ? (
-              <ManuscriptEditor editorBody={editorBody} onEditorBodyChange={onEditorBodyChange} />
+              <ManuscriptEditor
+                editorBody={editorBody}
+                writeProposal={writeProposal}
+                isApplyingWriteProposal={isApplyingWriteProposal}
+                isRejectingWriteProposal={isRejectingWriteProposal}
+                onEditorBodyChange={onEditorBodyChange}
+                onAcceptWriteProposal={onAcceptWriteProposal}
+                onRejectWriteProposal={onRejectWriteProposal}
+              />
             ) : activeTab === 'layout' ? (
               <LongformPreview
                 title={title}

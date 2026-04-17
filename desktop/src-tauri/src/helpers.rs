@@ -270,20 +270,70 @@ fn markdown_summary(content: &str, max_chars: usize) -> String {
     }
 }
 
-fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
+pub(crate) fn split_markdown_frontmatter(content: &str) -> Option<(String, String)> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
         return None;
     }
-    let mut lines = trimmed.lines();
+    let normalized = content.replace("\r\n", "\n");
+    if !normalized.starts_with("---\n") {
+        return None;
+    }
+    let mut lines = normalized.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
         return None;
     }
+    let mut raw_lines = Vec::<String>::new();
+    let mut body_start_line = None;
+    for (index, line) in normalized.lines().enumerate().skip(1) {
+        let trimmed = line.trim();
+        if trimmed == "---" || trimmed == "..." {
+            body_start_line = Some(index + 1);
+            break;
+        }
+        raw_lines.push(line.to_string());
+    }
+    let body_start_line = body_start_line?;
+    let all_lines = normalized.lines().collect::<Vec<_>>();
+    let block = all_lines[..body_start_line].join("\n");
+    let body = all_lines[body_start_line..]
+        .join("\n")
+        .trim_start_matches('\n')
+        .to_string();
+    Some((block, body))
+}
+
+pub(crate) fn strip_markdown_frontmatter(content: &str) -> String {
+    split_markdown_frontmatter(content)
+        .map(|(_, body)| body)
+        .unwrap_or_else(|| content.replace("\r\n", "\n"))
+}
+
+pub(crate) fn extract_markdown_frontmatter_block(content: &str) -> Option<String> {
+    split_markdown_frontmatter(content).map(|(block, _)| block)
+}
+
+pub(crate) fn compose_markdown_with_frontmatter(body: &str, block: Option<&str>) -> String {
+    let normalized_body = body.replace("\r\n", "\n");
+    let Some(frontmatter_block) = block.map(|value| value.replace("\r\n", "\n")) else {
+        return normalized_body;
+    };
+    let normalized_block = frontmatter_block.trim_end_matches('\n');
+    let next_body = normalized_body.trim_start_matches('\n');
+    if next_body.is_empty() {
+        format!("{normalized_block}\n")
+    } else {
+        format!("{normalized_block}\n\n{next_body}")
+    }
+}
+
+pub(crate) fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
+    let (block, _) = split_markdown_frontmatter(content)?;
     let mut object = serde_json::Map::new();
-    for line in lines {
+    for line in block.lines().skip(1) {
         let normalized = line.trim();
-        if normalized == "---" {
+        if normalized == "---" || normalized == "..." {
             break;
         }
         let Some((key, raw_value)) = normalized.split_once(':') else {

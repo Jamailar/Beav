@@ -169,6 +169,22 @@ struct ChatSessionContextRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ManuscriptWriteProposalRecord {
+    id: String,
+    file_path: String,
+    session_id: Option<String>,
+    tool_call_id: Option<String>,
+    draft_type: Option<String>,
+    title: Option<String>,
+    metadata: Option<Value>,
+    base_content: String,
+    proposed_content: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AdvisorRecord {
     id: String,
     name: String,
@@ -303,6 +319,7 @@ struct AppStore {
     chat_sessions: Vec<ChatSessionRecord>,
     chat_messages: Vec<ChatMessageRecord>,
     session_context_records: Vec<ChatSessionContextRecord>,
+    manuscript_write_proposals: Vec<ManuscriptWriteProposalRecord>,
     youtube_videos: Vec<YoutubeVideoRecord>,
     knowledge_notes: Vec<KnowledgeNoteRecord>,
     document_sources: Vec<DocumentKnowledgeSourceRecord>,

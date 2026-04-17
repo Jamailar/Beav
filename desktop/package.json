@@ -44,6 +44,7 @@
     "@xzdarcy/react-timeline-editor": "^1.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
+    "diff": "^9.0.0",
     "gifuct-js": "^2.1.2",
     "idb": "^8.0.3",
     "lottie-react": "^2.4.1",

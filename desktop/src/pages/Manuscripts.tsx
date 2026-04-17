@@ -136,6 +136,20 @@ type ManuscriptReadResult = {
     metadata?: Record<string, unknown>;
 };
 
+type ManuscriptWriteProposal = {
+    id: string;
+    filePath: string;
+    sessionId?: string | null;
+    toolCallId?: string | null;
+    draftType?: string | null;
+    title?: string | null;
+    metadata?: Record<string, unknown> | null;
+    baseContent: string;
+    proposedContent: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
 type FileCardMeta = {
     title: string;
     draftType: CreateKind | 'unknown';
@@ -503,6 +517,10 @@ function pathBasenameSafe(rawPath: string): string {
     return parts[parts.length - 1] || '';
 }
 
+function isSameDraftRelativePath(left: string | null | undefined, right: string | null | undefined): boolean {
+    return String(left || '').replace(/\\/g, '/').trim() === String(right || '').replace(/\\/g, '/').trim();
+}
+
 function inferAssetKind(asset: MediaAsset): 'image' | 'video' | 'audio' | 'unknown' {
     const mime = String(asset.mimeType || '').toLowerCase();
     const ref = `${asset.relativePath || ''} ${asset.previewUrl || ''} ${asset.absolutePath || ''}`.toLowerCase();
@@ -730,8 +748,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [editorBody, setEditorBody] = useState('');
     const [editorFrontmatterBlock, setEditorFrontmatterBlock] = useState<string | null>(null);
     const [editorMetadata, setEditorMetadata] = useState<Record<string, unknown>>({});
+    const [editorWriteProposal, setEditorWriteProposal] = useState<ManuscriptWriteProposal | null>(null);
     const [editorBodyDirty, setEditorBodyDirty] = useState(false);
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
+    const [isApplyingWriteProposal, setIsApplyingWriteProposal] = useState(false);
+    const [isRejectingWriteProposal, setIsRejectingWriteProposal] = useState(false);
     const [immersiveMaterialsCollapsed, setImmersiveMaterialsCollapsed] = useState(false);
     const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
     const treeRequestIdRef = useRef(0);
@@ -746,6 +767,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter !== 'drafts';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
+    const currentEditorContent = useMemo(
+        () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
+        [editorBody, editorFrontmatterBlock]
+    );
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
@@ -1313,6 +1338,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 setEditorBody('');
                 setEditorFrontmatterBlock(null);
                 setEditorMetadata({});
+                setEditorWriteProposal(null);
                 setEditorBodyDirty(false);
                 setPackageState(null);
                 setEditorChatSessionId(null);
@@ -1595,11 +1621,28 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         void refreshPackageState(editorFile);
     }, [editorFile, refreshPackageState]);
 
+    const loadEditorWriteProposal = useCallback(async (filePath: string | null) => {
+        if (!filePath) {
+            setEditorWriteProposal(null);
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:get-write-proposal', {
+                filePath,
+            }) as { success?: boolean; proposal?: ManuscriptWriteProposal | null };
+            setEditorWriteProposal(result?.proposal || null);
+        } catch (error) {
+            console.error('Failed to load manuscript write proposal:', error);
+            setEditorWriteProposal(null);
+        }
+    }, []);
+
     useEffect(() => {
         if (!editorFile || mode !== 'editor') {
             setEditorBody('');
             setEditorFrontmatterBlock(null);
             setEditorMetadata({});
+            setEditorWriteProposal(null);
             setEditorBodyDirty(false);
             return;
         }
@@ -1628,6 +1671,26 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             cancelled = true;
         };
     }, [editorDescriptor?.draftType, editorFile, mode]);
+
+    useEffect(() => {
+        if (!editorFile || mode !== 'editor') {
+            setEditorWriteProposal(null);
+            return;
+        }
+        void loadEditorWriteProposal(editorFile);
+    }, [editorFile, loadEditorWriteProposal, mode]);
+
+    useEffect(() => {
+        const handleProposalChanged = (_event: unknown, payload?: { filePath?: string; proposal?: ManuscriptWriteProposal | null }) => {
+            if (!editorFile) return;
+            if (!isSameDraftRelativePath(payload?.filePath, editorFile)) return;
+            setEditorWriteProposal(payload?.proposal || null);
+        };
+        window.ipcRenderer.on('manuscripts:write-proposal', handleProposalChanged);
+        return () => {
+            window.ipcRenderer.off('manuscripts:write-proposal', handleProposalChanged);
+        };
+    }, [editorFile]);
 
     useEffect(() => {
         if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
@@ -1747,6 +1810,63 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             console.error('Failed to sync editor chat metadata:', error);
         });
     }, [editorBodyDirty, editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
+
+    const handleAcceptEditorWriteProposal = useCallback(async () => {
+        if (!editorFile || !editorWriteProposal) return;
+        const shouldWarnAboutOverwrite =
+            isSavingEditorBody
+            || editorBodyDirty
+            || currentEditorContent !== editorWriteProposal.baseContent;
+        if (shouldWarnAboutOverwrite) {
+            const confirmed = await appConfirm(
+                '当前稿件在 AI 提案生成后又有变化。接受提案会用 AI 的版本覆盖现在的正文，是否继续？',
+                {
+                    title: '接受 AI 修改',
+                    confirmLabel: '继续接受',
+                }
+            );
+            if (!confirmed) return;
+        }
+        setIsApplyingWriteProposal(true);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:accept-write-proposal', {
+                filePath: editorFile,
+            }) as { success?: boolean; error?: string; content?: string; state?: PackageState };
+            if (!result?.success || typeof result.content !== 'string') {
+                throw new Error(result?.error || '接受 AI 修改失败');
+            }
+            const nextDraft = splitWritingDraftContent(result.content, editorDescriptor?.draftType);
+            setEditorBody(nextDraft.body);
+            setEditorFrontmatterBlock(nextDraft.frontmatterBlock);
+            setEditorBodyDirty(false);
+            setEditorWriteProposal(null);
+            if (result.state) {
+                setPackageState(result.state);
+            }
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '接受 AI 修改失败');
+        } finally {
+            setIsApplyingWriteProposal(false);
+        }
+    }, [currentEditorContent, editorBodyDirty, editorDescriptor?.draftType, editorFile, editorWriteProposal, isSavingEditorBody]);
+
+    const handleRejectEditorWriteProposal = useCallback(async () => {
+        if (!editorFile || !editorWriteProposal) return;
+        setIsRejectingWriteProposal(true);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:reject-write-proposal', {
+                filePath: editorFile,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '拒绝 AI 修改失败');
+            }
+            setEditorWriteProposal(null);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '拒绝 AI 修改失败');
+        } finally {
+            setIsRejectingWriteProposal(false);
+        }
+    }, [editorFile, editorWriteProposal]);
 
     useEffect(() => {
         const nextImmersiveMode: ImmersiveMode = mode === 'editor'
@@ -2054,6 +2174,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
         ) === 'confirmed';
+        const editorWriteProposalView = editorWriteProposal ? {
+            id: editorWriteProposal.id,
+            createdAt: editorWriteProposal.createdAt,
+            baseBody: splitWritingDraftContent(editorWriteProposal.baseContent, draftType).body,
+            proposedBody: splitWritingDraftContent(editorWriteProposal.proposedContent, draftType).body,
+            isStale: currentEditorContent !== editorWriteProposal.baseContent,
+        } : null;
         const packageCoverId = String(packageState?.cover?.assetId || '').trim();
         const packageImages = Array.isArray(packageState?.images?.items) ? packageState?.images?.items : [];
         const packageAssets = Array.isArray(packageState?.assets?.items) ? packageState?.assets?.items : [];
@@ -2371,16 +2498,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         title={currentDescriptor.title}
                         filePath={editorFile}
                         editorBody={editorBody}
+                        writeProposal={editorWriteProposalView}
                         editorBodyDirty={editorBodyDirty}
                         isSavingEditorBody={isSavingEditorBody}
+                        isApplyingWriteProposal={isApplyingWriteProposal}
+                        isRejectingWriteProposal={isRejectingWriteProposal}
                         editorChatSessionId={editorChatSessionId}
                         previewHtml={articlePreviewHtml}
                         hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
                         coverAsset={packageCoverAsset}
                         imageAssets={packageImageAssets}
-                        onEditorBodyChange={(value) => {
-                            setEditorBody(value);
-                            setEditorBodyDirty(true);
+                            onEditorBodyChange={(value) => {
+                                setEditorBody(value);
+                                setEditorBodyDirty(true);
+                            }}
+                        onAcceptWriteProposal={() => {
+                            void handleAcceptEditorWriteProposal();
+                        }}
+                        onRejectWriteProposal={() => {
+                            void handleRejectEditorWriteProposal();
                         }}
                     />
                 )}
