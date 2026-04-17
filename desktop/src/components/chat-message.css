@@ -34,6 +34,76 @@
   max-width: 100%;
 }
 
+.chat-processing-timer {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 136px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgb(var(--color-border) / 0.72);
+  color: rgb(var(--color-text-tertiary) / 0.94);
+}
+
+.chat-processing-timer__label {
+  font-size: 13px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.chat-processing-timer__value {
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: rgb(var(--color-text-secondary) / 0.96);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-markdown-body-pending {
+  min-height: 24px;
+}
+
+.chat-thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 24px;
+  color: rgb(var(--color-text-tertiary) / 0.96);
+  user-select: none;
+}
+
+.chat-thinking-indicator__text {
+  font-size: 13px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+  animation: chat-thinking-text-breathe 1.8s ease-in-out infinite;
+}
+
+.chat-thinking-indicator__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateY(1px);
+}
+
+.chat-thinking-indicator__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(var(--color-text-tertiary) / 0.56);
+  animation: chat-thinking-dot-bounce 1.1s ease-in-out infinite;
+}
+
+.chat-thinking-indicator__dot:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.chat-thinking-indicator__dot:nth-child(3) {
+  animation-delay: 240ms;
+}
+
 .chat-ai-content-streaming .chat-markdown-body {
   animation: chat-ai-content-enter 220ms ease-out;
 }
@@ -142,6 +212,31 @@
   }
 }
 
+@keyframes chat-thinking-text-breathe {
+  0%,
+  100% {
+    opacity: 0.56;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes chat-thinking-dot-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.32;
+    transform: translateY(0) scale(0.9);
+  }
+  40% {
+    opacity: 0.92;
+    transform: translateY(-2px) scale(1);
+  }
+}
+
 @media (max-width: 767px) {
   .chat-message-row {
     gap: 7px;
@@ -154,5 +249,11 @@
   .chat-markdown-body {
     font-size: 16px;
     line-height: 1.58;
+  }
+
+  .chat-processing-timer {
+    gap: 7px;
+    margin-bottom: 9px;
+    padding-bottom: 7px;
   }
 }

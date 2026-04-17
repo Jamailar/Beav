@@ -92,7 +92,17 @@ const AVATAR_COLORS = [
 ];
 const STREAM_FLUSH_INTERVAL_MS = 120;
 
-export function CreativeChat({ activeFile, isActive = true }: { activeFile?: { path: string; content: string }; isActive?: boolean }) {
+interface CreativeChatProps {
+    activeFile?: { path: string; content: string };
+    isActive?: boolean;
+    onExecutionStateChange?: (active: boolean) => void;
+}
+
+export function CreativeChat({
+    activeFile,
+    isActive = true,
+    onExecutionStateChange,
+}: CreativeChatProps) {
     const [rooms, setRooms] = useState<ChatRoom[]>([]);
     const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -126,6 +136,17 @@ export function CreativeChat({ activeFile, isActive = true }: { activeFile?: { p
     const isSixHatAdvisor = useCallback((advisorId?: string) => {
         return SIX_HAT_IDS.has(String(advisorId || '').trim());
     }, []);
+
+    useEffect(() => {
+        onExecutionStateChange?.(isSending);
+    }, [isSending, onExecutionStateChange]);
+
+    useEffect(() => {
+        return () => {
+            onExecutionStateChange?.(false);
+        };
+    }, [onExecutionStateChange]);
+
     const getSafeAdvisorIds = useCallback((room?: ChatRoom | null): string[] => {
         if (!room || !Array.isArray(room.advisorIds)) return [];
         return room.advisorIds.map((id) => String(id || '').trim()).filter(Boolean);

@@ -15,26 +15,32 @@ interface CodeMirrorEditorProps {
 // Custom theme for "Obsidian-like" feel
 const obsidianTheme = EditorView.theme({
     "&": {
-        height: "auto",
+        height: "100%",
         fontSize: "16px",
         color: "rgb(var(--color-text-primary) / 1)",
         backgroundColor: "rgb(var(--color-surface-primary) / 1)",
     },
     ".cm-editor": {
-        height: "auto",
-        minHeight: "0",
+        height: "100%",
+        minHeight: "100%",
         color: "rgb(var(--color-text-primary) / 1)",
         backgroundColor: "rgb(var(--color-surface-primary) / 1)",
     },
     ".cm-scroller": {
         fontFamily: "'Inter', 'Segoe UI', sans-serif",
         lineHeight: "1.6",
-        height: "auto",
-        minHeight: "0",
+        height: "100%",
+        minHeight: "100%",
+        overflowX: "hidden",
+        overflowY: "auto",
         color: "rgb(var(--color-text-primary) / 1)",
     },
+    ".cm-sizer": {
+        minHeight: "100%",
+    },
     ".cm-content": {
-        padding: "0 40px 100px 40px", // Align with px-10 (40px) in Manuscripts.tsx
+        boxSizing: "border-box",
+        padding: "32px 40px 120px 40px",
         minHeight: "100%",
         color: "rgb(var(--color-text-primary) / 1)",
     },
@@ -106,8 +112,8 @@ export function CodeMirrorEditor({ value, onChange, className }: CodeMirrorEdito
             <CodeMirror
                 value={value}
                 className="flex-1 min-h-0"
-                style={{ height: 'auto' }}
-                height="auto"
+                style={{ height: '100%' }}
+                height="100%"
                 extensions={[
                     markdown({ base: markdownLanguage, codeLanguages: languages }),
                     EditorView.lineWrapping,

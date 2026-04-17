@@ -28,12 +28,14 @@ import { resolveAssetUrl } from '../utils/pathManager';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
 import { appAlert, appConfirm } from '../utils/appDialogs';
-import type { PendingChatMessage } from '../App';
+import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
+import { composeMarkdownWithFrontmatter, parseMarkdownFrontmatter } from '../utils/markdownFrontmatter';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import type { EditorProjectFile } from '../components/manuscripts/editorProject';
+import { WritingDraftWorkbench } from '../components/manuscripts/WritingDraftWorkbench';
 import {
     ARTICLE_DRAFT_EXTENSION,
     AUDIO_DRAFT_EXTENSION,
@@ -43,9 +45,6 @@ import {
     VIDEO_DRAFT_EXTENSION,
 } from '../../shared/manuscriptFiles';
 
-const LegacyManuscriptsWorkspace = lazy(async () => ({
-    default: (await import('./LegacyManuscriptsWorkspace')).Manuscripts,
-}));
 const VideoDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/ExperimentalVideoWorkbench')).ExperimentalVideoWorkbench,
 }));
@@ -281,7 +280,7 @@ interface ManuscriptsProps {
     onFileConsumed?: () => void;
     onNavigateToRedClaw?: (message: PendingChatMessage) => void;
     isActive?: boolean;
-    onImmersiveModeChange?: (active: boolean) => void;
+    onImmersiveModeChange?: (mode: ImmersiveMode) => void;
 }
 
 const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; description: string; icon: typeof FileText }> = [
@@ -461,6 +460,31 @@ function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>):
     const quotedTitle = JSON.stringify(safeTitle);
 
     return `---\nid: draft_${ts}\ntitle: ${quotedTitle}\ndraftType: ${kind}\nstatus: writing\ncreatedAt: ${ts}\nupdatedAt: ${ts}\n---\n\n# ${safeTitle}\n\n## ${sectionTitle}\n\n`;
+}
+
+function shouldHideFrontmatterInEditor(draftType: CreateKind | 'unknown' | null | undefined): boolean {
+    return draftType !== 'video' && draftType !== 'audio';
+}
+
+function splitWritingDraftContent(content: string, draftType: CreateKind | 'unknown' | null | undefined) {
+    const source = String(content || '');
+    if (!shouldHideFrontmatterInEditor(draftType)) {
+        return {
+            body: source,
+            frontmatterBlock: null as string | null,
+        };
+    }
+    const parsed = parseMarkdownFrontmatter(source);
+    if (!parsed.hasFrontmatter) {
+        return {
+            body: source,
+            frontmatterBlock: null as string | null,
+        };
+    }
+    return {
+        body: parsed.body,
+        frontmatterBlock: parsed.block,
+    };
 }
 
 function normalizeDraftFileName(input: string): string {
@@ -704,6 +728,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isBindAssetModalOpen, setIsBindAssetModalOpen] = useState(false);
     const [editorChatSessionId, setEditorChatSessionId] = useState<string | null>(null);
     const [editorBody, setEditorBody] = useState('');
+    const [editorFrontmatterBlock, setEditorFrontmatterBlock] = useState<string | null>(null);
     const [editorMetadata, setEditorMetadata] = useState<Record<string, unknown>>({});
     const [editorBodyDirty, setEditorBodyDirty] = useState(false);
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
@@ -1286,6 +1311,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 setEditorFile(null);
                 setEditorDescriptor(null);
                 setEditorBody('');
+                setEditorFrontmatterBlock(null);
                 setEditorMetadata({});
                 setEditorBodyDirty(false);
                 setPackageState(null);
@@ -1572,6 +1598,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (!editorFile || mode !== 'editor') {
             setEditorBody('');
+            setEditorFrontmatterBlock(null);
             setEditorMetadata({});
             setEditorBodyDirty(false);
             return;
@@ -1581,13 +1608,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             try {
                 const result = await window.ipcRenderer.invoke('manuscripts:read', editorFile) as ManuscriptReadResult;
                 if (cancelled) return;
-                setEditorBody(String(result?.content || ''));
+                const nextContent = String(result?.content || '');
+                const { body, frontmatterBlock } = splitWritingDraftContent(nextContent, editorDescriptor?.draftType);
+                setEditorBody(body);
+                setEditorFrontmatterBlock(frontmatterBlock);
                 setEditorMetadata((result?.metadata || {}) as Record<string, unknown>);
                 setEditorBodyDirty(false);
             } catch (error) {
                 console.error('Failed to load editor body:', error);
                 if (!cancelled) {
                     setEditorBody('');
+                    setEditorFrontmatterBlock(null);
                     setEditorMetadata({});
                     setEditorBodyDirty(false);
                 }
@@ -1596,19 +1627,24 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return () => {
             cancelled = true;
         };
-    }, [editorFile, mode]);
+    }, [editorDescriptor?.draftType, editorFile, mode]);
 
     useEffect(() => {
         if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
         const nextScriptBody = packageState?.videoProject?.scriptBody
             ?? packageState?.editorProject?.script?.body;
-        if (typeof nextScriptBody !== 'string' || nextScriptBody === editorBody) return;
-        setEditorBody(nextScriptBody);
+        if (typeof nextScriptBody !== 'string') return;
+        const nextDraft = splitWritingDraftContent(nextScriptBody, editorDescriptor?.draftType);
+        if (nextDraft.body === editorBody && nextDraft.frontmatterBlock === editorFrontmatterBlock) return;
+        setEditorBody(nextDraft.body);
+        setEditorFrontmatterBlock(nextDraft.frontmatterBlock);
         setEditorBodyDirty(false);
     }, [
         editorBody,
         editorBodyDirty,
+        editorDescriptor?.draftType,
         editorFile,
+        editorFrontmatterBlock,
         mode,
         packageState?.editorProject?.script?.body,
         packageState?.videoProject?.scriptBody,
@@ -1619,9 +1655,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const timer = window.setTimeout(async () => {
             try {
                 setIsSavingEditorBody(true);
+                const nextContent = composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock);
                 const result = await window.ipcRenderer.invoke('manuscripts:save', {
                     path: editorFile,
-                    content: editorBody,
+                    content: nextContent,
                     metadata: editorMetadata,
                 }) as { success?: boolean; error?: string; state?: PackageState };
                 if (!result?.success) {
@@ -1638,10 +1675,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
         }, 700);
         return () => window.clearTimeout(timer);
-    }, [editorBody, editorBodyDirty, editorFile, editorMetadata]);
+    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata]);
 
     useEffect(() => {
-        if (!editorFile || (editorDescriptor?.draftType !== 'video' && editorDescriptor?.draftType !== 'audio')) {
+        if (!editorFile) {
             setEditorChatSessionId(null);
             return;
         }
@@ -1661,12 +1698,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return () => {
             cancelled = true;
         };
-    }, [editorDescriptor?.draftType, editorFile]);
+    }, [editorFile]);
 
     useEffect(() => {
         if (!editorChatSessionId || !editorFile) return;
-        const draftType = editorDescriptor?.draftType;
-        if (draftType !== 'video' && draftType !== 'audio') return;
+        const draftType = editorDescriptor?.draftType || 'unknown';
+        const isMediaDraft = draftType === 'video' || draftType === 'audio';
 
         const packageAssets = Array.isArray(packageState?.assets?.items) ? packageState?.assets?.items : [];
         const timelineClips = Array.isArray(packageState?.timelineSummary?.clips) ? packageState?.timelineSummary?.clips : [];
@@ -1683,31 +1720,39 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 agentProfile: draftType === 'video' ? 'video-editor' : draftType === 'audio' ? 'audio-editor' : 'default',
                 associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
                 associatedPackageAssetCount: packageAssets.length,
-                associatedPackageClipCount: Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0),
+                associatedPackageClipCount: isMediaDraft ? Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
                 associatedPackageScriptApprovalStatus:
-                    packageState?.videoProject?.scriptApproval?.status
-                    || packageState?.editorProject?.ai?.scriptApproval?.status
-                    || 'pending',
-                associatedPackageTrackNames: timelineTrackNames,
-                associatedPackageClips: timelineClips.slice(0, 12).map((item) => ({
-                    assetId: item?.assetId,
-                    name: item?.name,
-                    track: item?.track,
-                    order: item?.order,
-                    durationMs: item?.durationMs,
-                    trimInMs: item?.trimInMs,
-                    trimOutMs: item?.trimOutMs,
-                    enabled: item?.enabled,
-                })),
+                    (isMediaDraft
+                        ? packageState?.videoProject?.scriptApproval?.status
+                            || packageState?.editorProject?.ai?.scriptApproval?.status
+                            || 'pending'
+                        : editorBodyDirty
+                            ? 'pending'
+                            : 'draft'),
+                associatedPackageTrackNames: isMediaDraft ? timelineTrackNames : [],
+                associatedPackageClips: isMediaDraft
+                    ? timelineClips.slice(0, 12).map((item) => ({
+                        assetId: item?.assetId,
+                        name: item?.name,
+                        track: item?.track,
+                        order: item?.order,
+                        durationMs: item?.durationMs,
+                        trimInMs: item?.trimInMs,
+                        trimOutMs: item?.trimOutMs,
+                        enabled: item?.enabled,
+                    }))
+                    : [],
             },
         }).catch((error) => {
             console.error('Failed to sync editor chat metadata:', error);
         });
-    }, [editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
+    }, [editorBodyDirty, editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
 
     useEffect(() => {
-        const immersive = mode === 'editor' && (editorDescriptor?.draftType === 'video' || editorDescriptor?.draftType === 'audio');
-        onImmersiveModeChange?.(immersive);
+        const nextImmersiveMode: ImmersiveMode = mode === 'editor'
+            ? (editorDescriptor?.draftType === 'video' || editorDescriptor?.draftType === 'audio' ? 'dark' : 'theme')
+            : false;
+        onImmersiveModeChange?.(nextImmersiveMode);
         return () => {
             onImmersiveModeChange?.(false);
         };
@@ -1996,7 +2041,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const draftTheme = resolveDraftTypeTheme(draftType);
         const isVideoDraft = draftType === 'video';
         const isAudioDraft = draftType === 'audio';
-        const isImmersiveWorkbench = isVideoDraft || isAudioDraft;
+        const isImmersiveWorkbench = mode === 'editor';
         const isRichPostDraft = draftType === 'richpost';
         const isMarkdownDraft = editorFile.endsWith('.md');
         const canUpgradeToArticle = draftType === 'longform' && isMarkdownDraft;
@@ -2071,6 +2116,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             ].map((asset) => [asset.id, asset])
         ).values());
         const articlePreviewHtml = String(packageState?.wechatHtml || packageState?.layoutHtml || '').trim();
+        const packageCoverAsset = packagePreviewAssets.find((asset) => asset.id === packageCoverId) || null;
+        const packageImageAssets = packagePreviewAssets.filter((asset) => (
+            inferAssetKind(asset) === 'image' && asset.id !== packageCoverId
+        ));
         const primaryVideoAsset = packagePreviewAssets.find((asset) => {
             const kind = inferAssetKind(asset);
             return kind === 'video' || kind === 'image';
@@ -2315,96 +2364,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             onPackageStateChange={(state) => setPackageState(state as PackageState)}
                         />
                     </Suspense>
-                ) : isRichPostDraft ? (
-                    <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_420px]">
-                        <div className="min-h-0">
-                            <Suspense fallback={<div className="h-full flex items-center justify-center text-text-tertiary">编辑器加载中...</div>}>
-                                <LegacyManuscriptsWorkspace pendingFile={editorFile} onNavigateToRedClaw={onNavigateToRedClaw} isActive={true} />
-                            </Suspense>
-                        </div>
-                        <div className="border-l border-border/70 bg-[#fffaf3] px-6 py-5">
-                            <div className="text-xs uppercase tracking-[0.24em] text-amber-600/70">Mobile Preview</div>
-                            {(isPostPackage || isArticlePackage) && (
-                                <div className="mt-3 rounded-2xl border border-amber-200/70 bg-white/85 px-4 py-3 text-xs text-text-secondary">
-                                    <div>封面：{packageCoverId ? '已绑定' : '未绑定'}</div>
-                                    <div className="mt-1">配图：{packageImages.length} 张</div>
-                                    {isArticlePackage && (
-                                        <div className="mt-1">排版：{packageState?.hasWechatHtml ? '已生成公众号 HTML' : '尚未生成'}</div>
-                                    )}
-                                </div>
-                            )}
-                            <div className="mt-4 rounded-[36px] border border-border bg-white p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                                <div className="mx-auto w-[252px] rounded-[30px] border border-border bg-white p-4">
-                                    {packageCoverId && packagePreviewAssets.find((asset) => asset.id === packageCoverId) ? (
-                                        <img
-                                            src={resolveAssetUrl(packagePreviewAssets.find((asset) => asset.id === packageCoverId)?.previewUrl || packagePreviewAssets.find((asset) => asset.id === packageCoverId)?.relativePath || '')}
-                                            alt="封面"
-                                            className="h-40 w-full rounded-3xl object-cover"
-                                        />
-                                    ) : (
-                                        <div className="h-40 rounded-3xl bg-[linear-gradient(135deg,#fed7aa,#fdba74_38%,#fb7185)]" />
-                                    )}
-                                    <div className="mt-4 h-3 w-4/5 rounded-full bg-surface-secondary" />
-                                    <div className="mt-2 h-3 w-3/5 rounded-full bg-surface-secondary" />
-                                    <div className="mt-5 space-y-2">
-                                        <div className="h-2.5 rounded-full bg-surface-secondary" />
-                                        <div className="h-2.5 rounded-full bg-surface-secondary" />
-                                        <div className="h-2.5 w-4/5 rounded-full bg-surface-secondary" />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 ) : (
-                    <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_340px]">
-                        <div className="min-h-0">
-                            <Suspense fallback={<div className="h-full flex items-center justify-center text-text-tertiary">编辑器加载中...</div>}>
-                                <LegacyManuscriptsWorkspace pendingFile={editorFile} onNavigateToRedClaw={onNavigateToRedClaw} isActive={true} />
-                            </Suspense>
-                        </div>
-                        <div className="border-l border-border/70 bg-[#fbf8ef] px-5 py-5">
-                            <div className="text-xs uppercase tracking-[0.24em] text-[#8a6d3b]">Document Outline</div>
-                            {isArticlePackage && (
-                                <div className="mt-4 rounded-2xl border border-[#eadfbe] bg-white/85 px-4 py-3 text-xs text-text-secondary">
-                                    <div>封面：{packageCoverId ? '已绑定' : '未绑定'}</div>
-                                    <div className="mt-1">插图：{packageImages.length} 张</div>
-                                    <div className="mt-1">公众号 HTML：{packageState?.hasWechatHtml ? '已生成' : '未生成'}</div>
-                                </div>
-                            )}
-                            {isArticlePackage && articlePreviewHtml ? (
-                                <div className="mt-4 overflow-hidden rounded-2xl border border-[#eadfbe] bg-white">
-                                    <iframe
-                                        title="文章排版预览"
-                                        srcDoc={articlePreviewHtml}
-                                        className="h-[520px] w-full bg-white"
-                                    />
-                                </div>
-                            ) : (
-                                <div className="mt-4 space-y-3">
-                                    {['标题与摘要', '正文结构', '引用与资料', '复盘备注'].map((item) => (
-                                        <div key={item} className="rounded-2xl border border-[#eadfbe] bg-white/85 px-4 py-3 text-sm text-text-secondary">
-                                            {item}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                            {(isArticlePackage || isPostPackage) && packagePreviewAssets.length > 0 && (
-                                <div className="mt-4 space-y-2">
-                                    {packagePreviewAssets.slice(0, 4).map((asset) => (
-                                        <div key={asset.id} className="flex items-center gap-3 rounded-2xl border border-[#eadfbe] bg-white/85 px-3 py-2">
-                                            <div className="h-12 w-12 overflow-hidden rounded-xl bg-surface-secondary">
-                                                <img src={resolveAssetUrl(asset.previewUrl || asset.relativePath || '')} alt={asset.title || asset.id} className="h-full w-full object-cover" />
-                                            </div>
-                                            <div className="min-w-0 flex-1">
-                                                <div className="truncate text-sm font-medium text-text-primary">{asset.title || asset.relativePath || asset.id}</div>
-                                                <div className="truncate text-xs text-text-tertiary">{asset.id === packageCoverId ? '封面' : '配图素材'}</div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                    <WritingDraftWorkbench
+                        isActive={isActive}
+                        draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
+                        title={currentDescriptor.title}
+                        filePath={editorFile}
+                        editorBody={editorBody}
+                        editorBodyDirty={editorBodyDirty}
+                        isSavingEditorBody={isSavingEditorBody}
+                        editorChatSessionId={editorChatSessionId}
+                        previewHtml={articlePreviewHtml}
+                        hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
+                        coverAsset={packageCoverAsset}
+                        imageAssets={packageImageAssets}
+                        onEditorBodyChange={(value) => {
+                            setEditorBody(value);
+                            setEditorBodyDirty(true);
+                        }}
+                    />
                 )}
             </div>
         );

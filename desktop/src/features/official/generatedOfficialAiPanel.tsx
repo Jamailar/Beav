@@ -3,6 +3,7 @@ import { CreditCard, Gem, QrCode, RefreshCw, Smartphone, UserRound } from 'lucid
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
+import { extractAlipayPayQrContent } from '../../pages/settings/shared';
 
 type LoginTab = 'wechat' | 'sms';
 type NoticeType = 'idle' | 'success' | 'error';
@@ -58,9 +59,16 @@ interface RedboxPanelDisplaySnapshot {
   updatedAt: number;
 }
 
+interface AuthenticatedDataIssue {
+  label: string;
+  message: string;
+}
+
 const invoke = async <T,>(channel: string, payload?: unknown): Promise<T> => {
   return window.ipcRenderer.invoke(channel, payload) as Promise<T>;
 };
+
+const OFFICIAL_PANEL_REQUEST_TIMEOUT_MS = 15_000;
 
 const readDisplaySessionSnapshot = (): RedboxAuthSession | null => {
   try {
@@ -137,6 +145,29 @@ const normalizeRechargeAmountInput = (raw: string): string => {
   return value.toFixed(2);
 };
 
+const withRequestTimeout = async <T,>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> => {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+};
+
 const isLikelyImageUrl = (value: string): boolean => {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return false;
@@ -176,7 +207,10 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [rechargeAmount, setRechargeAmount] = useState('9.90');
   const [rechargeOrderNo, setRechargeOrderNo] = useState('');
   const [rechargeStatusText, setRechargeStatusText] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState<NoticeType>('idle');
   const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
@@ -185,6 +219,10 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [wechatStatusText, setWechatStatusText] = useState<WechatStatus>('idle');
   const [wechatExpiresAt, setWechatExpiresAt] = useState<number>(0);
   const pollTimerRef = useRef<number | null>(null);
+  const refreshControlsDisabled = refreshing || authBusy || logoutBusy || paymentBusy;
+  const authControlsDisabled = authBusy || refreshing || logoutBusy || paymentBusy;
+  const logoutDisabled = refreshControlsDisabled;
+  const paymentControlsDisabled = paymentBusy || logoutBusy;
 
   const setPanelNotice = useCallback((type: NoticeType, message: string) => {
     setNoticeType(type);
@@ -277,8 +315,30 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     setCallRecords((result.records || []).filter((item) => String(item?.id || '').trim()));
   }, []);
 
-  const loadAuthenticatedData = useCallback(async () => {
-    await Promise.allSettled([fetchUser(), fetchPoints(), fetchModels(), fetchCallRecords()]);
+  const loadAuthenticatedData = useCallback(async (): Promise<AuthenticatedDataIssue[]> => {
+    const tasks: Array<{ label: string; run: () => Promise<void> }> = [
+      { label: '用户信息', run: fetchUser },
+      { label: '积分余额', run: fetchPoints },
+      { label: '模型列表', run: fetchModels },
+      { label: '调用记录', run: fetchCallRecords },
+    ];
+    const results = await Promise.all(
+      tasks.map(async ({ label, run }) => {
+        try {
+          await withRequestTimeout(
+            run(),
+            OFFICIAL_PANEL_REQUEST_TIMEOUT_MS,
+            `${label}刷新超时，请稍后重试`,
+          );
+          return null;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : `${label}刷新失败`;
+          console.warn(`[OfficialAiPanel] ${label} refresh failed:`, error);
+          return { label, message };
+        }
+      }),
+    );
+    return results.filter((item): item is AuthenticatedDataIssue => item !== null);
   }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
 
   const requestBackgroundRefresh = useCallback(async () => {
@@ -290,18 +350,24 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, []);
 
   const refreshProfileAndPoints = useCallback(async () => {
-    setBusy(true);
+    setRefreshing(true);
     try {
       if (!session?.accessToken) {
         throw new Error('当前未登录，请先登录官方账号');
       }
-      await loadAuthenticatedData();
-      await requestBackgroundRefresh();
-      setPanelNotice('success', '已通知后台刷新，页面会在本地缓存更新后自动同步');
+      const issues = await loadAuthenticatedData();
+      void requestBackgroundRefresh().catch((error) => {
+        console.warn('[OfficialAiPanel] background refresh request failed:', error);
+      });
+      if (issues.length > 0) {
+        setPanelNotice('error', `刷新已完成，但部分数据未及时返回：${issues[0]?.message || issues[0]?.label}`);
+      } else {
+        setPanelNotice('success', '页面数据已刷新，后台缓存同步会继续完成。');
+      }
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '刷新用户信息失败');
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
   }, [loadAuthenticatedData, requestBackgroundRefresh, session, setPanelNotice]);
 
@@ -339,7 +405,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const fetchWechatQr = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     if (!silent) {
-      setBusy(true);
+      setAuthBusy(true);
     }
     try {
       const result = await invoke<{ success: boolean; data?: RedboxWechatInfo; error?: string }>('redbox-auth:wechat-url', { state: 'redconvert-desktop' });
@@ -362,7 +428,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setPanelNotice('error', error instanceof Error ? error.message : '获取二维码失败');
     } finally {
       if (!silent) {
-        setBusy(false);
+        setAuthBusy(false);
       }
     }
   }, [setPanelNotice, startWechatPolling]);
@@ -373,7 +439,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setPanelNotice('error', '请先输入手机号');
       return;
     }
-    setBusy(true);
+    setAuthBusy(true);
     try {
       const result = await invoke<{ success: boolean; error?: string }>('redbox-auth:send-sms-code', { phone });
       if (!result?.success) {
@@ -383,7 +449,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '验证码发送失败');
     } finally {
-      setBusy(false);
+      setAuthBusy(false);
     }
   }, [setPanelNotice, smsForm.phone]);
 
@@ -394,7 +460,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setPanelNotice('error', '请输入手机号和验证码');
       return;
     }
-    setBusy(true);
+    setAuthBusy(true);
     try {
       const result = await invoke<{ success: boolean; session?: RedboxAuthSession; error?: string }>(
         mode === 'login' ? 'redbox-auth:login-sms' : 'redbox-auth:register-sms',
@@ -410,12 +476,12 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : (mode === 'login' ? '登录失败' : '注册失败'));
     } finally {
-      setBusy(false);
+      setAuthBusy(false);
     }
   }, [applySession, loadAuthenticatedData, requestSettingsRefresh, setPanelNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
 
   const logout = useCallback(async () => {
-    setBusy(true);
+    setLogoutBusy(true);
     try {
       const result = await invoke<{ success: boolean; error?: string }>('redbox-auth:logout');
       if (!result?.success) {
@@ -435,7 +501,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } catch (error) {
       setPanelNotice('error', error instanceof Error ? error.message : '退出登录失败');
     } finally {
-      setBusy(false);
+      setLogoutBusy(false);
     }
   }, [applySession, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
@@ -445,7 +511,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setPanelNotice('error', '请输入充值金额');
       return;
     }
-    setBusy(true);
+    setPaymentBusy(true);
     try {
       const orderResult = await invoke<{ success: boolean; order?: Record<string, unknown>; error?: string }>('redbox-auth:create-page-pay-order', {
         amount: amount || undefined,
@@ -456,7 +522,8 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         throw new Error(orderResult?.error || '创建订单失败');
       }
       const outTradeNo = String(orderResult.order.out_trade_no || orderResult.order.outTradeNo || '').trim();
-      const paymentForm = String(orderResult.order.payment_form || orderResult.order.url || '').trim();
+      const paymentForm = extractAlipayPayQrContent(orderResult.order)
+        || String(orderResult.order.payment_url || orderResult.order.payment_form || orderResult.order.url || '').trim();
       console.log('[OfficialAiPanel] page-pay order created', {
         outTradeNo,
         orderKeys: Object.keys(orderResult.order || {}),
@@ -479,7 +546,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       setRechargeStatusText(message);
       setPanelNotice('error', message);
     } finally {
-      setBusy(false);
+      setPaymentBusy(false);
     }
   }, [rechargeAmount, setPanelNotice]);
 
@@ -589,16 +656,16 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
           <button
             type="button"
             onClick={() => void refreshProfileAndPoints()}
-            disabled={busy}
+            disabled={refreshControlsDisabled}
             title="刷新信息"
             className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
           >
-            <RefreshCw className={clsx('w-3.5 h-3.5', busy && 'animate-spin')} />
+            <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
           </button>
           <button
             type="button"
             onClick={() => void logout()}
-            disabled={busy || !session}
+            disabled={logoutDisabled || !session}
             className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50/70 transition-colors disabled:opacity-50"
           >
             退出
@@ -652,7 +719,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                   <button
                     type="button"
                     onClick={() => void fetchWechatQr()}
-                    disabled={busy}
+                    disabled={authControlsDisabled}
                     className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                   >
                     获取二维码
@@ -692,7 +759,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                   <button
                     type="button"
                     onClick={() => void sendSmsCode()}
-                    disabled={busy}
+                    disabled={authControlsDisabled}
                     className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                   >
                     发送验证码
@@ -709,7 +776,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                   <button
                     type="button"
                     onClick={() => void handleSmsAuth('login')}
-                    disabled={busy}
+                    disabled={authControlsDisabled}
                     className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                   >
                     登录
@@ -717,7 +784,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                   <button
                     type="button"
                     onClick={() => void handleSmsAuth('register')}
-                    disabled={busy}
+                    disabled={authControlsDisabled}
                     className="px-3 py-1.5 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                   >
                     注册并登录
@@ -758,11 +825,11 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                 <button
                   type="button"
                   onClick={() => void refreshProfileAndPoints()}
-                  disabled={busy}
+                  disabled={refreshControlsDisabled}
                   title="刷新余额"
                   className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
                 >
-                  <RefreshCw className={clsx('w-3.5 h-3.5', busy && 'animate-spin')} />
+                  <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
                 </button>
               </div>
             </div>
@@ -795,7 +862,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                 <button
                   type="button"
                     onClick={() => void handleCreateOrderAndPay()}
-                    disabled={busy || !rechargeAmount || Number(rechargeAmount) <= 0}
+                    disabled={paymentControlsDisabled || !rechargeAmount || Number(rechargeAmount) <= 0}
                     className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs bg-accent-primary text-white rounded hover:brightness-110 shadow-sm transition-all disabled:opacity-50 disabled:grayscale"
                   >
                   <CreditCard className="w-3.5 h-3.5" />
@@ -820,11 +887,11 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               <button
                 type="button"
                 onClick={() => void refreshProfileAndPoints()}
-                disabled={busy}
+                disabled={refreshControlsDisabled}
                 title="刷新记录"
                 className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
               >
-                <RefreshCw className={clsx('w-3.5 h-3.5', busy && 'animate-spin')} />
+                <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
               </button>
             </div>
             {!callRecords.length ? (

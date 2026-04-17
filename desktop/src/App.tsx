@@ -23,6 +23,7 @@ const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subject
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
 export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ImmersiveMode = false | 'theme' | 'dark';
 
 const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
@@ -179,7 +180,7 @@ function App() {
   useOfficialAuthLifecycle();
 
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
-  const [isImmersiveEditor, setIsImmersiveEditor] = useState(false);
+  const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
@@ -205,10 +206,10 @@ function App() {
   }, [currentView]);
 
   useEffect(() => {
-    if (currentView !== 'manuscripts' && isImmersiveEditor) {
-      setIsImmersiveEditor(false);
+    if (currentView !== 'manuscripts' && immersiveMode) {
+      setImmersiveMode(false);
     }
-  }, [currentView, isImmersiveEditor]);
+  }, [currentView, immersiveMode]);
 
   useEffect(() => {
     capturePromptOpenRef.current = isCapturePromptOpen;
@@ -372,12 +373,13 @@ function App() {
 
   return (
     <>
-      <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={isImmersiveEditor}>
+      <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={immersiveMode}>
         {shouldRenderView(mountedViews, currentView, persistentViews, 'chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
               <ChatPage
-                isActive={currentView === 'chat'}
+                isActive={currentView === 'chat' || persistentViews.has('chat')}
+                onExecutionStateChange={(active) => setViewPersistent('chat', active)}
                 pendingMessage={pendingChatMessage}
                 onMessageConsumed={clearPendingMessage}
               />
@@ -387,7 +389,10 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'creative-chat') && (
           <div className={currentView === 'creative-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'creative-chat' ? <ViewLoadingFallback /> : null}>
-              <CreativeChatPage isActive={currentView === 'creative-chat'} />
+              <CreativeChatPage
+                isActive={currentView === 'creative-chat' || persistentViews.has('creative-chat')}
+                onExecutionStateChange={(active) => setViewPersistent('creative-chat', active)}
+              />
             </Suspense>
           </div>
         )}
@@ -431,7 +436,7 @@ function App() {
                 onFileConsumed={clearPendingManuscriptFile}
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'manuscripts'}
-                onImmersiveModeChange={setIsImmersiveEditor}
+                onImmersiveModeChange={setImmersiveMode}
               />
             </Suspense>
           </div>
@@ -461,7 +466,8 @@ function App() {
               <RedClawPage
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
-                isActive={currentView === 'redclaw'}
+                isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
+                onExecutionStateChange={(active) => setViewPersistent('redclaw', active)}
               />
             </Suspense>
           </div>

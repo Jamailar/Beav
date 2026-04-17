@@ -542,13 +542,13 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_lists_turn_scoped_image_skill_in_chatroom_catalog() {
+    fn build_skill_runtime_state_lists_turn_scoped_image_skill_in_chatroom_and_redclaw_catalog() {
         let state = build_skill_runtime_state(
             &[SkillRecord {
                 name: "image-prompt-optimizer".to_string(),
                 description: "image desc".to_string(),
                 location: "redbox://skills/image-prompt-optimizer".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -567,5 +567,27 @@ mod tests {
         assert!(state
             .skills_section
             .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+
+        let redclaw_state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "image-prompt-optimizer".to_string(),
+                description: "image desc".to_string(),
+                location: "redbox://skills/image-prompt-optimizer".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            None,
+            &["app_cli".to_string()],
+        );
+        assert!(redclaw_state.active_skills.is_empty());
+        assert!(redclaw_state
+            .skills_section
+            .contains("image-prompt-optimizer: image desc"));
+        assert!(redclaw_state
+            .skills_section
+            .contains("Before any `app_cli(command=\"image generate ...\")`"));
     }
 }

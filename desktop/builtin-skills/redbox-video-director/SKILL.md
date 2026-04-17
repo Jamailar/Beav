@@ -1,6 +1,7 @@
 ---
 name: redbox-video-director
 description: Use when generating short videos with RedBox official video API, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, asks the user to confirm it, then chooses between text-to-video, reference-guided, and first-last-frame modes and calls the correct wan2.7 video model with prompt discipline focused on motion, reference elements, and transitions.
+allowedRuntimeModes: [chatroom, redclaw]
 allowed-tools: app_cli
 ---
 
@@ -14,8 +15,8 @@ Before any video tool call, follow this order:
 
 1. Clarify the intended video mode from the user's goal and assets.
 2. Draft a concise but detailed video script for review.
-3. Decide whether this should use a video project pack.
-4. For multi-shot or context-heavy work, create a video project pack first.
+3. Default to direct generation.
+4. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
 5. Decide whether this should be a single-video job or a multi-video assembly.
 6. If the script has multiple shots, continuity risk, character consistency requirements, or environment consistency requirements, proactively ask whether storyboard stills / keyframes should be generated first.
 7. If storyboard stills are needed, design a stable keyframe-generation plan first.
@@ -27,32 +28,38 @@ If the user has not yet confirmed the script, do not generate the video.
 
 ## Video Project Pack Rule
 
-For multi-shot videos, long-context videos, continuity-sensitive videos, or videos likely to go through several revisions, you should first create a video project pack with:
+A video project pack is not the default path.
 
-- `app_cli(command="video project-create --title ... --duration ... --aspect-ratio ... --mode ...")`
+Create one only when:
+
+- the user explicitly asks for a 视频项目 / 视频工程 / 项目包 / `.redvideo`
+- the user explicitly asks to continue later inside the video editor / project workbench
+- the task is already bound to an existing video project pack
+
+Do not create one only because the request has multiple shots, long context, continuity risk, storyboard needs, or possible revisions.
+
+When it is explicitly needed, create it with:
+
+- `app_cli(command="video project-create --explicit-project-workflow true --title ... --duration ... --aspect-ratio ... --mode ...")`
 
 The project pack lives in:
 
-- `media/video-projects/<id>/`
+- `manuscripts/video/<timestamp>.redvideo/`
 
 It should be used to keep these files together:
 
 - `manifest.json`
-- `brief.md`
 - `script.md`
-- reference images
-- voice references
-- storyboard keyframes
-- generated clips
-- final output
+- `assets.json`
+- `remotion.scene.json`
+- imported reference images / keyframes / generated clips / final output
 
 After the pack is created:
 
-- write the user brief into `brief.md`
-- write the approved script into `script.md`
+- write the user brief and approved script back into the `.redvideo` package
 - keep later keyframes, clips, and outputs in the same pack whenever possible
 
-This is preferred over keeping all video context only inside chat history.
+Otherwise keep the planning in chat, call `video generate` directly, and let the output live in the generated media library.
 
 ## Hard Rules
 
@@ -229,6 +236,10 @@ If the script contains multiple shots, a named character, an important environme
 - For `first-last-frame`, describe the transition between the first and last frame; do not rewrite the full scene unless the transition requires it.
 - Avoid bloated prompts that restate the whole image contents when the real task is only a motion or transition edit.
 - Focus on what should move, how the camera behaves, and what must stay stable.
+- After the user confirms a storyboard table, do not downgrade that approved script into a single generic sentence.
+- The final tool call must carry the approved storyboard structure in `payload.storyboardMarkdown` or `payload.storyboardShots`, so the host can compile the execution prompt from the actual approved beats.
+- `payload.storyboardShots` should use one item per approved row with `time`, `picture`, `sound`, and `shot`.
+- If you only pass a vague summary prompt after script confirmation, that is a failure because it discards the approved shot structure.
 
 ## Tool Usage
 
@@ -239,8 +250,31 @@ If the script contains multiple shots, a named character, an important environme
 - If a suitable voice reference exists, pass it as `drivingAudio` and describe it explicitly as `Audio 1` in the prompt preface.
 - For `reference-guided`, if a suitable voice reference exists, also pass it as the mode's voice reference input.
 - When a subject-library character is used, default to that character's saved voice reference as `Audio 1`.
-- If a video project pack already contains storyboard keyframes, prefer `video-project-id` + those keyframes as the main visual condition for `reference-guided`.
+- If a video project pack already contains storyboard keyframes or image assets, prefer `video-project-path` or `video-project-id` together with those packaged assets as the main visual condition for `reference-guided`.
+- When the final prompt, script, or reference path list is long, keep them in `payload` instead of stuffing everything into one shell-like command string.
 - Keep the final generation prompt focused on execution details derived from the approved script.
 - Do not dump the whole planning discussion into the generation prompt.
+- When a storyboard has been approved, pass that exact approved table or row structure in payload. Recommended pattern:
+
+```json
+{
+  "storyboardShots": [
+    {
+      "time": "0-2s",
+      "picture": "Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆，吸尘器作为道具举起。",
+      "sound": "Jamba 声音参考配音，轻快节奏感。",
+      "shot": "中景，人物全身入镜。"
+    },
+    {
+      "time": "2-4s",
+      "picture": "Jamba 一边跳舞一边用吸尘器做挥舞动作，身体转动，动作夸张有趣。",
+      "sound": "节奏感音乐 + Jamba 声音。",
+      "shot": "中近景，跟随人物移动。"
+    }
+  ]
+}
+```
+
+- If the storyboard lives in a confirmed video project pack, pass `video-project-id` / `video-project-path`; the host will use the confirmed project script as storyboard input.
 - If the user intent is ambiguous, explain the ambiguity briefly and pick the safer mode instead of faking certainty.
 - For multi-video mode, generate each clip deliberately, then use `ffmpeg` tooling to concatenate them in storyboard order after all clips succeed.

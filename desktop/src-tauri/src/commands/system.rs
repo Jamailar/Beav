@@ -5,8 +5,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    log_timing_event, now_iso, now_ms, payload_field, payload_string, payload_value_as_string,
-    refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
+    now_iso, payload_field, payload_string, payload_value_as_string, refresh_runtime_warm_state,
+    store_root, update_workspace_root_cache, AppState,
 };
 
 fn knowledge_api_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -74,23 +74,8 @@ pub fn handle_system_channel(
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path }))
                 }
-                "db:get-settings" => {
-                    let started_at = now_ms();
-                    let request_id = format!("db:get-settings:{}", started_at);
-                    let result = with_store(state, |store| Ok(store.settings.clone()));
-                    log_timing_event(
-                        state,
-                        "settings",
-                        &request_id,
-                        "db:get-settings",
-                        started_at,
-                        None,
-                    );
-                    result
-                }
+                "db:get-settings" => with_store(state, |store| Ok(store.settings.clone())),
                 "db:save-settings" => {
-                    let started_at = now_ms();
-                    let request_id = format!("db:save-settings:{}", started_at);
                     let active_space_id = with_store_mut(state, |store| {
                         if let (Some(current), Some(next)) =
                             (store.settings.as_object(), payload.as_object())
@@ -112,14 +97,6 @@ pub fn handle_system_channel(
                         json!({
                             "updatedAt": now_iso(),
                         }),
-                    );
-                    log_timing_event(
-                        state,
-                        "settings",
-                        &request_id,
-                        "db:save-settings",
-                        started_at,
-                        None,
                     );
                     Ok(json!({ "success": true }))
                 }

@@ -46,6 +46,7 @@ interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
     isActive?: boolean;
+    onExecutionStateChange?: (active: boolean) => void;
 }
 
 function redClawLastSessionStorageKey(spaceId: string): string {
@@ -60,7 +61,12 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
-export function RedClaw({ pendingMessage, onPendingMessageConsumed, isActive = true }: RedClawProps) {
+export function RedClaw({
+    pendingMessage,
+    onPendingMessageConsumed,
+    isActive = true,
+    onExecutionStateChange,
+}: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
         console.debug(`[ui][redclaw] ${event}`, extra || {});
@@ -938,6 +944,7 @@ export function RedClaw({ pendingMessage, onPendingMessageConsumed, isActive = t
                         <div className="relative min-h-0 flex-1 overflow-hidden">
                             <Chat
                                 isActive={isActive}
+                                onExecutionStateChange={onExecutionStateChange}
                                 key={`redclaw:${chatRefreshKey}`}
                                 fixedSessionId={activeSessionId}
                                 pendingMessage={pendingMessage}

@@ -1,23 +1,41 @@
 use serde_json::{json, Map, Value};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
 use crate::commands;
+use crate::events::{
+    emit_runtime_task_checkpoint_saved, emit_runtime_tool_partial, emit_runtime_tool_request,
+    emit_runtime_tool_result,
+};
 use crate::helpers::{ensure_manuscript_file_name, normalize_relative_path, VIDEO_DRAFT_EXTENSION};
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
-use crate::{payload_field, payload_string, AppState};
+use crate::runtime::SkillRecord;
+use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
+use crate::{make_id, payload_field, payload_string, AppState};
+
+const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
 pub struct AppCliExecutor<'a> {
     app: &'a AppHandle,
     state: &'a State<'a, AppState>,
     runtime_mode: &'a str,
     session_id: Option<&'a str>,
+    tool_call_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
     positionals: Vec<String>,
     options: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct VideoStoryboardShot {
+    time: String,
+    picture: String,
+    sound: String,
+    shot: String,
 }
 
 impl CliArgs {
@@ -62,12 +80,14 @@ impl<'a> AppCliExecutor<'a> {
         state: &'a State<'a, AppState>,
         runtime_mode: &'a str,
         session_id: Option<&'a str>,
+        tool_call_id: Option<&'a str>,
     ) -> Self {
         Self {
             app,
             state,
             runtime_mode,
             session_id,
+            tool_call_id,
         }
     }
 
@@ -77,7 +97,7 @@ impl<'a> AppCliExecutor<'a> {
         let payload = payload_field(arguments, "payload")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        let tokens = shell_words::split(&command).map_err(|error| error.to_string())?;
+        let tokens = tokenize_command(&command);
         if tokens.is_empty() {
             return Err("command is empty".to_string());
         }
@@ -399,9 +419,9 @@ impl<'a> AppCliExecutor<'a> {
             "project-create" => self.handle_video_project_create(&args, payload),
             "project-list" => self.handle_video_project_list(),
             "project-get" => self.handle_video_project_get(&args),
-            "project-brief" => self.handle_video_project_brief(&args),
+            "project-brief" => self.handle_video_project_brief(&args, payload),
             "project-script" => self.handle_video_project_script(&args, payload),
-            "project-asset-add" => self.handle_video_project_asset_add(&args),
+            "project-asset-add" => self.handle_video_project_asset_add(&args, payload),
             _ => Err(format!("unsupported video action: {action}")),
         }
     }
@@ -710,21 +730,20 @@ impl<'a> AppCliExecutor<'a> {
         args: &CliArgs,
         payload: &Value,
     ) -> Result<Value, String> {
+        if !video_project_create_requested_explicitly(args, payload) {
+            return Err(
+                "video project-create requires explicit project workflow confirmation. \
+For one-off generation, use `video generate` and keep the output in media/. \
+Only create a `.redvideo` project when the user explicitly asks for a project/package/editor workflow. \
+Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true` after explicit confirmation."
+                    .to_string(),
+            );
+        }
         let title = args
             .string(&["title"])
             .or_else(|| args.positionals.first().cloned())
             .unwrap_or_else(|| "Untitled Video".to_string());
-        let relative = args
-            .string(&["path"])
-            .map(|value| {
-                ensure_manuscript_file_name(&normalize_relative_path(&value), VIDEO_DRAFT_EXTENSION)
-            })
-            .unwrap_or_else(|| {
-                ensure_manuscript_file_name(
-                    &format!("video/{}", sanitize_slug(&title)),
-                    VIDEO_DRAFT_EXTENSION,
-                )
-            });
+        let relative = build_video_project_relative_path(args.string(&["path"]));
         let (parent_path, name) = split_parent_and_name(&relative);
         let script_content = payload_string(payload, "content")
             .or_else(|| payload_string(payload, "script"))
@@ -761,6 +780,7 @@ impl<'a> AppCliExecutor<'a> {
         Ok(json!({
             "success": true,
             "path": relative,
+            "videoProjectId": video_project_stem_from_path(&relative),
             "project": state
         }))
     }
@@ -773,26 +793,68 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     fn handle_video_project_get(&self, args: &CliArgs) -> Result<Value, String> {
+        let file_path = self.resolve_video_project_path(
+            args.string(&["path", "id", "video-project-id", "videoProjectId"])
+                .or_else(|| args.positionals.first().cloned())
+                .ok_or_else(|| "video project-get requires --path".to_string())?,
+        )?;
         self.call_channel(
             "manuscripts:get-video-project-state",
             json!({
-                "filePath": args
-                    .string(&["path"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "video project-get requires --path".to_string())?
+                "filePath": file_path
             }),
         )
     }
 
-    fn handle_video_project_brief(&self, args: &CliArgs) -> Result<Value, String> {
-        let project = self.handle_video_project_get(args)?;
+    fn handle_video_project_brief(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
+        let path = self.resolve_video_project_path(
+            args.string(&["path", "id", "video-project-id", "videoProjectId"])
+                .or_else(|| payload_string(payload, "path"))
+                .or_else(|| payload_string(payload, "id"))
+                .or_else(|| payload_string(payload, "videoProjectPath"))
+                .or_else(|| payload_string(payload, "videoProjectId"))
+                .or_else(|| args.positionals.first().cloned())
+                .ok_or_else(|| "video project-brief requires --path".to_string())?,
+        )?;
+        if let Some(content) = payload_string(payload, "content")
+            .or_else(|| payload_string(payload, "brief"))
+            .or_else(|| args.string(&["content", "brief"]))
+        {
+            let video_project_id = video_project_stem_from_path(&path);
+            let saved = self.call_channel(
+                "manuscripts:save-video-project-brief",
+                json!({
+                    "filePath": path.clone(),
+                    "content": content,
+                    "source": "user"
+                }),
+            )?;
+            return Ok(json!({
+                "success": saved.get("success").and_then(Value::as_bool).unwrap_or(true),
+                "path": path,
+                "videoProjectId": video_project_id,
+                "brief": saved.get("brief").cloned().unwrap_or(Value::Null),
+                "project": saved.get("project").cloned().unwrap_or(Value::Null),
+                "state": saved.get("state").cloned().unwrap_or(Value::Null)
+            }));
+        }
+        let project = self.call_channel(
+            "manuscripts:get-video-project-state",
+            json!({ "filePath": path.clone() }),
+        )?;
+        let project_state = project.get("project").cloned().unwrap_or(Value::Null);
+        let video_project_id = video_project_stem_from_path(&path);
         Ok(json!({
             "success": project.get("success").and_then(Value::as_bool).unwrap_or(true),
-            "manifest": project.get("manifest").cloned().unwrap_or(Value::Null),
-            "videoProject": project.get("videoProject").cloned().unwrap_or(Value::Null),
-            "timelineSummary": project.get("timelineSummary").cloned().unwrap_or(Value::Null),
-            "script": project.get("script").cloned().unwrap_or(Value::Null),
-            "assets": project.pointer("/assets/items").cloned().unwrap_or_else(|| json!([]))
+            "path": path,
+            "videoProjectId": video_project_id,
+            "brief": project_state.get("brief").cloned().unwrap_or(Value::Null),
+            "project": project_state.clone(),
+            "videoProject": project_state.clone(),
+            "script": project_state.get("scriptBody").cloned().unwrap_or(Value::Null),
+            "scriptApproval": project_state.get("scriptApproval").cloned().unwrap_or(Value::Null),
+            "assets": project_state.get("assets").cloned().unwrap_or_else(|| json!([])),
+            "renderOutput": project_state.get("renderOutput").cloned().unwrap_or(Value::Null)
         }))
     }
 
@@ -801,10 +863,13 @@ impl<'a> AppCliExecutor<'a> {
         args: &CliArgs,
         payload: &Value,
     ) -> Result<Value, String> {
-        let path = args
-            .string(&["path"])
-            .or_else(|| args.positionals.first().cloned())
-            .ok_or_else(|| "video project-script requires --path".to_string())?;
+        let path = self.resolve_video_project_path(
+            args.string(&["path", "id", "video-project-id", "videoProjectId"])
+                .or_else(|| payload_string(payload, "path"))
+                .or_else(|| payload_string(payload, "id"))
+                .or_else(|| args.positionals.first().cloned())
+                .ok_or_else(|| "video project-script requires --path".to_string())?,
+        )?;
         if let Some(content) =
             payload_string(payload, "content").or_else(|| args.string(&["content"]))
         {
@@ -820,21 +885,84 @@ impl<'a> AppCliExecutor<'a> {
         self.call_channel("manuscripts:read", json!(path))
     }
 
-    fn handle_video_project_asset_add(&self, args: &CliArgs) -> Result<Value, String> {
-        self.call_channel(
-            "manuscripts:add-package-clip",
-            json!({
-                "filePath": args
-                    .string(&["path"])
+    fn handle_video_project_asset_add(
+        &self,
+        args: &CliArgs,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let asset_id = args
+            .string(&["asset-id", "assetId"])
+            .or_else(|| payload_string(payload, "assetId"))
+            .or_else(|| args.positionals.get(1).cloned());
+        if let Some(asset_id) = asset_id.filter(|value| !value.trim().is_empty()) {
+            let file_path = self.resolve_video_project_path(
+                args.string(&["path", "id", "video-project-id", "videoProjectId"])
+                    .or_else(|| payload_string(payload, "path"))
+                    .or_else(|| payload_string(payload, "id"))
+                    .or_else(|| payload_string(payload, "videoProjectPath"))
+                    .or_else(|| payload_string(payload, "videoProjectId"))
                     .or_else(|| args.positionals.first().cloned())
                     .ok_or_else(|| "video project-asset-add requires --path".to_string())?,
-                "assetId": args
-                    .string(&["asset-id", "assetId"])
-                    .or_else(|| args.positionals.get(1).cloned())
-                    .ok_or_else(|| "video project-asset-add requires --asset-id".to_string())?,
-                "track": args.string(&["track"]),
-                "order": args.i64(&["order"]),
-                "durationMs": args.i64(&["duration-ms", "durationMs"])
+            )?;
+            return self.call_channel(
+                "manuscripts:add-package-clip",
+                json!({
+                    "filePath": file_path,
+                    "assetId": asset_id,
+                    "track": args.string(&["track"]),
+                    "order": args.i64(&["order"]),
+                    "durationMs": args.i64(&["duration-ms", "durationMs"])
+                }),
+            );
+        }
+
+        let project_locator = args
+            .string(&["id", "video-project-id", "videoProjectId"])
+            .or_else(|| payload_string(payload, "id"))
+            .or_else(|| payload_string(payload, "videoProjectId"))
+            .or_else(|| payload_string(payload, "projectId"))
+            .or_else(|| payload_string(payload, "videoProjectPath"))
+            .or_else(|| {
+                args.string(&["path"]).and_then(|value| {
+                    if value.ends_with(VIDEO_DRAFT_EXTENSION)
+                        || (!std::path::Path::new(&value).is_absolute() && value.contains('/'))
+                    {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| args.positionals.first().cloned())
+            .ok_or_else(|| {
+                "video project-asset-add requires a project locator (--id or --path)".to_string()
+            })?;
+        let file_path = self.resolve_video_project_path(project_locator)?;
+        let source_path = args
+            .string(&["source", "source-path", "sourcePath"])
+            .or_else(|| payload_string(payload, "sourcePath"))
+            .or_else(|| {
+                args.string(&["path"]).and_then(|value| {
+                    if std::path::Path::new(&value).is_absolute() {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| args.positionals.get(1).cloned())
+            .ok_or_else(|| {
+                "video project-asset-add requires --source-path when --asset-id is absent"
+                    .to_string()
+            })?;
+        self.call_channel(
+            "manuscripts:attach-package-file",
+            json!({
+                "filePath": file_path,
+                "sourcePath": source_path,
+                "kind": args.string(&["kind"]).or_else(|| payload_string(payload, "kind")),
+                "label": args.string(&["label"]).or_else(|| payload_string(payload, "label")),
+                "role": args.string(&["role"]).or_else(|| payload_string(payload, "role"))
             }),
         )
     }
@@ -864,11 +992,112 @@ impl<'a> AppCliExecutor<'a> {
                 }
             }
         }
+        self.run_preflight_image_skill_activation();
         self.call_channel("image-gen:generate", merged)
+    }
+
+    fn run_preflight_image_skill_activation(&self) {
+        let Some(session_id) = self.session_id else {
+            return;
+        };
+        let item = with_store(self.state, |store| {
+            Ok(preflight_skill_activation_item(
+                &store.skills,
+                self.runtime_mode,
+                IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
+            ))
+        })
+        .ok()
+        .flatten();
+        let Some((name, description)) = item else {
+            return;
+        };
+        let call_id = make_id("tool-call");
+        let command = format!("skills invoke --name {name}");
+        emit_runtime_tool_request(
+            self.app,
+            Some(session_id),
+            &call_id,
+            "app_cli",
+            json!({
+                "command": command,
+            }),
+            Some("Preflight skill activation before image generation"),
+        );
+        let invoke_result = self.call_channel(
+            "skills:invoke",
+            json!({
+                "name": name,
+                "sessionId": session_id,
+                "runtimeMode": self.runtime_mode,
+            }),
+        );
+        match invoke_result {
+            Ok(result) => {
+                let output =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                emit_runtime_tool_result(
+                    self.app,
+                    Some(session_id),
+                    &call_id,
+                    "app_cli",
+                    true,
+                    &output,
+                );
+            }
+            Err(error) => {
+                emit_runtime_tool_result(
+                    self.app,
+                    Some(session_id),
+                    &call_id,
+                    "app_cli",
+                    false,
+                    &error,
+                );
+                return;
+            }
+        }
+        emit_runtime_task_checkpoint_saved(
+            self.app,
+            None,
+            Some(session_id),
+            "chat.skill_activated",
+            "skill activated",
+            Some(json!({
+                "name": name,
+                "description": description,
+                "runtimeMode": self.runtime_mode,
+                "activationSource": "host.image-generate-preflight",
+            })),
+        );
+    }
+
+    fn emit_tool_partial(&self, content: &str) {
+        let Some(tool_call_id) = self.tool_call_id else {
+            return;
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        emit_runtime_tool_partial(self.app, self.session_id, tool_call_id, "app_cli", trimmed);
     }
 
     fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
         let mut merged = build_generation_payload(args, payload);
+        let video_project_path = self
+            .video_project_locator_from_generate(args, payload)
+            .map(|locator| self.resolve_video_project_path(locator))
+            .transpose()?;
+        let video_project_state = video_project_path
+            .as_ref()
+            .map(|project_path| {
+                self.call_channel(
+                    "manuscripts:get-video-project-state",
+                    json!({ "filePath": project_path }),
+                )
+            })
+            .transpose()?;
         let subject_matches = self.collect_subject_matches(args, payload, 5)?;
         let subject_reference_images = subject_matches
             .iter()
@@ -876,6 +1105,13 @@ impl<'a> AppCliExecutor<'a> {
             .take(5)
             .collect::<Vec<_>>();
         let mut reference_images = value_string_list(merged.get("referenceImages"), 5);
+        let project_reference_images = video_project_state
+            .as_ref()
+            .map(|state| extract_video_project_reference_images(state, 5))
+            .unwrap_or_default();
+        if reference_images.is_empty() && !project_reference_images.is_empty() {
+            reference_images.extend(project_reference_images);
+        }
         reference_images.extend(subject_reference_images);
         dedupe_string_list(&mut reference_images, 5);
         let explicit_driving_audio = args
@@ -908,8 +1144,110 @@ impl<'a> AppCliExecutor<'a> {
             if let Some(driving_audio) = inferred_driving_audio {
                 object.insert("drivingAudio".to_string(), json!(driving_audio));
             }
+            if let Some(project_path) = video_project_path.clone() {
+                object.insert("videoProjectPath".to_string(), json!(project_path));
+            }
+            if let Some(session_id) = self.session_id {
+                object.insert("sessionId".to_string(), json!(session_id));
+            }
+            if let Some(tool_call_id) = self.tool_call_id {
+                object.insert("toolCallId".to_string(), json!(tool_call_id));
+                object.insert("toolName".to_string(), json!("app_cli"));
+            }
         }
-        self.call_channel("video-gen:generate", merged)
+        if let Some(compiled_prompt) =
+            compile_video_generation_prompt(&merged, video_project_state.as_ref())
+        {
+            if let Some(object) = merged.as_object_mut() {
+                object.insert("prompt".to_string(), json!(compiled_prompt));
+            }
+        }
+        self.emit_tool_partial("视频生成已提交到宿主，正在准备 provider 请求。");
+        let result = self.call_channel("video-gen:generate", merged)?;
+        if let Some(project_path) = video_project_path {
+            if let Some(assets) = result.get("assets").and_then(Value::as_array) {
+                for asset in assets {
+                    let Some(asset_id) = asset.get("id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    self.call_channel(
+                        "manuscripts:add-package-clip",
+                        json!({
+                            "filePath": project_path,
+                            "assetId": asset_id
+                        }),
+                    )?;
+                }
+            }
+            let project_state = self.call_channel(
+                "manuscripts:get-video-project-state",
+                json!({ "filePath": project_path.clone() }),
+            )?;
+            return Ok(merge_video_generation_result(
+                result,
+                Some(project_path),
+                Some(project_state),
+            ));
+        }
+        Ok(merge_video_generation_result(result, None, None))
+    }
+
+    fn video_project_locator_from_generate(
+        &self,
+        args: &CliArgs,
+        payload: &Value,
+    ) -> Option<String> {
+        args.string(&["path", "video-project-path", "videoProjectPath"])
+            .or_else(|| payload_string(payload, "videoProjectPath"))
+            .or_else(|| payload_string(payload, "path"))
+            .or_else(|| {
+                args.string(&[
+                    "video-project-id",
+                    "videoProjectId",
+                    "project-id",
+                    "projectId",
+                ])
+            })
+            .or_else(|| payload_string(payload, "videoProjectId"))
+            .or_else(|| payload_string(payload, "projectId"))
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn resolve_video_project_path(&self, locator: String) -> Result<String, String> {
+        let trimmed = locator.trim();
+        if trimmed.is_empty() {
+            return Err("video project locator is empty".to_string());
+        }
+        let normalized = normalize_relative_path(trimmed);
+        if normalized.contains('/') || normalized.ends_with(VIDEO_DRAFT_EXTENSION) {
+            return Ok(ensure_manuscript_file_name(
+                &normalized,
+                VIDEO_DRAFT_EXTENSION,
+            ));
+        }
+        let default_path =
+            ensure_manuscript_file_name(&format!("video/{normalized}"), VIDEO_DRAFT_EXTENSION);
+        let tree = self.call_channel("manuscripts:list", json!({}))?;
+        let mut projects = Vec::<Value>::new();
+        collect_video_projects(&tree, &mut projects);
+        let target_file_name = format!("{normalized}{VIDEO_DRAFT_EXTENSION}");
+        let matches = projects
+            .iter()
+            .filter_map(|item| item.get("path").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .filter(|path| {
+                *path == default_path
+                    || *path == target_file_name
+                    || path.ends_with(&format!("/{target_file_name}"))
+            })
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            Ok(matches[0].clone())
+        } else {
+            Ok(default_path)
+        }
     }
 
     fn collect_subject_matches(
@@ -1070,6 +1408,68 @@ fn parse_cli_args(tokens: &[String]) -> Result<CliArgs, String> {
     Ok(args)
 }
 
+fn tokenize_command(input: &str) -> Vec<String> {
+    let mut tokens = Vec::<String>::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = input.trim().chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(active_quote) = quote {
+            match ch {
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        if next == active_quote || next == '\\' {
+                            current.push(next);
+                        } else {
+                            current.push(ch);
+                            current.push(next);
+                        }
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                value if value == active_quote => quote = None,
+                value => current.push(value),
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            value if value.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                } else {
+                    current.push(ch);
+                }
+            }
+            value => current.push(value),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn preflight_skill_activation_item(
+    skills: &[SkillRecord],
+    runtime_mode: &str,
+    skill_name: &str,
+) -> Option<(String, String)> {
+    let skill = find_catalog_skill_by_name(skills, skill_name)?;
+    if skill.disabled || !skill_allows_runtime_mode(&skill, runtime_mode) {
+        return None;
+    }
+    Some((skill.name, skill.description))
+}
+
 fn parse_option_value(raw: &str) -> Value {
     let trimmed = raw.trim();
     match trimmed.to_ascii_lowercase().as_str() {
@@ -1179,6 +1579,35 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
     {
         merged.insert("referenceImages".to_string(), reference_images);
     }
+    if !merged.contains_key("generationMode") {
+        if let Some(mode) = payload_string(payload, "mode").filter(|item| !item.trim().is_empty()) {
+            merged.insert("generationMode".to_string(), json!(mode));
+        }
+    }
+    if !merged.contains_key("aspectRatio") {
+        if let Some(ratio) = payload_string(payload, "ratio").filter(|item| !item.trim().is_empty())
+        {
+            merged.insert("aspectRatio".to_string(), json!(ratio));
+        }
+    }
+    if !merged.contains_key("durationSeconds") {
+        let duration_seconds = payload_field(payload, "duration")
+            .and_then(|value| match value {
+                Value::Number(number) => number.as_i64(),
+                Value::String(text) => text.trim().parse::<i64>().ok(),
+                _ => None,
+            })
+            .or_else(|| {
+                payload_field(payload, "seconds").and_then(|value| match value {
+                    Value::Number(number) => number.as_i64(),
+                    Value::String(text) => text.trim().parse::<i64>().ok(),
+                    _ => None,
+                })
+            });
+        if let Some(duration_seconds) = duration_seconds {
+            merged.insert("durationSeconds".to_string(), json!(duration_seconds));
+        }
+    }
     if !merged.contains_key("projectId") {
         if let Some(value) = merged
             .get("videoProjectId")
@@ -1253,6 +1682,327 @@ fn dedupe_string_list(items: &mut Vec<String>, limit: usize) {
     *items = deduped;
 }
 
+fn compact_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_storyboard_cell(text: &str) -> String {
+    compact_whitespace(
+        &text
+            .replace("<br />", " / ")
+            .replace("<br/>", " / ")
+            .replace("<br>", " / "),
+    )
+    .trim()
+    .trim_matches('`')
+    .to_string()
+}
+
+fn storyboard_header_kind(header: &str) -> Option<&'static str> {
+    let normalized = header.trim().to_ascii_lowercase();
+    if normalized.contains("time") || header.contains("时间") {
+        return Some("time");
+    }
+    if normalized.contains("picture") || normalized.contains("visual") || header.contains("画面")
+    {
+        return Some("picture");
+    }
+    if normalized.contains("sound") || normalized.contains("audio") || header.contains("声音") {
+        return Some("sound");
+    }
+    if normalized.contains("shot")
+        || normalized.contains("camera")
+        || header.contains("景别")
+        || header.contains("镜头")
+    {
+        return Some("shot");
+    }
+    None
+}
+
+fn markdown_separator_row(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let trimmed = cell.trim();
+            !trimmed.is_empty()
+                && trimmed
+                    .chars()
+                    .all(|ch| ch == '-' || ch == ':' || ch == ' ' || ch == '|' || ch == '\t')
+        })
+}
+
+fn shot_from_storyboard_map(values: &Map<String, Value>) -> Option<VideoStoryboardShot> {
+    let get = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| values.get(*key))
+            .and_then(Value::as_str)
+            .map(normalize_storyboard_cell)
+            .filter(|value| !value.is_empty())
+    };
+    let shot = VideoStoryboardShot {
+        time: get(&["time", "Time", "时间"])?,
+        picture: get(&["picture", "Picture", "visual", "Visual", "画面"])?,
+        sound: get(&["sound", "Sound", "audio", "Audio", "声音"])
+            .unwrap_or_else(|| "未指定".to_string()),
+        shot: get(&["shot", "Shot", "camera", "Camera", "景别", "镜头"])
+            .unwrap_or_else(|| "未指定".to_string()),
+    };
+    Some(shot)
+}
+
+fn extract_storyboard_shots_from_value(value: &Value) -> Vec<VideoStoryboardShot> {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_object().and_then(shot_from_storyboard_map))
+            .collect(),
+        Value::String(text) => parse_storyboard_markdown(text),
+        Value::Object(values) => shot_from_storyboard_map(values).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_storyboard_markdown(markdown: &str) -> Vec<VideoStoryboardShot> {
+    let mut header_kinds = Vec::<&'static str>::new();
+    let mut shots = Vec::<VideoStoryboardShot>::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+            continue;
+        }
+        let cells = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(normalize_storyboard_cell)
+            .collect::<Vec<_>>();
+        if cells.is_empty() {
+            continue;
+        }
+        if header_kinds.is_empty() {
+            let mapped = cells
+                .iter()
+                .filter_map(|cell| storyboard_header_kind(cell))
+                .collect::<Vec<_>>();
+            if mapped.len() == cells.len()
+                && mapped.iter().any(|kind| *kind == "time")
+                && mapped.iter().any(|kind| *kind == "picture")
+            {
+                header_kinds = mapped;
+            }
+            continue;
+        }
+        if markdown_separator_row(&cells) {
+            continue;
+        }
+        if cells.len() < header_kinds.len() {
+            continue;
+        }
+        let mut shot = VideoStoryboardShot::default();
+        for (index, kind) in header_kinds.iter().enumerate() {
+            let value = cells.get(index).cloned().unwrap_or_default();
+            match *kind {
+                "time" => shot.time = value,
+                "picture" => shot.picture = value,
+                "sound" => shot.sound = value,
+                "shot" => shot.shot = value,
+                _ => {}
+            }
+        }
+        if shot.time.is_empty() || shot.picture.is_empty() {
+            continue;
+        }
+        if shot.sound.is_empty() {
+            shot.sound = "未指定".to_string();
+        }
+        if shot.shot.is_empty() {
+            shot.shot = "未指定".to_string();
+        }
+        shots.push(shot);
+    }
+
+    shots
+}
+
+fn confirmed_project_storyboard(project_state: &Value) -> Vec<VideoStoryboardShot> {
+    let status = project_state
+        .pointer("/project/scriptApproval/status")
+        .or_else(|| project_state.pointer("/scriptApproval/status"))
+        .and_then(Value::as_str)
+        .unwrap_or("pending");
+    if status != "confirmed" {
+        return Vec::new();
+    }
+    let script_body = project_state
+        .pointer("/project/scriptBody")
+        .or_else(|| project_state.get("scriptBody"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    parse_storyboard_markdown(script_body)
+}
+
+fn extract_video_storyboard(
+    payload: &Value,
+    project_state: Option<&Value>,
+) -> Vec<VideoStoryboardShot> {
+    for key in [
+        "storyboardShots",
+        "storyboard",
+        "storyboardMarkdown",
+        "approvedScript",
+        "scriptMarkdown",
+        "script",
+    ] {
+        let shots = payload_field(payload, key)
+            .map(extract_storyboard_shots_from_value)
+            .unwrap_or_default();
+        if !shots.is_empty() {
+            return shots;
+        }
+    }
+    if let Some(state) = project_state {
+        let shots = confirmed_project_storyboard(state);
+        if !shots.is_empty() {
+            return shots;
+        }
+    }
+    payload_string(payload, "prompt")
+        .map(|prompt| parse_storyboard_markdown(&prompt))
+        .unwrap_or_default()
+}
+
+fn default_reference_image_label(generation_mode: &str, index: usize) -> String {
+    match generation_mode {
+        "first-last-frame" if index == 0 => "first-frame visual reference".to_string(),
+        "first-last-frame" if index == 1 => "last-frame visual reference".to_string(),
+        "continuation" if index == 0 => "previous clip continuation reference".to_string(),
+        _ => "reference-guided visual anchor".to_string(),
+    }
+}
+
+fn compile_video_generation_prompt(
+    payload: &Value,
+    project_state: Option<&Value>,
+) -> Option<String> {
+    let storyboard = extract_video_storyboard(payload, project_state);
+    if storyboard.is_empty() {
+        return None;
+    }
+
+    let base_prompt = payload_string(payload, "prompt")
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let generation_mode =
+        payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-video".to_string());
+    let aspect_ratio = payload_string(payload, "aspectRatio").unwrap_or_else(|| "16:9".to_string());
+    let duration_seconds = payload_field(payload, "durationSeconds")
+        .and_then(Value::as_i64)
+        .unwrap_or(8);
+    let reference_images = value_string_list(payload_field(payload, "referenceImages"), 5);
+    let reference_image_labels =
+        value_string_list(payload_field(payload, "referenceImageLabels"), 5);
+    let driving_audio = payload_string(payload, "drivingAudio");
+    let driving_audio_label = payload_string(payload, "drivingAudioLabel").unwrap_or_else(|| {
+        "driving audio reference for tone, speaking rhythm, and beat timing".to_string()
+    });
+    let first_clip = payload_string(payload, "firstClip");
+
+    let mut sections = Vec::<String>::new();
+
+    let mut asset_lines = reference_images
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let label = reference_image_labels
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| default_reference_image_label(&generation_mode, index));
+            format!("Image {}: {}", index + 1, label)
+        })
+        .collect::<Vec<_>>();
+    if let Some(first_clip) = first_clip.filter(|value| !value.trim().is_empty()) {
+        let label = payload_string(payload, "firstClipLabel")
+            .unwrap_or_else(|| "existing clip reference for motion continuation".to_string());
+        if !first_clip.is_empty() {
+            asset_lines.push(format!("Clip 1: {label}"));
+        }
+    }
+    if driving_audio.is_some() {
+        asset_lines.push(format!("Audio 1: {driving_audio_label}"));
+    }
+    if !asset_lines.is_empty() {
+        sections.push(asset_lines.join("\n"));
+    }
+
+    if !base_prompt.is_empty() && parse_storyboard_markdown(&base_prompt).is_empty() {
+        sections.push(format!(
+            "Creative brief: {}",
+            compact_whitespace(&base_prompt)
+        ));
+    }
+
+    sections.push(format!(
+        "Execution spec: single video, {} seconds, aspect ratio {}, mode {}.",
+        duration_seconds, aspect_ratio, generation_mode
+    ));
+
+    let storyboard_lines = storyboard
+        .iter()
+        .enumerate()
+        .map(|(index, shot)| {
+            format!(
+                "Beat {} ({}): Picture: {}; Sound: {}; Shot: {}.",
+                index + 1,
+                shot.time,
+                shot.picture,
+                shot.sound,
+                shot.shot
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    sections.push(format!("Approved storyboard beats:\n{storyboard_lines}"));
+
+    let mut execution_rules = vec![
+        "Follow the beat order exactly; do not collapse the storyboard into one generic summary."
+            .to_string(),
+        "Preserve the same main character identity, product shape, and prop continuity across all beats."
+            .to_string(),
+        format!(
+            "Keep framing, camera movement, and action progression aligned with the approved {} storyboard.",
+            aspect_ratio
+        ),
+    ];
+    if generation_mode == "reference-guided" {
+        execution_rules.push(
+            "Use the reference images as stable visual anchors for identity, product details, and scene continuity."
+                .to_string(),
+        );
+    }
+    if generation_mode == "first-last-frame" {
+        execution_rules.push(
+            "Respect the first-frame and last-frame references as the fixed endpoints of the motion."
+                .to_string(),
+        );
+    }
+    if generation_mode == "continuation" {
+        execution_rules.push(
+            "Continue naturally from the reference clip instead of resetting the scene or character pose."
+                .to_string(),
+        );
+    }
+    if driving_audio.is_some() {
+        execution_rules
+            .push("Align body rhythm, lip-sync feel, and timing accents with Audio 1.".to_string());
+    }
+    sections.push(format!(
+        "Execution requirements:\n- {}",
+        execution_rules.join("\n- ")
+    ));
+
+    Some(sections.join("\n\n"))
+}
+
 fn copy_optional_string(target: &mut Map<String, Value>, key: &str, value: Option<String>) {
     if let Some(value) = value.filter(|item| !item.trim().is_empty()) {
         target.insert(key.to_string(), json!(value));
@@ -1266,18 +2016,159 @@ fn split_parent_and_name(path: &str) -> (String, String) {
     }
 }
 
-fn sanitize_slug(title: &str) -> String {
-    let mut result = title
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
-            _ => ch,
+fn payload_bool_value(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(value) => Some(*value),
+        Value::Number(value) => Some(value.as_i64().unwrap_or_default() != 0),
+        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn payload_bool(payload: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| payload_field(payload, key).and_then(payload_bool_value))
+}
+
+fn video_project_create_requested_explicitly(args: &CliArgs, payload: &Value) -> bool {
+    args.bool(&[
+        "explicit-project-workflow",
+        "explicitProjectWorkflow",
+        "confirm-project-workflow",
+        "confirmProjectWorkflow",
+        "allow-project-create",
+        "allowProjectCreate",
+    ])
+    .or_else(|| {
+        payload_bool(
+            payload,
+            &[
+                "explicitProjectWorkflow",
+                "confirmProjectWorkflow",
+                "allowProjectCreate",
+            ],
+        )
+    })
+    .unwrap_or(false)
+}
+
+fn now_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn build_video_project_relative_path(explicit_path: Option<String>) -> String {
+    let parent = explicit_path
+        .map(|value| normalize_relative_path(&value))
+        .map(|normalized| {
+            if normalized.ends_with(VIDEO_DRAFT_EXTENSION) {
+                split_parent_and_name(&normalized).0
+            } else {
+                normalized
+            }
         })
-        .collect::<String>()
-        .trim()
-        .to_string();
-    if result.is_empty() {
-        result = "untitled-video".to_string();
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "video".to_string());
+    ensure_manuscript_file_name(
+        &format!("{parent}/{}", now_timestamp_millis()),
+        VIDEO_DRAFT_EXTENSION,
+    )
+}
+
+fn video_project_stem_from_path(path: &str) -> String {
+    let normalized = normalize_relative_path(path);
+    normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+        .to_string()
+}
+
+fn asset_looks_like_image(asset: &Value) -> bool {
+    let mime = asset
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if mime.starts_with("image/") {
+        return true;
+    }
+    [
+        "absolutePath",
+        "mediaPath",
+        "relativePath",
+        "src",
+        "previewUrl",
+    ]
+    .into_iter()
+    .filter_map(|key| asset.get(key).and_then(Value::as_str))
+    .map(str::trim)
+    .any(|value| {
+        let lower = value.to_ascii_lowercase();
+        lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".jpeg")
+            || lower.ends_with(".webp")
+            || lower.ends_with(".gif")
+            || lower.ends_with(".bmp")
+            || lower.ends_with(".svg")
+    })
+}
+
+fn extract_video_project_reference_images(project_state: &Value, limit: usize) -> Vec<String> {
+    project_state
+        .pointer("/project/assets")
+        .or_else(|| project_state.get("assets"))
+        .and_then(Value::as_array)
+        .map(|assets| {
+            assets
+                .iter()
+                .filter(|asset| asset_looks_like_image(asset))
+                .filter_map(|asset| {
+                    ["absolutePath", "mediaPath", "relativePath", "src"]
+                        .into_iter()
+                        .filter_map(|key| asset.get(key).and_then(Value::as_str))
+                        .map(str::trim)
+                        .find(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                })
+                .take(limit)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn merge_video_generation_result(
+    mut result: Value,
+    video_project_path: Option<String>,
+    video_project: Option<Value>,
+) -> Value {
+    let Some(object) = result.as_object_mut() else {
+        return result;
+    };
+    object.insert("kind".to_string(), json!("generated-videos"));
+    if let Some(path) = video_project_path {
+        object.insert("videoProjectPath".to_string(), json!(path));
+        object.insert(
+            "videoProjectId".to_string(),
+            json!(video_project_stem_from_path(
+                object
+                    .get("videoProjectPath")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )),
+        );
+    }
+    if let Some(project) = video_project {
+        object.insert("videoProject".to_string(), project);
     }
     result
 }
@@ -1390,12 +2281,15 @@ fn help_response(namespace: Option<&str>) -> Value {
             "video generate --prompt \"...\" --mode reference-guided --reference-images /abs/a.png,/abs/b.png",
             "video generate --prompt \"...\" --mode first-last-frame --reference-images /abs/first.png,/abs/last.png",
             "video generate --prompt \"...\" --mode continuation --first-clip /abs/clip.mp4",
-            "video project-create --title \"...\" [--duration 8s] [--aspect-ratio 9:16]",
+            "video generate --mode reference-guided --duration 6 --aspect-ratio 9:16  # put approved storyboardMarkdown/storyboardShots in payload so the host can compile the final execution prompt",
+            "video project-create --explicit-project-workflow true --title \"...\" [--duration 8s] [--aspect-ratio 9:16]",
             "video project-list",
-            "video project-get --path <relativePath>",
-            "video project-brief --path <relativePath>",
+            "video project-get --path <relativePath>  # or --id <timestampStem>",
+            "video project-brief --path <relativePath>  # or --id <timestampStem> [payload.content|payload.brief]",
             "video project-script --path <relativePath> [payload.content]",
             "video project-asset-add --path <relativePath> --asset-id <assetId>",
+            "video project-asset-add --id <timestampStem> --path /abs/ref.png --kind reference-image",
+            "video generate --mode reference-guided --duration 8 --aspect-ratio 9:16 --video-project-id <timestampStem>  # long prompt/reference data should go in payload; confirmed project scripts are used as storyboard input",
         ],
         "knowledge" => vec![
             "knowledge list",
@@ -1447,4 +2341,261 @@ fn help_response(namespace: Option<&str>) -> Value {
         "namespace": namespace,
         "commands": commands,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_skill(name: &str, allowed_runtime_modes: &str, disabled: Option<bool>) -> SkillRecord {
+        SkillRecord {
+            name: name.to_string(),
+            description: format!("{name} desc"),
+            location: format!("redbox://skills/{name}"),
+            body: format!(
+                "---\nallowedRuntimeModes: [{allowed_runtime_modes}]\n---\n# {name}\n\nBody"
+            ),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled,
+        }
+    }
+
+    #[test]
+    fn preflight_skill_activation_item_requires_runtime_compatibility() {
+        let skills = vec![test_skill(
+            IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
+            "chatroom, redclaw, image-generation",
+            Some(false),
+        )];
+
+        let item =
+            preflight_skill_activation_item(&skills, "redclaw", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME);
+
+        assert_eq!(
+            item,
+            Some((
+                IMAGE_PROMPT_OPTIMIZER_SKILL_NAME.to_string(),
+                "image-prompt-optimizer desc".to_string(),
+            ))
+        );
+        assert_eq!(
+            preflight_skill_activation_item(&skills, "wander", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,),
+            None
+        );
+    }
+
+    #[test]
+    fn preflight_skill_activation_item_skips_disabled_skill() {
+        let skills = vec![test_skill(
+            IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
+            "chatroom, redclaw, image-generation",
+            Some(true),
+        )];
+
+        assert_eq!(
+            preflight_skill_activation_item(&skills, "redclaw", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,),
+            None
+        );
+    }
+
+    #[test]
+    fn build_video_project_relative_path_uses_timestamp_file_name_by_default() {
+        let path = build_video_project_relative_path(None);
+
+        assert!(path.starts_with("video/"));
+        assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
+        assert!(path
+            .trim_start_matches("video/")
+            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
+    }
+
+    #[test]
+    fn build_video_project_relative_path_preserves_parent_but_replaces_file_name() {
+        let path = build_video_project_relative_path(Some(
+            "video/custom/Jamba 戴森V8舞蹈视频.redvideo".to_string(),
+        ));
+
+        assert!(path.starts_with("video/custom/"));
+        assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
+        assert!(path
+            .trim_start_matches("video/custom/")
+            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
+    }
+
+    #[test]
+    fn tokenize_command_keeps_rest_of_unclosed_quoted_prompt() {
+        let tokens = tokenize_command(
+            "video generate --mode reference-guided --prompt \"Jamba 手持戴森 V8 吸尘器跳舞",
+        );
+
+        assert_eq!(tokens[0], "video");
+        assert_eq!(tokens[1], "generate");
+        assert_eq!(tokens[2], "--mode");
+        assert_eq!(tokens[3], "reference-guided");
+        assert_eq!(tokens[4], "--prompt");
+        assert_eq!(tokens[5], "Jamba 手持戴森 V8 吸尘器跳舞");
+    }
+
+    #[test]
+    fn video_project_create_requested_explicitly_accepts_cli_and_payload_flags() {
+        let cli_args = parse_cli_args(&[
+            "--explicit-project-workflow".to_string(),
+            "true".to_string(),
+        ])
+        .expect("cli args should parse");
+        assert!(video_project_create_requested_explicitly(
+            &cli_args,
+            &json!({})
+        ));
+
+        assert!(video_project_create_requested_explicitly(
+            &CliArgs::default(),
+            &json!({ "explicitProjectWorkflow": true })
+        ));
+        assert!(video_project_create_requested_explicitly(
+            &CliArgs::default(),
+            &json!({ "confirmProjectWorkflow": "yes" })
+        ));
+        assert!(!video_project_create_requested_explicitly(
+            &CliArgs::default(),
+            &json!({})
+        ));
+    }
+
+    #[test]
+    fn extract_video_project_reference_images_reads_project_assets() {
+        let refs = extract_video_project_reference_images(
+            &json!({
+                "project": {
+                    "assets": [
+                        { "absolutePath": "/tmp/demo.png", "mimeType": "image/png" },
+                        { "absolutePath": "/tmp/demo.mp4", "mimeType": "video/mp4" }
+                    ]
+                }
+            }),
+            5,
+        );
+
+        assert_eq!(refs, vec!["/tmp/demo.png".to_string()]);
+    }
+
+    #[test]
+    fn parse_storyboard_markdown_reads_standard_table() {
+        let shots = parse_storyboard_markdown(
+            r#"
+视频时长：6 秒
+
+| Time | Picture | Sound | Shot |
+| --- | --- | --- | --- |
+| 0-2s | Jamba 手持吸尘器左右摇摆 | 轻快节奏配音 | 中景，全身 |
+| 2-4s | 一边跳舞一边挥舞吸尘器 | 节奏音乐 + 人声 | 中近景，跟拍 |
+"#,
+        );
+
+        assert_eq!(shots.len(), 2);
+        assert_eq!(shots[0].time, "0-2s");
+        assert_eq!(shots[0].picture, "Jamba 手持吸尘器左右摇摆");
+        assert_eq!(shots[1].shot, "中近景，跟拍");
+    }
+
+    #[test]
+    fn compile_video_generation_prompt_includes_storyboard_beats() {
+        let prompt = compile_video_generation_prompt(
+            &json!({
+                "prompt": "Jamba 手持戴森 V8 吸尘器跳舞，整体轻快有趣。",
+                "generationMode": "reference-guided",
+                "aspectRatio": "9:16",
+                "durationSeconds": 6,
+                "referenceImages": ["/tmp/jamba.jpg", "/tmp/dyson.jpg"],
+                "referenceImageLabels": ["Jamba 人物主体参考", "戴森 V8 产品参考"],
+                "drivingAudio": "/tmp/jamba.webm",
+                "drivingAudioLabel": "Jamba 声音参考，用于节奏和语气",
+                "storyboardShots": [
+                    {
+                        "time": "0-2s",
+                        "picture": "Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。",
+                        "sound": "Jamba 声音参考配音，轻快节奏感。",
+                        "shot": "中景，人物全身入镜。"
+                    },
+                    {
+                        "time": "2-4s",
+                        "picture": "Jamba 一边跳舞一边用吸尘器做挥舞动作。",
+                        "sound": "节奏感音乐 + Jamba 声音。",
+                        "shot": "中近景，跟随人物移动。"
+                    }
+                ]
+            }),
+            None,
+        )
+        .expect("storyboard prompt should compile");
+
+        assert!(prompt.contains("Image 1: Jamba 人物主体参考"));
+        assert!(prompt
+            .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。"));
+        assert!(prompt.contains("Follow the beat order exactly; do not collapse the storyboard into one generic summary."));
+        assert!(
+            prompt.contains("Align body rhythm, lip-sync feel, and timing accents with Audio 1.")
+        );
+    }
+
+    #[test]
+    fn compile_video_generation_prompt_uses_confirmed_project_script() {
+        let prompt = compile_video_generation_prompt(
+            &json!({
+                "prompt": "生成视频",
+                "generationMode": "reference-guided",
+                "aspectRatio": "9:16",
+                "durationSeconds": 6
+            }),
+            Some(&json!({
+                "project": {
+                    "scriptBody": r#"
+| 时间 | 画面 | 声音 | 景别 |
+| --- | --- | --- | --- |
+| 0-2s | Jamba 左右摇摆 | 轻快配音 | 中景 |
+"#,
+                    "scriptApproval": {
+                        "status": "confirmed"
+                    }
+                }
+            })),
+        )
+        .expect("confirmed project script should compile");
+
+        assert!(
+            prompt.contains("Beat 1 (0-2s): Picture: Jamba 左右摇摆; Sound: 轻快配音; Shot: 中景.")
+        );
+    }
+
+    #[test]
+    fn build_generation_payload_normalizes_video_payload_aliases() {
+        let merged = build_generation_payload(
+            &CliArgs::default(),
+            &json!({
+                "prompt": "生成视频",
+                "mode": "reference-guided",
+                "duration": 6,
+                "ratio": "9:16",
+                "referenceImages": ["/tmp/jamba.jpg", "/tmp/dyson.jpg"]
+            }),
+        );
+
+        assert_eq!(
+            payload_string(&merged, "generationMode"),
+            Some("reference-guided".to_string())
+        );
+        assert_eq!(
+            payload_field(&merged, "durationSeconds").and_then(Value::as_i64),
+            Some(6)
+        );
+        assert_eq!(
+            payload_string(&merged, "aspectRatio"),
+            Some("9:16".to_string())
+        );
+    }
 }

@@ -307,6 +307,109 @@ select {
   animation: slide-in-left-refined 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@keyframes wander-dice-float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes wander-dice-tumble {
+  0% {
+    transform: rotateX(-18deg) rotateY(30deg) rotateZ(0deg);
+  }
+  18% {
+    transform: rotateX(-18deg) rotateY(30deg) rotateZ(0deg);
+  }
+  36% {
+    transform: rotateX(72deg) rotateY(122deg) rotateZ(7deg);
+  }
+  54% {
+    transform: rotateX(72deg) rotateY(122deg) rotateZ(7deg);
+  }
+  72% {
+    transform: rotateX(162deg) rotateY(214deg) rotateZ(-5deg);
+  }
+  88% {
+    transform: rotateX(162deg) rotateY(214deg) rotateZ(-5deg);
+  }
+  100% {
+    transform: rotateX(342deg) rotateY(390deg) rotateZ(0deg);
+  }
+}
+
+@keyframes wander-dice-shadow {
+  0%,
+  100% {
+    transform: scaleX(0.88);
+    opacity: 0.16;
+  }
+  50% {
+    transform: scaleX(1.02);
+    opacity: 0.24;
+  }
+}
+
+@keyframes wander-dice-halo {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.75;
+  }
+}
+
+@keyframes wander-dice-spark {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.88);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate3d(0, -8px, 0) scale(1.08);
+    opacity: 0.85;
+  }
+}
+
+.wander-loading-dice__float {
+  animation: wander-dice-float 4.8s ease-in-out infinite;
+}
+
+.wander-loading-dice__cube {
+  animation: wander-dice-tumble 6.4s cubic-bezier(0.65, 0.05, 0.35, 1) infinite;
+}
+
+.wander-loading-dice__face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.wander-loading-dice__shadow {
+  animation: wander-dice-shadow 4.8s ease-in-out infinite;
+}
+
+.wander-loading-dice__halo {
+  animation: wander-dice-halo 4.8s ease-in-out infinite;
+}
+
+.wander-loading-dice__spark {
+  animation: wander-dice-spark 3.8s ease-in-out infinite;
+}
+
+.wander-loading-dice__spark--b {
+  animation-delay: 0.8s;
+}
+
+.wander-loading-dice__spark--c {
+  animation-delay: 1.6s;
+}
+
 .ui-switch-track {
   --ui-switch-width: 44px;
   --ui-switch-height: 26px;

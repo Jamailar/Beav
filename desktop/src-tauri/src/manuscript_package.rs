@@ -183,6 +183,15 @@ pub(crate) fn ensure_manifest_video_ai_state(
     let video_ai_object = video_ai
         .as_object_mut()
         .ok_or_else(|| "Manifest videoAi must be an object".to_string())?;
+    video_ai_object
+        .entry("brief".to_string())
+        .or_insert(Value::Null);
+    video_ai_object
+        .entry("lastBriefUpdateAt".to_string())
+        .or_insert(Value::Null);
+    video_ai_object
+        .entry("lastBriefUpdateSource".to_string())
+        .or_insert(Value::Null);
     let approval = video_ai_object
         .entry("scriptApproval".to_string())
         .or_insert_with(|| default_video_script_approval("system"));
@@ -205,6 +214,14 @@ pub(crate) fn ensure_manifest_video_ai_state(
         .entry("confirmedAt".to_string())
         .or_insert(Value::Null);
     Ok(video_ai_object)
+}
+
+pub(crate) fn video_project_brief_from_manifest(manifest: &Value) -> Value {
+    json!({
+        "content": manifest.pointer("/videoAi/brief").cloned().unwrap_or(Value::Null),
+        "updatedAt": manifest.pointer("/videoAi/lastBriefUpdateAt").cloned().unwrap_or(Value::Null),
+        "source": manifest.pointer("/videoAi/lastBriefUpdateSource").cloned().unwrap_or(Value::Null)
+    })
 }
 
 pub(crate) fn video_script_state_from_manifest(manifest: &Value, script_body: &str) -> Value {
@@ -658,6 +675,7 @@ pub(crate) fn get_video_project_state(
         })
         .unwrap_or_else(|| default_video_script_approval(""));
     json!({
+        "brief": video_project_brief_from_manifest(manifest),
         "scriptBody": script_body,
         "scriptApproval": script_approval,
         "assets": asset_items_from_package_assets(assets),
@@ -2938,6 +2956,9 @@ pub(crate) fn create_manuscript_package(
             "videoEngine": if package_kind == "video" { json!("ai-remotion") } else { Value::Null },
             "videoAi": if package_kind == "video" {
                 json!({
+                    "brief": Value::Null,
+                    "lastBriefUpdateAt": Value::Null,
+                    "lastBriefUpdateSource": Value::Null,
                     "scriptApproval": {
                         "status": "pending",
                         "lastScriptUpdateAt": now_i64(),
@@ -3456,5 +3477,26 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&package_path);
+    }
+
+    #[test]
+    fn video_project_brief_from_manifest_reads_video_ai_brief_fields() {
+        let brief = video_project_brief_from_manifest(&json!({
+            "videoAi": {
+                "brief": "Jamba 手持戴森 V8 跳舞",
+                "lastBriefUpdateAt": 1234567890_i64,
+                "lastBriefUpdateSource": "user"
+            }
+        }));
+
+        assert_eq!(
+            brief.get("content").and_then(Value::as_str),
+            Some("Jamba 手持戴森 V8 跳舞")
+        );
+        assert_eq!(
+            brief.get("updatedAt").and_then(Value::as_i64),
+            Some(1234567890)
+        );
+        assert_eq!(brief.get("source").and_then(Value::as_str), Some("user"));
     }
 }

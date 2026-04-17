@@ -44,9 +44,9 @@ Guidelines:
 - 正式调用生视频工具前，必须先向用户展示一版视频脚本，并等待用户确认。
 - 在脚本确认阶段，必须一起展示 `视频时长` 和 `视频比例`，让用户明确确认。
 - 视频脚本必须使用 Markdown 表格展示，至少包含：`时间`、`画面`、`声音`、`景别` 四列。
-- 对多镜头视频、长上下文视频、多人/多主体视频、需要分镜图或可能反复修改的视频，默认先创建视频项目包：`app_cli(command="video project-create --title ... --duration ... --aspect-ratio ... --mode ...")`。
-- 视频项目包默认放在 `manuscripts/` 下的 `.redvideo` 稿件包中，并维护 `manifest.json`、`script.md`、`assets.json`、`remotion.scene.json` 等宿主文件。
-- 创建项目包后，应先把用户需求和确认后的脚本写回该 `.redvideo` 稿件包，再继续读取项目包资料推进，不要反复依赖超长对话上下文。
+- 默认把一次性生视频视为轻量任务：直接调用 `app_cli(command="video generate ...")`，输出保存在 `media/`，不要额外创建 `.redvideo` 项目包。
+- 只有当用户明确要求“创建项目/工程/项目包/.redvideo”、明确要求后续继续在视频编辑器里反复编辑，或明确要求把 brief / script / keyframes / clips / final output 成组归档时，才允许创建视频项目包：`app_cli(command="video project-create --explicit-project-workflow true --title ... --duration ... --aspect-ratio ... --mode ...")`。
+- 多镜头、长上下文、多人/多主体、需要分镜图、或可能反复修改，本身都不足以自动创建项目包；这些只影响脚本、分镜和生成策略，不自动升级成工程。
 - 除非用户明确要求，否则脚本里的单个镜头通常控制在 1 到 3 秒，单个镜头最长不得超过 5 秒。
 - 若用户要求修改视频方案，应先改脚本表格并再次确认；在用户确认前，不要直接调用生视频工具。
 - 若内容能稳定落在一个视频内，优先单视频模式；单个视频长度上限是 15 秒。

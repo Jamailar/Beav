@@ -1,5 +1,6 @@
 use base64::Engine;
 use serde_json::{json, Value};
+use std::io::Write;
 
 #[derive(Debug, Clone)]
 pub(crate) struct HttpJsonResponse {
@@ -16,7 +17,7 @@ fn build_curl_json_command(
     url: &str,
     api_key: Option<&str>,
     extra_headers: &[(&str, String)],
-    body: Option<&Value>,
+    has_body: bool,
     max_time_seconds: Option<u64>,
     no_buffer: bool,
 ) -> Result<std::process::Command, String> {
@@ -37,12 +38,63 @@ fn build_curl_json_command(
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
     }
-    if let Some(payload) = body {
-        command
-            .arg("-d")
-            .arg(serde_json::to_string(payload).map_err(|error| error.to_string())?);
+    if has_body {
+        command.arg("--data-binary").arg("@-");
     }
     Ok(command)
+}
+
+fn serialized_json_body(body: Option<&Value>) -> Result<Option<Vec<u8>>, String> {
+    body.map(serde_json::to_vec)
+        .transpose()
+        .map_err(|error| error.to_string())
+}
+
+fn spawn_curl_json_child(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<&Value>,
+    max_time_seconds: Option<u64>,
+    no_buffer: bool,
+    stdout_piped: bool,
+    stderr_piped: bool,
+) -> Result<std::process::Child, String> {
+    use std::process::Stdio;
+
+    let serialized_body = serialized_json_body(body)?;
+    let mut command = build_curl_json_command(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        serialized_body.is_some(),
+        max_time_seconds,
+        no_buffer,
+    )?;
+    if serialized_body.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    if stdout_piped {
+        command.stdout(Stdio::piped());
+    }
+    if stderr_piped {
+        command.stderr(Stdio::piped());
+    }
+
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let Some(payload) = serialized_body {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "curl stdin unavailable".to_string())?;
+        stdin
+            .write_all(&payload)
+            .map_err(|error| error.to_string())?;
+        drop(stdin);
+    }
+    Ok(child)
 }
 
 pub(crate) fn spawn_curl_json_process(
@@ -54,9 +106,7 @@ pub(crate) fn spawn_curl_json_process(
     max_time_seconds: Option<u64>,
     no_buffer: bool,
 ) -> Result<std::process::Child, String> {
-    use std::process::Stdio;
-
-    let mut command = build_curl_json_command(
+    spawn_curl_json_child(
         method,
         url,
         api_key,
@@ -64,9 +114,9 @@ pub(crate) fn spawn_curl_json_process(
         body,
         max_time_seconds,
         no_buffer,
-    )?;
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    command.spawn().map_err(|error| error.to_string())
+        true,
+        true,
+    )
 }
 
 pub(crate) fn run_curl_json_with_timeout(
@@ -91,19 +141,38 @@ pub(crate) fn run_curl_json_response(
 ) -> Result<HttpJsonResponse, String> {
     const STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
 
+    let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = build_curl_json_command(
         method,
         url,
         api_key,
         extra_headers,
-        body.as_ref(),
+        serialized_body.is_some(),
         max_time_seconds,
         false,
     )?;
     command
         .arg("-w")
         .arg(format!("\n{STATUS_MARKER}%{{http_code}}"));
-    let output = command.output().map_err(|error| error.to_string())?;
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    if serialized_body.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    }
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let Some(payload) = serialized_body {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "curl stdin unavailable".to_string())?;
+        stdin
+            .write_all(&payload)
+            .map_err(|error| error.to_string())?;
+        drop(stdin);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -159,10 +228,26 @@ pub(crate) fn run_curl_text(
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
     }
-    if let Some(payload) = body {
-        command.arg("-d").arg(payload);
+    if body.is_some() {
+        command.arg("--data-binary").arg("@-");
+        command.stdin(std::process::Stdio::piped());
     }
-    let output = command.output().map_err(|error| error.to_string())?;
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let Some(payload) = body {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "curl stdin unavailable".to_string())?;
+        stdin
+            .write_all(payload.as_bytes())
+            .map_err(|error| error.to_string())?;
+        drop(stdin);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -181,6 +266,7 @@ pub(crate) fn run_curl_bytes(
     extra_headers: &[(&str, String)],
     body: Option<Value>,
 ) -> Result<Vec<u8>, String> {
+    let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = std::process::Command::new("curl");
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
@@ -191,13 +277,27 @@ pub(crate) fn run_curl_bytes(
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
     }
-    if let Some(payload) = body {
+    if serialized_body.is_some() {
         command.arg("-H").arg("Content-Type: application/json");
-        command
-            .arg("-d")
-            .arg(serde_json::to_string(&payload).map_err(|error| error.to_string())?);
+        command.arg("--data-binary").arg("@-");
+        command.stdin(std::process::Stdio::piped());
     }
-    let output = command.output().map_err(|error| error.to_string())?;
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let Some(payload) = serialized_body {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "curl stdin unavailable".to_string())?;
+        stdin
+            .write_all(&payload)
+            .map_err(|error| error.to_string())?;
+        drop(stdin);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -284,4 +384,50 @@ pub(crate) fn run_sse_mcp_method(url: &str, method: &str, params: Value) -> Resu
             "params": params
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_curl_json_command_uses_stdin_transport_when_body_exists() {
+        let command = build_curl_json_command(
+            "POST",
+            "https://example.com/v1/videos/generations/async",
+            Some("secret"),
+            &[],
+            true,
+            Some(30),
+            false,
+        )
+        .expect("command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|value| value == "--data-binary"));
+        assert!(args.iter().any(|value| value == "@-"));
+        assert!(!args.iter().any(|value| value.contains("\"prompt\"")));
+    }
+
+    #[test]
+    fn build_curl_json_command_omits_stdin_transport_without_body() {
+        let command = build_curl_json_command(
+            "GET",
+            "https://example.com/v1/videos/generations/tasks/query",
+            None,
+            &[],
+            false,
+            None,
+            false,
+        )
+        .expect("command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(!args.iter().any(|value| value == "--data-binary"));
+        assert!(!args.iter().any(|value| value == "@-"));
+    }
 }

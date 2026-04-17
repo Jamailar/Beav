@@ -172,16 +172,39 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
     ]
 }
 
-fn ensure_builtin_skills_present(store: &mut AppStore) {
+fn ensure_builtin_skills_present(store: &mut AppStore) -> bool {
+    let mut changed = false;
     for builtin in builtin_skill_records() {
-        let exists = store
+        let existing = store
             .skills
             .iter()
-            .any(|skill| skill.name.eq_ignore_ascii_case(&builtin.name));
-        if !exists {
+            .position(|skill| skill.name.eq_ignore_ascii_case(&builtin.name));
+        if let Some(index) = existing {
+            let preserved_disabled = store.skills[index].disabled;
+            let refreshed = SkillRecord {
+                disabled: preserved_disabled.or(builtin.disabled),
+                ..builtin
+            };
+            if skill_record_differs(&store.skills[index], &refreshed) {
+                store.skills[index] = refreshed;
+                changed = true;
+            }
+        } else {
             store.skills.push(builtin);
+            changed = true;
         }
     }
+    changed
+}
+
+fn skill_record_differs(left: &SkillRecord, right: &SkillRecord) -> bool {
+    left.name != right.name
+        || left.description != right.description
+        || left.location != right.location
+        || left.body != right.body
+        || left.source_scope != right.source_scope
+        || left.is_builtin != right.is_builtin
+        || left.disabled != right.disabled
 }
 
 pub fn default_store() -> AppStore {
@@ -320,8 +343,11 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         Err(_) => return default_store(),
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
-    ensure_builtin_skills_present(&mut store);
+    let skills_migrated = ensure_builtin_skills_present(&mut store);
     crate::session_manager::enforce_default_retention(&mut store);
+    if skills_migrated {
+        let _ = persist_store(path, &store);
+    }
     store
 }
 
@@ -561,4 +587,36 @@ fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
             eprintln!("[RedBox async persist] rename failed: {error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_builtin_skills_present_refreshes_existing_builtin_body_and_preserves_disabled() {
+        let mut store = default_store();
+        let skill = store
+            .skills
+            .iter_mut()
+            .find(|item| item.name == "image-prompt-optimizer")
+            .expect("image-prompt-optimizer builtin should exist");
+        skill.body =
+            "---\nallowedRuntimeModes: [chatroom, image-generation]\n---\n# stale".to_string();
+        skill.disabled = Some(true);
+
+        ensure_builtin_skills_present(&mut store);
+
+        let refreshed = store
+            .skills
+            .iter()
+            .find(|item| item.name == "image-prompt-optimizer")
+            .expect("refreshed image-prompt-optimizer should exist");
+        assert!(refreshed
+            .body
+            .contains("allowedRuntimeModes: [chatroom, redclaw, image-generation]"));
+        assert_eq!(refreshed.disabled, Some(true));
+        assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
+        assert_eq!(refreshed.is_builtin, Some(true));
+    }
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
+import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -857,13 +858,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
             <div className="max-w-4xl mx-auto space-y-10">
               {loading && (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] py-10 animate-in fade-in zoom-in-[0.98] duration-1000">
-                  <div className="relative mb-12">
-                    <div className="w-20 h-20 rounded-[28px] border-[3px] border-black/[0.03]"></div>
-                    <div className="absolute top-0 left-0 w-20 h-20 rounded-[28px] border-[3px] border-accent-primary border-t-transparent animate-spin"></div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <Sparkles className="w-8 h-8 text-accent-primary animate-pulse" />
-                    </div>
-                  </div>
+                  <WanderLoadingDice className="mb-10" size={76} />
                   
                   <div className="w-full max-w-xl space-y-6">
                     <div className="text-center space-y-2">

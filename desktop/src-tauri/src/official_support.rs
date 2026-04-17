@@ -11,6 +11,7 @@ pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1"
 const REDBOX_APP_SLUG: &str = "redbox";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
+const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
 
 pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> String {
     let base = normalize_base_url(base_url);
@@ -599,7 +600,14 @@ pub(crate) fn run_official_json_request_response(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    crate::run_curl_json_response(method, &endpoint, api_key.as_deref(), &[], body, None)
+    crate::run_curl_json_response(
+        method,
+        &endpoint,
+        api_key.as_deref(),
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )
 }
 
 pub(crate) fn run_official_public_json_request(
@@ -614,7 +622,14 @@ pub(crate) fn run_official_public_json_request(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    run_curl_json(method, &endpoint, None, &[], body)
+    run_curl_json_with_timeout(
+        method,
+        &endpoint,
+        None,
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )
 }
 
 pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, String> {

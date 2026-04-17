@@ -454,6 +454,142 @@ fn parse_wander_brainstorm_payload(payload: &Value) -> (Vec<Value>, Value) {
     (Vec::new(), json!({}))
 }
 
+fn parse_wander_session_timestamp(raw: &str) -> i64 {
+    raw.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn parse_legacy_wander_items_from_context_text(context_text: &str) -> Vec<Value> {
+    let normalized = context_text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks = Vec::new();
+    for (index, chunk) in normalized.split("\n\nItem ").enumerate() {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if index == 0 {
+            blocks.push(trimmed.to_string());
+        } else {
+            blocks.push(format!("Item {trimmed}"));
+        }
+    }
+
+    blocks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let mut title = String::new();
+            let mut item_type = String::from("note");
+            let mut content = String::new();
+            for line in block.lines() {
+                if let Some(rest) = line.strip_prefix("Title: ") {
+                    title = rest.trim().to_string();
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("Type: ") {
+                    item_type = rest.trim().to_string();
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("Content Summary: ") {
+                    content = rest.trim().to_string();
+                    continue;
+                }
+                if !content.is_empty() {
+                    content.push('\n');
+                    content.push_str(line);
+                }
+            }
+            if title.trim().is_empty() {
+                return None;
+            }
+            let normalized_content = content.trim().trim_end_matches("...").trim().to_string();
+            Some(json!({
+                "id": format!("legacy-wander-item-{}-{}", index + 1, slug_from_relative_path(&title)),
+                "type": if item_type.trim() == "video" { "video" } else { "note" },
+                "title": title,
+                "content": normalized_content,
+                "meta": {
+                    "sourceType": "legacy-wander-context"
+                }
+            }))
+        })
+        .collect()
+}
+
+fn rebuild_wander_history_from_sessions(store: &AppStore) -> Vec<WanderHistoryRecord> {
+    let mut sessions = store
+        .chat_sessions
+        .iter()
+        .filter(|session| {
+            let metadata = session.metadata.as_ref();
+            let context_type = metadata
+                .and_then(|value| value.get("contextType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            context_type == "wander"
+                || session.id.starts_with("session_wander_")
+                || session.title == "Wander Deep Think"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    sessions.sort_by(|left, right| {
+        parse_wander_session_timestamp(&right.updated_at)
+            .cmp(&parse_wander_session_timestamp(&left.updated_at))
+    });
+
+    let mut rebuilt = Vec::new();
+    for session in sessions {
+        let mut assistant_messages = store
+            .chat_messages
+            .iter()
+            .filter(|message| {
+                message.session_id == session.id && message.role.eq_ignore_ascii_case("assistant")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assistant_messages.sort_by(|left, right| {
+            parse_wander_session_timestamp(&right.created_at)
+                .cmp(&parse_wander_session_timestamp(&left.created_at))
+        });
+        let Some(latest_assistant) = assistant_messages.into_iter().next() else {
+            continue;
+        };
+
+        let Some(parsed_payload) = parse_wander_json_payload(&latest_assistant.content) else {
+            continue;
+        };
+        let multi_choice = parsed_payload
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|items| !items.is_empty())
+            .or_else(|| {
+                parsed_payload
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .map(|items| !items.is_empty())
+            })
+            .unwrap_or(false);
+        let result_value = normalize_wander_result(parsed_payload, multi_choice);
+        let items = session
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("contextContent"))
+            .and_then(Value::as_str)
+            .map(parse_legacy_wander_items_from_context_text)
+            .unwrap_or_default();
+        let created_at = parse_wander_session_timestamp(&session.updated_at)
+            .max(parse_wander_session_timestamp(&latest_assistant.created_at));
+        rebuilt.push(WanderHistoryRecord {
+            id: session.id.clone(),
+            items: serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
+            result: serde_json::to_string(&result_value).unwrap_or_else(|_| "{}".to_string()),
+            created_at,
+        });
+    }
+
+    rebuilt
+}
+
 pub fn handle_chat_sessions_wander_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -976,7 +1112,13 @@ pub fn handle_chat_sessions_wander_channel(
                 let _ = fs::remove_file(&audio_path);
                 Ok(json!({ "success": true, "text": text }))
             }
-            "wander:list-history" => with_store(state, |store| {
+            "wander:list-history" => with_store_mut(state, |store| {
+                if store.wander_history.is_empty() {
+                    let rebuilt = rebuild_wander_history_from_sessions(store);
+                    if !rebuilt.is_empty() {
+                        store.wander_history = rebuilt;
+                    }
+                }
                 let mut history = store.wander_history.clone();
                 history.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 Ok(json!(history))

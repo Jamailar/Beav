@@ -653,6 +653,7 @@ struct AppState {
     workspace_root_cache: Mutex<PathBuf>,
     store_persist_version: Arc<AtomicU64>,
     official_auth_refresh_lock: Mutex<()>,
+    official_cache_refresh_inflight: AtomicBool,
     mcp_manager: mcp::McpManager,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
     editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
@@ -2101,12 +2102,18 @@ fn execute_interactive_tool_call(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
+    tool_call_id: Option<&str>,
     name: &str,
     arguments: &Value,
     model_config: Option<&Value>,
 ) -> Result<Value, String> {
-    let tool_executor =
-        tools::executor::InteractiveToolExecutor::new(app, state, runtime_mode, session_id);
+    let tool_executor = tools::executor::InteractiveToolExecutor::new(
+        app,
+        state,
+        runtime_mode,
+        session_id,
+        tool_call_id,
+    );
     let prepared = tool_executor.prepare_tool_call(name, arguments)?;
     let name = prepared.name;
     let arguments = &prepared.arguments;
@@ -4451,6 +4458,7 @@ fn run_anthropic_interactive_chat_runtime(
                 state,
                 runtime_mode,
                 session_id,
+                Some(&call.id),
                 &call.name,
                 &call.arguments,
                 Some(&model_config_value_from_resolved(config)),
@@ -4931,6 +4939,7 @@ fn run_gemini_interactive_chat_runtime(
                 state,
                 runtime_mode,
                 session_id,
+                Some(&call.id),
                 &call.name,
                 &call.arguments,
                 Some(&model_config_value_from_resolved(config)),
@@ -5311,6 +5320,7 @@ fn run_openai_interactive_chat_runtime(
                 state,
                 runtime_mode,
                 session_id,
+                Some(&call.id),
                 effective_tool_name,
                 &effective_arguments,
                 Some(&model_config_value_from_resolved(config)),
@@ -6023,14 +6033,7 @@ const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
     thread::spawn(move || loop {
-        {
-            let state = app.state::<AppState>();
-            if let Err(error) = commands::official::refresh_official_cached_data(&app, &state) {
-                if error != "官方账号未登录" {
-                    eprintln!("[RedBox official cache refresher] {error}");
-                }
-            }
-        }
+        let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
         thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
     })
 }
@@ -6056,6 +6059,7 @@ fn main() {
             workspace_root_cache: Mutex::new(initial_workspace_root),
             store_persist_version: Arc::new(AtomicU64::new(0)),
             official_auth_refresh_lock: Mutex::new(()),
+            official_cache_refresh_inflight: AtomicBool::new(false),
             mcp_manager: mcp::McpManager::default(),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),

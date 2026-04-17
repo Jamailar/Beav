@@ -3,7 +3,8 @@ use crate::manuscript_package::{
     animation_layers_from_remotion_scene, build_default_remotion_scene,
     default_video_script_approval, ensure_manifest_video_ai_state, get_video_project_state,
     hydrate_editor_project_motion_from_remotion, normalized_remotion_render_config,
-    persist_remotion_composition_artifacts, video_script_state_from_manifest,
+    persist_remotion_composition_artifacts, video_project_brief_from_manifest,
+    video_script_state_from_manifest,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
@@ -269,6 +270,57 @@ fn confirm_manifest_video_script(manifest: &mut Value) -> Result<Value, String> 
         .pointer("/videoAi/scriptApproval")
         .cloned()
         .unwrap_or_else(|| default_video_script_approval("system")))
+}
+
+fn persist_video_project_brief(
+    package_path: &std::path::Path,
+    brief: &str,
+    source: &str,
+) -> Result<(Value, Value), String> {
+    let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+    }
+    let video_ai = ensure_manifest_video_ai_state(&mut manifest)?;
+    let normalized_brief = brief.trim();
+    video_ai.insert(
+        "brief".to_string(),
+        if normalized_brief.is_empty() {
+            Value::Null
+        } else {
+            json!(normalized_brief)
+        },
+    );
+    video_ai.insert("lastBriefUpdateAt".to_string(), json!(now_i64()));
+    video_ai.insert(
+        "lastBriefUpdateSource".to_string(),
+        if source.trim().is_empty() {
+            Value::Null
+        } else {
+            json!(source)
+        },
+    );
+    write_json_value(&package_manifest_path(package_path), &manifest)?;
+    Ok((
+        get_manuscript_package_state(package_path)?,
+        video_project_brief_from_manifest(&manifest),
+    ))
+}
+
+fn normalize_video_project_asset_kind(input: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = input.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized = raw.to_ascii_lowercase();
+    match normalized.as_str() {
+        "reference-image" | "voice-reference" | "keyframe" | "clip" | "output" | "other" => {
+            Ok(Some(normalized))
+        }
+        _ => Err(
+            "kind must be one of reference-image, voice-reference, keyframe, clip, output, other"
+                .to_string(),
+        ),
+    }
 }
 
 fn mark_editor_project_script_pending(
@@ -2436,12 +2488,15 @@ fn normalize_editor_project_timeline(project: &mut Value) -> Result<(), String> 
 fn ensure_package_asset_entry(
     package_path: &std::path::Path,
     asset: &MediaAssetRecord,
+    package_kind: Option<&str>,
+    label: Option<&str>,
+    role: Option<&str>,
 ) -> Result<(), String> {
     let mut assets = read_json_value_or(&package_assets_path(package_path), json!({ "items": [] }));
     let Some(items) = assets.get_mut("items").and_then(Value::as_array_mut) else {
         return Err("Package assets items missing".to_string());
     };
-    let next_entry = json!({
+    let mut next_entry = json!({
         "assetId": asset.id,
         "title": asset.title.clone(),
         "mimeType": asset.mime_type.clone(),
@@ -2453,6 +2508,27 @@ fn ensure_package_asset_entry(
         "exists": asset.exists,
         "updatedAt": asset.updated_at.clone(),
     });
+    if let Some(value) = package_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        next_entry
+            .as_object_mut()
+            .ok_or_else(|| "Package asset entry must be an object".to_string())?
+            .insert("kind".to_string(), json!(value));
+    }
+    if let Some(value) = label.map(str::trim).filter(|value| !value.is_empty()) {
+        next_entry
+            .as_object_mut()
+            .ok_or_else(|| "Package asset entry must be an object".to_string())?
+            .insert("label".to_string(), json!(value));
+    }
+    if let Some(value) = role.map(str::trim).filter(|value| !value.is_empty()) {
+        next_entry
+            .as_object_mut()
+            .ok_or_else(|| "Package asset entry must be an object".to_string())?
+            .insert("role".to_string(), json!(value));
+    }
     if let Some(existing) = items.iter_mut().find(|item| {
         item.get("assetId")
             .and_then(|value| value.as_str())
@@ -3360,6 +3436,40 @@ pub fn handle_manuscripts_channel(
                         editor_project,
                         &timeline_summary,
                     )
+                }))
+            }
+            "manuscripts:save-video-project-brief" => {
+                let file_path = payload_value_as_string(&payload)
+                    .or_else(|| payload_string(&payload, "filePath"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("video") {
+                    return Ok(
+                        json!({ "success": false, "error": "Not a video manuscript package" }),
+                    );
+                }
+                let brief = payload_string(&payload, "content")
+                    .or_else(|| payload_string(&payload, "brief"))
+                    .unwrap_or_default();
+                let source =
+                    payload_string(&payload, "source").unwrap_or_else(|| "user".to_string());
+                let (next_state, brief_state) =
+                    persist_video_project_brief(&full_path, &brief, &source)?;
+                Ok(json!({
+                    "success": true,
+                    "brief": brief_state,
+                    "project": next_state.get("videoProject").cloned().unwrap_or(Value::Null),
+                    "state": next_state
                 }))
             }
             "manuscripts:ffmpeg-edit" => {
@@ -4559,10 +4669,95 @@ pub fn handle_manuscripts_channel(
                 target_children.insert(desired_order, clip);
                 normalize_package_timeline(&mut timeline);
                 write_json_value(&package_timeline_path(&full_path), &timeline)?;
-                ensure_package_asset_entry(&full_path, &asset)?;
+                ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
                 Ok(json!({
                     "success": true,
                     "insertedClipId": inserted_clip_id,
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
+            }
+            "manuscripts:attach-package-file" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let source_path = payload_string(&payload, "sourcePath").unwrap_or_default();
+                if file_path.is_empty() || source_path.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "filePath and sourcePath are required"
+                    }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir()
+                    || !is_manuscript_package_name(
+                        full_path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or(""),
+                    )
+                {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let source = std::path::PathBuf::from(source_path.trim());
+                if !source.exists() || !source.is_file() {
+                    return Ok(json!({ "success": false, "error": "Source file not found" }));
+                }
+                let package_asset_kind = normalize_video_project_asset_kind(
+                    payload_string(&payload, "kind").as_deref(),
+                )?;
+                let label = payload_string(&payload, "label");
+                let role = payload_string(&payload, "role");
+                let imports_root = media_root(state)?.join("imports");
+                fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
+                let (relative_name, target) = copy_file_into_dir(&source, &imports_root)?;
+                let (mime_type, _kind, _) = guess_mime_and_kind(&target);
+                let asset = with_store_mut(state, |store| {
+                    let asset = MediaAssetRecord {
+                        id: make_id("media"),
+                        source: "imported".to_string(),
+                        project_id: None,
+                        title: source
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .map(ToString::to_string),
+                        prompt: None,
+                        provider: None,
+                        provider_template: None,
+                        model: None,
+                        aspect_ratio: None,
+                        size: None,
+                        quality: None,
+                        mime_type: Some(mime_type.clone()),
+                        relative_path: Some(format!("imports/{}", relative_name)),
+                        bound_manuscript_path: Some(file_path.clone()),
+                        created_at: now_iso(),
+                        updated_at: now_iso(),
+                        absolute_path: Some(target.display().to_string()),
+                        preview_url: Some(file_url_for_path(&target)),
+                        exists: true,
+                    };
+                    store.media_assets.push(asset.clone());
+                    Ok(asset)
+                })?;
+                persist_media_workspace_catalog(state)?;
+                ensure_package_asset_entry(
+                    &full_path,
+                    &asset,
+                    package_asset_kind.as_deref(),
+                    label.as_deref(),
+                    role.as_deref(),
+                )?;
+                Ok(json!({
+                    "success": true,
+                    "asset": {
+                        "id": asset.id,
+                        "title": asset.title,
+                        "mimeType": asset.mime_type,
+                        "relativePath": asset.relative_path,
+                        "absolutePath": asset.absolute_path,
+                        "previewUrl": asset.preview_url,
+                        "kind": package_asset_kind,
+                        "label": label,
+                        "role": role
+                    },
                     "state": get_manuscript_package_state(&full_path)?
                 }))
             }
@@ -4784,7 +4979,7 @@ pub fn handle_manuscripts_channel(
                 target_children.insert(safe_order, clip);
                 normalize_package_timeline(&mut timeline);
                 write_json_value(&package_timeline_path(&full_path), &timeline)?;
-                ensure_package_asset_entry(&full_path, &asset)?;
+                ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
                 Ok(json!({
                     "success": true,
                     "insertedClipId": inserted_clip_id,
@@ -4943,7 +5138,7 @@ pub fn handle_manuscripts_channel(
                         Ok(asset)
                     })?;
                     persist_media_workspace_catalog(state)?;
-                    ensure_package_asset_entry(&full_path, &asset)?;
+                    ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
                     let track = if mime_type.starts_with("audio/") {
                         "A1"
                     } else {

@@ -15,6 +15,7 @@ pub struct InteractiveToolExecutor<'a> {
     state: &'a State<'a, AppState>,
     runtime_mode: &'a str,
     session_id: Option<&'a str>,
+    tool_call_id: Option<&'a str>,
 }
 
 impl<'a> InteractiveToolExecutor<'a> {
@@ -23,12 +24,14 @@ impl<'a> InteractiveToolExecutor<'a> {
         state: &'a State<'a, AppState>,
         runtime_mode: &'a str,
         session_id: Option<&'a str>,
+        tool_call_id: Option<&'a str>,
     ) -> Self {
         Self {
             app,
             state,
             runtime_mode,
             session_id,
+            tool_call_id,
         }
     }
 
@@ -168,6 +171,7 @@ impl<'a> InteractiveToolExecutor<'a> {
             self.state,
             self.runtime_mode,
             self.session_id,
+            self.tool_call_id,
         )
         .execute(arguments)
     }

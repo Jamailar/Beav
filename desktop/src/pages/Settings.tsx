@@ -434,12 +434,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     remote: false,
   });
 
-  const logSettingsPerf = useCallback((stage: string, startedAt: number, extra?: string) => {
-    const elapsed = Math.round(performance.now() - startedAt);
-    const suffix = extra ? ` | ${extra}` : '';
-    console.debug(`[settings][perf] ${stage} elapsed=${elapsed}ms${suffix}`);
-  }, []);
-
   const defaultAiSource = useMemo(() => {
     if (!aiSources.length) return null;
     return aiSources.find((source) => source.id === defaultAiSourceId) || aiSources[0];
@@ -760,7 +754,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
     if (activeTab !== 'ai' || aiModelSubTab !== 'login' || OfficialAiPanelComponent) return;
     let canceled = false;
-    const startedAt = performance.now();
     void loadOfficialAiPanelModule().then((module) => {
       if (canceled) return;
       const nextComponent = module?.default || null;
@@ -768,12 +761,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (!nextComponent) {
         setAiModelSubTab('custom');
       }
-      logSettingsPerf('official-panel-load', startedAt, nextComponent ? 'loaded' : 'empty');
     });
     return () => {
       canceled = true;
     };
-  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, logSettingsPerf, officialAiPanelEnabled]);
+  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -2411,7 +2403,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (baseSettingsInFlightRef.current) return;
     if (!force && baseSettingsLoadedRef.current) return;
     baseSettingsInFlightRef.current = true;
-    const startedAt = performance.now();
     try {
       await loadSettings({
         preserveViewState: true,
@@ -2420,18 +2411,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       void syncOfficialAuthForStartup();
       baseSettingsLoadedRef.current = true;
       tabWarmRef.current.ai = true;
-      logSettingsPerf(force ? 'base-settings-refresh' : 'base-settings-load', startedAt);
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [loadSettings, logSettingsPerf, syncOfficialAuthForStartup]);
+  }, [loadSettings, syncOfficialAuthForStartup]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
     if (tabInFlightRef.current[tab]) return;
     if (!force && tabWarmRef.current[tab]) return;
     tabInFlightRef.current[tab] = true;
-    const startedAt = performance.now();
     try {
       if (tab === 'general') {
         await Promise.all([
@@ -2461,7 +2450,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
       }
       tabWarmRef.current[tab] = true;
-      logSettingsPerf(force ? `tab-refresh:${tab}` : `tab-load:${tab}`, startedAt);
     } finally {
       tabInFlightRef.current[tab] = false;
     }
@@ -2483,7 +2471,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadRuntimeTasks,
     loadToolDiagnostics,
     loadVectorStats,
-    logSettingsPerf,
     officialAiPanelEnabled,
   ]);
 
@@ -2835,9 +2822,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           <button
             key={tab.id}
             onClick={() => {
-              const startedAt = performance.now();
               setActiveTab(tab.id);
-              logSettingsPerf(`tab-click:${tab.id}`, startedAt);
             }}
             className={clsx(
               "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",

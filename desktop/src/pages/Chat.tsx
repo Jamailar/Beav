@@ -1,5 +1,5 @@
 import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
-import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, FileX, Square, MessageSquarePlus } from 'lucide-react';
+import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Square, Film, ImageIcon, Music2, FileText, File as FileIcon } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
@@ -9,6 +9,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
+import { resolveAssetUrl } from '../utils/pathManager';
 import { uiDebug, uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 
 interface Session {
@@ -35,6 +36,7 @@ interface SelectionMenu {
 
 interface ChatProps {
   isActive?: boolean;
+  onExecutionStateChange?: (active: boolean) => void;
   defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
@@ -124,6 +126,191 @@ interface ChatSettingsSnapshot {
   default_ai_source_id?: string;
 }
 
+type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
+
+const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
+const VIDEO_ATTACHMENT_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i;
+const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i;
+const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
+
+function getAttachmentSource(attachment: UploadedFileAttachment): string {
+  const candidate = String(
+    attachment.localUrl
+      || attachment.absolutePath
+      || attachment.originalAbsolutePath
+      || '',
+  ).trim();
+  return candidate ? resolveAssetUrl(candidate) : '';
+}
+
+function getAttachmentExtLabel(attachment: UploadedFileAttachment): string {
+  const explicit = String(attachment.ext || '').trim().replace(/^\./, '');
+  if (explicit) return explicit.toUpperCase();
+  const matched = String(attachment.name || '').trim().match(/\.([a-zA-Z0-9]+)$/);
+  return matched?.[1]?.toUpperCase() || '';
+}
+
+function getAttachmentVisualKind(attachment: UploadedFileAttachment): ComposerAttachmentVisualKind {
+  const kind = String(attachment.kind || '').trim().toLowerCase();
+  const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+  const source = String(
+    attachment.localUrl
+      || attachment.absolutePath
+      || attachment.originalAbsolutePath
+      || attachment.name
+      || '',
+  ).trim().toLowerCase();
+
+  if (kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source)) return 'image';
+  if (kind === 'video' || mimeType.startsWith('video/') || VIDEO_ATTACHMENT_EXT_RE.test(source)) return 'video';
+  if (kind === 'audio' || mimeType.startsWith('audio/') || AUDIO_ATTACHMENT_EXT_RE.test(source)) return 'audio';
+  if (kind === 'text' || mimeType.startsWith('text/') || TEXT_ATTACHMENT_EXT_RE.test(source)) return 'text';
+  return 'file';
+}
+
+function formatAttachmentSize(size?: number): string {
+  if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) return '';
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+  return `${Math.round(size)} B`;
+}
+
+function getAttachmentKindLabel(kind: ComposerAttachmentVisualKind): string {
+  switch (kind) {
+    case 'image':
+      return '图片';
+    case 'video':
+      return '视频';
+    case 'audio':
+      return '音频';
+    case 'text':
+      return '文档';
+    default:
+      return '文件';
+  }
+}
+
+function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: string) {
+  switch (kind) {
+    case 'image':
+      return <ImageIcon className={className} />;
+    case 'video':
+      return <Film className={className} />;
+    case 'audio':
+      return <Music2 className={className} />;
+    case 'text':
+      return <FileText className={className} />;
+    default:
+      return <FileIcon className={className} />;
+  }
+}
+
+interface ComposerAttachmentPreviewProps {
+  attachment: UploadedFileAttachment;
+  darkEmbedded: boolean;
+  variant: 'empty' | 'main';
+  onRemove: () => void;
+  children: React.ReactNode;
+}
+
+function ComposerAttachmentPreview({
+  attachment,
+  darkEmbedded,
+  variant,
+  onRemove,
+  children,
+}: ComposerAttachmentPreviewProps) {
+  const visualKind = getAttachmentVisualKind(attachment);
+  const previewSrc = visualKind === 'image' ? getAttachmentSource(attachment) : '';
+  const extLabel = getAttachmentExtLabel(attachment);
+  const sizeLabel = formatAttachmentSize(attachment.size);
+  const typeLabel = getAttachmentKindLabel(visualKind);
+  const frameClass = variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
+  const metaClass = darkEmbedded ? 'text-white/46' : 'text-text-tertiary';
+  const titleClass = darkEmbedded ? 'text-white/88' : 'text-text-primary';
+  const badgeClass = darkEmbedded
+    ? 'border-white/10 bg-white/[0.05] text-white/58'
+    : 'border-black/[0.06] bg-[#f7f2e7] text-[#7f715f]';
+  const previewShellClass = darkEmbedded
+    ? 'border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] shadow-[0_12px_34px_rgba(0,0,0,0.35)]'
+    : 'border-black/[0.07] bg-[linear-gradient(180deg,#fbf6ec,#f2eadb)] shadow-[0_12px_28px_rgba(110,84,44,0.12)]';
+  const removeButtonClass = darkEmbedded
+    ? 'border-white/12 bg-[#1b2026] text-white/62 hover:text-white hover:bg-[#222831]'
+    : 'border-white bg-white text-[#786d5f] hover:text-[#2d2822] hover:bg-[#f8f4ea]';
+  const infoTokens = [typeLabel, extLabel, sizeLabel].filter(Boolean);
+
+  return (
+    <div className="flex items-start gap-3">
+      <div className="relative shrink-0">
+        {previewSrc ? (
+          <div className={clsx(
+            'overflow-hidden rounded-[22px] border',
+            frameClass,
+            variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]',
+            previewShellClass,
+          )}>
+            <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />
+          </div>
+        ) : (
+          <div className={clsx(
+            'flex items-center justify-center rounded-[22px] border',
+            frameClass,
+            previewShellClass,
+          )}>
+            <div className="flex flex-col items-center gap-1.5 px-2 text-center">
+              {getAttachmentKindIcon(visualKind, clsx(
+                variant === 'empty' ? 'h-5 w-5' : 'h-[18px] w-[18px]',
+                darkEmbedded ? 'text-white/68' : 'text-[#7f715f]',
+              ))}
+              <span className={clsx(
+                'max-w-full truncate text-[10px] font-semibold tracking-[0.18em]',
+                darkEmbedded ? 'text-white/42' : 'text-[#9d8f7b]',
+              )}>
+                {extLabel || typeLabel}
+              </span>
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onRemove}
+          className={clsx(
+            'absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border transition-colors',
+            removeButtonClass,
+          )}
+          title="移除文件"
+          aria-label={`移除 ${attachment.name}`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="min-w-0 flex-1 pt-1">
+        <div className={clsx('text-[11px] font-medium tracking-[0.08em]', metaClass)}>已添加文件</div>
+        <div className={clsx(
+          'mt-1 truncate font-medium',
+          variant === 'empty' ? 'text-[15px]' : 'text-[13px]',
+          titleClass,
+        )} title={attachment.name}>
+          {attachment.name}
+        </div>
+        {infoTokens.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {infoTokens.map((token) => (
+              <span
+                key={token}
+                className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
+              >
+                {token}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
   if (typeof model === 'string') {
     const forced = getForcedModelCapabilities(model);
@@ -194,6 +381,24 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   if (current.endsWith(incoming)) return current;
   if (incoming.startsWith(current)) return incoming;
   return `${current}${incoming}`;
+}
+
+function parseMessageTimestampMs(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1e12 ? value : value * 1000;
+  }
+
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return undefined;
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
@@ -381,6 +586,7 @@ function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatMode
 
 export function Chat({
   isActive = true,
+  onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
   defaultCollapsed = true,
@@ -432,6 +638,16 @@ export function Chat({
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+
+  useEffect(() => {
+    onExecutionStateChange?.(isProcessing);
+  }, [isProcessing, onExecutionStateChange]);
+
+  useEffect(() => {
+    return () => {
+      onExecutionStateChange?.(false);
+    };
+  }, [onExecutionStateChange]);
   const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
@@ -590,6 +806,14 @@ export function Chat({
     inputRef.current.style.height = 'auto';
     inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
   }, []);
+
+  const clearPendingAttachment = useCallback(() => {
+    setPendingAttachment(null);
+    requestAnimationFrame(() => {
+      syncInputHeight();
+      inputRef.current?.focus();
+    });
+  }, [syncInputHeight]);
 
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
@@ -802,8 +1026,9 @@ export function Chat({
       }
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
+      const processingStartedAt = Date.now();
       const userMsg: Message = {
-        id: Date.now().toString(),
+        id: processingStartedAt.toString(),
         role: 'user',
         content: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
@@ -813,14 +1038,15 @@ export function Chat({
       };
 
       const aiPlaceholder: Message = {
-        id: (Date.now() + 1).toString(),
+        id: (processingStartedAt + 1).toString(),
         role: 'ai',
         content: '',
         tools: [],
         timeline: (
           pendingMessage.taskHints?.forceMultiAgent
         ) ? buildPendingAssistantTimeline('任务已提交') : [],
-        isStreaming: true
+        isStreaming: true,
+        processingStartedAt,
       };
 
       if (shouldAppendToCurrentSession) {
@@ -901,6 +1127,7 @@ export function Chat({
       const runtimeState = runtimeStateRaw as ChatRuntimeState;
 
       // Convert DB messages to UI messages
+      let lastUserCreatedAt: number | undefined;
       const uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
@@ -912,15 +1139,26 @@ export function Chat({
           }
         }
 
+        const role = msg.role === 'user' ? 'user' : 'ai';
+        const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
+        const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
+        const processingFinishedAt = role === 'ai' ? createdAt : undefined;
+
+        if (role === 'user') {
+          lastUserCreatedAt = createdAt;
+        }
+
         return {
           id: msg.id,
-          role: msg.role === 'user' ? 'user' : 'ai', // Simplified mapping
+          role, // Simplified mapping
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
           tools: [], // History tools not fully reconstructed in this simple view yet
           timeline: [], // History timeline not fully reconstructed
-          isStreaming: false
+          isStreaming: false,
+          processingStartedAt,
+          processingFinishedAt,
         };
       });
 
@@ -945,12 +1183,15 @@ export function Chat({
             tools: [],
             timeline: [],
             isStreaming: true,
+            processingStartedAt: lastUserCreatedAt ?? Date.now(),
           });
         } else {
           uiMessages[uiMessages.length - 1] = {
             ...lastMsg,
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
+            processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
+            processingFinishedAt: undefined,
           };
         }
         shouldSetProcessing = true;
@@ -1496,18 +1737,27 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), { ...lastMsg, content: mergedContent, timeline, isStreaming: false }];
+            return [...prev.slice(0, -1), {
+              ...lastMsg,
+              content: mergedContent,
+              timeline,
+              isStreaming: false,
+              processingFinishedAt: now,
+            }];
           }
           if (finalContent) {
+            const now = Date.now();
             return [
               ...prev,
               {
-                id: Date.now().toString(),
+                id: now.toString(),
                 role: 'ai',
                 content: finalContent,
                 tools: [],
                 timeline: [],
                 isStreaming: false,
+                processingStartedAt: now,
+                processingFinishedAt: now,
               }
             ];
           }
@@ -1544,7 +1794,7 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false }];
+          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false, processingFinishedAt: now }];
         });
       });
     };
@@ -1592,17 +1842,26 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), { ...lastMsg, content: formatted, timeline, isStreaming: false }];
+            return [...prev.slice(0, -1), {
+              ...lastMsg,
+              content: formatted,
+              timeline,
+              isStreaming: false,
+              processingFinishedAt: now,
+            }];
           }
+          const now = Date.now();
           return [
             ...prev,
             {
-              id: Date.now().toString(),
+              id: now.toString(),
               role: 'ai',
               content: formatted,
               tools: [],
               timeline: [],
               isStreaming: false,
+              processingStartedAt: now,
+              processingFinishedAt: now,
             }
           ];
         });
@@ -1736,12 +1995,17 @@ export function Chat({
       }
       if (result.canceled) return;
       if (result.attachment) {
+        setErrorNotice(null);
         setPendingAttachment(result.attachment);
+        requestAnimationFrame(() => {
+          syncInputHeight();
+          inputRef.current?.focus();
+        });
       }
     } catch (error) {
       setErrorNotice(String(error || '上传文件失败'));
     }
-  }, [currentSessionId, isProcessing]);
+  }, [currentSessionId, isProcessing, syncInputHeight]);
 
   const getChatModelConfig = useCallback(() => {
     if (!selectedChatModel) return undefined;
@@ -1858,8 +2122,9 @@ export function Chat({
     const normalizedContent = String(content || '').trim();
     const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
     if (!displayText) return;
+    const processingStartedAt = Date.now();
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: processingStartedAt.toString(),
       role: 'user',
       content: normalizedContent || displayText,
       displayContent: displayText,
@@ -1869,12 +2134,13 @@ export function Chat({
     };
 
     const aiPlaceholder: Message = {
-      id: (Date.now() + 1).toString(),
+      id: (processingStartedAt + 1).toString(),
       role: 'ai',
       content: '',
       tools: [],
       timeline: [],
-      isStreaming: true
+      isStreaming: true,
+      processingStartedAt,
     };
 
     localMessageMutationRef.current += 1;
@@ -1950,9 +2216,6 @@ export function Chat({
   const composerModelPickerClass = darkEmbedded
     ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
     : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
-  const composerAttachmentClass = darkEmbedded
-    ? 'rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/68 flex items-center justify-between'
-    : 'rounded-lg border border-border bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary flex items-center justify-between';
   const composerSendButtonClass = input.trim() || pendingAttachment
     ? 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]'
     : darkEmbedded
@@ -2029,6 +2292,83 @@ export function Chat({
       </div>
     </div>
   ) : null;
+
+  const renderComposerInput = (
+    source: 'empty' | 'composer',
+    variant: 'empty' | 'main',
+    placeholder: string,
+  ) => {
+    const attached = Boolean(pendingAttachment);
+    const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
+    const textareaClass = attached
+      ? variant === 'empty'
+        ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
+        : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none resize-none min-h-[52px] max-h-[180px] overflow-y-auto'
+      : variant === 'empty'
+        ? 'w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto'
+        : 'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto';
+
+    if (composerSuppressed) {
+      return (
+        <button
+          type="button"
+          onClick={() => resumeComposerFocus(source)}
+          className={clsx(
+            'w-full rounded-2xl py-6 text-left',
+            variant === 'empty' ? 'px-4 text-[16px]' : 'px-3.5 text-[14px]',
+            darkEmbedded ? 'text-white/45' : 'text-text-tertiary',
+          )}
+        >
+          对话已完成，点击后继续输入...
+        </button>
+      );
+    }
+
+    const textarea = (
+      <textarea
+        ref={inputRef}
+        value={input}
+        onChange={(e) => {
+          setInput(e.target.value);
+          syncInputHeight();
+        }}
+        onFocus={() => handleComposerFocus(source)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
+            e.preventDefault();
+            handleSubmit(e as any);
+            if (inputRef.current) inputRef.current.style.height = 'auto';
+          }
+        }}
+        placeholder={placeholder}
+        className={clsx(textareaClass, composerTextClass)}
+        data-ime={source === 'empty' ? 'chat-composer-empty' : 'chat-composer-main'}
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+        readOnly={isProcessing}
+        aria-disabled={isProcessing}
+        rows={1}
+      />
+    );
+
+    if (!pendingAttachment) {
+      return textarea;
+    }
+
+    return (
+      <div className={wrapperClass}>
+        <ComposerAttachmentPreview
+          attachment={pendingAttachment}
+          darkEmbedded={darkEmbedded}
+          variant={variant}
+          onRemove={clearPendingAttachment}
+        >
+          {textarea}
+        </ComposerAttachmentPreview>
+      </div>
+    );
+  };
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
@@ -2116,41 +2456,7 @@ export function Chat({
     <form onSubmit={handleSubmit} className="relative w-full">
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
       <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
-        {composerSuppressed ? (
-          <button
-            type="button"
-            onClick={() => resumeComposerFocus('empty')}
-            className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-          >
-            对话已完成，点击后继续输入...
-          </button>
-        ) : (
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              syncInputHeight();
-            }}
-            onFocus={() => handleComposerFocus('empty')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                e.preventDefault();
-                handleSubmit(e as any);
-                if (inputRef.current) inputRef.current.style.height = 'auto';
-              }
-            }}
-            placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-            className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
-            data-ime="chat-composer-empty"
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            readOnly={isProcessing}
-            aria-disabled={isProcessing}
-            rows={1}
-          />
-        )}
+        {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
         <div className="flex items-center justify-between px-2 pb-1">
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
@@ -2220,14 +2526,6 @@ export function Chat({
           </div>
         </div>
       </div>
-      {pendingAttachment && (
-        <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
-          <span className="truncate">附件: {pendingAttachment.name}</span>
-          <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
-            <FileX className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
     </form>
   );
 
@@ -2364,41 +2662,7 @@ export function Chat({
               <form onSubmit={handleSubmit} className="relative w-full mt-10">
                 <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
                 <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
-                  {composerSuppressed ? (
-                    <button
-                      type="button"
-                      onClick={() => resumeComposerFocus('empty')}
-                      className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-                    >
-                      对话已完成，点击后继续输入...
-                    </button>
-                  ) : (
-                    <textarea
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => {
-                        setInput(e.target.value);
-                        syncInputHeight();
-                      }}
-                      onFocus={() => handleComposerFocus('empty')}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                          e.preventDefault();
-                          handleSubmit(e as any);
-                          if (inputRef.current) inputRef.current.style.height = 'auto';
-                        }
-                      }}
-                      placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-                      className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
-                      data-ime="chat-composer-empty"
-                      spellCheck={false}
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      readOnly={isProcessing}
-                      aria-disabled={isProcessing}
-                      rows={1}
-                    />
-                  )}
+                  {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
                   <div className="flex items-center justify-between px-2 pb-1">
                     <div className="flex items-center gap-1">
                       <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
@@ -2467,14 +2731,6 @@ export function Chat({
                     </div>
                   </div>
                 </div>
-                {pendingAttachment && (
-                  <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
-                    <span className="truncate">附件: {pendingAttachment.name}</span>
-                    <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
-                      <FileX className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
               </form>
             </div>
             {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
@@ -2537,48 +2793,8 @@ export function Chat({
 
                 <form onSubmit={handleSubmit} className="relative w-full">
                   <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                  {pendingAttachment && (
-                    <div className={clsx('mb-3', composerAttachmentClass)}>
-                      <span className="truncate">附件: {pendingAttachment.name}</span>
-                      <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary"><FileX className="w-3.5 h-3.5" /></button>
-                    </div>
-                  )}
                   <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellClass)}>
-                    {composerSuppressed ? (
-                      <button
-                        type="button"
-                        onClick={() => resumeComposerFocus('composer')}
-                        className={clsx('w-full rounded-2xl px-3.5 py-6 text-left text-[14px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-                      >
-                        对话已完成，点击后继续输入...
-                      </button>
-                    ) : (
-                      <textarea
-                        ref={inputRef}
-                        value={input}
-                        onChange={(e) => {
-                          setInput(e.target.value);
-                          syncInputHeight();
-                        }}
-                        onFocus={() => handleComposerFocus('composer')}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                            e.preventDefault();
-                            handleSubmit(e as any);
-                            if (inputRef.current) inputRef.current.style.height = 'auto';
-                          }
-                        }}
-                        placeholder="发送消息..."
-                        className={clsx('w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto', composerTextClass)}
-                        data-ime="chat-composer-main"
-                        spellCheck={false}
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        readOnly={isProcessing}
-                        aria-disabled={isProcessing}
-                        rows={1}
-                      />
-                    )}
+                    {renderComposerInput('composer', 'main', '发送消息...')}
                     <div className="flex items-center justify-between px-1.5 pb-0.5">
                       <div className="flex items-center gap-1">
                         <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">

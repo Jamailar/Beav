@@ -3,7 +3,7 @@ import { MessageSquare, MessageSquarePlus, Settings as SettingsIcon, FolderOpen,
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ViewType } from '../App';
+import type { ImmersiveMode, ViewType } from '../App';
 import { IndexingStatus } from './IndexingStatus';
 import { appAlert } from '../utils/appDialogs';
 import { uiMeasure } from '../utils/uiDebug';
@@ -14,7 +14,7 @@ interface LayoutProps {
   children: ReactNode;
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
-  immersiveMode?: boolean;
+  immersiveMode?: ImmersiveMode;
 }
 
 const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
@@ -156,7 +156,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isSpaceMenuOpen]);
 
   useEffect(() => {
-    const effectiveTheme = immersiveMode ? 'dark' : themeMode;
+    const effectiveTheme = immersiveMode === 'dark' ? 'dark' : themeMode;
     const root = document.documentElement;
     root.setAttribute('data-theme', effectiveTheme);
     root.classList.toggle('dark', effectiveTheme === 'dark');
@@ -338,7 +338,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
 
   return (
-    <div className={clsx('flex h-screen w-full overflow-hidden text-text-primary', immersiveMode ? 'bg-[#0f0f0f]' : 'bg-background')}>
+    <div
+      className={clsx(
+        'flex h-screen w-full overflow-hidden text-text-primary',
+        immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
+      )}
+    >
       {/* Sidebar */}
       {!immersiveMode && (
         <aside
@@ -559,7 +564,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
 
       {/* Main Content */}
-      <main className={clsx('app-main-shell flex-1 flex flex-col min-w-0 relative', immersiveMode ? 'bg-[#0f0f0f]' : 'bg-surface-primary')}>
+      <main
+        className={clsx(
+          'app-main-shell flex-1 flex flex-col min-w-0 relative',
+          immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-surface-primary'
+        )}
+      >
         {/* Content */}
         <div
           className={clsx(

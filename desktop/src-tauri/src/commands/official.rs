@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
@@ -657,15 +658,16 @@ fn refresh_official_auth_session_with_lock(
     }
 }
 
-fn run_authenticated_official_request(
+fn run_authenticated_official_request_inner(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
     method: &str,
     path: &str,
     body: Option<Value>,
+    preflight_refresh: bool,
 ) -> Result<Value, String> {
-    if official_session_needs_refresh(settings) {
+    if preflight_refresh && official_session_needs_refresh(settings) {
         refresh_official_auth_session_with_lock(app, state, settings, false, "preflight")?;
     }
 
@@ -684,6 +686,28 @@ fn run_authenticated_official_request(
     let _ =
         apply_official_settings_update(app, state, settings, "official-auth-unauthorized", None);
     Err(response_error_message(&retry.body))
+}
+
+fn run_authenticated_official_request(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_authenticated_official_request_inner(app, state, settings, method, path, body, true)
+}
+
+fn run_authenticated_official_request_skip_preflight_refresh(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &mut Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_authenticated_official_request_inner(app, state, settings, method, path, body, false)
 }
 
 fn fetch_official_models_with_recovery(
@@ -946,13 +970,32 @@ pub(crate) fn bootstrap_official_auth_session(
     }))
 }
 
-pub(crate) fn trigger_official_cached_data_refresh(app: AppHandle) {
+fn spawn_official_cached_data_refresh(app: AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    if state
+        .official_cache_refresh_inflight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         if let Err(error) = refresh_official_cached_data(&app, &state) {
-            eprintln!("[RedBox official refresh] {error}");
+            if error != "官方账号未登录" {
+                eprintln!("[RedBox official refresh] {error}");
+            }
         }
+        state
+            .official_cache_refresh_inflight
+            .store(false, Ordering::Release);
     });
+    true
+}
+
+pub(crate) fn trigger_official_cached_data_refresh(app: AppHandle) -> bool {
+    spawn_official_cached_data_refresh(app)
 }
 
 pub fn handle_official_channel(
@@ -1232,31 +1275,14 @@ pub fn handle_official_channel(
                     if !official_session_logged_in(&settings_snapshot) {
                         return Ok(json!({ "success": false, "error": "官方账号未登录" }));
                     }
-                    let mut settings = settings_snapshot.clone();
-                    let token_refreshed = refresh_official_auth_session_with_lock(
-                        app,
-                        state,
-                        &mut settings,
-                        true,
-                        "manual-refresh",
-                    )
-                    .is_ok();
-                    let refreshed =
-                        refresh_official_cached_data_into_settings(app, state, &mut settings)?;
-                    apply_official_settings_update(
-                        app,
-                        state,
-                        &settings,
-                        "official-manual-refresh",
-                        Some(refreshed.clone()),
-                    )?;
+                    let started = trigger_official_cached_data_refresh(app.clone());
                     let response = json!({
                         "success": true,
-                        "queued": false,
-                        "tokenRefreshed": token_refreshed,
+                        "queued": true,
+                        "started": started,
+                        "alreadyInFlight": !started,
                         "requestedAt": now_iso(),
-                        "session": official_settings_session(&settings),
-                        "data": refreshed,
+                        "session": official_settings_session(&settings_snapshot),
                     });
                     Ok(response)
                 }
@@ -1489,7 +1515,7 @@ pub fn handle_official_channel(
                     let amount = payload_f64(payload, "amount").unwrap_or(9.9);
                     let subject = payload_string(payload, "subject")
                         .unwrap_or_else(|| format!("积分充值 ¥{amount:.2}"));
-                    let order = run_authenticated_official_request(
+                    let order = run_authenticated_official_request_skip_preflight_refresh(
                         app,
                         state,
                         &mut settings,

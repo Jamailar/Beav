@@ -6,10 +6,11 @@ use std::thread;
 
 use crate::{
     decode_base64_bytes, normalize_base_url, payload_field, payload_string, run_curl_bytes,
-    run_curl_json,
+    run_curl_json, run_curl_json_response,
 };
 
-const REDBOX_OFFICIAL_VIDEO_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
+const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
+const VIDEO_TASK_POLL_TIMEOUT_MS: u64 = 6 * 60 * 1000;
 
 pub(crate) fn resolve_image_generation_settings(
     settings: &Value,
@@ -491,6 +492,19 @@ fn run_curl_form_json(
     fields: &[(String, String)],
     file_fields: &[(String, PathBuf)],
 ) -> Result<Value, String> {
+    let temp_field_paths = fields
+        .iter()
+        .enumerate()
+        .map(|(index, (_name, value))| {
+            let path = std::env::temp_dir().join(format!(
+                "redbox-form-field-{}-{}-{index}.txt",
+                std::process::id(),
+                crate::now_ms()
+            ));
+            fs::write(&path, value.as_bytes()).map_err(|error| error.to_string())?;
+            Ok(path)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut command = std::process::Command::new("curl");
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
@@ -501,15 +515,19 @@ fn run_curl_form_json(
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
     }
-    for (name, value) in fields {
-        command.arg("-F").arg(format!("{name}={value}"));
+    for ((name, _value), path) in fields.iter().zip(temp_field_paths.iter()) {
+        command.arg("-F").arg(format!("{name}=<{}", path.display()));
     }
     for (name, file_path) in file_fields {
         command
             .arg("-F")
             .arg(format!("{name}=@{}", file_path.display()));
     }
-    let output = command.output().map_err(|error| error.to_string())?;
+    let output_result = command.output().map_err(|error| error.to_string());
+    for path in temp_field_paths {
+        let _ = fs::remove_file(path);
+    }
+    let output = output_result?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -1143,8 +1161,8 @@ pub(crate) fn extract_media_base64(value: &Value) -> Option<&str> {
         .or_else(|| visit(value))
 }
 
-pub(crate) fn extract_task_id(value: &Value) -> Option<String> {
-    fn visit(value: &Value) -> Option<String> {
+pub(crate) fn extract_task_id_details(value: &Value) -> Option<(String, &'static str)> {
+    fn visit_scalar(value: &Value) -> Option<String> {
         match value {
             Value::String(text) => {
                 let trimmed = text.trim();
@@ -1157,18 +1175,23 @@ pub(crate) fn extract_task_id(value: &Value) -> Option<String> {
                     None
                 }
             }
+            _ => None,
+        }
+    }
+    fn visit(value: &Value) -> Option<(String, &'static str)> {
+        match value {
             Value::Object(map) => {
-                for key in [
-                    "task_id",
-                    "taskId",
-                    "job_id",
-                    "jobId",
-                    "request_id",
-                    "requestId",
-                    "id",
+                for (key, source) in [
+                    ("task_id", "task_id"),
+                    ("taskId", "taskId"),
+                    ("job_id", "job_id"),
+                    ("jobId", "jobId"),
+                    ("request_id", "request_id"),
+                    ("requestId", "requestId"),
+                    ("id", "id"),
                 ] {
-                    if let Some(found) = map.get(key).and_then(visit) {
-                        return Some(found);
+                    if let Some(found) = map.get(key).and_then(visit_scalar) {
+                        return Some((found, source));
                     }
                 }
                 for key in ["task", "job", "request", "output", "result", "data"] {
@@ -1270,7 +1293,7 @@ fn map_openai_video_seconds(duration_seconds: i64) -> &'static str {
     }
 }
 
-fn build_video_request_body(model: &str, payload: &Value) -> Result<Value, String> {
+fn build_video_request_body(endpoint: &str, model: &str, payload: &Value) -> Result<Value, String> {
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
     let generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-video".to_string());
@@ -1311,7 +1334,7 @@ fn build_video_request_body(model: &str, payload: &Value) -> Result<Value, Strin
         "generateAudio": generate_audio,
     });
 
-    if is_redbox_compatible_endpoint(REDBOX_OFFICIAL_VIDEO_BASE_URL) {
+    if is_redbox_compatible_endpoint(endpoint) {
         body["resolution"] = json!(if resolution == "1080p" {
             "1080P"
         } else {
@@ -1323,6 +1346,15 @@ fn build_video_request_body(model: &str, payload: &Value) -> Result<Value, Strin
     match generation_mode.as_str() {
         "reference-guided" => {
             if !reference_images.is_empty() {
+                if is_redbox_compatible_endpoint(endpoint) {
+                    body["media"] = json!(reference_images
+                        .iter()
+                        .map(|item| json!({
+                            "type": "reference_image",
+                            "url": item,
+                        }))
+                        .collect::<Vec<_>>());
+                }
                 body["images"] = json!(reference_images.clone());
                 body["reference_images"] = json!(reference_images.clone());
                 body["reference_image_urls"] = json!(reference_images.clone());
@@ -1416,23 +1448,112 @@ pub(crate) fn video_poll_url(endpoint: &str, task_id: &str, status_url: Option<S
     }
 }
 
-pub(crate) fn poll_video_generation_result(
+fn extract_video_generation_status(value: &Value) -> String {
+    value
+        .get("task_status")
+        .or_else(|| value.get("status"))
+        .or_else(|| value.pointer("/data/task_status"))
+        .or_else(|| value.pointer("/data/status"))
+        .or_else(|| value.pointer("/output/task_status"))
+        .or_else(|| value.pointer("/output/status"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+pub(crate) fn extract_video_generation_status_details(
+    value: &Value,
+) -> Option<(String, &'static str)> {
+    [
+        ("task_status", value.get("task_status")),
+        ("status", value.get("status")),
+        ("data.task_status", value.pointer("/data/task_status")),
+        ("data.status", value.pointer("/data/status")),
+        ("output.task_status", value.pointer("/output/task_status")),
+        ("output.status", value.pointer("/output/status")),
+    ]
+    .into_iter()
+    .find_map(|(source, item)| {
+        item.and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|status| !status.is_empty())
+            .map(|status| (status.to_ascii_lowercase(), source))
+    })
+}
+
+fn extract_video_generation_failure_message(value: &Value) -> Option<String> {
+    [
+        value.get("message"),
+        value.get("error"),
+        value.get("error_message"),
+        value.get("detail"),
+        value.pointer("/output/message"),
+        value.pointer("/output/code"),
+        value.pointer("/data/message"),
+        value.pointer("/data/error"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_str)
+    .map(str::trim)
+    .filter(|item| !item.is_empty())
+    .map(ToString::to_string)
+}
+
+fn summarize_json_body(value: &Value) -> String {
+    let raw = match value {
+        Value::String(text) => text.trim().to_string(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    let snippet = trimmed.chars().take(400).collect::<String>();
+    if snippet.chars().count() == trimmed.chars().count() {
+        snippet
+    } else {
+        format!("{snippet}...")
+    }
+}
+
+pub(crate) fn poll_video_generation_result<F>(
     endpoint: &str,
     api_key: Option<&str>,
     model: &str,
     response: &Value,
-) -> Option<String> {
+    mut on_progress: F,
+) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
     if let Some(url) = extract_media_url(response) {
-        return Some(url);
+        on_progress("provider 已直接返回视频地址，跳过轮询。");
+        return Ok(url);
     }
-    let task_id = extract_task_id(response)?;
+    let (task_id, task_id_source) = extract_task_id_details(response)
+        .ok_or_else(|| "video generation response did not include a task id".to_string())?;
+    on_progress(&format!(
+        "provider 已创建异步任务，task_id={task_id}，来源字段={task_id_source}。"
+    ));
+    if task_id_source == "id" {
+        on_progress("provider 只返回了通用 id 字段，当前按 task_id 继续轮询；如果后续异常，这里是首要怀疑点。");
+    }
+    let max_attempts = (VIDEO_TASK_POLL_TIMEOUT_MS / VIDEO_TASK_POLL_INTERVAL_MS) as usize;
+    let sleep_duration = std::time::Duration::from_millis(VIDEO_TASK_POLL_INTERVAL_MS);
+    let mut last_transport_error: Option<String> = None;
     if is_redbox_compatible_endpoint(endpoint) {
         let query_urls =
             build_compatible_video_route_urls(endpoint, "/videos/generations/tasks/query");
-        for _ in 0..60 {
-            thread::sleep(std::time::Duration::from_millis(2000));
+        on_progress("开始轮询 provider 任务状态（POST /videos/generations/tasks/query）。");
+        for attempt_index in 0..max_attempts {
+            thread::sleep(sleep_duration);
+            let attempt = attempt_index + 1;
+            let mut attempt_transport_error: Option<String> = None;
+            let mut logged_status = false;
             for query_url in &query_urls {
-                if let Ok(next) = run_curl_json(
+                match run_curl_json_response(
                     "POST",
                     query_url,
                     api_key,
@@ -1441,49 +1562,132 @@ pub(crate) fn poll_video_generation_result(
                         "model": model,
                         "task_id": task_id,
                     })),
+                    None,
                 ) {
-                    if let Some(url) = extract_media_url(&next) {
-                        return Some(url);
+                    Ok(response) => {
+                        if !(200..300).contains(&response.status) {
+                            let message = format!(
+                                "[{query_url}] HTTP {} {}",
+                                response.status,
+                                summarize_json_body(&response.body)
+                            );
+                            last_transport_error = Some(message.clone());
+                            attempt_transport_error = Some(message.clone());
+                            if response.status != 404 {
+                                on_progress(&format!("poll#{attempt} api_error={message}"));
+                                return Err(message);
+                            }
+                            continue;
+                        }
+                        let next = response.body;
+                        if !logged_status {
+                            if let Some((status, source)) =
+                                extract_video_generation_status_details(&next)
+                            {
+                                on_progress(&format!(
+                                    "poll#{attempt} api_status[{source}]={status}"
+                                ));
+                            } else {
+                                on_progress(&format!("poll#{attempt} api_status=<missing>"));
+                            }
+                            logged_status = true;
+                        }
+                        if let Some(url) = extract_media_url(&next) {
+                            on_progress(&format!("poll#{attempt} media_url_ready=true"));
+                            return Ok(url);
+                        }
+                        let status = extract_video_generation_status(&next);
+                        if status.contains("failed")
+                            || status.contains("error")
+                            || status.contains("cancel")
+                        {
+                            let message = extract_video_generation_failure_message(&next)
+                                .unwrap_or_else(|| {
+                                    format!("video generation failed with status {status}")
+                                });
+                            on_progress(&format!("provider 任务失败：{message}"));
+                            return Err(message);
+                        }
                     }
-                    let status = next
-                        .get("status")
-                        .or_else(|| next.pointer("/output/task_status"))
-                        .or_else(|| next.pointer("/data/status"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if status.contains("failed")
-                        || status.contains("error")
-                        || status.contains("cancel")
-                    {
-                        return None;
+                    Err(error) => {
+                        let message = format!("[{query_url}] {error}");
+                        last_transport_error = Some(message.clone());
+                        attempt_transport_error = Some(message);
                     }
                 }
             }
+            if !logged_status {
+                if let Some(error) = attempt_transport_error.as_deref() {
+                    on_progress(&format!("poll#{attempt} api_error={error}"));
+                } else {
+                    on_progress(&format!("poll#{attempt} api_status=<missing>"));
+                }
+            }
         }
-        return None;
+        let timeout_error = last_transport_error.unwrap_or_else(|| {
+            format!(
+                "video generation timed out after {} seconds (task_id={task_id})",
+                VIDEO_TASK_POLL_TIMEOUT_MS / 1000
+            )
+        });
+        on_progress(&format!("轮询超时：{timeout_error}"));
+        return Err(timeout_error);
     }
     let status_url = extract_status_url(response);
     let poll_url = video_poll_url(endpoint, &task_id, status_url);
-    for _ in 0..60 {
-        thread::sleep(std::time::Duration::from_millis(2000));
-        if let Ok(next) = run_curl_json("GET", &poll_url, api_key, &[], None) {
-            if let Some(url) = extract_media_url(&next) {
-                return Some(url);
+    on_progress(&format!("开始轮询 provider 任务状态（GET {poll_url}）。"));
+    for attempt_index in 0..max_attempts {
+        thread::sleep(sleep_duration);
+        let attempt = attempt_index + 1;
+        match run_curl_json_response("GET", &poll_url, api_key, &[], None, None) {
+            Ok(response) => {
+                if !(200..300).contains(&response.status) {
+                    let message = format!(
+                        "[{poll_url}] HTTP {} {}",
+                        response.status,
+                        summarize_json_body(&response.body)
+                    );
+                    on_progress(&format!("poll#{attempt} api_error={message}"));
+                    return Err(message);
+                }
+                let next = response.body;
+                if let Some((status, source)) = extract_video_generation_status_details(&next) {
+                    on_progress(&format!("poll#{attempt} api_status[{source}]={status}"));
+                } else {
+                    on_progress(&format!("poll#{attempt} api_status=<missing>"));
+                }
+                if let Some(url) = extract_media_url(&next) {
+                    on_progress(&format!("poll#{attempt} media_url_ready=true"));
+                    return Ok(url);
+                }
+                let status = extract_video_generation_status(&next);
+                if status.contains("failed")
+                    || status.contains("error")
+                    || status.contains("cancel")
+                {
+                    let message = extract_video_generation_failure_message(&next)
+                        .unwrap_or_else(|| format!("video generation failed with status {status}"));
+                    on_progress(&format!("provider 任务失败：{message}"));
+                    return Err(message);
+                }
             }
-            let status = next
-                .get("status")
-                .or_else(|| next.pointer("/output/task_status"))
-                .or_else(|| next.pointer("/data/status"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_lowercase();
-            if status.contains("failed") || status.contains("error") || status.contains("cancel") {
-                return None;
+            Err(error) => {
+                last_transport_error = Some(error);
+                on_progress(&format!(
+                    "poll#{attempt} api_error={}",
+                    last_transport_error.as_deref().unwrap_or_default()
+                ));
             }
         }
     }
-    None
+    let timeout_error = last_transport_error.unwrap_or_else(|| {
+        format!(
+            "video generation timed out after {} seconds (task_id={task_id})",
+            VIDEO_TASK_POLL_TIMEOUT_MS / 1000
+        )
+    });
+    on_progress(&format!("轮询超时：{timeout_error}"));
+    Err(timeout_error)
 }
 
 pub(crate) fn run_video_generation_request(
@@ -1493,11 +1697,24 @@ pub(crate) fn run_video_generation_request(
     payload: &Value,
 ) -> Result<Value, String> {
     let create_urls = build_compatible_video_route_urls(endpoint, "/videos/generations/async");
-    let body = build_video_request_body(model, payload)?;
+    let body = build_video_request_body(endpoint, model, payload)?;
     let mut last_error = None;
     for url in create_urls {
-        match run_curl_json("POST", &url, api_key, &[], Some(body.clone())) {
-            Ok(response) => return Ok(response),
+        match run_curl_json_response("POST", &url, api_key, &[], Some(body.clone()), None) {
+            Ok(response) => {
+                if (200..300).contains(&response.status) {
+                    return Ok(response.body);
+                }
+                let error = format!(
+                    "[{url}] HTTP {} {}",
+                    response.status,
+                    summarize_json_body(&response.body)
+                );
+                if response.status != 404 {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
             Err(error) => last_error = Some(format!("[{url}] {error}")),
         }
     }
@@ -1584,5 +1801,93 @@ pub(crate) fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
         0.0
     } else {
         dot / (left_norm.sqrt() * right_norm.sqrt())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_video_generation_status_details_reports_status_field_path() {
+        let legacy_direct =
+            extract_video_generation_status_details(&json!({ "task_status": "PENDING" }));
+        let direct = extract_video_generation_status_details(&json!({ "status": "queued" }));
+        let nested_data = extract_video_generation_status_details(&json!({
+            "data": { "task_status": "RUNNING" }
+        }));
+        let nested = extract_video_generation_status_details(&json!({
+            "output": { "task_status": "PROCESSING" }
+        }));
+
+        assert_eq!(legacy_direct, Some(("pending".to_string(), "task_status")));
+        assert_eq!(direct, Some(("queued".to_string(), "status")));
+        assert_eq!(
+            nested_data,
+            Some(("running".to_string(), "data.task_status"))
+        );
+        assert_eq!(
+            nested,
+            Some(("processing".to_string(), "output.task_status"))
+        );
+    }
+
+    #[test]
+    fn extract_task_id_details_reports_source_field() {
+        let direct = extract_task_id_details(&json!({ "task_id": "task-123" }));
+        let nested = extract_task_id_details(&json!({ "data": { "id": "job-456" } }));
+
+        assert_eq!(direct, Some(("task-123".to_string(), "task_id")));
+        assert_eq!(nested, Some(("job-456".to_string(), "id")));
+    }
+
+    #[test]
+    fn build_video_request_body_adds_redbox_fields_only_for_redbox_endpoint() {
+        let payload = json!({
+            "prompt": "test",
+            "aspectRatio": "9:16",
+            "resolution": "1080p",
+            "durationSeconds": 6,
+        });
+
+        let redbox = build_video_request_body("https://api.ziz.hk/redbox/v1", "wan-test", &payload)
+            .expect("redbox body");
+        let generic = build_video_request_body("https://example.com/v1", "wan-test", &payload)
+            .expect("generic body");
+
+        assert_eq!(
+            redbox.get("resolution").and_then(Value::as_str),
+            Some("1080P")
+        );
+        assert_eq!(redbox.get("duration").and_then(Value::as_i64), Some(6));
+        assert!(generic.get("resolution").is_none());
+        assert!(generic.get("duration").is_none());
+    }
+
+    #[test]
+    fn build_video_request_body_adds_reference_media_for_redbox_reference_guided() {
+        let payload = json!({
+            "prompt": "test",
+            "generationMode": "reference-guided",
+            "referenceImages": [
+                "data:image/jpeg;base64,AAA=",
+                "data:image/jpeg;base64,BBB="
+            ],
+        });
+
+        let redbox = build_video_request_body("https://api.ziz.hk/redbox/v1", "wan-test", &payload)
+            .expect("redbox body");
+        let generic = build_video_request_body("https://example.com/v1", "wan-test", &payload)
+            .expect("generic body");
+
+        assert_eq!(
+            redbox.pointer("/media/0/type").and_then(Value::as_str),
+            Some("reference_image")
+        );
+        assert_eq!(
+            redbox.pointer("/media/0/url").and_then(Value::as_str),
+            Some("data:image/jpeg;base64,AAA=")
+        );
+        assert!(generic.get("media").is_none());
     }
 }
