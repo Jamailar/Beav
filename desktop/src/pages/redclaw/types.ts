@@ -8,7 +8,6 @@ export interface RunnerScheduledTask {
     enabled: boolean;
     mode: ScheduleMode;
     prompt: string;
-    projectId?: string;
     intervalMinutes?: number;
     time?: string;
     weekdays?: number[];
@@ -28,7 +27,6 @@ export interface RunnerLongCycleTask {
     status: 'running' | 'paused' | 'completed';
     objective: string;
     stepPrompt: string;
-    projectId?: string;
     intervalMinutes: number;
     totalRounds: number;
     completedRounds: number;
@@ -73,15 +71,6 @@ export interface RunnerStatus {
     longCycleTasks?: Record<string, RunnerLongCycleTask>;
 }
 
-export interface RedClawProjectSummary {
-    id: string;
-    goal: string;
-    platform?: string;
-    taskType?: string;
-    status: string;
-    updatedAt: string;
-}
-
 export interface ScheduleTemplate {
     id: string;
     label: string;
@@ -109,7 +98,6 @@ export interface ScheduleDraft {
     templateId: string;
     name: string;
     mode: ScheduleMode;
-    projectId: string;
     intervalMinutes: number;
     time: string;
     weekdays: number[];
@@ -120,7 +108,6 @@ export interface ScheduleDraft {
 export interface LongDraft {
     templateId: string;
     name: string;
-    projectId: string;
     objective: string;
     stepPrompt: string;
     intervalMinutes: number;

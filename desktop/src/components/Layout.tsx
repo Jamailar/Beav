@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, MessageSquarePlus, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,7 +8,7 @@ import { IndexingStatus } from './IndexingStatus';
 import { appAlert } from '../utils/appDialogs';
 import { uiMeasure } from '../utils/uiDebug';
 
-const appLogo = new URL('../../Box.png', import.meta.url).href;
+const appLogo = '/Box.png';
 
 interface LayoutProps {
   children: ReactNode;
@@ -24,8 +24,7 @@ const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; grou
   { id: 'manuscripts', label: '稿件', icon: FileEdit },
   { id: 'redclaw', label: 'RedClaw', icon: Bot },
   { id: 'subjects', label: '主体', icon: Package },
-  { id: 'creative-chat', label: '聊天室', icon: MessageSquarePlus },
-  { id: 'advisors', label: '智囊团', icon: Users },
+  { id: 'team', label: '团队', icon: Users },
   { id: 'cover-studio', label: '封面', icon: ImagePlus },
   { id: 'media-library', label: '媒体', icon: Image },
   { id: 'settings', label: '设置', icon: SettingsIcon },

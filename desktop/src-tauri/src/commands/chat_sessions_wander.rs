@@ -14,6 +14,7 @@ use crate::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 fn xorshift64(mut seed: u64) -> u64 {
@@ -38,6 +39,26 @@ fn shuffle_wander_items(items: &mut [Value], seed: u64) {
     }
 }
 
+fn wander_shuffle_seed(items: &[Value]) -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_else(|_| now_ms() as u64);
+    let mut seed = nanos
+        ^ ((std::process::id() as u64) << 17)
+        ^ ((items.len() as u64) << 33)
+        ^ (now_ms() as u64).rotate_left(11);
+    for item in items.iter().take(8) {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            for byte in id.as_bytes() {
+                seed ^= (*byte as u64).wrapping_mul(0x9E37_79B9);
+                seed = xorshift64(seed);
+            }
+        }
+    }
+    xorshift64(seed)
+}
+
 fn collect_wander_candidate_items(store: &AppStore) -> Vec<Value> {
     let mut items = Vec::new();
     for note in &store.knowledge_notes {
@@ -52,16 +73,56 @@ fn collect_wander_candidate_items(store: &AppStore) -> Vec<Value> {
     items
 }
 
-fn pick_random_wander_items(mut items: Vec<Value>, count: usize) -> Vec<Value> {
+fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<String> {
+    let mut history = if store.wander_history.is_empty() {
+        rebuild_wander_history_from_sessions(store)
+    } else {
+        store.wander_history.clone()
+    };
+    history.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    history
+        .into_iter()
+        .take(recent_limit)
+        .filter_map(|record| serde_json::from_str::<Vec<Value>>(&record.items).ok())
+        .flat_map(|items| items.into_iter())
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(|id| id.trim().to_string()))
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+fn pick_random_wander_items(
+    mut items: Vec<Value>,
+    count: usize,
+    excluded_ids: &HashSet<String>,
+) -> Vec<Value> {
     items.sort_by_key(|item| {
         item.get("id")
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string()
     });
-    shuffle_wander_items(&mut items, now_ms() as u64);
-    items.truncate(items.len().min(count.max(1)));
-    items
+
+    let mut eligible = items
+        .into_iter()
+        .filter(|item| {
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            !id.is_empty() && !excluded_ids.contains(&id)
+        })
+        .collect::<Vec<_>>();
+
+    if eligible.is_empty() {
+        return Vec::new();
+    }
+
+    let seed = wander_shuffle_seed(&eligible);
+    shuffle_wander_items(&mut eligible, seed);
+    eligible.truncate(eligible.len().min(count.max(1)));
+    eligible
 }
 
 fn parse_wander_json_payload(payload: &str) -> Option<Value> {
@@ -1131,9 +1192,11 @@ pub fn handle_chat_sessions_wander_channel(
                 })
             }
             "wander:get-random" => with_store(state, |store| {
+                let excluded_ids = recent_wander_excluded_ids(&store, 5);
                 Ok(json!(pick_random_wander_items(
                     collect_wander_candidate_items(&store),
                     3,
+                    &excluded_ids,
                 )))
             }),
             "wander:brainstorm" => {
@@ -1151,9 +1214,11 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 if items.is_empty() {
                     items = with_store(state, |store| {
+                        let excluded_ids = recent_wander_excluded_ids(&store, 5);
                         Ok(pick_random_wander_items(
                             collect_wander_candidate_items(&store),
                             3,
+                            &excluded_ids,
                         ))
                     })?;
                 }
@@ -1178,6 +1243,9 @@ pub fn handle_chat_sessions_wander_channel(
                 let multi_choice = payload_field(&options, "multiChoice")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false);
+                let load_writing_style_skill = payload_field(&options, "loadWritingStyleSkill")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true);
                 let wander_session_id =
                     format!("session_wander_{}", slug_from_relative_path(&request_id));
                 let _ = app.emit(
@@ -1266,13 +1334,22 @@ pub fn handle_chat_sessions_wander_channel(
                         Some(wander_session_id.clone()),
                         Some("Wander Deep Think".to_string()),
                     );
-                    session.metadata = Some(json!({
-                        "contextId": format!("wander:{}", request_id),
-                        "contextType": "wander",
-                        "contextContent": items_text,
-                        "isContextBound": true,
-                        "activeSkills": ["writing-style"],
-                    }));
+                    let mut metadata = serde_json::Map::new();
+                    metadata.insert(
+                        "contextId".to_string(),
+                        json!(format!("wander:{}", request_id)),
+                    );
+                    metadata.insert("contextType".to_string(), json!("wander"));
+                    metadata.insert("contextContent".to_string(), json!(items_text));
+                    metadata.insert("isContextBound".to_string(), json!(true));
+                    metadata.insert(
+                        "loadWritingStyleSkill".to_string(),
+                        json!(load_writing_style_skill),
+                    );
+                    if load_writing_style_skill {
+                        metadata.insert("activeSkills".to_string(), json!(["writing-style"]));
+                    }
+                    session.metadata = Some(Value::Object(metadata));
                     session.updated_at = now_iso();
                     Ok(())
                 })?;

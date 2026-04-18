@@ -8,10 +8,9 @@ import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
-const CreativeChatPage = lazy(async () => ({ default: (await import('./pages/CreativeChat')).CreativeChat }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
-const AdvisorsPage = lazy(async () => ({ default: (await import('./pages/Advisors')).Advisors }));
+const TeamPage = lazy(async () => ({ default: (await import('./pages/Team')).Team }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
@@ -22,17 +21,17 @@ const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/Cove
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
-export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
 export type ImmersiveMode = false | 'theme' | 'dark';
+export type TeamSection = 'group-chat' | 'members';
 
 const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'chat',
-  'creative-chat',
+  'team',
   'skills',
   'knowledge',
-  'advisors',
   'settings',
   'manuscripts',
   'archives',
@@ -386,12 +385,12 @@ function App() {
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'creative-chat') && (
-          <div className={currentView === 'creative-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'creative-chat' ? <ViewLoadingFallback /> : null}>
-              <CreativeChatPage
-                isActive={currentView === 'creative-chat' || persistentViews.has('creative-chat')}
-                onExecutionStateChange={(active) => setViewPersistent('creative-chat', active)}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'team') && (
+          <div className={currentView === 'team' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'team' ? <ViewLoadingFallback /> : null}>
+              <TeamPage
+                isActive={currentView === 'team' || persistentViews.has('team')}
+                onExecutionStateChange={(active) => setViewPersistent('team', active)}
               />
             </Suspense>
           </div>
@@ -411,13 +410,6 @@ function App() {
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'knowledge'}
               />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'advisors') && (
-          <div className={currentView === 'advisors' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'advisors' ? <ViewLoadingFallback /> : null}>
-              <AdvisorsPage isActive={currentView === 'advisors'} />
             </Suspense>
           </div>
         )}

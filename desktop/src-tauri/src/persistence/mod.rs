@@ -1,5 +1,6 @@
 use dirs::config_dir;
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -95,15 +96,6 @@ pub fn build_store_path() -> PathBuf {
 fn builtin_skill_records() -> Vec<SkillRecord> {
     vec![
         SkillRecord {
-            name: "redclaw-project".to_string(),
-            description: "RedClaw 项目编排技能".to_string(),
-            location: "redbox://skills/redclaw-project".to_string(),
-            body: "---\nallowedRuntimeModes: [redclaw]\nallowedToolPack: redclaw\nallowedTools: [bash, app_cli]\nhookMode: inline\nautoActivate: true\ncontextNote: 默认把项目目标、产物落盘与 Workboard 联动作为执行约束。\n---\n# RedClaw Project\n\n用于推进内容项目的内置技能。\n\n## 工作流\n\n1. 明确目标、平台和受众。\n2. 生成选题、文案、配图提示和复盘。\n3. 将产物保存到 RedClaw workspace，并同步生成 Workboard 工作项。\n4. 遇到 `save-copy`、`save-image`、`save-retro` 意图时，应优先落地对应文件。".to_string(),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled: Some(false),
-        },
-        SkillRecord {
             name: "cover-builder".to_string(),
             description: "封面生成辅助技能".to_string(),
             location: "redbox://skills/cover-builder".to_string(),
@@ -173,8 +165,23 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
 }
 
 fn ensure_builtin_skills_present(store: &mut AppStore) -> bool {
+    let builtins = builtin_skill_records();
+    let builtin_names = builtins
+        .iter()
+        .map(|skill| skill.name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
     let mut changed = false;
-    for builtin in builtin_skill_records() {
+    let before = store.skills.len();
+    store.skills.retain(|skill| {
+        let is_builtin =
+            skill.is_builtin.unwrap_or(false) || skill.source_scope.as_deref() == Some("builtin");
+        !is_builtin || builtin_names.contains(&skill.name.to_ascii_lowercase())
+    });
+    if store.skills.len() != before {
+        changed = true;
+    }
+
+    for builtin in builtins {
         let existing = store
             .skills
             .iter()
@@ -531,9 +538,9 @@ pub fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result
 
 pub fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        let needs_hydration = store.redclaw_state.projects.is_empty()
-            || store.redclaw_state.scheduled_tasks.is_empty()
-                && store.redclaw_state.long_cycle_tasks.is_empty();
+        let needs_hydration = store.redclaw_state.scheduled_tasks.is_empty()
+            && store.redclaw_state.long_cycle_tasks.is_empty()
+            && store.work_items.is_empty();
         if !needs_hydration {
             return Ok(None);
         }

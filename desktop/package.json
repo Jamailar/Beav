@@ -1,15 +1,16 @@
 {
   "name": "redbox",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.9.2",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
-    "build": "tsc && vite build",
+    "build": "node ./scripts/sync-version.mjs && tsc && vite build",
     "preview": "vite preview --port 1420",
     "tauri:before-dev": "node ./scripts/tauri-before-dev.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "version:sync": "node ./scripts/sync-version.mjs",
     "ipc:inventory": "node ./scripts/extract-ipc-inventory.mjs",
     "remotion:render": "node ./remotion/render.mjs"
   },

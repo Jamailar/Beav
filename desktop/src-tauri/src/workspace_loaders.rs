@@ -7,10 +7,9 @@ use crate::{
     optional_asset_url_from_note_path, read_text_file_or_empty, slug_from_relative_path,
     AdvisorRecord, ChatRoomMessageRecord, ChatRoomRecord, CoverAssetRecord,
     DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord,
-    MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord,
-    RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
-    SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord,
-    YoutubeVideoRecord,
+    MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
+    RedclawStateRecord, SubjectAttribute, SubjectCategory, SubjectRecord, UserMemoryRecord,
+    WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord,
 };
 
 pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
@@ -1298,56 +1297,7 @@ pub(crate) fn load_redclaw_state_from_fs(redclaw_root: &Path) -> RedclawStateRec
             })
             .unwrap_or_default();
     }
-    let projects_root = redclaw_root.join("projects");
-    let mut projects = Vec::new();
-    if let Ok(entries) = fs::read_dir(&projects_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(project) = read_json_file(&path.join("project.json")) else {
-                continue;
-            };
-            projects.push(RedclawProjectRecord {
-                id: {
-                    let entry_name = entry.file_name().to_string_lossy().to_string();
-                    project
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&entry_name)
-                        .to_string()
-                },
-                goal: project
-                    .get("goal")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未命名项目")
-                    .to_string(),
-                platform: project
-                    .get("platform")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
-                task_type: project
-                    .get("taskType")
-                    .or_else(|| project.get("task_type"))
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
-                status: project
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("planning")
-                    .to_string(),
-                updated_at: project
-                    .get("updatedAt")
-                    .or_else(|| project.get("updated_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
-            });
-        }
-    }
-    projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    state.projects = projects;
+    state.projects = Vec::new();
     state
 }
 

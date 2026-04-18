@@ -71,23 +71,10 @@ fn spawn_redclaw_chat_postprocess(
 ) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let project_id = with_store(&state, |store| {
-            Ok(store
-                .redclaw_state
-                .projects
-                .first()
-                .map(|item| item.id.clone())
-                .unwrap_or_else(|| "redclaw-chat".to_string()))
-        });
-        let Ok(project_id) = project_id else {
-            eprintln!("[RedClaw chat postprocess] failed to resolve project id");
-            return;
-        };
         let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
         let artifacts = save_redclaw_outputs(
             &state,
             artifact_kind,
-            &project_id,
             &session_id,
             &message,
             &response,

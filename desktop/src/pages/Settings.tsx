@@ -416,7 +416,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
-  const officialStartupSyncRef = useRef(false);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
@@ -2094,32 +2093,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
 
-  const syncOfficialAuthForStartup = useCallback(async () => {
-    if (officialStartupSyncRef.current) return;
-    officialStartupSyncRef.current = true;
-    try {
-      const cached = await window.ipcRenderer.invoke('redbox-auth:get-session-cached') as {
-        success?: boolean;
-        session?: { accessToken?: string | null } | null;
-      } | null;
-      const accessToken = String(cached?.session?.accessToken || '').trim();
-      if (!accessToken) {
-        officialStartupSyncRef.current = false;
-        return;
-      }
-      void window.ipcRenderer.invoke('redbox-auth:get-session')
-        .catch((error) => {
-          console.error('Failed to sync official auth during startup', error);
-        })
-        .finally(() => {
-          officialStartupSyncRef.current = false;
-        });
-    } catch (error) {
-      console.error('Failed to sync official auth during startup', error);
-      officialStartupSyncRef.current = false;
-    }
-  }, []);
-
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
       preserveViewState: true,
@@ -2408,13 +2381,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         preserveViewState: true,
         preserveRemoteModels: true,
       });
-      void syncOfficialAuthForStartup();
       baseSettingsLoadedRef.current = true;
       tabWarmRef.current.ai = true;
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [loadSettings, syncOfficialAuthForStartup]);
+  }, [loadSettings]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -2505,7 +2477,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     if (!isActive) return;
     const handleSettingsUpdated = () => {
-      void ensureBaseSettingsLoaded(true);
+      // Preserve local edits on form-driven tabs; otherwise external auth sync can
+      // reload persisted settings and wipe unsaved AI source/model changes.
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai';
+      if (!preserveLocalFormState) {
+        void ensureBaseSettingsLoaded(true);
+      }
       if (activeTab === 'remote') {
         scheduleRemoteTabWarmup();
       }

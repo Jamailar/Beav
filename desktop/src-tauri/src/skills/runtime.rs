@@ -384,9 +384,9 @@ mod tests {
     fn skills() -> Vec<SkillRecord> {
         vec![
             SkillRecord {
-                name: "redclaw-project".to_string(),
+                name: "redclaw-guide".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/redclaw-project".to_string(),
+                location: "redbox://skills/redclaw-guide".to_string(),
                 body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, app_cli]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -492,7 +492,7 @@ mod tests {
                 "redbox_mcp".to_string(),
             ],
         );
-        assert!(state.skills_section.contains("redclaw-project: desc"));
+        assert!(state.skills_section.contains("redclaw-guide: desc"));
         assert!(state.skills_section.contains("cover-builder: desc"));
         assert!(!state
             .skills_section

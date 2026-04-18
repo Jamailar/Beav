@@ -2,8 +2,8 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::{
-    make_id, now_iso, now_ms, slug_from_relative_path, AppState, AppStore, ChatMessageRecord,
-    ChatRuntimeStateRecord, ChatSessionRecord,
+    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path, AppState,
+    AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
 };
 
 pub const DIAGNOSTICS_CONTEXT_TYPE: &str = "diagnostics";
@@ -21,6 +21,18 @@ pub fn update_chat_runtime_state(
         .chat_runtime_states
         .lock()
         .map_err(|_| "chat runtime state lock 已损坏".to_string())?;
+    let previous = guard.get(session_id).cloned();
+    let should_log_transition = previous
+        .as_ref()
+        .map(|entry| {
+            entry.is_processing != is_processing
+                || entry.error != error
+                || (entry.partial_response.is_empty() && !partial_response.is_empty())
+        })
+        .unwrap_or(true);
+    let error_for_log = error.clone();
+    let partial_chars_for_log = partial_response.chars().count();
+    let had_partial_for_log = !partial_response.is_empty();
     guard.insert(
         session_id.to_string(),
         ChatRuntimeStateRecord {
@@ -32,6 +44,19 @@ pub fn update_chat_runtime_state(
             cancel_requested: false,
         },
     );
+    if should_log_transition {
+        append_debug_trace_state(
+            state,
+            format!(
+                "[runtime][state][chat] session={} processing={} partial_chars={} had_partial={} error={}",
+                session_id,
+                is_processing,
+                partial_chars_for_log,
+                had_partial_for_log,
+                error_for_log.as_deref().unwrap_or("none"),
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -57,6 +82,13 @@ pub fn request_chat_runtime_cancel(
     entry.cancel_requested = true;
     entry.error = Some("cancelled".to_string());
     entry.updated_at = now_ms();
+    append_debug_trace_state(
+        state,
+        format!(
+            "[runtime][state][chat] session={} processing=false cancel_requested=true error=cancelled",
+            session_id
+        ),
+    );
     Ok(())
 }
 

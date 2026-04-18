@@ -1,6 +1,6 @@
 [package]
 name = "redbox"
-version = "0.1.0"
+version = "1.9.2"
 description = "Rust host for the RedConvert desktop migration"
 authors = ["Codex"]
 edition = "2021"

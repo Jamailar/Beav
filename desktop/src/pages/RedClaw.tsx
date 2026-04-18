@@ -34,7 +34,6 @@ import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
 import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
     LongDraft,
-    RedClawProjectSummary,
     RunnerLongCycleTask,
     RunnerScheduledTask,
     RunnerStatus,
@@ -101,7 +100,6 @@ export function RedClaw({
     const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
-    const [projects, setProjects] = useState<RedClawProjectSummary[]>([]);
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
     const [runnerMaxAutomationPerTick, setRunnerMaxAutomationPerTick] = useState<number>(2);
@@ -122,7 +120,6 @@ export function RedClaw({
     const activeSessionIdRef = useRef<string | null>(null);
     const sessionListRef = useRef<ContextChatSessionListItem[]>([]);
     const runnerStatusRequestIdRef = useRef(0);
-    const projectsRequestIdRef = useRef(0);
     const skillsRequestIdRef = useRef(0);
     const hasSessionSnapshotRef = useRef(false);
     const hasRunnerSnapshotRef = useRef(false);
@@ -282,21 +279,6 @@ export function RedClaw({
         }
     }, [applyRunnerForm]);
 
-    const loadProjects = useCallback(async () => {
-        const requestId = ++projectsRequestIdRef.current;
-        try {
-            const list = await uiMeasure('redclaw', 'load_projects', async () => (
-                window.ipcRenderer.invoke('redclaw:list-projects', { limit: 60 }) as Promise<RedClawProjectSummary[]>
-            )) as RedClawProjectSummary[];
-            if (requestId !== projectsRequestIdRef.current) return;
-            if (Array.isArray(list)) {
-                setProjects(list);
-            }
-        } catch (error) {
-            console.error('Failed to load RedClaw projects:', error);
-        }
-    }, []);
-
     const loadSkills = useCallback(async () => {
         const requestId = ++skillsRequestIdRef.current;
         if (!hasSkillsSnapshotRef.current) {
@@ -337,22 +319,20 @@ export function RedClaw({
         if (!isActive) return;
         void initSession();
         void loadRunnerStatus(true);
-        void loadProjects();
-    }, [initSession, isActive, loadProjects, loadRunnerStatus]);
+    }, [initSession, isActive, loadRunnerStatus]);
 
     useEffect(() => {
         if (!isActive) return;
         const onSpaceChanged = () => {
             void initSession();
             void loadRunnerStatus(true);
-            void loadProjects();
             void loadSkills();
         };
         window.ipcRenderer.on('space:changed', onSpaceChanged);
         return () => {
             window.ipcRenderer.off('space:changed', onSpaceChanged);
         };
-    }, [initSession, isActive, loadProjects, loadRunnerStatus, loadSkills]);
+    }, [initSession, isActive, loadRunnerStatus, loadSkills]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -678,7 +658,7 @@ export function RedClaw({
 
     const applyScheduleTemplate = useCallback((templateId: string) => {
         const template = pickScheduleTemplate(templateId);
-        setScheduleDraft((prev) => scheduleDraftFromTemplate(template, prev.projectId));
+        setScheduleDraft(scheduleDraftFromTemplate(template));
     }, []);
 
     const addScheduleTask = useCallback(async () => {
@@ -713,7 +693,6 @@ export function RedClaw({
                 name: draft.name.trim() || '定时任务',
                 mode: draft.mode,
                 prompt: draft.prompt.trim(),
-                projectId: draft.projectId || undefined,
                 intervalMinutes: draft.mode === 'interval' ? draft.intervalMinutes : undefined,
                 time: draft.mode === 'daily' || draft.mode === 'weekly' ? draft.time : undefined,
                 weekdays: draft.mode === 'weekly' ? draft.weekdays : undefined,
@@ -794,7 +773,7 @@ export function RedClaw({
 
     const applyLongTemplate = useCallback((templateId: string) => {
         const template = pickLongTemplate(templateId);
-        setLongDraft((prev) => longDraftFromTemplate(template, prev.projectId));
+        setLongDraft(longDraftFromTemplate(template));
     }, []);
 
     const addLongTask = useCallback(async () => {
@@ -811,7 +790,6 @@ export function RedClaw({
                 name: draft.name.trim() || '长周期任务',
                 objective: draft.objective.trim(),
                 stepPrompt: draft.stepPrompt.trim(),
-                projectId: draft.projectId || undefined,
                 intervalMinutes: draft.intervalMinutes,
                 totalRounds: draft.totalRounds,
                 enabled: true,

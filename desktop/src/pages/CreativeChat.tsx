@@ -37,6 +37,9 @@ interface ChatMessage {
     phase?: 'introduction' | 'discussion' | 'summary';
 }
 
+export type CreativeChatAdvisor = Advisor;
+export type CreativeChatRoom = ChatRoom;
+
 // 总监常量
 const DIRECTOR_ID = 'director-system';
 const DIRECTOR_NAME = '总监';
@@ -96,12 +99,22 @@ interface CreativeChatProps {
     activeFile?: { path: string; content: string };
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
+    hideRoomList?: boolean;
+    selectedRoomId?: string | null;
+    onSelectedRoomIdChange?: (roomId: string | null) => void;
+    onRoomsChange?: (rooms: ChatRoom[]) => void;
+    createRequestKey?: number;
 }
 
 export function CreativeChat({
     activeFile,
     isActive = true,
     onExecutionStateChange,
+    hideRoomList = false,
+    selectedRoomId,
+    onSelectedRoomIdChange,
+    onRoomsChange,
+    createRequestKey,
 }: CreativeChatProps) {
     const [rooms, setRooms] = useState<ChatRoom[]>([]);
     const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
@@ -124,6 +137,7 @@ export function CreativeChat({
     const loadRoomsRequestRef = useRef(0);
     const loadMessagesRequestRef = useRef(0);
     const hasRoomsSnapshotRef = useRef(false);
+    const createRequestKeyRef = useRef<number | undefined>(createRequestKey);
     const pendingStreamMapRef = useRef<Record<string, {
         roomId?: string;
         advisorId: string;
@@ -197,6 +211,10 @@ export function CreativeChat({
             }
             setRooms(normalizedRooms);
             setAdvisors(normalizedAdvisors);
+            setSelectedRoom((prev) => {
+                if (!prev) return prev;
+                return normalizedRooms.find((room) => room.id === prev.id) || null;
+            });
             hasRoomsSnapshotRef.current = true;
         } catch (e) {
             if (requestId !== loadRoomsRequestRef.current) {
@@ -276,6 +294,17 @@ export function CreativeChat({
     useEffect(() => {
         advisorsRef.current = advisors;
     }, [advisors]);
+
+    useEffect(() => {
+        onRoomsChange?.(rooms);
+    }, [onRoomsChange, rooms]);
+
+    useEffect(() => {
+        if (createRequestKey === undefined) return;
+        if (createRequestKeyRef.current === createRequestKey) return;
+        createRequestKeyRef.current = createRequestKey;
+        setIsCreateModalOpen(true);
+    }, [createRequestKey]);
 
     // 流式消息只做即时滚动，避免每个 chunk 触发 smooth scroll 造成主线程卡顿
     const hasStreamingMessage = messages.some(m => m.isStreaming);
@@ -603,12 +632,32 @@ export function CreativeChat({
     }, [flushBufferedStreams, isActive, loadMessages, loadRooms, scheduleBufferedStreamFlush]);
 
 
-    const handleSelectRoom = (room: ChatRoom) => {
+    const handleSelectRoom = useCallback((room: ChatRoom) => {
         selectedRoomIdRef.current = room.id;
         selectedRoomRef.current = room;
         setSelectedRoom(room);
         setMessages([]);
-    };
+        onSelectedRoomIdChange?.(room.id);
+    }, [onSelectedRoomIdChange]);
+
+    useEffect(() => {
+        if (selectedRoomId === undefined) return;
+        if (!selectedRoomId) {
+            if (selectedRoomRef.current) {
+                selectedRoomIdRef.current = null;
+                selectedRoomRef.current = null;
+                setSelectedRoom(null);
+                setMessages([]);
+            }
+            return;
+        }
+
+        if (selectedRoomRef.current?.id === selectedRoomId) return;
+        const matchedRoom = rooms.find((room) => room.id === selectedRoomId);
+        if (matchedRoom) {
+            handleSelectRoom(matchedRoom);
+        }
+    }, [handleSelectRoom, rooms, selectedRoomId]);
 
     const handleSendMessage = async () => {
         if (!inputValue.trim() || !selectedRoom || isSending) return;
@@ -648,6 +697,7 @@ export function CreativeChat({
             const newRoom = await window.ipcRenderer.invoke('chatrooms:create', { name, advisorIds }) as ChatRoom;
             setRooms(prev => [...prev, newRoom]);
             setSelectedRoom(newRoom);
+            onSelectedRoomIdChange?.(newRoom.id);
             setIsCreateModalOpen(false);
         } catch (e) {
             console.error('Failed to create room:', e);
@@ -661,6 +711,7 @@ export function CreativeChat({
             await window.ipcRenderer.invoke('chatrooms:delete', selectedRoom.id);
             setRooms(prev => prev.filter(r => r.id !== selectedRoom.id));
             setSelectedRoom(null);
+            onSelectedRoomIdChange?.(null);
             setMessages([]);
             setIsManageModalOpen(false);
             setPendingRoomDelete(null);
@@ -697,6 +748,7 @@ export function CreativeChat({
             if (result.success && result.room) {
                 setRooms(prev => prev.map(r => r.id === selectedRoom.id ? result.room! : r));
                 setSelectedRoom(result.room);
+                onSelectedRoomIdChange?.(result.room.id);
             }
             setIsManageModalOpen(false);
         } catch (e) {
@@ -791,71 +843,72 @@ export function CreativeChat({
 
     return (
         <div className="flex h-full">
-            {/* Room List */}
-            <div className="w-72 border-r border-border bg-surface-secondary/30 flex flex-col">
-                <div className="p-4 border-b border-border flex items-center justify-between">
-                    <h2 className="text-sm font-semibold text-text-primary">创意聊天室</h2>
-                    <button
-                        onClick={() => setIsCreateModalOpen(true)}
-                        className="p-1.5 text-text-tertiary hover:text-accent-primary hover:bg-surface-primary rounded transition-colors"
-                    >
-                        <Plus className="w-4 h-4" />
-                    </button>
-                </div>
+            {!hideRoomList && (
+                <div className="w-72 border-r border-border bg-surface-secondary/30 flex flex-col">
+                    <div className="p-4 border-b border-border flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-text-primary">创意聊天室</h2>
+                        <button
+                            onClick={() => setIsCreateModalOpen(true)}
+                            className="p-1.5 text-text-tertiary hover:text-accent-primary hover:bg-surface-primary rounded transition-colors"
+                        >
+                            <Plus className="w-4 h-4" />
+                        </button>
+                    </div>
 
-                <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {isLoading && rooms.length === 0 ? (
-                        <div className="text-center text-text-tertiary text-xs py-8">加载中...</div>
-                    ) : rooms.length === 0 ? (
-                        <div className="text-center text-text-tertiary text-xs py-8">
-                            <MessageSquarePlus className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                            <p>暂无聊天室</p>
-                            <button onClick={() => setIsCreateModalOpen(true)} className="mt-2 text-accent-primary hover:underline">
-                                创建聊天室
-                            </button>
-                        </div>
-                    ) : (
-                        rooms.map((room) => (
-                            <button
-                                key={room.id}
-                                onClick={() => handleSelectRoom(room)}
-                                className={clsx(
-                                    "w-full text-left p-3 rounded-xl transition-all",
-                                    selectedRoom?.id === room.id
-                                        ? "bg-accent-primary/10 border border-accent-primary/30"
-                                        : "hover:bg-surface-primary border border-transparent",
-                                    room.isSystem && "ring-1 ring-amber-300/50"
-                                )}
-                            >
-                                <div className="flex items-center gap-2">
-                                    {room.isSystem && (
-                                        <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium">
-                                            🎩
-                                        </span>
+                    <div className="flex-1 overflow-auto p-2 space-y-2">
+                        {isLoading && rooms.length === 0 ? (
+                            <div className="text-center text-text-tertiary text-xs py-8">加载中...</div>
+                        ) : rooms.length === 0 ? (
+                            <div className="text-center text-text-tertiary text-xs py-8">
+                                <MessageSquarePlus className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                                <p>暂无聊天室</p>
+                                <button onClick={() => setIsCreateModalOpen(true)} className="mt-2 text-accent-primary hover:underline">
+                                    创建聊天室
+                                </button>
+                            </div>
+                        ) : (
+                            rooms.map((room) => (
+                                <button
+                                    key={room.id}
+                                    onClick={() => handleSelectRoom(room)}
+                                    className={clsx(
+                                        "w-full text-left p-3 rounded-xl transition-all",
+                                        selectedRoom?.id === room.id
+                                            ? "bg-accent-primary/10 border border-accent-primary/30"
+                                            : "hover:bg-surface-primary border border-transparent",
+                                        room.isSystem && "ring-1 ring-amber-300/50"
                                     )}
-                                    <span className="text-sm font-medium text-text-primary truncate">{room.name}</span>
-                                </div>
-                                <div className="flex items-center gap-1 mt-1.5">
-                                    {getRoomMembers(room).slice(0, 6).map((a) => (
-                                        <div
-                                            key={a.id}
-                                            className={clsx(
-                                                "w-5 h-5 rounded-full flex items-center justify-center overflow-hidden",
-                                                getAdvisorColor(a.id)
-                                            )}
-                                        >
-                                            {renderAvatar(a.avatar || '🤖', 'sm', undefined, a.id)}
-                                        </div>
-                                    ))}
-                                    {getRoomMembers(room).length > 6 && (
-                                        <span className="text-[10px] text-text-tertiary">+{getRoomMembers(room).length - 6}</span>
-                                    )}
-                                </div>
-                            </button>
-                        ))
-                    )}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        {room.isSystem && (
+                                            <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium">
+                                                🎩
+                                            </span>
+                                        )}
+                                        <span className="text-sm font-medium text-text-primary truncate">{room.name}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 mt-1.5">
+                                        {getRoomMembers(room).slice(0, 6).map((a) => (
+                                            <div
+                                                key={a.id}
+                                                className={clsx(
+                                                    "w-5 h-5 rounded-full flex items-center justify-center overflow-hidden",
+                                                    getAdvisorColor(a.id)
+                                                )}
+                                            >
+                                                {renderAvatar(a.avatar || '🤖', 'sm', undefined, a.id)}
+                                            </div>
+                                        ))}
+                                        {getRoomMembers(room).length > 6 && (
+                                            <span className="text-[10px] text-text-tertiary">+{getRoomMembers(room).length - 6}</span>
+                                        )}
+                                    </div>
+                                </button>
+                            ))
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Chat Area */}
             <div className="flex-1 flex flex-col min-w-0">

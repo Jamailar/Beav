@@ -9,16 +9,16 @@ export const REDCLAW_CONTEXT = [
 ].join('\n');
 
 export const REDCLAW_SHORTCUTS = [
-    { label: '🎯 新建项目', text: '这是一个新的自媒体内容目标，请先创建 RedClaw 项目，再推进完整工作流。' },
-    { label: '🧠 生成文案包', text: '请基于当前项目目标生成完整内容文案包，并通过 app_cli 调用 redclaw save-copy 保存。' },
-    { label: '🖼️ 生成配图包', text: '请为当前项目生成封面与配图提示词，并通过 app_cli 调用 redclaw save-image 保存。' },
-    { label: '📊 复盘本次发布', text: '请基于当前项目进行发布复盘，并通过 app_cli 调用 redclaw save-retro 保存。' },
+    { label: '🎯 开始策划', text: '这是一个新的自媒体内容目标，请先拆解目标、平台和受众，再给出完整执行方案。' },
+    { label: '🧠 生成文案包', text: '请围绕当前目标生成完整内容文案包，并在完成后保存成稿件。' },
+    { label: '🖼️ 生成配图包', text: '请为当前内容生成封面与配图提示词，并把结果落到可复用的文件。' },
+    { label: '📊 复盘本次发布', text: '请基于本次发布结果做复盘，输出有效动作、问题和下一步建议。' },
 ];
 
 export const REDCLAW_WELCOME_SHORTCUTS = [
-    { label: '🚀 新建项目', text: '我想开始一个新的自媒体内容项目，请先明确目标并创建项目。' },
-    { label: '✍️ 继续文案', text: '继续当前项目，先回顾项目状态，再完成文案包。' },
-    { label: '🎨 继续配图', text: '继续当前项目，完善封面和配图提示词，并保存配图包。' },
+    { label: '🚀 开始创作', text: '我想开始一个新的自媒体内容任务，请先明确目标，再推进创作。' },
+    { label: '✍️ 继续文案', text: '继续当前内容任务，先回顾已有上下文，再完成文案包。' },
+    { label: '🎨 继续配图', text: '继续当前内容任务，完善封面和配图提示词，并保存配图包。' },
     { label: '🔁 做复盘', text: '我已经发布了内容，请引导我输入数据并完成复盘。' },
 ];
 
@@ -28,17 +28,17 @@ export const HEARTBEAT_INTERVAL_OPTIONS = [15, 30, 60, 120];
 export const REDCLAW_SIDEBAR_MIN_WIDTH = 300;
 export const REDCLAW_SIDEBAR_MAX_WIDTH = 560;
 export const REDCLAW_SIDEBAR_DEFAULT_WIDTH = 380;
-export const REDCLAW_WELCOME_ICON_SRC = new URL('../../../public/Box.png', import.meta.url).href;
+export const REDCLAW_WELCOME_ICON_SRC = '/Box.png';
 
 export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
     {
         id: 'daily-creation',
         label: '每日创作推进',
-        description: '每天自动推进当前项目的文案与发布计划',
+        description: '每天自动推进当前内容任务的文案与发布计划',
         name: '每日创作推进',
         mode: 'daily',
         time: '09:30',
-        prompt: '请优先选择当前最重要的 RedClaw 项目，推进一次完整创作流程：补齐标题候选、正文、标签和发布计划，并保存文案包。',
+        prompt: '请推进一次完整创作流程：补齐标题候选、正文、标签和发布计划，并把可交付内容保存成稿件。',
     },
     {
         id: 'daily-image',
@@ -47,7 +47,7 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
         name: '每日配图完善',
         mode: 'daily',
         time: '14:00',
-        prompt: '请检查当前重点项目的配图状态，产出封面和配图提示词并保存配图包；若已有配图包，迭代优化。',
+        prompt: '请检查当前重点内容的配图状态，产出封面和配图提示词并保存配图包；若已有配图包，继续迭代优化。',
     },
     {
         id: 'weekly-retro',
@@ -57,16 +57,16 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
         mode: 'weekly',
         time: '21:00',
         weekdays: [1, 4],
-        prompt: '请对本周 RedClaw 项目执行情况进行复盘，输出有效动作、问题、下周假设和优先级动作。',
+        prompt: '请对本周内容执行情况进行复盘，输出有效动作、问题、下周假设和优先级动作。',
     },
     {
         id: 'interval-watch',
         label: '短周期巡检',
-        description: '按固定间隔巡检项目卡点与风险',
-        name: '项目巡检',
+        description: '按固定间隔巡检内容卡点与风险',
+        name: '内容巡检',
         mode: 'interval',
         intervalMinutes: 60,
-        prompt: '请巡检所有进行中项目，识别卡点和阻塞，输出最小下一步行动，并推动至少一个项目前进。',
+        prompt: '请巡检当前进行中的内容任务，识别卡点和阻塞，输出最小下一步行动，并推动至少一个任务前进。',
     },
 ];
 
@@ -77,7 +77,7 @@ export const LONG_TEMPLATES: LongTemplate[] = [
         description: '围绕一个目标持续多轮优化',
         name: '30天增长冲刺',
         objective: '在 30 天内建立稳定的自媒体内容产出节奏并提升互动率。',
-        stepPrompt: '执行一轮增长冲刺：复盘上一轮结果、调整选题策略、产出新的内容动作并落地到项目。',
+        stepPrompt: '执行一轮增长冲刺：复盘上一轮结果、调整选题策略、产出新的内容动作并落地到稿件、素材或工作项。',
         intervalMinutes: 720,
         totalRounds: 30,
     },
@@ -121,12 +121,11 @@ export function pickLongTemplate(templateId: string): LongTemplate {
     return LONG_TEMPLATES.find((item) => item.id === templateId) || LONG_TEMPLATES[0];
 }
 
-export function scheduleDraftFromTemplate(template: ScheduleTemplate, keepProjectId = ''): ScheduleDraft {
+export function scheduleDraftFromTemplate(template: ScheduleTemplate): ScheduleDraft {
     return {
         templateId: template.id,
         name: template.name,
         mode: template.mode,
-        projectId: keepProjectId,
         intervalMinutes: template.intervalMinutes || 60,
         time: template.time || '09:00',
         weekdays: template.weekdays || [1],
@@ -135,11 +134,10 @@ export function scheduleDraftFromTemplate(template: ScheduleTemplate, keepProjec
     };
 }
 
-export function longDraftFromTemplate(template: LongTemplate, keepProjectId = ''): LongDraft {
+export function longDraftFromTemplate(template: LongTemplate): LongDraft {
     return {
         templateId: template.id,
         name: template.name,
-        projectId: keepProjectId,
         objective: template.objective,
         stepPrompt: template.stepPrompt,
         intervalMinutes: template.intervalMinutes,

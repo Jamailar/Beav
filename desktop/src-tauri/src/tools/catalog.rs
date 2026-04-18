@@ -31,7 +31,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         "app_cli" => Some(ToolDescriptor {
             name: "app_cli",
             description:
-                "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.",
+                "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, RedClaw, settings, memory, skills, and MCP.",
             kind: ToolKind::AppCli,
             requires_approval: false,
             concurrency_safe: false,
@@ -115,7 +115,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "app_cli",
-                "description": "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.",
+                "description": "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, RedClaw, settings, memory, skills, and MCP.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -162,7 +162,6 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                                 "memory.search",
                                 "chat.sessions.list",
                                 "settings.summary",
-                                "redclaw.projects.list",
                                 "redclaw.profile.bundle",
                                 "redclaw.profile.onboarding"
                             ]

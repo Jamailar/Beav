@@ -72,6 +72,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
+  const [skillLoadingEnabled, setSkillLoadingEnabled] = useState(true);
+  const [isSavingSkillLoading, setIsSavingSkillLoading] = useState(false);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -428,7 +430,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '',
       '注意：不要只依赖我在消息里给的摘要。你必须先读取下方3个素材文件夹中的文件，再开始写作。',
       '请优先读取每个素材目录下的 meta.json，并按需要继续读取正文/转录文件。',
-      '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。',
+      skillLoadingEnabled
+        ? '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。'
+        : '本次不要额外加载 writing-style 技能。请直接基于素材完成标题候选、正文、标签建议和封面文案，但仍然避免模板化表达。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -456,6 +460,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
       taskHints: {
         intent: 'manuscript_creation',
+        activeSkills: skillLoadingEnabled ? ['writing-style'] : [],
       },
       attachment: {
         type: 'wander-references',
@@ -465,14 +470,86 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     });
   };
 
-  const syncWanderModeSetting = useCallback(async () => {
+  const syncWanderSettings = useCallback(async () => {
     try {
       const settings = await window.ipcRenderer.getSettings();
       setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
+      setSkillLoadingEnabled(settings?.wander_skill_loading_enabled !== false);
     } catch (error) {
-      console.error('Failed to load wander mode setting:', error);
+      console.error('Failed to load wander settings:', error);
     }
   }, []);
+
+  const persistWanderSettings = useCallback(async (patch: {
+    wander_deep_think_enabled?: boolean;
+    wander_skill_loading_enabled?: boolean;
+  }) => {
+    const settings = await window.ipcRenderer.getSettings();
+    await window.ipcRenderer.saveSettings({
+      api_endpoint: settings?.api_endpoint || '',
+      api_key: settings?.api_key || '',
+      model_name: settings?.model_name || '',
+      workspace_dir: settings?.workspace_dir,
+      active_space_id: settings?.active_space_id,
+      role_mapping: settings?.role_mapping || '{}',
+      transcription_model: settings?.transcription_model,
+      transcription_endpoint: settings?.transcription_endpoint,
+      transcription_key: settings?.transcription_key,
+      embedding_endpoint: settings?.embedding_endpoint,
+      embedding_key: settings?.embedding_key,
+      embedding_model: settings?.embedding_model,
+      ai_sources_json: settings?.ai_sources_json,
+      default_ai_source_id: settings?.default_ai_source_id,
+      image_provider: settings?.image_provider,
+      image_endpoint: settings?.image_endpoint,
+      image_api_key: settings?.image_api_key,
+      image_model: settings?.image_model,
+      image_provider_template: settings?.image_provider_template,
+      image_aspect_ratio: settings?.image_aspect_ratio,
+      image_size: settings?.image_size,
+      image_quality: settings?.image_quality,
+      mcp_servers_json: settings?.mcp_servers_json,
+      redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
+      wander_deep_think_enabled: patch.wander_deep_think_enabled ?? settings?.wander_deep_think_enabled,
+      wander_skill_loading_enabled: patch.wander_skill_loading_enabled ?? settings?.wander_skill_loading_enabled,
+    });
+  }, []);
+
+  const handleToggleMultiChoice = async () => {
+    if (isSavingMode || loading) return;
+    const nextValue = !multiChoiceEnabled;
+    setMultiChoiceEnabled(nextValue);
+    setIsSavingMode(true);
+
+    try {
+      await persistWanderSettings({
+        wander_deep_think_enabled: nextValue,
+      });
+    } catch (error) {
+      console.error('Failed to persist wander mode setting:', error);
+      setMultiChoiceEnabled(!nextValue);
+    } finally {
+      setIsSavingMode(false);
+    }
+  };
+
+  const handleToggleSkillLoading = async () => {
+    if (isSavingSkillLoading || loading) return;
+    const nextValue = !skillLoadingEnabled;
+    setSkillLoadingEnabled(nextValue);
+    setIsSavingSkillLoading(true);
+
+    try {
+      await persistWanderSettings({
+        wander_skill_loading_enabled: nextValue,
+      });
+    } catch (error) {
+      console.error('Failed to persist wander skill loading setting:', error);
+      setSkillLoadingEnabled(!nextValue);
+    } finally {
+      setIsSavingSkillLoading(false);
+    }
+  };
 
   // 加载历史记录列表
   const loadHistoryList = useCallback(async () => {
@@ -538,7 +615,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       return;
     }
     const [, list] = await Promise.all([
-      syncWanderModeSetting(),
+      syncWanderSettings(),
       loadHistoryList(),
     ]);
     if (list.length > 0 && currentHistoryId) {
@@ -564,7 +641,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setItems([]);
       setCurrentHistoryId(null);
     }
-  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderModeSetting]);
+  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderSettings]);
 
   usePageRefresh({
     isActive,
@@ -574,13 +651,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   useEffect(() => {
     if (!isActive) return;
     const handleSettingsUpdated = () => {
-      void syncWanderModeSetting();
+      void syncWanderSettings();
     };
     window.ipcRenderer.on('settings:updated', handleSettingsUpdated);
     return () => {
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
-  }, [isActive, syncWanderModeSetting]);
+  }, [isActive, syncWanderSettings]);
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -663,49 +740,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
   }, [loadHistoryList]);
 
-  const handleToggleMultiChoice = async () => {
-    if (isSavingMode || loading) return;
-    const nextValue = !multiChoiceEnabled;
-    setMultiChoiceEnabled(nextValue);
-    setIsSavingMode(true);
-
-    try {
-      const settings = await window.ipcRenderer.getSettings();
-      await window.ipcRenderer.saveSettings({
-        api_endpoint: settings?.api_endpoint || '',
-        api_key: settings?.api_key || '',
-        model_name: settings?.model_name || '',
-        workspace_dir: settings?.workspace_dir,
-        active_space_id: settings?.active_space_id,
-        role_mapping: settings?.role_mapping || '{}',
-        transcription_model: settings?.transcription_model,
-        transcription_endpoint: settings?.transcription_endpoint,
-        transcription_key: settings?.transcription_key,
-        embedding_endpoint: settings?.embedding_endpoint,
-        embedding_key: settings?.embedding_key,
-        embedding_model: settings?.embedding_model,
-        ai_sources_json: settings?.ai_sources_json,
-        default_ai_source_id: settings?.default_ai_source_id,
-        image_provider: settings?.image_provider,
-        image_endpoint: settings?.image_endpoint,
-        image_api_key: settings?.image_api_key,
-        image_model: settings?.image_model,
-        image_provider_template: settings?.image_provider_template,
-        image_aspect_ratio: settings?.image_aspect_ratio,
-        image_size: settings?.image_size,
-        image_quality: settings?.image_quality,
-        mcp_servers_json: settings?.mcp_servers_json,
-        redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
-        wander_deep_think_enabled: nextValue,
-      });
-    } catch (error) {
-      console.error('Failed to persist wander mode setting:', error);
-      setMultiChoiceEnabled(!nextValue);
-    } finally {
-      setIsSavingMode(false);
-    }
-  };
-
   const startWander = async () => {
     const requestId = `wander-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeRequestIdRef.current = requestId;
@@ -739,6 +773,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         items: randomItems,
         options: {
           multiChoice: multiChoiceEnabled,
+          loadWritingStyleSkill: skillLoadingEnabled,
           requestId,
         },
       });
@@ -804,6 +839,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
             </>
           )}
           <div className={clsx('flex items-center gap-3', phase !== 'idle' && 'ml-1 pl-4 border-l border-black/[0.06]')}>
+            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
+              技能加载
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleToggleSkillLoading()}
+              disabled={isSavingSkillLoading || loading}
+              className="ui-switch-track shrink-0 disabled:opacity-50"
+              data-size="sm"
+              data-state={skillLoadingEnabled ? 'on' : 'off'}
+            >
+              <div className="ui-switch-thumb" />
+            </button>
+          </div>
+          <div className="w-[1px] h-4 bg-black/[0.06]" />
+          <div className="flex items-center gap-3">
             <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
               多选题
             </div>

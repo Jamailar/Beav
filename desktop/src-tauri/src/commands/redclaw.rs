@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
-    RedclawLongCycleTaskRecord, RedclawProjectRecord, RedclawRuntime, RedclawScheduledTaskRecord,
+    RedclawLongCycleTaskRecord, RedclawRuntime, RedclawScheduledTaskRecord,
 };
 use crate::scheduler::{
     emit_scheduler_snapshot, enqueue_manual_job_execution_for_source, run_job_queue_once,
@@ -17,8 +17,7 @@ use crate::scheduler::{
 use crate::{
     handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, make_id, normalize_optional_string, now_i64, now_iso,
-    payload_field, payload_string, redclaw_state_value, render_redbox_prompt,
-    update_redclaw_profile_doc, AppState,
+    payload_field, payload_string, redclaw_state_value, update_redclaw_profile_doc, AppState,
 };
 
 fn stop_redclaw_runtime(runtime: &mut RedclawRuntime) {
@@ -68,9 +67,7 @@ pub fn handle_redclaw_channel(
             let _ = ensure_store_hydrated_for_redclaw(state);
             with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
         }
-        "redclaw:list-projects" => with_store(state, |store| {
-            Ok(json!(store.redclaw_state.projects.clone()))
-        }),
+        "redclaw:list-projects" => Ok(json!([])),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             Ok(json!({
@@ -174,29 +171,11 @@ pub fn handle_redclaw_channel(
             Ok(status)
         })(),
         "redclaw:runner-run-now" => (|| {
-            let (project_id, prompt) = with_store(state, |store| {
-                let project = store.redclaw_state.projects.first().cloned();
-                let project_id = project.as_ref().map(|item| item.id.clone());
-                let prompt = project
-                    .as_ref()
-                    .map(|item| {
-                        render_redbox_prompt(
-                            &load_redbox_prompt_or_embedded(
-                                "runtime/redclaw/runner_run_now_with_project.txt",
-                                include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_with_project.txt"),
-                            ),
-                            &[("project_goal", item.goal.clone())],
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        load_redbox_prompt_or_embedded(
-                            "runtime/redclaw/runner_run_now_default.txt",
-                            include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_default.txt"),
-                        )
-                    });
-                Ok((project_id, prompt))
-            })?;
-            let run_result = execute_redclaw_run(app, state, prompt, project_id, "runner-run-now")?;
+            let prompt = load_redbox_prompt_or_embedded(
+                "runtime/redclaw/runner_run_now_default.txt",
+                include_str!("../../../prompts/library/runtime/redclaw/runner_run_now_default.txt"),
+            );
+            let run_result = execute_redclaw_run(app, state, prompt, "runner-run-now")?;
             let status = with_store_mut(state, |store| {
                 store.redclaw_state.last_tick_at = Some(now_iso());
                 Ok(redclaw_state_value(&store.redclaw_state))
@@ -204,47 +183,7 @@ pub fn handle_redclaw_channel(
             let _ = app.emit("redclaw:runner-status", status.clone());
             Ok(json!({ "success": true, "status": status, "run": run_result }))
         })(),
-        "redclaw:runner-set-project" => {
-            let project_id = payload_string(payload, "projectId").unwrap_or_default();
-            let enabled = payload_field(payload, "enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let prompt = normalize_optional_string(payload_string(payload, "prompt"));
-            with_store_mut(state, |store| {
-                if enabled {
-                    if let Some(project) = store
-                        .redclaw_state
-                        .projects
-                        .iter_mut()
-                        .find(|item| item.id == project_id)
-                    {
-                        project.status = "active".to_string();
-                        project.updated_at = now_iso();
-                    } else {
-                        store.redclaw_state.projects.push(RedclawProjectRecord {
-                            id: if project_id.is_empty() {
-                                make_id("redclaw-project")
-                            } else {
-                                project_id.clone()
-                            },
-                            goal: prompt
-                                .clone()
-                                .unwrap_or_else(|| "RedClaw Project".to_string()),
-                            platform: Some("generic".to_string()),
-                            task_type: Some("manual".to_string()),
-                            status: "active".to_string(),
-                            updated_at: now_iso(),
-                        });
-                    }
-                } else {
-                    store
-                        .redclaw_state
-                        .projects
-                        .retain(|item| item.id != project_id);
-                }
-                Ok(json!({ "success": true }))
-            })
-        }
+        "redclaw:runner-set-project" => Ok(json!({ "success": true, "deprecated": true })),
         "redclaw:runner-set-config" => (|| {
             let status = with_store_mut(state, |store| {
                 if let Some(interval) =
@@ -303,7 +242,7 @@ pub fn handle_redclaw_channel(
                         .unwrap_or(true),
                     mode: payload_string(payload, "mode").unwrap_or_else(|| "daily".to_string()),
                     prompt: payload_string(payload, "prompt").unwrap_or_default(),
-                    project_id: normalize_optional_string(payload_string(payload, "projectId")),
+                    project_id: None,
                     interval_minutes: payload_field(payload, "intervalMinutes")
                         .and_then(|v| v.as_i64()),
                     time: normalize_optional_string(payload_string(payload, "time")),
@@ -415,7 +354,7 @@ pub fn handle_redclaw_channel(
                     status: "paused".to_string(),
                     objective: payload_string(payload, "objective").unwrap_or_default(),
                     step_prompt: payload_string(payload, "stepPrompt").unwrap_or_default(),
-                    project_id: normalize_optional_string(payload_string(payload, "projectId")),
+                    project_id: None,
                     interval_minutes: payload_field(payload, "intervalMinutes")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(720),

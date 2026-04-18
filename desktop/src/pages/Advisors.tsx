@@ -15,6 +15,8 @@ interface Advisor {
     createdAt: string;
 }
 
+export type AdvisorProfile = Advisor;
+
 const AVATAR_OPTIONS = ['🧠', '💡', '📊', '🎨', '📝', '🔍', '💼', '🎯', '🌟', '🚀'];
 const AVATAR_COLORS = [
     'bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-orange-500',
@@ -25,7 +27,21 @@ const isRenderableAvatarUrl = (value: string): boolean => {
     return hasRenderableAssetUrl(value);
 };
 
-export function Advisors({ isActive = true }: { isActive?: boolean }) {
+export function Advisors({
+    isActive = true,
+    hideAdvisorList = false,
+    selectedAdvisorId,
+    onSelectedAdvisorIdChange,
+    onAdvisorsChange,
+    createRequestKey,
+}: {
+    isActive?: boolean;
+    hideAdvisorList?: boolean;
+    selectedAdvisorId?: string | null;
+    onSelectedAdvisorIdChange?: (advisorId: string | null) => void;
+    onAdvisorsChange?: (advisors: Advisor[]) => void;
+    createRequestKey?: number;
+}) {
     const [advisors, setAdvisors] = useState<Advisor[]>([]);
     const [selectedAdvisor, setSelectedAdvisor] = useState<Advisor | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -40,6 +56,7 @@ export function Advisors({ isActive = true }: { isActive?: boolean }) {
     const [indexingStatus, setIndexingStatus] = useState<any>(null);
     const hasLoadedSnapshotRef = useRef(false);
     const loadAdvisorsRequestRef = useRef(0);
+    const createRequestKeyRef = useRef<number | undefined>(createRequestKey);
 
     useEffect(() => {
         if (!isActive) return;
@@ -111,6 +128,31 @@ export function Advisors({ isActive = true }: { isActive?: boolean }) {
         void loadAdvisors();
     }, [isActive, loadAdvisors]);
 
+    useEffect(() => {
+        onAdvisorsChange?.(advisors);
+    }, [advisors, onAdvisorsChange]);
+
+    useEffect(() => {
+        if (createRequestKey === undefined) return;
+        if (createRequestKeyRef.current === createRequestKey) return;
+        createRequestKeyRef.current = createRequestKey;
+        setEditingAdvisor(null);
+        setIsModalOpen(true);
+    }, [createRequestKey]);
+
+    useEffect(() => {
+        if (selectedAdvisorId === undefined) return;
+        if (!selectedAdvisorId) {
+            setSelectedAdvisor(null);
+            return;
+        }
+        if (selectedAdvisor?.id === selectedAdvisorId) return;
+        const matchedAdvisor = advisors.find((advisor) => advisor.id === selectedAdvisorId) || null;
+        if (matchedAdvisor) {
+            setSelectedAdvisor(matchedAdvisor);
+        }
+    }, [advisors, selectedAdvisor, selectedAdvisorId]);
+
     const handleCreate = () => {
         setEditingAdvisor(null);
         setIsModalOpen(true);
@@ -128,6 +170,7 @@ export function Advisors({ isActive = true }: { isActive?: boolean }) {
             await loadAdvisors();
             if (selectedAdvisor?.id === advisorId) {
                 setSelectedAdvisor(null);
+                onSelectedAdvisorIdChange?.(null);
             }
         } catch (e) {
             console.error('Failed to delete advisor:', e);
@@ -166,7 +209,12 @@ export function Advisors({ isActive = true }: { isActive?: boolean }) {
             }
 
             setIsModalOpen(false);
-            await loadAdvisors();
+            const list = await loadAdvisors();
+            if (newId) {
+                const nextSelectedAdvisor = list.find((advisor) => advisor.id === newId) || null;
+                setSelectedAdvisor(nextSelectedAdvisor);
+                onSelectedAdvisorIdChange?.(nextSelectedAdvisor?.id || null);
+            }
         } catch (e) {
             console.error('Failed to save advisor:', e);
         }
@@ -207,66 +255,70 @@ export function Advisors({ isActive = true }: { isActive?: boolean }) {
 
     return (
         <div className="flex h-full">
-            {/* Advisor List */}
-            <div className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col">
-                <div className="p-4 border-b border-border flex items-center justify-between">
-                    <h2 className="text-sm font-semibold text-text-primary">智囊团</h2>
-                    <button
-                        onClick={handleCreate}
-                        className="p-1.5 text-text-tertiary hover:text-accent-primary hover:bg-surface-primary rounded transition-colors"
-                        title="创建新成员"
-                    >
-                        <Plus className="w-4 h-4" />
-                    </button>
-                </div>
+            {!hideAdvisorList && (
+                <div className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col">
+                    <div className="p-4 border-b border-border flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-text-primary">智囊团</h2>
+                        <button
+                            onClick={handleCreate}
+                            className="p-1.5 text-text-tertiary hover:text-accent-primary hover:bg-surface-primary rounded transition-colors"
+                            title="创建新成员"
+                        >
+                            <Plus className="w-4 h-4" />
+                        </button>
+                    </div>
 
-                <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {isLoading && advisors.length === 0 ? (
-                        <div className="text-center text-text-tertiary text-xs py-8">加载中...</div>
-                    ) : advisors.length === 0 ? (
-                        <div className="text-center text-text-tertiary text-xs py-8">
-                            <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                            <p>暂无智囊团成员</p>
-                            <button onClick={handleCreate} className="mt-2 text-accent-primary hover:underline">
-                                创建第一个成员
-                            </button>
-                        </div>
-                    ) : (
-                        advisors.map((advisor) => (
-                            <button
-                                key={advisor.id}
-                                onClick={() => setSelectedAdvisor(advisor)}
-                                className={clsx(
-                                    "w-full text-left p-3 rounded-xl transition-all",
-                                    selectedAdvisor?.id === advisor.id
-                                        ? "bg-accent-primary/10 border border-accent-primary/30 shadow-sm"
-                                        : "hover:bg-surface-primary border border-transparent"
-                                )}
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className={clsx(
-                                        "w-10 h-10 rounded-full flex items-center justify-center text-lg overflow-hidden shrink-0",
-                                        isRenderableAvatarUrl(advisor.avatar)
-                                            ? "bg-transparent border border-border/50"
-                                            : AVATAR_COLORS[parseInt(advisor.id.slice(-1), 16) % AVATAR_COLORS.length]
-                                    )}>
-                                        {isRenderableAvatarUrl(advisor.avatar) ? (
-                                            <img src={resolveAssetUrl(advisor.avatar)} alt={advisor.name} className="w-full h-full object-cover" />
-                                        ) : (
-                                            advisor.avatar
-                                        )}
+                    <div className="flex-1 overflow-auto p-2 space-y-2">
+                        {isLoading && advisors.length === 0 ? (
+                            <div className="text-center text-text-tertiary text-xs py-8">加载中...</div>
+                        ) : advisors.length === 0 ? (
+                            <div className="text-center text-text-tertiary text-xs py-8">
+                                <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                                <p>暂无智囊团成员</p>
+                                <button onClick={handleCreate} className="mt-2 text-accent-primary hover:underline">
+                                    创建第一个成员
+                                </button>
+                            </div>
+                        ) : (
+                            advisors.map((advisor) => (
+                                <button
+                                    key={advisor.id}
+                                    onClick={() => {
+                                        setSelectedAdvisor(advisor);
+                                        onSelectedAdvisorIdChange?.(advisor.id);
+                                    }}
+                                    className={clsx(
+                                        "w-full text-left p-3 rounded-xl transition-all",
+                                        selectedAdvisor?.id === advisor.id
+                                            ? "bg-accent-primary/10 border border-accent-primary/30 shadow-sm"
+                                            : "hover:bg-surface-primary border border-transparent"
+                                    )}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className={clsx(
+                                            "w-10 h-10 rounded-full flex items-center justify-center text-lg overflow-hidden shrink-0",
+                                            isRenderableAvatarUrl(advisor.avatar)
+                                                ? "bg-transparent border border-border/50"
+                                                : AVATAR_COLORS[parseInt(advisor.id.slice(-1), 16) % AVATAR_COLORS.length]
+                                        )}>
+                                            {isRenderableAvatarUrl(advisor.avatar) ? (
+                                                <img src={resolveAssetUrl(advisor.avatar)} alt={advisor.name} className="w-full h-full object-cover" />
+                                            ) : (
+                                                advisor.avatar
+                                            )}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-medium text-text-primary truncate">{advisor.name}</div>
+                                            <div className="text-xs text-text-tertiary truncate">{advisor.personality}</div>
+                                            <div className="text-[11px] text-text-tertiary truncate">知识库语言：{advisor.knowledgeLanguage || '中文'}</div>
+                                        </div>
                                     </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="text-sm font-medium text-text-primary truncate">{advisor.name}</div>
-                                        <div className="text-xs text-text-tertiary truncate">{advisor.personality}</div>
-                                        <div className="text-[11px] text-text-tertiary truncate">知识库语言：{advisor.knowledgeLanguage || '中文'}</div>
-                                    </div>
-                                </div>
-                            </button>
-                        ))
-                    )}
+                                </button>
+                            ))
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Advisor Detail */}
             <div className="flex-1 flex flex-col min-w-0">

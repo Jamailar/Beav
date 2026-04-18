@@ -587,8 +587,11 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
-            "list-projects" | "projects" => self.call_channel("redclaw:list-projects", json!({})),
+            "list-projects" | "projects" => {
+                Ok(json!({ "success": true, "projects": [], "deprecated": true }))
+            }
             "runner-status" => self.call_channel("redclaw:runner-status", json!({})),
+            "runner-run-now" => self.call_channel("redclaw:runner-run-now", json!({})),
             "runner-start" => self.call_channel(
                 "redclaw:runner-start",
                 merge_payload(&args.options, payload),
@@ -2337,7 +2340,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "knowledge list|search",
             "work list|ready|get|update",
             "memory list|search|add|delete",
-            "redclaw projects|runner-status|runner-start|runner-stop|runner-set-config|profile-bundle|profile-read|profile-update",
+            "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|profile-bundle|profile-read|profile-update",
             "settings summary|get|set",
             "skills list|invoke|enable|disable",
             "mcp list|sessions|oauth-status|save",
@@ -2413,8 +2416,8 @@ fn help_response(namespace: Option<&str>) -> Value {
             "memory delete --id <memoryId>",
         ],
         "redclaw" => vec![
-            "redclaw projects",
             "redclaw runner-status",
+            "redclaw runner-run-now",
             "redclaw runner-start [--interval-minutes 15]",
             "redclaw runner-stop",
             "redclaw runner-set-config [payload]",

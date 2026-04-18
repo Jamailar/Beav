@@ -1,4 +1,5 @@
-import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Square, Film, ImageIcon, Music2, FileText, File as FileIcon } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
@@ -644,6 +645,14 @@ export function Chat({
   }, [isProcessing, onExecutionStateChange]);
 
   useEffect(() => {
+    debugUi('processing_state', {
+      sessionId: currentSessionIdRef.current,
+      isProcessing,
+      responseCompleted: responseCompletedRef.current,
+    });
+  }, [debugUi, isProcessing]);
+
+  useEffect(() => {
     return () => {
       onExecutionStateChange?.(false);
     };
@@ -655,6 +664,9 @@ export function Chat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentSessionIdRef = useRef<string | null>(null);
+  const chatInstanceIdRef = useRef(
+    `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
+  );
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -671,12 +683,73 @@ export function Chat({
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
+  const responseCompletedRef = useRef(false);
+  const responseFinalizeSeqRef = useRef(0);
+  const pendingResponseFinalizeRef = useRef<{
+    ticket: number;
+    source: string;
+    contentChars: number;
+  } | null>(null);
   const suppressComposerFocusUntilRef = useRef(0);
   const [composerSuppressed, setComposerSuppressed] = useState(false);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+
+  useEffect(() => {
+    debugUi('instance_mount', {
+      chatInstanceId: chatInstanceIdRef.current,
+      fixedSessionId: fixedSessionId || null,
+      isActive,
+    });
+    return () => {
+      debugUi('instance_unmount', {
+        chatInstanceId: chatInstanceIdRef.current,
+        fixedSessionId: fixedSessionId || null,
+      });
+    };
+  }, [debugUi, fixedSessionId, isActive]);
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    const runningTimelineCount = Array.isArray(lastMessage?.timeline)
+      ? lastMessage.timeline.filter((item) => item.status === 'running').length
+      : 0;
+    if (pendingResponseFinalizeRef.current) {
+      const pending = pendingResponseFinalizeRef.current;
+      debugUi('response_end:commit_observed', {
+        chatInstanceId: chatInstanceIdRef.current,
+        ticket: pending.ticket,
+        source: pending.source,
+        contentChars: pending.contentChars,
+        isProcessing,
+        lastIsStreaming: Boolean(lastMessage?.isStreaming),
+        lastTimelineRunning: runningTimelineCount,
+        messageCount: messages.length,
+      });
+      pendingResponseFinalizeRef.current = null;
+    }
+    debugUi('render_state', {
+      chatInstanceId: chatInstanceIdRef.current,
+      sessionId: currentSessionIdRef.current,
+      isActive: isActiveRef.current,
+      isProcessing,
+      responseCompleted: responseCompletedRef.current,
+      messageCount: messages.length,
+      lastRole: lastMessage?.role || 'none',
+      lastIsStreaming: Boolean(lastMessage?.isStreaming),
+      lastTimelineRunning: runningTimelineCount,
+      lastContentChars: String(lastMessage?.content || '').length,
+      hasConfirmRequest: Boolean(confirmRequest),
+      visibleBusy: Boolean(
+        isProcessing
+          || lastMessage?.isStreaming
+          || runningTimelineCount > 0
+          || confirmRequest
+      ),
+    });
+  }, [confirmRequest, debugUi, isProcessing, messages]);
   const blurComposer = useCallback((reason: string) => {
     const element = inputRef.current;
     if (!element) return;
@@ -1343,6 +1416,9 @@ export function Chat({
     // 1. Phase Start (e.g. Planning, Executing)
     const handlePhaseStart = (_: unknown, { name }: { name: string }) => {
       if (!isActiveRef.current) return;
+      if (name === 'thinking') {
+        responseCompletedRef.current = false;
+      }
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (!lastMsg || lastMsg.role !== 'ai') return prev;
@@ -1701,13 +1777,18 @@ export function Chat({
       setConfirmRequest(request);
     };
 
-    const handleResponseEnd = (_: unknown, payload?: { content?: string }) => {
+    const handleResponseEnd = (
+      _: unknown,
+      payload?: { content?: string },
+      source: 'checkpoint' | 'runtime_done' | 'unknown' = 'unknown',
+    ) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response end');
         }
         return;
       }
+      responseCompletedRef.current = true;
       suppressComposerFocus('response_end', 5000);
       blurComposer('response_end');
       flushPendingAssistantChunk();
@@ -1721,11 +1802,49 @@ export function Chat({
         streamElapsedMs: streamStats ? Math.round(performance.now() - streamStats.startedAt) : 0,
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      const finalizeTicket = ++responseFinalizeSeqRef.current;
+      pendingResponseFinalizeRef.current = {
+        ticket: finalizeTicket,
+        source,
+        contentChars: finalContent.length,
+      };
+      debugUi('response_end:transition_scheduled', {
+        chatInstanceId: chatInstanceIdRef.current,
+        sessionId: currentSessionIdRef.current,
+        ticket: finalizeTicket,
+        source,
+        contentChars: finalContent.length,
+      });
+      flushSync(() => {
+        debugUi('response_end:transition_run', {
+          chatInstanceId: chatInstanceIdRef.current,
+          sessionId: currentSessionIdRef.current,
+          ticket: finalizeTicket,
+          source,
+        });
         setIsProcessing(false);
         setErrorNotice(null);
+        debugUi('response_end:state_calls_issued', {
+          chatInstanceId: chatInstanceIdRef.current,
+          sessionId: currentSessionIdRef.current,
+          ticket: finalizeTicket,
+          source,
+        });
         setMessages(prev => {
           const lastMsg = prev[prev.length - 1];
+          debugUi('response_end:set_messages', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            prevCount: prev.length,
+            lastRole: lastMsg?.role || 'none',
+            lastIsStreaming: Boolean(lastMsg?.isStreaming),
+            lastTimelineRunning: Array.isArray(lastMsg?.timeline)
+              ? lastMsg.timeline.filter((item) => item.status === 'running').length
+              : 0,
+            finalContentChars: finalContent.length,
+          });
           if (lastMsg && lastMsg.role === 'ai') {
             const mergedContent = mergeAssistantContent(lastMsg.content || '', finalContent);
             const now = Date.now();
@@ -1763,6 +1882,24 @@ export function Chat({
           }
           return prev;
         });
+        queueMicrotask(() => {
+          debugUi('response_end:microtask_after_transition', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            responseCompleted: responseCompletedRef.current,
+          });
+        });
+        requestAnimationFrame(() => {
+          debugUi('response_end:raf_after_transition', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            responseCompleted: responseCompletedRef.current,
+          });
+        });
       });
     };
 
@@ -1778,7 +1915,7 @@ export function Chat({
         streamedChars: streamStatsRef.current?.chars || 0,
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
         setErrorNotice(null);
@@ -1826,7 +1963,7 @@ export function Chat({
         error: typeof error === 'string' ? error : error?.message || 'unknown',
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
         setErrorNotice(notice);
@@ -1881,6 +2018,18 @@ export function Chat({
       },
       onResponseDelta: ({ content }) => {
         handleResponseChunk(null, { content });
+      },
+      onChatDone: ({ status, content, reason }) => {
+        debugUi('runtime_done:received', {
+          sessionId: currentSessionIdRef.current,
+          status,
+          reason,
+          contentChars: content.length,
+          responseCompleted: responseCompletedRef.current,
+        });
+        if (status === 'completed' && !responseCompletedRef.current) {
+          handleResponseEnd(null, { content }, 'runtime_done');
+        }
       },
       onToolRequest: ({ callId, name, input, description }) => {
         handleToolStart(null, { callId, name, input, description });
@@ -1946,7 +2095,12 @@ export function Chat({
         handleThoughtEnd(null);
       },
       onChatResponseEnd: ({ content }) => {
-        handleResponseEnd(null, { content });
+        debugUi('checkpoint_response_end:received', {
+          sessionId: currentSessionIdRef.current,
+          contentChars: content.length,
+          responseCompleted: responseCompletedRef.current,
+        });
+        handleResponseEnd(null, { content }, 'checkpoint');
       },
       onChatCancelled: () => {
         handleCancelled();
