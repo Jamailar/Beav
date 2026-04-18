@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, Database, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { Chat } from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
@@ -22,9 +23,51 @@ const AVATAR_COLORS = [
     'bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-orange-500',
     'bg-green-500', 'bg-teal-500', 'bg-indigo-500', 'bg-rose-500'
 ];
+const ADVISOR_CHAT_CONTEXT_TYPE = 'advisor-discussion';
 
 const isRenderableAvatarUrl = (value: string): boolean => {
     return hasRenderableAssetUrl(value);
+};
+
+const buildAdvisorInitialContext = (advisor: Advisor): string => {
+    const sections = [
+        `当前对话绑定成员：${advisor.name}`,
+        advisor.personality ? `成员定位：${advisor.personality}` : null,
+        `知识库语言：${advisor.knowledgeLanguage || '中文'}`,
+        advisor.knowledgeFiles.length > 0 ? `已接入知识文件：${advisor.knowledgeFiles.length} 个` : '当前暂无知识文件',
+        '请始终以该成员身份回答，保持表达风格、专业倾向和角色设定一致。',
+        advisor.systemPrompt ? `系统设定：\n${advisor.systemPrompt}` : null,
+    ];
+    return sections.filter(Boolean).join('\n\n');
+};
+
+const getAdvisorWelcomeAvatarText = (advisor: Advisor): string => {
+    const avatarText = String(advisor.avatar || '').trim();
+    if (avatarText) {
+        return avatarText.slice(0, 2);
+    }
+    return String(advisor.name || '成').trim().slice(0, 2);
+};
+
+const sortAdvisorSessionItems = (items: ContextChatSessionListItem[]): ContextChatSessionListItem[] => {
+    return [...items].sort((left, right) => {
+        const leftUpdatedAt = String(left.chatSession?.updatedAt || '').trim();
+        const rightUpdatedAt = String(right.chatSession?.updatedAt || '').trim();
+        return rightUpdatedAt.localeCompare(leftUpdatedAt);
+    });
+};
+
+const formatAdvisorSessionTime = (value?: string): string => {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 };
 
 export function Advisors({
@@ -51,27 +94,19 @@ export function Advisors({
     const [downloadStatus, setDownloadStatus] = useState<{ advisorId: string; progress: string } | null>(null);
     const [isSystemPromptExpanded, setIsSystemPromptExpanded] = useState(false); // 默认折叠
     const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false); // AI优化状态
+    const [advisorSessionId, setAdvisorSessionId] = useState<string | null>(null);
+    const [isAdvisorSessionLoading, setIsAdvisorSessionLoading] = useState(false);
+    const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
+    const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+    const [advisorSessions, setAdvisorSessions] = useState<ContextChatSessionListItem[]>([]);
+    const [isHistoryLoading, setIsHistoryLoading] = useState(false);
 
-    // Indexing status
-    const [indexingStatus, setIndexingStatus] = useState<any>(null);
     const hasLoadedSnapshotRef = useRef(false);
     const loadAdvisorsRequestRef = useRef(0);
     const createRequestKeyRef = useRef<number | undefined>(createRequestKey);
-
-    useEffect(() => {
-        if (!isActive) return;
-        const handleIndexingStatus = (_: unknown, status: any) => {
-            setIndexingStatus(status);
-        };
-        window.ipcRenderer.on('indexing:status', handleIndexingStatus);
-
-        // Initial fetch
-        window.ipcRenderer.invoke('indexing:get-stats').then(setIndexingStatus);
-
-        return () => {
-            window.ipcRenderer.off('indexing:status', handleIndexingStatus);
-        };
-    }, [isActive]);
+    const advisorSessionRequestRef = useRef(0);
+    const hasAdvisorSessionSnapshotRef = useRef(false);
+    const advisorSessionIdRef = useRef<string | null>(null);
 
     const loadAdvisors = useCallback(async (): Promise<Advisor[]> => {
         const requestId = loadAdvisorsRequestRef.current + 1;
@@ -153,6 +188,122 @@ export function Advisors({
         }
     }, [advisors, selectedAdvisor, selectedAdvisorId]);
 
+    useEffect(() => {
+        setIsSystemPromptExpanded(false);
+    }, [selectedAdvisor?.id]);
+
+    useEffect(() => {
+        advisorSessionIdRef.current = advisorSessionId;
+    }, [advisorSessionId]);
+
+    useEffect(() => {
+        if (!isSettingsDrawerOpen && !isHistoryDrawerOpen) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsSettingsDrawerOpen(false);
+                setIsHistoryDrawerOpen(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isHistoryDrawerOpen, isSettingsDrawerOpen]);
+
+    const loadAdvisorSessions = useCallback(async (
+        advisor: Advisor,
+        options?: {
+            preferredSessionId?: string | null;
+            createIfEmpty?: boolean;
+            silent?: boolean;
+        },
+    ) => {
+        const requestId = advisorSessionRequestRef.current + 1;
+        advisorSessionRequestRef.current = requestId;
+        const shouldCreateIfEmpty = options?.createIfEmpty !== false;
+
+        if (!hasAdvisorSessionSnapshotRef.current && !options?.silent) {
+            setIsAdvisorSessionLoading(true);
+        }
+        if (!options?.silent) {
+            setIsHistoryLoading(true);
+        }
+
+        try {
+            let items = await window.ipcRenderer.chat.listContextSessions({
+                contextId: advisor.id,
+                contextType: ADVISOR_CHAT_CONTEXT_TYPE,
+            }) as ContextChatSessionListItem[];
+
+            items = sortAdvisorSessionItems(Array.isArray(items) ? items : []);
+
+            let nextSessionId =
+                options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
+                    ? options.preferredSessionId
+                    : advisorSessionIdRef.current && items.some((item) => item.id === advisorSessionIdRef.current)
+                        ? advisorSessionIdRef.current
+                        : items[0]?.id || null;
+
+            if (items.length === 0 && shouldCreateIfEmpty) {
+                const created = await window.ipcRenderer.chat.createContextSession({
+                    contextId: advisor.id,
+                    contextType: ADVISOR_CHAT_CONTEXT_TYPE,
+                    title: `与 ${advisor.name} 聊聊`,
+                    initialContext: buildAdvisorInitialContext(advisor),
+                });
+                items = [{
+                    id: created.id,
+                    messageCount: 0,
+                    summary: '',
+                    transcriptCount: 0,
+                    checkpointCount: 0,
+                    chatSession: {
+                        id: created.id,
+                        title: created.title,
+                        updatedAt: created.updatedAt,
+                    },
+                }];
+                nextSessionId = created.id;
+            }
+
+            if (requestId !== advisorSessionRequestRef.current) return;
+            hasAdvisorSessionSnapshotRef.current = true;
+            setAdvisorSessions(items);
+            setAdvisorSessionId(nextSessionId);
+        } catch (error) {
+            if (requestId !== advisorSessionRequestRef.current) return;
+            console.error('Failed to load advisor sessions:', error);
+            if (!hasAdvisorSessionSnapshotRef.current) {
+                setAdvisorSessions([]);
+                setAdvisorSessionId(null);
+            }
+        } finally {
+            if (requestId === advisorSessionRequestRef.current) {
+                setIsAdvisorSessionLoading(false);
+                setIsHistoryLoading(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isActive || !selectedAdvisor) {
+            setAdvisorSessionId(null);
+            setAdvisorSessions([]);
+            setIsAdvisorSessionLoading(false);
+            hasAdvisorSessionSnapshotRef.current = false;
+            if (!selectedAdvisor) {
+                setIsSettingsDrawerOpen(false);
+                setIsHistoryDrawerOpen(false);
+            }
+            return;
+        }
+
+        hasAdvisorSessionSnapshotRef.current = false;
+        setAdvisorSessions([]);
+        setAdvisorSessionId(null);
+        void loadAdvisorSessions(selectedAdvisor);
+    }, [isActive, selectedAdvisor, loadAdvisorSessions]);
+
     const handleCreate = () => {
         setEditingAdvisor(null);
         setIsModalOpen(true);
@@ -162,6 +313,71 @@ export function Advisors({
         setEditingAdvisor(advisor);
         setIsModalOpen(true);
     };
+
+    const handleOptimizePrompt = useCallback(async (advisor: Advisor) => {
+        setIsOptimizingPrompt(true);
+        try {
+            const result = await window.ipcRenderer.invoke('advisors:optimize-prompt-deep', {
+                advisorId: advisor.id,
+                name: advisor.name,
+                personality: advisor.personality,
+                currentPrompt: advisor.systemPrompt,
+            }) as { success: boolean; prompt?: string; error?: string };
+
+            if (result.success && result.prompt) {
+                await window.ipcRenderer.invoke('advisors:update', {
+                    ...advisor,
+                    systemPrompt: result.prompt,
+                });
+                await loadAdvisors();
+                setSelectedAdvisor((prev) => prev ? { ...prev, systemPrompt: result.prompt! } : null);
+                return;
+            }
+            void appAlert('优化失败: ' + (result.error || '未知错误'));
+        } catch (e) {
+            console.error('Deep optimization error:', e);
+            void appAlert('优化失败，请检查 API 设置');
+        } finally {
+            setIsOptimizingPrompt(false);
+        }
+    }, [loadAdvisors]);
+
+    const handleCreateAdvisorSession = useCallback(async () => {
+        if (!selectedAdvisor) return;
+        setIsHistoryLoading(true);
+        try {
+            const created = await window.ipcRenderer.chat.createContextSession({
+                contextId: selectedAdvisor.id,
+                contextType: ADVISOR_CHAT_CONTEXT_TYPE,
+                title: `与 ${selectedAdvisor.name} 聊聊`,
+                initialContext: buildAdvisorInitialContext(selectedAdvisor),
+            });
+            setAdvisorSessionId(created.id);
+            await loadAdvisorSessions(selectedAdvisor, {
+                preferredSessionId: created.id,
+                silent: true,
+            });
+            setIsHistoryDrawerOpen(false);
+        } catch (error) {
+            console.error('Failed to create advisor session:', error);
+        } finally {
+            setIsHistoryLoading(false);
+        }
+    }, [loadAdvisorSessions, selectedAdvisor]);
+
+    const handleDeleteAdvisorSession = useCallback(async (sessionId: string) => {
+        if (!selectedAdvisor) return;
+        if (!(await appConfirm('确定要删除这条对话记录吗？', { title: '删除对话', confirmLabel: '删除', tone: 'danger' }))) return;
+        try {
+            await window.ipcRenderer.chat.deleteSession(sessionId);
+            const nextPreferredSessionId = advisorSessionId === sessionId ? null : advisorSessionId;
+            await loadAdvisorSessions(selectedAdvisor, {
+                preferredSessionId: nextPreferredSessionId,
+            });
+        } catch (error) {
+            console.error('Failed to delete advisor session:', error);
+        }
+    }, [advisorSessionId, loadAdvisorSessions, selectedAdvisor]);
 
     const handleDelete = async (advisorId: string) => {
         if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
@@ -243,18 +459,8 @@ export function Advisors({
         }
     };
 
-    const handleRebuildAdvisorIndex = async (advisorId: string) => {
-        if (!(await appConfirm('确定要重建该成员的知识库索引吗？\n\n这可能需要几分钟时间，具体取决于知识库文件的大小。在此期间，您可以继续使用其他功能。', { title: '重建知识库索引', confirmLabel: '重建', tone: 'danger' }))) return;
-        try {
-            await window.ipcRenderer.invoke('indexing:rebuild-advisor', advisorId);
-        } catch (e) {
-            console.error('Failed to rebuild advisor index:', e);
-            void appAlert('重建触发失败');
-        }
-    };
-
     return (
-        <div className="flex h-full">
+        <div className="flex h-full min-h-0">
             {!hideAdvisorList && (
                 <div className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col">
                     <div className="p-4 border-b border-border flex items-center justify-between">
@@ -321,228 +527,95 @@ export function Advisors({
             )}
 
             {/* Advisor Detail */}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="relative flex h-full min-h-0 flex-1 min-w-0 flex-col">
                 {selectedAdvisor ? (
                     <>
-                        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
-                            <div className="flex items-center gap-4">
-                                <div className={clsx(
-                                    "w-14 h-14 rounded-full flex items-center justify-center text-2xl overflow-hidden shrink-0",
+                        <div className="relative h-20 border-b border-border bg-surface-primary/90 backdrop-blur-sm">
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <div className="flex flex-col items-center justify-center">
+                                    <div className={clsx(
+                                    "w-10 h-10 rounded-full flex items-center justify-center text-lg overflow-hidden shrink-0",
                                     isRenderableAvatarUrl(selectedAdvisor.avatar)
                                         ? "bg-transparent border border-border"
                                         : AVATAR_COLORS[parseInt(selectedAdvisor.id.slice(-1), 16) % AVATAR_COLORS.length]
-                                )}>
-                                    {isRenderableAvatarUrl(selectedAdvisor.avatar) ? (
-                                        <img src={resolveAssetUrl(selectedAdvisor.avatar)} alt={selectedAdvisor.name} className="w-full h-full object-cover" />
-                                    ) : (
-                                        selectedAdvisor.avatar
-                                    )}
-                                </div>
-                                <div>
-                                    <h1 className="text-lg font-semibold text-text-primary">{selectedAdvisor.name}</h1>
-                                    <p className="text-xs text-text-tertiary">{selectedAdvisor.personality}</p>
-                                    <p className="text-[11px] text-text-tertiary mt-1">知识库语言：{selectedAdvisor.knowledgeLanguage || '中文'}</p>
+                                    )}>
+                                        {isRenderableAvatarUrl(selectedAdvisor.avatar) ? (
+                                            <img src={resolveAssetUrl(selectedAdvisor.avatar)} alt={selectedAdvisor.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                            selectedAdvisor.avatar
+                                        )}
+                                    </div>
+                                    <h1 className="mt-2 text-sm font-semibold leading-none text-text-primary">{selectedAdvisor.name}</h1>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="absolute left-5 top-1/2 -translate-y-1/2">
                                 <button
-                                    onClick={() => handleEdit(selectedAdvisor)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-secondary hover:text-accent-primary border border-border rounded-md"
+                                    type="button"
+                                    onClick={() => {
+                                        setIsSettingsDrawerOpen(false);
+                                        setIsHistoryDrawerOpen((prev) => !prev);
+                                        if (!isHistoryDrawerOpen && selectedAdvisor) {
+                                            void loadAdvisorSessions(selectedAdvisor, { silent: true });
+                                        }
+                                    }}
+                                    className={clsx(
+                                        'flex items-center gap-2 rounded-xl border border-white/40 px-3.5 py-1.5 text-[12px] font-bold shadow-sm backdrop-blur-xl transition-all active:scale-95',
+                                        isHistoryDrawerOpen
+                                            ? 'bg-accent-primary text-white border-transparent'
+                                            : 'bg-white/70 text-text-secondary hover:bg-white/90 hover:text-text-primary'
+                                    )}
+                                    title="对话历史"
+                                    aria-label="对话历史"
                                 >
-                                    <Pencil className="w-3 h-3" /> 编辑
+                                    <History className="w-4 h-4" />
+                                    <span>历史</span>
                                 </button>
+                            </div>
+                            <div className="absolute right-6 top-1/2 flex -translate-y-1/2 items-center gap-2">
                                 <button
-                                    onClick={() => handleDelete(selectedAdvisor.id)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-border rounded-md hover:bg-red-50"
+                                    type="button"
+                                    onClick={() => {
+                                        setIsHistoryDrawerOpen(false);
+                                        setIsSettingsDrawerOpen(true);
+                                    }}
+                                    className="h-9 w-9 rounded-full border border-border bg-surface-primary text-text-tertiary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
+                                    title="成员设置"
+                                    aria-label="成员设置"
                                 >
-                                    <Trash2 className="w-3 h-3" /> 删除
+                                    <MoreHorizontal className="w-4 h-4" />
                                 </button>
                             </div>
                         </div>
 
-                        <div className="flex-1 overflow-auto p-6 space-y-6">
-                            {/* System Prompt - 可折叠 */}
-                            <section>
-                                <div className="flex items-center justify-between mb-2">
-                                    <button
-                                        onClick={() => setIsSystemPromptExpanded(!isSystemPromptExpanded)}
-                                        className="flex items-center gap-2 text-sm font-medium text-text-primary hover:text-accent-primary transition-colors"
-                                    >
-                                        <Sparkles className="w-4 h-4 text-accent-primary" />
-                                        角色设定
-                                        {isSystemPromptExpanded ? (
-                                            <ChevronUp className="w-4 h-4 text-text-tertiary" />
-                                        ) : (
-                                            <ChevronDown className="w-4 h-4 text-text-tertiary" />
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={async () => {
-                                            if (!selectedAdvisor) return;
-                                            setIsOptimizingPrompt(true);
-                                            try {
-                                                const result = await window.ipcRenderer.invoke('advisors:optimize-prompt-deep', {
-                                                    advisorId: selectedAdvisor.id,
-                                                    name: selectedAdvisor.name,
-                                                    personality: selectedAdvisor.personality,
-                                                    currentPrompt: selectedAdvisor.systemPrompt,
-                                                }) as { success: boolean; prompt?: string; error?: string };
-
-                                                if (result.success && result.prompt) {
-                                                    // 更新本地状态
-                                                    await window.ipcRenderer.invoke('advisors:update', {
-                                                        ...selectedAdvisor,
-                                                        systemPrompt: result.prompt,
-                                                    });
-                                                    // 刷新列表
-                                                    await loadAdvisors();
-                                                    // 更新选中的 advisor
-                                                    setSelectedAdvisor(prev => prev ? { ...prev, systemPrompt: result.prompt! } : null);
-                                                } else {
-                                                    void appAlert('优化失败: ' + (result.error || '未知错误'));
-                                                }
-                                            } catch (e) {
-                                                console.error('Deep optimization error:', e);
-                                                void appAlert('优化失败，请检查 API 设置');
-                                            } finally {
-                                                setIsOptimizingPrompt(false);
-                                            }
-                                        }}
-                                        disabled={isOptimizingPrompt}
-                                        className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded-md hover:bg-accent-primary/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                    >
-                                        <Sparkles className={clsx("w-3 h-3", isOptimizingPrompt && "animate-pulse")} />
-                                        {isOptimizingPrompt ? '优化中...' : 'AI优化设定'}
-                                    </button>
+                        <div className="relative flex-1 min-h-0 bg-background">
+                            {isAdvisorSessionLoading ? (
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <div className="flex flex-col items-center gap-3 text-text-tertiary">
+                                        <div className="w-8 h-8 border-2 border-accent-primary border-t-transparent rounded-full animate-spin" />
+                                        <span className="text-xs">正在连接会话...</span>
+                                    </div>
                                 </div>
-
-                                {/* 折叠状态：显示预览 */}
-                                {!isSystemPromptExpanded ? (
-                                    <div
-                                        onClick={() => setIsSystemPromptExpanded(true)}
-                                        className="bg-surface-secondary/50 rounded-lg border border-border p-3 cursor-pointer hover:border-accent-primary/30 transition-colors"
-                                    >
-                                        <p className="text-sm text-text-secondary line-clamp-2">
-                                            {selectedAdvisor.systemPrompt || '未设置角色提示词，点击展开或使用 AI 优化'}
-                                        </p>
-                                        {selectedAdvisor.systemPrompt && selectedAdvisor.systemPrompt.length > 100 && (
-                                            <span className="text-xs text-text-tertiary mt-1 inline-block">点击展开查看全部</span>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
-                                        <pre className="text-sm text-text-primary whitespace-pre-wrap font-sans">
-                                            {selectedAdvisor.systemPrompt || '未设置角色提示词'}
-                                        </pre>
-                                    </div>
-                                )}
-                            </section>
-
-                            {/* Knowledge Base */}
-                            <section>
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                                        <FileText className="w-4 h-4 text-accent-primary" /> 专属知识库
-
-                                        {/* Local Indexing Status Indicator */}
-                                        {(() => {
-                                            if (!indexingStatus) return null;
-
-                                            // Filter tasks for this advisor
-                                            const activeTasks = indexingStatus.activeItems?.filter((i: any) => i.metadata?.advisorId === selectedAdvisor.id) || [];
-                                            const queuedTasks = indexingStatus.queuedItems?.filter((i: any) => i.metadata?.advisorId === selectedAdvisor.id) || [];
-                                            const isIndexing = activeTasks.length > 0 || queuedTasks.length > 0;
-
-                                            if (isIndexing) {
-                                                return (
-                                                    <span className="flex items-center gap-1.5 text-[10px] bg-accent-primary/10 text-accent-primary px-2 py-0.5 rounded-full font-medium">
-                                                        <RefreshCw className="w-3 h-3 animate-spin" />
-                                                        处理中... ({activeTasks.length + queuedTasks.length})
-                                                    </span>
-                                                );
-                                            } else {
-                                                // Always show status + rebuild button
-                                                return (
-                                                    <div className="flex items-center gap-2">
-                                                        {selectedAdvisor.knowledgeFiles.length > 0 && (
-                                                            <span className="flex items-center gap-1.5 text-[10px] bg-green-500/10 text-green-600 px-2 py-0.5 rounded-full font-medium">
-                                                                <Check className="w-3 h-3" />
-                                                                索引已完成
-                                                            </span>
-                                                        )}
-                                                        <button
-                                                            onClick={() => handleRebuildAdvisorIndex(selectedAdvisor.id)}
-                                                            className="flex items-center gap-1.5 px-2 py-1 text-xs text-text-tertiary border border-border rounded hover:bg-surface-secondary hover:text-accent-primary transition-colors"
-                                                            title="重新扫描并索引所有文件"
-                                                        >
-                                                            <RefreshCw className="w-3 h-3" />
-                                                            重建索引
-                                                        </button>
-                                                    </div>
-                                                );
-                                            }
-                                        })()}
-                                    </h3>
-                                    <button
-                                        onClick={() => handleUploadKnowledge(selectedAdvisor.id)}
-                                        className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/10"
-                                    >
-                                        <Upload className="w-3 h-3" /> 上传文件
-                                    </button>
+                            ) : advisorSessionId ? (
+                                <Chat
+                                    key={advisorSessionId}
+                                    isActive={isActive}
+                                    fixedSessionId={advisorSessionId}
+                                    defaultCollapsed={true}
+                                    fixedSessionBannerText=""
+                                    fixedSessionContextIndicatorMode="none"
+                                    welcomeTitle={`和 ${selectedAdvisor.name} 聊聊`}
+                                    welcomeSubtitle={selectedAdvisor.personality || '直接提问，成员会按自己的设定回复'}
+                                    welcomeIconSrc={isRenderableAvatarUrl(selectedAdvisor.avatar) ? resolveAssetUrl(selectedAdvisor.avatar) : undefined}
+                                    welcomeAvatarText={isRenderableAvatarUrl(selectedAdvisor.avatar) ? undefined : getAdvisorWelcomeAvatarText(selectedAdvisor)}
+                                    welcomeIconVariant="avatar"
+                                    emptyStateVerticalAlign="lower"
+                                />
+                            ) : (
+                                <div className="absolute inset-0 flex items-center justify-center text-text-tertiary">
+                                    会话初始化失败
                                 </div>
+                            )}
 
-                                {/* Detailed Download Progress */}
-                                {downloadStatus && downloadStatus.advisorId === selectedAdvisor.id && (
-                                    <div className="mb-4 bg-surface-secondary/30 rounded-lg border border-border p-3">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <Upload className="w-3.5 h-3.5 text-accent-primary animate-bounce" />
-                                            <span className="text-xs font-medium text-text-primary">正在下载字幕...</span>
-                                        </div>
-                                        <div className="text-[10px] text-text-tertiary font-mono truncate">
-                                            {downloadStatus.progress}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {selectedAdvisor.knowledgeFiles.length === 0 ? (
-                                    <div className="bg-surface-secondary/30 rounded-lg border border-dashed border-border p-6 text-center">
-                                        <FileText className="w-8 h-8 mx-auto mb-2 text-text-tertiary opacity-50" />
-                                        <p className="text-xs text-text-tertiary">暂无知识库文件</p>
-                                        <p className="text-[10px] text-text-tertiary mt-1">支持 .txt 和 .md 格式（YouTube 字幕会自动保存为 视频ID.txt）</p>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-2 max-h-48 overflow-auto">
-                                        {selectedAdvisor.knowledgeFiles.map((file) => {
-                                            // Try to extract video ID and show human-readable name
-                                            const videoId = file.replace('.txt', '').replace('.srt', '').replace('.vtt', '');
-                                            const isVideoSubtitle = videoId.length === 11; // YouTube video IDs are 11 chars
-
-                                            return (
-                                                <div key={file} className="flex items-center justify-between bg-surface-secondary/50 rounded-lg border border-border px-4 py-2">
-                                                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                                                        <FileText className="w-4 h-4 text-text-tertiary shrink-0" />
-                                                        <div className="min-w-0 flex-1">
-                                                            <span className="text-sm text-text-primary block truncate">{file}</span>
-                                                            {isVideoSubtitle && (
-                                                                <span className="text-[10px] text-text-tertiary">📺 YouTube 字幕</span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => handleDeleteKnowledge(selectedAdvisor.id, file)}
-                                                        className="text-text-tertiary hover:text-red-500"
-                                                    >
-                                                        <Trash2 className="w-3 h-3" />
-                                                    </button>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </section>
-
-                            {/* Video Management Section - Only for YouTube-imported advisors */}
-                            <VideoManagement advisorId={selectedAdvisor.id} isActive={isActive} />
                         </div>
                     </>
                 ) : (
@@ -552,6 +625,49 @@ export function Advisors({
                             <p className="text-sm">选择一个智囊团成员查看详情</p>
                         </div>
                     </div>
+                )}
+
+                {selectedAdvisor && isHistoryDrawerOpen && (
+                    <AdvisorHistoryPanel
+                        advisor={selectedAdvisor}
+                        sessions={advisorSessions}
+                        activeSessionId={advisorSessionId}
+                        isLoading={isHistoryLoading}
+                        onSelectSession={(sessionId) => {
+                            setAdvisorSessionId(sessionId);
+                            setIsHistoryDrawerOpen(false);
+                        }}
+                        onCreateSession={() => void handleCreateAdvisorSession()}
+                        onDeleteSession={(sessionId) => void handleDeleteAdvisorSession(sessionId)}
+                        onClose={() => setIsHistoryDrawerOpen(false)}
+                    />
+                )}
+
+                {selectedAdvisor && isSettingsDrawerOpen && (
+                    <>
+                        <button
+                            type="button"
+                            className="absolute inset-0 z-30 bg-black/20 backdrop-blur-[2px] transition-opacity"
+                            onClick={() => setIsSettingsDrawerOpen(false)}
+                            aria-label="关闭成员设置"
+                        />
+                        <aside className="absolute right-4 top-4 bottom-4 z-40 w-[30rem] max-w-[min(46vw,30rem)] overflow-hidden rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.16)] backdrop-blur-[40px] animate-slide-in-right">
+                            <AdvisorSettingsPanel
+                                advisor={selectedAdvisor}
+                                isActive={isActive}
+                                downloadStatus={downloadStatus}
+                                isSystemPromptExpanded={isSystemPromptExpanded}
+                                setIsSystemPromptExpanded={setIsSystemPromptExpanded}
+                                isOptimizingPrompt={isOptimizingPrompt}
+                                onOptimizePrompt={() => void handleOptimizePrompt(selectedAdvisor)}
+                                onUploadKnowledge={() => void handleUploadKnowledge(selectedAdvisor.id)}
+                                onDeleteKnowledge={(fileName) => void handleDeleteKnowledge(selectedAdvisor.id, fileName)}
+                                onEdit={() => handleEdit(selectedAdvisor)}
+                                onDelete={() => void handleDelete(selectedAdvisor.id)}
+                                onClose={() => setIsSettingsDrawerOpen(false)}
+                            />
+                        </aside>
+                    </>
                 )}
             </div>
 
@@ -563,6 +679,332 @@ export function Advisors({
                     onClose={() => setIsModalOpen(false)}
                 />
             )}
+        </div>
+    );
+}
+
+function AdvisorHistoryPanel({
+    advisor,
+    sessions,
+    activeSessionId,
+    isLoading,
+    onSelectSession,
+    onCreateSession,
+    onDeleteSession,
+    onClose,
+}: {
+    advisor: Advisor;
+    sessions: ContextChatSessionListItem[];
+    activeSessionId: string | null;
+    isLoading: boolean;
+    onSelectSession: (sessionId: string) => void;
+    onCreateSession: () => void;
+    onDeleteSession: (sessionId: string) => void;
+    onClose: () => void;
+}) {
+    return (
+        <div className="absolute inset-0 z-40">
+            <button
+                type="button"
+                className="absolute inset-0 bg-black/[0.02] backdrop-blur-[2px] transition-opacity"
+                aria-label="关闭历史对话抽屉"
+                onClick={onClose}
+            />
+
+            <div className="absolute left-4 top-4 bottom-4 w-[320px] max-w-[calc(100%-2rem)] rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.12)] backdrop-blur-[40px] overflow-hidden flex flex-col animate-slide-in-left-refined">
+                <div className="relative flex h-full flex-col">
+                    <div className="px-5 pt-5 pb-2">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-[15px] font-extrabold tracking-tight text-text-primary">会话历史</h2>
+                            <div className="flex items-center gap-1.5">
+                                <button
+                                    type="button"
+                                    onClick={() => void onCreateSession()}
+                                    disabled={isLoading}
+                                    className="flex h-7 items-center gap-1 rounded-lg bg-text-primary px-2.5 text-[11px] font-bold text-white transition-all hover:bg-text-primary/90 active:scale-95 disabled:opacity-40"
+                                >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    新会话
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary"
+                                >
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto px-2 custom-scrollbar">
+                        {isLoading && sessions.length === 0 ? (
+                            <div className="flex h-full items-center justify-center py-10">
+                                <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />
+                            </div>
+                        ) : sessions.length === 0 ? (
+                            <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+                                <History className="w-8 h-8 text-accent-primary/20 mb-3" />
+                                <h3 className="text-[13px] font-bold text-text-primary">暂无记录</h3>
+                            </div>
+                        ) : (
+                            <div className="space-y-0.5 pb-6">
+                                {sessions.map((session) => {
+                                    const isActive = session.id === activeSessionId;
+                                    const title = session.chatSession?.title?.trim() || '未命名会话';
+                                    const time = formatAdvisorSessionTime(session.chatSession?.updatedAt);
+                                    const summary = session.summary?.trim();
+
+                                    return (
+                                        <div
+                                            key={session.id}
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => onSelectSession(session.id)}
+                                            onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelectSession(session.id)}
+                                            className={clsx(
+                                                'group relative w-full rounded-lg px-3 py-2.5 text-left transition-all duration-200 active:scale-[0.98]',
+                                                isActive
+                                                    ? 'bg-white shadow-sm ring-1 ring-black/[0.03]'
+                                                    : 'hover:bg-white/40'
+                                            )}
+                                        >
+                                            {isActive && (
+                                                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-accent-primary rounded-r-full" />
+                                            )}
+
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0 flex-1">
+                                                    <h4 className={clsx(
+                                                        'truncate text-[13px] font-bold leading-tight transition-colors',
+                                                        isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                                    )}>
+                                                        {title}
+                                                    </h4>
+
+                                                    <div className="mt-0.5 flex items-center gap-1.5 text-[9px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
+                                                        <span>{time}</span>
+                                                        {isActive && (
+                                                            <span className="text-accent-primary uppercase tracking-normal">● Online</span>
+                                                        )}
+                                                    </div>
+
+                                                    {summary && (
+                                                        <p className="mt-1.5 line-clamp-1 text-[11px] leading-normal text-text-secondary/70 font-medium">
+                                                            {summary}
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDeleteSession(session.id);
+                                                    }}
+                                                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                                                    title="移除"
+                                                >
+                                                    <Trash2 className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="px-5 py-3 border-t border-black/[0.02]">
+                        <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
+                            RedBox Engine
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function AdvisorSettingsPanel({
+    advisor,
+    isActive,
+    downloadStatus,
+    isSystemPromptExpanded,
+    setIsSystemPromptExpanded,
+    isOptimizingPrompt,
+    onOptimizePrompt,
+    onUploadKnowledge,
+    onDeleteKnowledge,
+    onEdit,
+    onDelete,
+    onClose,
+}: {
+    advisor: Advisor;
+    isActive?: boolean;
+    downloadStatus: { advisorId: string; progress: string } | null;
+    isSystemPromptExpanded: boolean;
+    setIsSystemPromptExpanded: (next: boolean) => void;
+    isOptimizingPrompt: boolean;
+    onOptimizePrompt: () => void;
+    onUploadKnowledge: () => void;
+    onDeleteKnowledge: (fileName: string) => void;
+    onEdit: () => void;
+    onDelete: () => void;
+    onClose: () => void;
+}) {
+    return (
+        <div className="flex h-full flex-col">
+            <div className="border-b border-black/[0.04] px-5 pt-5 pb-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-[15px] font-extrabold tracking-tight text-text-primary">成员设置</div>
+                        <div className="mt-1 text-xs text-text-tertiary truncate">{advisor.name}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary"
+                        aria-label="关闭成员设置"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+                <div className="mt-4 flex items-center gap-2">
+                    <button
+                        onClick={onEdit}
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-black/10 bg-white/70 px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-white hover:text-accent-primary"
+                    >
+                        <Pencil className="w-3 h-3" /> 编辑
+                    </button>
+                    <button
+                        onClick={onDelete}
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-red-200/80 bg-white/70 px-3 text-xs font-medium text-red-500 transition-colors hover:bg-red-50"
+                    >
+                        <Trash2 className="w-3 h-3" /> 删除
+                    </button>
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
+                <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                        <button
+                            onClick={() => setIsSystemPromptExpanded(!isSystemPromptExpanded)}
+                            className="flex items-center gap-2 text-sm font-medium text-text-primary transition-colors hover:text-accent-primary"
+                        >
+                            <Sparkles className="w-4 h-4 text-accent-primary" />
+                            角色设定
+                            {isSystemPromptExpanded ? (
+                                <ChevronUp className="w-4 h-4 text-text-tertiary" />
+                            ) : (
+                                <ChevronDown className="w-4 h-4 text-text-tertiary" />
+                            )}
+                        </button>
+                        <button
+                            onClick={onOptimizePrompt}
+                            disabled={isOptimizingPrompt}
+                            className="flex items-center gap-1.5 rounded-full border border-accent-primary/20 bg-white/70 px-2.5 py-1 text-xs text-accent-primary transition-colors hover:bg-accent-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Sparkles className={clsx('w-3 h-3', isOptimizingPrompt && 'animate-pulse')} />
+                            {isOptimizingPrompt ? '优化中...' : 'AI优化设定'}
+                        </button>
+                    </div>
+
+                    {!isSystemPromptExpanded ? (
+                        <div
+                            onClick={() => setIsSystemPromptExpanded(true)}
+                            className="cursor-pointer rounded-2xl border border-black/[0.06] bg-white/70 p-3 transition-colors hover:border-accent-primary/30"
+                        >
+                            <p className="line-clamp-2 text-sm text-text-secondary">
+                                {advisor.systemPrompt || '未设置角色提示词，点击展开或使用 AI 优化'}
+                            </p>
+                            {advisor.systemPrompt && advisor.systemPrompt.length > 100 && (
+                                <span className="mt-1 inline-block text-xs text-text-tertiary">点击展开查看全部</span>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="rounded-2xl border border-black/[0.06] bg-white/70 p-4">
+                            <pre className="whitespace-pre-wrap font-sans text-sm text-text-primary">
+                                {advisor.systemPrompt || '未设置角色提示词'}
+                            </pre>
+                        </div>
+                    )}
+                </section>
+
+                <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                <FileText className="w-4 h-4 text-accent-primary" /> 专属知识库
+                            </h3>
+                            <p className="mt-2 text-xs text-text-tertiary">
+                                上传的资料会保留在当前成员名下，供后续对话和整理使用。
+                            </p>
+                        </div>
+                        <button
+                            onClick={onUploadKnowledge}
+                            className="flex shrink-0 items-center gap-1.5 rounded-full border border-accent-primary/20 bg-white/70 px-3 py-1.5 text-xs text-accent-primary transition-colors hover:bg-accent-primary/10"
+                        >
+                            <Upload className="w-3 h-3" /> 上传文件
+                        </button>
+                    </div>
+
+                    {downloadStatus && downloadStatus.advisorId === advisor.id && (
+                        <div className="mb-4 rounded-2xl border border-black/[0.06] bg-white/70 p-3">
+                            <div className="mb-1 flex items-center gap-2">
+                                <Upload className="w-3.5 h-3.5 animate-bounce text-accent-primary" />
+                                <span className="text-xs font-medium text-text-primary">正在下载字幕...</span>
+                            </div>
+                            <div className="truncate font-mono text-[10px] text-text-tertiary">
+                                {downloadStatus.progress}
+                            </div>
+                        </div>
+                    )}
+
+                    {advisor.knowledgeFiles.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-black/[0.08] bg-white/55 p-6 text-center">
+                            <FileText className="mx-auto mb-2 h-8 w-8 text-text-tertiary opacity-50" />
+                            <p className="text-xs text-text-tertiary">暂无知识库文件</p>
+                            <p className="mt-1 text-[10px] text-text-tertiary">支持 .txt 和 .md 格式（YouTube 字幕会自动保存为 视频ID.txt）</p>
+                        </div>
+                    ) : (
+                        <div className="max-h-52 space-y-2 overflow-auto">
+                            {advisor.knowledgeFiles.map((file) => {
+                                const videoId = file.replace('.txt', '').replace('.srt', '').replace('.vtt', '');
+                                const isVideoSubtitle = videoId.length === 11;
+                                return (
+                                    <div key={file} className="flex items-center justify-between rounded-2xl border border-black/[0.06] bg-white/70 px-4 py-2">
+                                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                                            <FileText className="h-4 w-4 shrink-0 text-text-tertiary" />
+                                            <div className="min-w-0 flex-1">
+                                                <span className="block truncate text-sm text-text-primary">{file}</span>
+                                                {isVideoSubtitle && (
+                                                    <span className="text-[10px] text-text-tertiary">📺 YouTube 字幕</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => onDeleteKnowledge(file)}
+                                            className="text-text-tertiary transition-colors hover:text-red-500"
+                                        >
+                                            <Trash2 className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </section>
+
+                <VideoManagement advisorId={advisor.id} isActive={isActive} />
+            </div>
+
+            <div className="border-t border-black/[0.02] px-5 py-3">
+                <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
+                    RedBox Engine
+                </p>
+            </div>
         </div>
     );
 }

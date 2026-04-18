@@ -1633,58 +1633,6 @@ export function MemorySettingsSection({
     );
 }
 
-interface KnowledgeSettingsSectionProps {
-    vectorStats: { documents?: number; vectors?: number } | null;
-    handleRebuildIndex: () => Promise<void>;
-    isRebuilding: boolean;
-}
-
-export function KnowledgeSettingsSection({ vectorStats, handleRebuildIndex, isRebuilding }: KnowledgeSettingsSectionProps) {
-    return (
-        <section className="space-y-6">
-            <h2 className="text-lg font-medium text-text-primary mb-6">知识库索引管理</h2>
-
-            <div className="grid grid-cols-2 gap-4">
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="text-xs text-text-tertiary mb-1">已索引文档</div>
-                    <div className="text-2xl font-bold text-text-primary">
-                        {vectorStats?.documents || 0}
-                    </div>
-                </div>
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="text-xs text-text-tertiary mb-1">向量切片数</div>
-                    <div className="text-2xl font-bold text-text-primary">
-                        {vectorStats?.vectors || 0}
-                    </div>
-                </div>
-            </div>
-
-            <div className="bg-surface-secondary/20 rounded-lg border border-border p-4">
-                <h3 className="text-sm font-medium text-text-primary mb-2 flex items-center gap-2">
-                    <Database className="w-4 h-4" />
-                    索引操作
-                </h3>
-                <p className="text-xs text-text-tertiary mb-4">
-                    如果发现检索结果不准确或知识库内容未更新，可以尝试重建索引。
-                    此操作会清空当前所有向量数据并重新扫描知识库文件。
-                </p>
-
-                <div className="flex gap-3">
-                    <button
-                        type="button"
-                        onClick={() => void handleRebuildIndex()}
-                        disabled={isRebuilding}
-                        className="flex items-center px-4 py-2 border border-red-200 bg-red-50/50 text-red-600 text-xs font-medium rounded hover:bg-red-100/50 transition-colors disabled:opacity-50"
-                    >
-                        {isRebuilding ? <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
-                        {isRebuilding ? '重建中...' : '重建所有索引'}
-                    </button>
-                </div>
-            </div>
-        </section>
-    );
-}
-
 interface ToolsSettingsSectionProps {
     isSyncingMcp: boolean;
     handleDiscoverAndImportMcp: () => Promise<void>;
@@ -3167,7 +3115,7 @@ export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalS
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental' | 'remote';
+    activeTab: 'general' | 'ai' | 'tools' | 'memory' | 'experimental' | 'remote';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 

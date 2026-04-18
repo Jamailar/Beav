@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check, Radio } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check, Radio } from 'lucide-react';
 import clsx from 'clsx';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
@@ -10,7 +10,7 @@ import {
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
-import { appAlert, appConfirm } from '../utils/appDialogs';
+import { appAlert } from '../utils/appDialogs';
 import {
   type AgentTaskSnapshot,
   type AgentTaskTrace,
@@ -67,7 +67,6 @@ import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProp
 import {
   ExperimentalSettingsSection,
   GeneralSettingsSection,
-  KnowledgeSettingsSection,
   RemoteConnectionSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
@@ -81,7 +80,7 @@ const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
 
-type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'experimental' | 'remote';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'experimental' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 
@@ -419,7 +418,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
-    knowledge: false,
     tools: false,
     experimental: false,
     remote: false,
@@ -427,7 +425,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
-    knowledge: false,
     tools: false,
     experimental: false,
     remote: false,
@@ -709,10 +706,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [mcpLiveSessions, setMcpLiveSessions] = useState<McpSessionState[]>([]);
   const [mcpRuntimeItems, setMcpRuntimeItems] = useState<McpServerRuntimeItem[]>([]);
   const [mcpInspectingId, setMcpInspectingId] = useState('');
-
-  // Knowledge State
-  const [vectorStats, setVectorStats] = useState<{ vectors: number; documents: number } | null>(null);
-  const [isRebuilding, setIsRebuilding] = useState(false);
 
   // Update State
   const [appVersion, setAppVersion] = useState('');
@@ -2361,17 +2354,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setAssistantDaemonWeixinLogin(null);
   }, []);
 
-  const loadVectorStats = useCallback(async () => {
-    try {
-      const stats = await window.ipcRenderer.invoke('indexing:get-stats') as { totalStats: { vectors: number; documents: number } } | null;
-      if (stats && stats.totalStats) {
-        setVectorStats(stats.totalStats);
-      }
-    } catch (e) {
-      console.error("Failed to load vector stats", e);
-    }
-  }, []);
-
   const ensureBaseSettingsLoaded = useCallback(async (force = false) => {
     if (baseSettingsInFlightRef.current) return;
     if (!force && baseSettingsLoadedRef.current) return;
@@ -2399,8 +2381,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           loadAppVersion(),
           loadRecentDebugLogs(),
         ]);
-      } else if (tab === 'knowledge') {
-        await loadVectorStats();
       } else if (tab === 'tools') {
         await Promise.all([
           checkTools(),
@@ -2442,7 +2422,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
-    loadVectorStats,
     officialAiPanelEnabled,
   ]);
 
@@ -2486,7 +2465,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (activeTab === 'remote') {
         scheduleRemoteTabWarmup();
       }
-      if (activeTab === 'general' || activeTab === 'knowledge' || activeTab === 'tools') {
+      if (activeTab === 'general' || activeTab === 'tools') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
@@ -2508,9 +2487,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     let backgroundTaskPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
-    }
-    if (activeTab === 'knowledge') {
-      void ensureTabResourcesLoaded('knowledge');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
@@ -2564,21 +2540,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     runtimeTasks.length,
     scheduleRemoteTabWarmup,
   ]);
-
-  const handleRebuildIndex = async () => {
-    if (!(await appConfirm('确定要重建所有索引吗？这可能需要一些时间，且会暂时清空现有向量数据。', { title: '重建索引', confirmLabel: '重建', tone: 'danger' }))) return;
-
-    setIsRebuilding(true);
-    try {
-      await window.ipcRenderer.invoke('indexing:rebuild-all');
-      void appAlert('已触发后台索引重建任务。您可以在侧边栏查看进度。');
-      loadVectorStats();
-    } catch (e) {
-      void appAlert('重建失败: ' + String(e));
-    } finally {
-      setIsRebuilding(false);
-    }
-  };
 
   const handleInstallYtdlp = async () => {
     setIsInstallingTool(true);
@@ -2785,7 +2746,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
     { id: 'remote', label: '远程连接', icon: Radio },
-    { id: 'knowledge', label: '知识库索引', icon: Database },
     { id: 'tools', label: '工具管理', icon: Wrench },
     { id: 'experimental', label: '实验性功能', icon: FlaskConical },
   ] as const;
@@ -3601,15 +3561,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
                 </section>
               </div>
-            )}
-
-            {/* Knowledge Tab */}
-            {activeTab === 'knowledge' && (
-              <KnowledgeSettingsSection
-                vectorStats={vectorStats}
-                handleRebuildIndex={handleRebuildIndex}
-                isRebuilding={isRebuilding}
-              />
             )}
 
             {/* Tools Tab */}

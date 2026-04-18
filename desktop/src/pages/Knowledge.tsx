@@ -1664,17 +1664,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                         <FileText className="w-3 h-3 opacity-60" />
                                                         {source.fileCount} DOCUMENTS
                                                     </span>
-                                                    {source.indexing && (
-                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-accent-primary/10 text-accent-primary px-2.5 py-1.5 border border-accent-primary/10">
-                                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                                            INDEXING...
-                                                        </span>
-                                                    )}
-                                                    {!source.indexing && source.indexError && (
-                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-red-50 text-red-600 px-2.5 py-1.5 border border-red-100 uppercase">
-                                                            Index Failed
-                                                        </span>
-                                                    )}
                                                 </div>
                                                 {source.sampleFiles.length > 0 && (
                                                     <div className="mt-3.5 flex flex-wrap gap-1.5">

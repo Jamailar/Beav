@@ -52,6 +52,8 @@ interface ChatProps {
   welcomeTitle?: string;
   welcomeSubtitle?: string;
   welcomeIconSrc?: string;
+  welcomeAvatarText?: string;
+  welcomeIconVariant?: 'default' | 'avatar';
   welcomeActions?: Array<{ label: string; text?: string; url?: string; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
@@ -62,6 +64,7 @@ interface ChatProps {
   embeddedTheme?: 'default' | 'dark';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
+  emptyStateVerticalAlign?: 'center' | 'lower';
 }
 
 interface UploadedFileAttachment {
@@ -602,6 +605,8 @@ export function Chat({
   welcomeTitle = '有什么可以帮您？',
   welcomeSubtitle = '我可以帮您阅读和编辑稿件、分析内容、提供创作建议',
   welcomeIconSrc,
+  welcomeAvatarText,
+  welcomeIconVariant = 'default',
   welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
@@ -612,6 +617,7 @@ export function Chat({
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
+  emptyStateVerticalAlign = 'center',
 }: ChatProps) {
   const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
     uiDebug('chat', event, extra);
@@ -2528,11 +2534,32 @@ export function Chat({
     <>
       <div className="flex justify-center">
         {welcomeIconSrc ? (
-          <img
-            src={welcomeIconSrc}
-            alt={welcomeTitle}
-            className="w-24 h-24 object-contain"
-          />
+          welcomeIconVariant === 'avatar' ? (
+            <div className={clsx(
+              'flex items-center justify-center overflow-hidden border shadow-lg',
+              darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
+              'h-24 w-24 rounded-[28px]',
+            )}>
+              <img
+                src={welcomeIconSrc}
+                alt={welcomeTitle}
+                className="h-full w-full object-cover"
+              />
+            </div>
+          ) : (
+            <img
+              src={welcomeIconSrc}
+              alt={welcomeTitle}
+              className="w-24 h-24 object-contain"
+            />
+          )
+        ) : welcomeAvatarText ? (
+          <div className={clsx(
+            'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
+            darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
+          )}>
+            {welcomeAvatarText}
+          </div>
         ) : (
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
             <Sparkles className="w-8 h-8 text-white" />
@@ -2788,7 +2815,10 @@ export function Chat({
 
         {/* Content Area */}
         {isEmptySession && !dockedEmptyState ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative">
+          <div className={clsx(
+            'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
+            emptyStateVerticalAlign === 'lower' && 'pt-16'
+          )}>
             <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
               {/* Logo/Icon */}
               {showWelcomeHeader ? (

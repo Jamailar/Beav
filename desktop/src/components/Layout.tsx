@@ -4,7 +4,6 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImmersiveMode, ViewType } from '../App';
-import { IndexingStatus } from './IndexingStatus';
 import { appAlert } from '../utils/appDialogs';
 import { uiMeasure } from '../utils/uiDebug';
 
@@ -349,7 +348,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
             isSidebarAnimating && 'app-sidebar-shell--animating',
-            isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[13.5rem]'
+            isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[9rem]'
           )}
         >
           {/* App Title */}
@@ -376,17 +375,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
               </span>
             </div>
             <div className={clsx('flex items-center gap-2', sidebarVisualCollapsed ? 'flex-col' : 'ml-auto')}>
-              <button
-                type="button"
-                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
-                className="h-7 w-7 rounded-lg border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
-                title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-                aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-              >
-                {themeMode === 'dark'
-                  ? <Sun className="w-[14px] h-[14px]" strokeWidth={1.75} />
-                  : <Moon className="w-[14px] h-[14px]" strokeWidth={1.75} />}
-              </button>
               <button
                 type="button"
                 onClick={toggleSidebarCollapsed}
@@ -549,14 +537,24 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 )}
               </div>
             </div>
-            <IndexingStatus compact={sidebarVisualCollapsed} />
             <div
               className={clsx(
-                'text-[11px] text-text-tertiary/90 text-center overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
+                'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
                 sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
               )}
             >
-                {appVersion ? `v${appVersion}` : 'v--'} • 本地运行
+              <button
+                type="button"
+                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+              >
+                {themeMode === 'dark'
+                  ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                  : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
+              </button>
+              <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
             </div>
           </div>
         </aside>

@@ -592,7 +592,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                     </div>
                     <div className="min-w-0">
                         <h1 className="text-base leading-none font-semibold text-text-primary">主体库画廊</h1>
-                        <div className="text-[11px] mt-0.5 text-text-tertiary truncate">人物、商品、场景统一管理，供 RedClaw 精准检索引用</div>
+                        <div className="text-[11px] mt-0.5 text-text-tertiary truncate">人物、商品、场景统一管理，便于在创作时直接调用参考</div>
                     </div>
 
                     <div className="hidden xl:flex items-center gap-1.5 min-w-0 ml-2">
@@ -762,7 +762,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                     {draft.id ? '编辑主体' : '新建主体'}
                                 </div>
                                 <div className="text-xs text-text-tertiary mt-0.5">
-                                    名称必填，图片最多 5 张。保存后会自动注册进 AI 主体索引。
+                                    名称必填，图片最多 5 张。保存后可在创作时直接引用这些主体资料。
                                 </div>
                             </div>
                             <button
@@ -960,7 +960,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                     {draft.id && (
                                         <div className="mt-4 rounded-lg bg-surface-secondary/40 px-4 py-3 text-xs text-text-tertiary space-y-1">
                                             <div>ID：{draft.id}</div>
-                                            <div>保存后会自动注册进主体索引，供 AI 识别可读主体名称。</div>
+                                            <div>保存后可在创作时直接通过主体名称引用这些资料。</div>
                                         </div>
                                     )}
 
