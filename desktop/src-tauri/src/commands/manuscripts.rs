@@ -5609,6 +5609,12 @@ Remotion 读取结果 JSON：{}\n\
             );
                 let model_config = payload_field(&payload, "modelConfig").cloned();
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                let auth_runtime = state
+                    .auth_runtime
+                    .lock()
+                    .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                let settings_snapshot =
+                    crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime);
                 let resolved_config =
                     resolve_chat_config(&settings_snapshot, model_config.as_ref());
                 let session_id = payload_string(&payload, "sessionId");

@@ -429,6 +429,12 @@ pub fn handle_generation_channel(
             Some("image/png".to_string())
         };
         let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+        let auth_runtime = state
+            .auth_runtime
+            .lock()
+            .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+        let settings_snapshot =
+            crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime);
         let real_image_config = if channel == "image-gen:generate" {
             resolve_image_generation_settings(&settings_snapshot)
         } else {

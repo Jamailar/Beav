@@ -527,8 +527,6 @@ pub(crate) fn official_auth_token_from_settings(settings: &Value) -> Option<Stri
     let session = official_settings_session(settings)?;
     payload_string(&session, "apiKey")
         .or_else(|| payload_string(&session, "accessToken"))
-        .or_else(|| payload_string(settings, "video_api_key"))
-        .or_else(|| payload_string(settings, "api_key"))
         .filter(|value| !value.trim().is_empty())
 }
 
@@ -648,20 +646,15 @@ pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, Stri
         .unwrap_or_else(|| "Bearer".to_string());
     let expires_raw = payload_field(&payload, "expires_at")
         .or_else(|| payload_field(&payload, "expiresAt"))
-        .and_then(|value| value.as_i64())
-        .map(|value| {
-            if value > 10_000_000_000 {
-                value
-            } else {
-                value * 1000
-            }
-        });
+        .and_then(crate::auth::parse_time_candidate_ms);
     let expires_in = payload_field(&payload, "expires_in")
         .or_else(|| payload_field(&payload, "expiresIn"))
         .and_then(|value| value.as_i64())
         .filter(|value| *value > 0)
         .map(|value| (now_ms() as i64) + (value * 1000));
-    let expires_at = expires_raw.or(expires_in);
+    let expires_at = expires_raw
+        .or(expires_in)
+        .or_else(|| crate::auth::jwt_expiration_ms(&access_token));
     Ok(json!({
         "accessToken": access_token,
         "refreshToken": refresh_token,

@@ -274,6 +274,18 @@ function createIpcRenderer() {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh')
     },
+    auth: {
+      getState: () => invokeChannel('auth:get-state'),
+      loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('auth:login-sms', payload),
+      loginWechatStart: (payload?: { state?: string }) => invokeChannel('auth:login-wechat-start', payload || {}),
+      loginWechatPoll: (payload: { sessionId: string }) => invokeChannel('auth:login-wechat-poll', payload),
+      logout: () => invokeChannel('auth:logout'),
+      refreshNow: () => invokeChannel('auth:refresh-now'),
+      onStateChanged: (listener: Listener) => on('auth:state-changed', listener),
+      offStateChanged: (listener: Listener) => off('auth:state-changed', listener),
+      onDataChanged: (listener: Listener) => on('auth:data-changed', listener),
+      offDataChanged: (listener: Listener) => off('auth:data-changed', listener),
+    },
     sessions: {
       list: () => invokeChannel('sessions:list'),
       get: (sessionId: string) => invokeChannel('sessions:get', { sessionId }),

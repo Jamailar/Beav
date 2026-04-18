@@ -362,6 +362,7 @@ pub fn load_store(path: &PathBuf) -> AppStore {
 pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
     let mut snapshot = store.clone();
     crate::session_manager::enforce_default_retention(&mut snapshot);
+    crate::auth::sanitize_store_for_persist(&mut snapshot);
     let serialized = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -568,7 +569,9 @@ fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
         .saturating_add(1);
     let latest = state.store_persist_version.clone();
     std::thread::spawn(move || {
-        let serialized = match serde_json::to_string_pretty(&store) {
+        let mut snapshot = store.clone();
+        crate::auth::sanitize_store_for_persist(&mut snapshot);
+        let serialized = match serde_json::to_string_pretty(&snapshot) {
             Ok(value) => value,
             Err(error) => {
                 eprintln!("[RedBox async persist] serialize failed: {error}");

@@ -3,7 +3,6 @@ import { Link2, Loader2 } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
-import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -176,8 +175,6 @@ function shouldRenderView(
 }
 
 function App() {
-  useOfficialAuthLifecycle();
-
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);

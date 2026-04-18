@@ -20,6 +20,17 @@ interface RedboxAuthSession {
   updatedAt: number;
 }
 
+interface AuthStateSnapshot {
+  status?: string;
+  loggedIn?: boolean;
+  session?: RedboxAuthSession | null;
+  points?: Record<string, unknown> | null;
+  models?: ModelsResponseItem[];
+  callRecords?: RedboxCallRecordItem[];
+  degradedReason?: string | null;
+  lastError?: string | null;
+}
+
 interface RedboxWechatInfo {
   enabled: boolean;
   sessionId: string;
@@ -77,7 +88,7 @@ const readDisplaySessionSnapshot = (): RedboxAuthSession | null => {
     const parsed = JSON.parse(raw) as RedboxSessionDisplaySnapshot;
     if (!parsed || typeof parsed !== 'object') return null;
     return {
-      accessToken: 'cached-display-session',
+      accessToken: '',
       refreshToken: '',
       tokenType: 'Bearer',
       expiresAt: Number.isFinite(Number(parsed.expiresAt)) ? Number(parsed.expiresAt) : null,
@@ -93,7 +104,7 @@ const readDisplaySessionSnapshot = (): RedboxAuthSession | null => {
 
 const writeDisplaySessionSnapshot = (sessionData: RedboxAuthSession | null): void => {
   try {
-    if (!sessionData?.accessToken) {
+    if (!sessionData) {
       window.localStorage.removeItem(SESSION_DISPLAY_SNAPSHOT_KEY);
       return;
     }
@@ -260,22 +271,19 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, [callRecords, models, points, user]);
 
   const hydrateCachedSession = useCallback(async () => {
-    const result = await invoke<{ success: boolean; session?: RedboxAuthSession | null; error?: string }>('redbox-auth:get-session-cached');
-    if (!result?.success) {
-      const fallback = readDisplaySessionSnapshot();
-      if (fallback?.accessToken) {
-        applySession(fallback);
-        return fallback;
-      }
-      return null;
-    }
-    const sessionData = result.session || null;
-    if (sessionData?.accessToken) {
+    const snapshot = await (window.ipcRenderer.auth.getState() as Promise<AuthStateSnapshot | null>);
+    const sessionData = snapshot?.session || null;
+    if (sessionData) {
       applySession(sessionData);
+      if (snapshot?.points) setPoints(snapshot.points);
+      if (snapshot?.models) setModels((snapshot.models || []).filter((item) => String(item?.id || '').trim()));
+      if (snapshot?.callRecords) {
+        setCallRecords((snapshot.callRecords || []).filter((item) => String(item?.id || '').trim()));
+      }
       return sessionData;
     }
     const fallback = readDisplaySessionSnapshot();
-    if (fallback?.accessToken) {
+    if (fallback) {
       applySession(fallback);
       return fallback;
     }
@@ -342,7 +350,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, [fetchCallRecords, fetchModels, fetchPoints, fetchUser]);
 
   const requestBackgroundRefresh = useCallback(async () => {
-    const result = await invoke<{ success: boolean; queued?: boolean; error?: string }>('redbox-auth:refresh');
+    const result = await (window.ipcRenderer.auth.refreshNow() as Promise<{ success: boolean; queued?: boolean; error?: string }>);
     if (!result?.success) {
       throw new Error(result?.error || '后台刷新请求失败');
     }
@@ -352,7 +360,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const refreshProfileAndPoints = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (!session?.accessToken) {
+      if (!session) {
         throw new Error('当前未登录，请先登录官方账号');
       }
       const issues = await loadAuthenticatedData();
@@ -596,7 +604,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       try {
         const cachedSession = await hydrateCachedSession();
         if (canceled) return;
-        if (cachedSession?.accessToken) {
+        if (cachedSession) {
           requestSettingsRefresh();
           await loadAuthenticatedData();
         }
@@ -616,10 +624,10 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, [hydrateCachedSession, loadAuthenticatedData, requestSettingsRefresh, stopWechatPolling]);
 
   useEffect(() => {
-    const handleSessionUpdated = async (_event: unknown, payload?: { session?: RedboxAuthSession | null }) => {
+    const handleSessionUpdated = async (_event: unknown, payload?: { session?: RedboxAuthSession | null; loggedIn?: boolean; degradedReason?: string | null; lastError?: string | null }) => {
       const nextSession = payload?.session || null;
       applySession(nextSession);
-      if (!nextSession?.accessToken) {
+      if (!nextSession && !payload?.loggedIn) {
         setUser(null);
         setPoints(null);
         setModels([]);
@@ -629,19 +637,26 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       requestSettingsRefresh();
       await loadAuthenticatedData();
     };
-    window.ipcRenderer.on('redbox-auth:session-updated', handleSessionUpdated);
+    window.ipcRenderer.auth.onStateChanged(handleSessionUpdated);
     return () => {
-      window.ipcRenderer.off('redbox-auth:session-updated', handleSessionUpdated);
+      window.ipcRenderer.auth.offStateChanged(handleSessionUpdated);
     };
   }, [applySession, loadAuthenticatedData, requestSettingsRefresh]);
 
   useEffect(() => {
-    const handleDataUpdated = async () => {
+    const handleDataUpdated = async (_event: unknown, payload?: { points?: Record<string, unknown> | null; models?: ModelsResponseItem[]; callRecords?: RedboxCallRecordItem[] }) => {
+      if (payload?.points) setPoints(payload.points);
+      if (payload?.models) {
+        setModels((payload.models || []).filter((item) => String(item?.id || '').trim()));
+      }
+      if (payload?.callRecords) {
+        setCallRecords((payload.callRecords || []).filter((item) => String(item?.id || '').trim()));
+      }
       await loadAuthenticatedData();
     };
-    window.ipcRenderer.on('redbox-auth:data-updated', handleDataUpdated);
+    window.ipcRenderer.auth.onDataChanged(handleDataUpdated);
     return () => {
-      window.ipcRenderer.off('redbox-auth:data-updated', handleDataUpdated);
+      window.ipcRenderer.auth.offDataChanged(handleDataUpdated);
     };
   }, [loadAuthenticatedData]);
 

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod auth;
 mod app_shared;
 mod assistant_core;
 mod chat_helpers;
@@ -72,6 +73,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) use app_shared::*;
+pub(crate) use auth::*;
 pub(crate) use assistant_core::*;
 pub(crate) use diagnostics::*;
 pub(crate) use helpers::*;
@@ -672,6 +674,7 @@ struct AppState {
     store: Mutex<AppStore>,
     workspace_root_cache: Mutex<PathBuf>,
     store_persist_version: Arc<AtomicU64>,
+    auth_runtime: Mutex<AuthRuntimeState>,
     official_auth_refresh_lock: Mutex<()>,
     official_cache_refresh_inflight: AtomicBool,
     mcp_manager: mcp::McpManager,
@@ -6376,7 +6379,10 @@ const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
     thread::spawn(move || loop {
-        let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+        let state = app.state::<AppState>();
+        if auth::should_run_background_refresh(&state) {
+            let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+        }
         thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
     })
 }
@@ -6386,6 +6392,9 @@ fn main() {
     let mut store = load_store(&store_path);
     if let Err(error) = maybe_import_legacy_store(&mut store, &store_path) {
         eprintln!("[RedBox legacy import] {error}");
+    }
+    if let Err(error) = auth::migrate_legacy_auth_store(&store_path, &mut store) {
+        eprintln!("[RedBox auth migrate] {error}");
     }
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
@@ -6401,6 +6410,7 @@ fn main() {
             store: Mutex::new(store),
             workspace_root_cache: Mutex::new(initial_workspace_root),
             store_persist_version: Arc::new(AtomicU64::new(0)),
+            auth_runtime: Mutex::new(AuthRuntimeState::default()),
             official_auth_refresh_lock: Mutex::new(()),
             official_cache_refresh_inflight: AtomicBool::new(false),
             mcp_manager: mcp::McpManager::default(),
@@ -6418,6 +6428,9 @@ fn main() {
         .setup(|app| {
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
+            if let Err(error) = auth::initialize_auth_runtime(app.handle(), &state) {
+                eprintln!("[RedBox auth init] {error}");
+            }
             if let Err(error) = ensure_redclaw_profile_files(&state) {
                 eprintln!("[RedBox redclaw profile init] {error}");
             }

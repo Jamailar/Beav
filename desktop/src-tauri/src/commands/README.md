@@ -4,6 +4,8 @@
 
 - 按业务域处理前端发起的 channel/IPC 请求。
 - 将请求路由到 runtime、persistence、scheduler 与各能力模块。
+- IPC 管理规范见：
+  - [IPC-GUIDE.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/commands/IPC-GUIDE.md)
 
 ## 子模块
 

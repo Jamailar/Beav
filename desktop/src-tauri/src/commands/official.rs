@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
+    auth,
     create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_official_auth_session, now_iso, now_ms,
     official_account_summary_local, official_auth_token_from_settings, official_fallback_products,
@@ -268,19 +269,16 @@ fn official_response_is_unauthorized(status: u16, response: &Value) -> bool {
             | "TOKEN_EXPIRED"
             | "ACCESS_TOKEN_EXPIRED"
             | "AUTH_EXPIRED"
+            | "INVALID_GRANT"
     ) {
         return true;
     }
 
     let message = response_error_message(response).to_lowercase();
-    message.contains("unauthorized")
+    message.contains("invalid_grant")
         || message.contains("token expired")
-        || message.contains("invalid token")
-        || message.contains("access token")
-        || message.contains("jwt")
+        || message.contains("refresh token revoked")
         || message.contains("登录过期")
-        || message.contains("重新登录")
-        || message.contains("鉴权")
 }
 
 fn iso_time_from_value(value: Option<&Value>) -> String {
@@ -427,7 +425,7 @@ fn official_session_needs_refresh(settings: &Value) -> bool {
 
     match session_refresh_deadline(settings) {
         Some(refresh_at) => refresh_at <= now_ms() as i64,
-        None => true,
+        None => false,
     }
 }
 
@@ -517,6 +515,7 @@ fn clear_official_auth_state(settings: &mut Value) {
         object.insert("redbox_auth_points_json".to_string(), json!(""));
         object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
         object.insert("redbox_auth_wechat_login_json".to_string(), json!(""));
+        object.insert("redbox_official_models_json".to_string(), json!("[]"));
     }
 }
 
@@ -598,6 +597,7 @@ fn apply_official_settings_update(
         merge_official_settings(&mut store.settings, settings);
         Ok(())
     })?;
+    let _ = auth::sync_auth_runtime_from_settings(Some(app), state, settings);
     let _ = app.emit(
         "settings:updated",
         json!({
@@ -623,6 +623,7 @@ fn refresh_official_auth_session_with_lock(
         .official_auth_refresh_lock
         .lock()
         .map_err(|_| "官方登录态刷新锁已损坏".to_string())?;
+    let _ = auth::mark_auth_refreshing(app, state);
     let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
     merge_official_settings(settings, &latest_settings);
 
@@ -645,14 +646,20 @@ fn refresh_official_auth_session_with_lock(
             Ok(Some(session))
         }
         Err(error) => {
-            clear_official_auth_state(settings);
-            let _ = apply_official_settings_update(
-                app,
-                state,
-                settings,
-                "official-auth-refresh-failed",
-                None,
-            );
+            let kind = auth::classify_auth_error(&error);
+            if kind == auth::AuthErrorKind::ReauthRequired {
+                clear_official_auth_state(settings);
+                let _ = apply_official_settings_update(
+                    app,
+                    state,
+                    settings,
+                    "official-auth-refresh-failed",
+                    None,
+                );
+                let _ = auth::mark_auth_reauth_required(app, state, error.clone());
+            } else {
+                let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
+            }
             Err(error)
         }
     }
@@ -682,10 +689,22 @@ fn run_authenticated_official_request_inner(
         return Ok(retry.body);
     }
 
-    clear_official_auth_state(settings);
-    let _ =
-        apply_official_settings_update(app, state, settings, "official-auth-unauthorized", None);
-    Err(response_error_message(&retry.body))
+    let error = response_error_message(&retry.body);
+    let kind = auth::classify_auth_error(&error);
+    if kind == auth::AuthErrorKind::ReauthRequired {
+        clear_official_auth_state(settings);
+        let _ = apply_official_settings_update(
+            app,
+            state,
+            settings,
+            "official-auth-unauthorized",
+            None,
+        );
+        let _ = auth::mark_auth_reauth_required(app, state, error.clone());
+    } else {
+        let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
+    }
+    Err(error)
 }
 
 fn run_authenticated_official_request(
@@ -957,15 +976,37 @@ pub(crate) fn bootstrap_official_auth_session(
         }));
     }
 
-    let refreshed = refresh_official_cached_data(app, state)?;
     let session = with_store(state, |store| {
         Ok(official_settings_session(&store.settings))
     })?;
+    let snapshot = auth::auth_state_snapshot(state).unwrap_or_default();
+    let refreshed = match refresh_official_cached_data(app, state) {
+        Ok(payload) => payload,
+        Err(error) if session.is_some() || snapshot.logged_in => {
+            let _ = auth::mark_auth_degraded(
+                app,
+                state,
+                error.clone(),
+                auth::classify_auth_error(&error),
+            );
+            json!({
+                "user": cached_official_user(&settings_snapshot),
+                "points": cached_official_points(&settings_snapshot),
+                "models": official_settings_models(&settings_snapshot),
+                "records": official_settings_call_records_list(&settings_snapshot),
+                "refreshedAt": now_iso(),
+                "stale": true,
+                "error": error,
+            })
+        }
+        Err(error) => return Err(error),
+    };
     Ok(json!({
         "success": true,
-        "loggedIn": session.is_some(),
+        "loggedIn": session.is_some() || snapshot.logged_in,
         "session": session,
         "data": refreshed,
+        "authState": auth::auth_state_snapshot(state).unwrap_or_default(),
         "reason": reason,
     }))
 }
@@ -1004,6 +1045,20 @@ pub fn handle_official_channel(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
+    if channel == "auth:get-state" {
+        return Some(
+            serde_json::to_value(auth::auth_state_snapshot(state).unwrap_or_default())
+                .map_err(|error| error.to_string()),
+        );
+    }
+    let channel = match channel {
+        "auth:login-sms" => "redbox-auth:login-sms",
+        "auth:login-wechat-start" => "redbox-auth:wechat-url",
+        "auth:login-wechat-poll" => "redbox-auth:wechat-status",
+        "auth:logout" => "redbox-auth:logout",
+        "auth:refresh-now" => "redbox-auth:refresh",
+        _ => channel,
+    };
     let result = match channel {
         "redbox-auth:get-config"
         | "redbox-auth:bootstrap"
@@ -1064,6 +1119,7 @@ pub fn handle_official_channel(
                     let mut settings = settings_snapshot.clone();
                     clear_official_auth_state(&mut settings);
                     apply_official_settings_update(app, state, &settings, "official-logout", None)?;
+                    let _ = auth::mark_auth_logged_out(app, state);
                     Ok(json!({ "success": true, "routing": { "cleared": true } }))
                 }
                 "redbox-auth:send-sms-code" => {
@@ -1983,7 +2039,7 @@ mod tests {
     }
 
     #[test]
-    fn session_without_expiry_but_with_refresh_token_requires_refresh() {
+    fn session_without_expiry_but_with_refresh_token_does_not_force_refresh() {
         let settings = json!({
             "redbox_auth_session_json": serde_json::to_string(&json!({
                 "accessToken": "access-1",
@@ -1993,7 +2049,7 @@ mod tests {
             .unwrap(),
         });
 
-        assert!(official_session_needs_refresh(&settings));
+        assert!(!official_session_needs_refresh(&settings));
     }
 
     #[test]

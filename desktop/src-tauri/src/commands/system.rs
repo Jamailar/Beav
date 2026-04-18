@@ -75,7 +75,17 @@ pub fn handle_system_channel(
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path }))
                 }
-                "db:get-settings" => with_store(state, |store| Ok(store.settings.clone())),
+                "db:get-settings" => with_store(state, |store| {
+                    let runtime = state
+                        .auth_runtime
+                        .lock()
+                        .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                    let projected = crate::auth::project_settings_for_runtime(
+                        &store.settings,
+                        &runtime,
+                    );
+                    Ok(projected)
+                }),
                 "db:save-settings" => {
                     let active_space_id = with_store_mut(state, |store| {
                         if let (Some(current), Some(next)) =
@@ -83,6 +93,12 @@ pub fn handle_system_channel(
                         {
                             let mut merged = current.clone();
                             for (key, value) in next {
+                                if matches!(
+                                    key.as_str(),
+                                    "redbox_auth_session_json" | "api_key" | "video_api_key"
+                                ) {
+                                    continue;
+                                }
                                 merged.insert(key.to_string(), value.clone());
                             }
                             store.settings = Value::Object(merged);
