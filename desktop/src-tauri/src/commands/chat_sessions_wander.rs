@@ -726,15 +726,25 @@ pub fn handle_chat_sessions_wander_channel(
             "chat:list-context-sessions" => {
                 let context_id = payload_string(&payload, "contextId").unwrap_or_default();
                 let context_type = payload_string(&payload, "contextType").unwrap_or_default();
+                let items = with_store(state, |store| {
+                    Ok(list_context_sessions(&store, &context_type, &context_id))
+                })?;
+                let transcript_meta_by_session_id: HashMap<String, SessionTranscriptFileMeta> =
+                    items
+                        .iter()
+                        .filter_map(|session| {
+                            transcript_session_meta_by_id(state, &session.id)
+                                .ok()
+                                .flatten()
+                                .map(|meta| (session.id.clone(), meta))
+                        })
+                        .collect();
                 with_store(state, |store| {
-                    let items = list_context_sessions(&store, &context_type, &context_id);
                     Ok(json!(items
                         .iter()
                         .map(|session| {
-                            let transcript_meta = transcript_session_meta_by_id(state, &session.id)
-                                .ok()
-                                .flatten();
-                            session_list_item_value(&store, session, transcript_meta.as_ref())
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, session, transcript_meta)
                         })
                         .collect::<Vec<_>>()))
                 })
@@ -778,7 +788,7 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(json!(session))
             }
             "chat:get-sessions" => with_store(state, |store| Ok(json!(list_sessions(&store)))),
-            "sessions:list" => with_store(state, |store| {
+            "sessions:list" => {
                 let started_at = now_ms();
                 let request_id = format!("sessions:list:{}", started_at);
                 let transcript_index = list_transcript_sessions(state).unwrap_or_default();
@@ -792,46 +802,49 @@ pub fn handle_chat_sessions_wander_channel(
                     .iter()
                     .map(crate::runtime::transcript_session_meta_value)
                     .collect();
-                let items: Vec<Value> = if transcript_items.is_empty() {
-                    list_sessions(&store)
-                        .into_iter()
-                        .map(|session| {
-                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
-                            session_list_item_value(&store, &session, transcript_meta)
-                        })
-                        .collect()
-                } else {
-                    let mut merged = transcript_items;
-                    let known_ids = merged
-                        .iter()
-                        .filter_map(|item| item.get("id").and_then(Value::as_str))
-                        .map(ToString::to_string)
-                        .collect::<HashSet<_>>();
-                    let mut store_only = store
-                        .chat_sessions
-                        .iter()
-                        .filter(|session| !known_ids.contains(&session.id))
-                        .map(|session| {
-                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
-                            session_list_item_value(&store, session, transcript_meta)
-                        })
-                        .collect::<Vec<_>>();
-                    merged.append(&mut store_only);
-                    merged.sort_by(|a, b| {
-                        let left = a
-                            .get("chatSession")
-                            .and_then(|item| item.get("updatedAt"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        let right = b
-                            .get("chatSession")
-                            .and_then(|item| item.get("updatedAt"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        right.cmp(left)
-                    });
-                    merged
-                };
+                let items = with_store(state, |store| {
+                    let items: Vec<Value> = if transcript_items.is_empty() {
+                        list_sessions(&store)
+                            .into_iter()
+                            .map(|session| {
+                                let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, &session, transcript_meta)
+                            })
+                            .collect()
+                    } else {
+                        let mut merged = transcript_items;
+                        let known_ids = merged
+                            .iter()
+                            .filter_map(|item| item.get("id").and_then(Value::as_str))
+                            .map(ToString::to_string)
+                            .collect::<HashSet<_>>();
+                        let mut store_only = store
+                            .chat_sessions
+                            .iter()
+                            .filter(|session| !known_ids.contains(&session.id))
+                            .map(|session| {
+                                let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, session, transcript_meta)
+                            })
+                            .collect::<Vec<_>>();
+                        merged.append(&mut store_only);
+                        merged.sort_by(|a, b| {
+                            let left = a
+                                .get("chatSession")
+                                .and_then(|item| item.get("updatedAt"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let right = b
+                                .get("chatSession")
+                                .and_then(|item| item.get("updatedAt"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            right.cmp(left)
+                        });
+                        merged
+                    };
+                    Ok(items)
+                })?;
                 log_timing_event(
                     state,
                     "settings",
@@ -841,18 +854,22 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("sessions={}", items.len())),
                 );
                 Ok(json!(items))
-            }),
+            }
             "sessions:get" => {
                 let requested_session_id = payload_string(&payload, "sessionId");
+                let session_id = with_store(state, |store| {
+                    Ok(resolve_resume_target_session_id(
+                        &store,
+                        requested_session_id.as_deref(),
+                    ))
+                })?;
+                let Some(session_id) = session_id else {
+                    return Ok(Value::Null);
+                };
+                let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                    .ok()
+                    .flatten();
                 with_store(state, |store| {
-                    let Some(session_id) =
-                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
-                    else {
-                        return Ok(Value::Null);
-                    };
-                    let transcript_meta = transcript_session_meta_by_id(state, &session_id)
-                        .ok()
-                        .flatten();
                     Ok(session_detail_value(
                         &store,
                         &session_id,
@@ -860,11 +877,13 @@ pub fn handle_chat_sessions_wander_channel(
                     ))
                 })
             }
-            "sessions:resume" => with_store(state, |store| {
+            "sessions:resume" => {
                 let requested_session_id = payload_string(&payload, "sessionId");
-                let Some(session_id) =
-                    resolve_resume_target_session_id(&store, requested_session_id.as_deref())
-                else {
+                let store_snapshot = with_store(state, |store| Ok(store.clone()))?;
+                let Some(session_id) = resolve_resume_target_session_id(
+                    &store_snapshot,
+                    requested_session_id.as_deref(),
+                ) else {
                     return Ok(Value::Null);
                 };
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
@@ -872,13 +891,13 @@ pub fn handle_chat_sessions_wander_channel(
                     .flatten();
                 let resume_messages = transcript_resume_messages(
                     state,
-                    &store,
+                    &store_snapshot,
                     &session_id,
                     crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
                 )
                 .ok();
                 let value = session_resume_value(
-                    &store,
+                    &store_snapshot,
                     &session_id,
                     transcript_meta.as_ref(),
                     resume_messages.clone(),
@@ -899,7 +918,7 @@ pub fn handle_chat_sessions_wander_channel(
                     "resumeMessages": resume_messages.unwrap_or_default(),
                     "lastCheckpoint": Value::Null,
                 }))
-            }),
+            }
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let forked = with_store_mut(state, |store| {

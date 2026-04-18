@@ -43,6 +43,7 @@ pub fn handle_system_channel(
         | "db:save-settings"
         | "debug:get-status"
         | "debug:get-recent"
+        | "debug:get-runtime-summary"
         | "debug:open-log-dir"
         | "clipboard:read-text"
         | "clipboard:write-html" => (|| -> Result<Value, String> {
@@ -118,6 +119,7 @@ pub fn handle_system_channel(
                         Ok(json!({ "lines": lines }))
                     })
                 }
+                "debug:get-runtime-summary" => crate::build_runtime_diagnostics_summary(state),
                 "debug:open-log-dir" => {
                     let path = store_root(state)?;
                     open::that(&path).map_err(|error| error.to_string())?;

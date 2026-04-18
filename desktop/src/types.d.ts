@@ -264,6 +264,12 @@ export interface SessionBridgePermissionRequest {
   decision?: 'proceed_once' | 'proceed_always' | 'cancel';
 }
 
+export interface IpcInvokeGuardOptions<T = unknown> {
+  timeoutMs?: number;
+  fallback?: T | null | (() => T | null);
+  normalize?: (value: unknown) => T;
+}
+
 export interface RoleSpec {
   roleId: string;
   purpose: string;
@@ -343,6 +349,65 @@ declare global {
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
         getRecent: (limit?: number) => Promise<{ lines: string[] }>;
+        getRuntimeSummary: () => Promise<{
+          generatedAt?: number;
+          runtimeWarm?: {
+            lastWarmedAt?: number;
+            entries?: Array<{
+              mode: string;
+              warmedAt: number;
+              systemPromptChars: number;
+              longTermContextChars: number;
+              hasModelConfig: boolean;
+            }>;
+          };
+          phase0?: {
+            personaGeneration?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgSearchElapsedMs?: number;
+              avgKnowledgeFiles?: number;
+              avgSearchHits?: number;
+              avgAdvisorKnowledgeHits?: number;
+              avgManuscriptHits?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            knowledgeIngest?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgImportedFiles?: number;
+              avgTotalKnowledgeFiles?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            runtimeQueries?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgPromptChars?: number;
+              avgActiveSkillCount?: number;
+              avgResponseChars?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              byMode?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            skillInvocations?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgActiveSkillCount?: number;
+              bySkill?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            toolCalls?: {
+              count: number;
+              successCount?: number;
+              successRate?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              byTool?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+          };
+        }>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
       };
       officialAuth: {
@@ -758,6 +823,7 @@ declare global {
       off: (channel: string, func: (...args: any[]) => void) => void;
       removeAllListeners: (channel: string) => void;
       invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
+      invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: IpcInvokeGuardOptions<T>) => Promise<T>;
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;

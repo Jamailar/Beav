@@ -170,6 +170,7 @@ pub fn handle_skills_ai_channel(
                 Ok(list)
             }
             "skills:invoke" => {
+                let started_at = now_ms();
                 let requested_name = requested_skill_name(payload);
                 if requested_name.is_empty() {
                     return Err("技能名称不能为空".to_string());
@@ -207,6 +208,33 @@ pub fn handle_skills_ai_channel(
                     &skill.name,
                     activation_scope,
                 )?;
+                let _ = record_skill_invocation_metric(
+                    state,
+                    SkillInvocationMetric {
+                        session_id: session_id.clone(),
+                        runtime_mode: runtime_mode.clone(),
+                        skill_name: skill.name.clone(),
+                        activation_scope: activation_scope.to_string(),
+                        persisted_to_session,
+                        active_skill_count: active_skills.len() as i64,
+                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+                        created_at: now_i64(),
+                    },
+                );
+                log_timing_event(
+                    state,
+                    "skills",
+                    &format!("skills:invoke:{}", skill.name),
+                    "skills:invoke",
+                    started_at,
+                    Some(format!(
+                        "runtimeMode={} activationScope={} activeSkills={} persistedToSession={}",
+                        runtime_mode,
+                        activation_scope,
+                        active_skills.len(),
+                        persisted_to_session
+                    )),
+                );
                 let rendered = render_invoked_skill_bundle(&skill, workspace.as_deref());
                 Ok(json!({
                     "success": true,

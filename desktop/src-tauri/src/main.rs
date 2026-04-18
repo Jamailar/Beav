@@ -7,6 +7,7 @@ mod assistant_core;
 mod chat_helpers;
 mod commands;
 mod desktop_io;
+mod diagnostics;
 mod events;
 mod helpers;
 mod http_utils;
@@ -72,6 +73,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) use app_shared::*;
 pub(crate) use assistant_core::*;
+pub(crate) use diagnostics::*;
 pub(crate) use helpers::*;
 pub(crate) use http_utils::*;
 pub(crate) use legacy_import::*;
@@ -681,6 +683,7 @@ struct AppState {
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
     runtime_warm: Mutex<RuntimeWarmState>,
     skill_watch: Mutex<skills::SkillWatcherSnapshot>,
+    diagnostics: Mutex<DiagnosticsState>,
 }
 
 struct AssistantRuntime {
@@ -6409,6 +6412,7 @@ fn main() {
             redclaw_runtime: Mutex::new(None),
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
+            diagnostics: Mutex::new(DiagnosticsState::default()),
         })
         .invoke_handler(tauri::generate_handler![ipc_invoke, ipc_send])
         .setup(|app| {

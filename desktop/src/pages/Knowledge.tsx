@@ -499,9 +499,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invoke('knowledge:list') as Note[];
+            const list = await window.ipcRenderer.invokeGuarded<Note[] | null>('knowledge:list', undefined, {
+                timeoutMs: 3200,
+                fallback: null,
+                normalize: (value) => Array.isArray(value) ? value as Note[] : [],
+            });
             if (requestId !== loadNotesRequestRef.current) return;
-            setNotes(list || []);
+            if (list == null) {
+                if (!hasLocalData) {
+                    setNotes([]);
+                }
+                return;
+            }
+            setNotes(list);
             hasKnowledgeSnapshotRef.current = true;
         } catch (e) {
             if (requestId !== loadNotesRequestRef.current) return;
@@ -524,9 +534,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invoke('knowledge:list-youtube') as YouTubeVideo[];
+            const list = await window.ipcRenderer.invokeGuarded<YouTubeVideo[] | null>('knowledge:list-youtube', undefined, {
+                timeoutMs: 3200,
+                fallback: null,
+                normalize: (value) => Array.isArray(value) ? value as YouTubeVideo[] : [],
+            });
             if (requestId !== loadYoutubeVideosRequestRef.current) return;
-            setYoutubeVideos(list || []);
+            if (list == null) {
+                if (!hasLocalData) {
+                    setYoutubeVideos([]);
+                }
+                return;
+            }
+            setYoutubeVideos(list);
             hasKnowledgeSnapshotRef.current = true;
         } catch (e) {
             if (requestId !== loadYoutubeVideosRequestRef.current) return;
@@ -549,8 +569,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invoke('knowledge:docs:list') as DocumentKnowledgeSource[];
+            const list = await window.ipcRenderer.invokeGuarded<DocumentKnowledgeSource[] | null>('knowledge:docs:list', undefined, {
+                timeoutMs: 3200,
+                fallback: null,
+                normalize: (value) => Array.isArray(value) ? value as DocumentKnowledgeSource[] : [],
+            });
             if (requestId !== loadDocumentSourcesRequestRef.current) return;
+            if (list == null) {
+                if (!hasLocalData) {
+                    setDocumentSources([]);
+                }
+                return;
+            }
             setDocumentSources(Array.isArray(list) ? list : []);
             hasKnowledgeSnapshotRef.current = true;
         } catch (error) {
@@ -575,15 +605,42 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
         try {
             const [noteList, videoList, docList] = await Promise.all([
-                window.ipcRenderer.invoke('knowledge:list') as Promise<Note[]>,
-                window.ipcRenderer.invoke('knowledge:list-youtube') as Promise<YouTubeVideo[]>,
-                window.ipcRenderer.invoke('knowledge:docs:list') as Promise<DocumentKnowledgeSource[]>,
+                window.ipcRenderer.invokeGuarded<Note[] | null>('knowledge:list', undefined, {
+                    timeoutMs: 3200,
+                    fallback: null,
+                    normalize: (value) => Array.isArray(value) ? value as Note[] : [],
+                }),
+                window.ipcRenderer.invokeGuarded<YouTubeVideo[] | null>('knowledge:list-youtube', undefined, {
+                    timeoutMs: 3200,
+                    fallback: null,
+                    normalize: (value) => Array.isArray(value) ? value as YouTubeVideo[] : [],
+                }),
+                window.ipcRenderer.invokeGuarded<DocumentKnowledgeSource[] | null>('knowledge:docs:list', undefined, {
+                    timeoutMs: 3200,
+                    fallback: null,
+                    normalize: (value) => Array.isArray(value) ? value as DocumentKnowledgeSource[] : [],
+                }),
             ]);
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
-            setNotes(Array.isArray(noteList) ? noteList : []);
-            setYoutubeVideos(Array.isArray(videoList) ? videoList : []);
-            setDocumentSources(Array.isArray(docList) ? docList : []);
-            hasKnowledgeSnapshotRef.current = true;
+            const hasAnyResult = noteList != null || videoList != null || docList != null;
+            if (Array.isArray(noteList)) {
+                setNotes(noteList);
+            } else if (!hasLocalData) {
+                setNotes([]);
+            }
+            if (Array.isArray(videoList)) {
+                setYoutubeVideos(videoList);
+            } else if (!hasLocalData) {
+                setYoutubeVideos([]);
+            }
+            if (Array.isArray(docList)) {
+                setDocumentSources(docList);
+            } else if (!hasLocalData) {
+                setDocumentSources([]);
+            }
+            if (hasAnyResult) {
+                hasKnowledgeSnapshotRef.current = true;
+            }
         } catch (error) {
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
             console.error('Failed to load knowledge:', error);

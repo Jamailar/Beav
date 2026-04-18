@@ -83,6 +83,7 @@ const SETTINGS_TAB_POLL_DELAY_MS = 300;
 type SettingsTab = 'general' | 'ai' | 'tools' | 'experimental' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
+type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 
 type AssistantDaemonDraft = {
   enabled: boolean;
@@ -353,6 +354,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
   const [runtimeTasks, setRuntimeTasks] = useState<AgentTaskSnapshot[]>([]);
   const [runtimeRoles, setRuntimeRoles] = useState<RoleSpec[]>([]);
+  const [runtimeDiagnosticsSummary, setRuntimeDiagnosticsSummary] = useState<RuntimeDiagnosticsSummary | null>(null);
   const [runtimeSessions, setRuntimeSessions] = useState<RuntimeSessionListItem[]>([]);
   const [selectedRuntimeTaskId, setSelectedRuntimeTaskId] = useState('');
   const [selectedRuntimeSessionId, setSelectedRuntimeSessionId] = useState('');
@@ -404,6 +406,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
   const runtimeTasksLoadRequestRef = useRef(0);
+  const runtimeSummaryLoadRequestRef = useRef(0);
   const runtimeSessionsLoadRequestRef = useRef(0);
   const runtimeTaskTracesLoadRequestRef = useRef(0);
   const runtimeSessionDetailsLoadRequestRef = useRef(0);
@@ -1568,6 +1571,17 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const loadRuntimeSummary = useCallback(async () => {
+    const requestId = ++runtimeSummaryLoadRequestRef.current;
+    try {
+      const result = await window.ipcRenderer.debug.getRuntimeSummary();
+      if (requestId !== runtimeSummaryLoadRequestRef.current) return;
+      setRuntimeDiagnosticsSummary(result || null);
+    } catch (e) {
+      console.error('Failed to load runtime diagnostics summary', e);
+    }
+  }, []);
+
   const loadRuntimeTasks = useCallback(async (preserveSelection = true) => {
     const requestId = ++runtimeTasksLoadRequestRef.current;
     setIsRuntimeLoading(true);
@@ -1717,6 +1731,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const loadRuntimeDeveloperData = useCallback(async () => {
     await Promise.all([
       loadRuntimeRoles(),
+      loadRuntimeSummary(),
       loadToolDiagnostics(),
     ]);
     await Promise.all([
@@ -1733,6 +1748,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBackgroundWorkerPool,
     loadRuntimeHooks,
     loadRuntimeRoles,
+    loadRuntimeSummary,
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
@@ -3606,6 +3622,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleRunAllAiToolDiagnostics={() => runAllToolDiagnostics('ai')}
                 runtimeTasks={runtimeTasks}
                 runtimeRoles={runtimeRoles}
+                runtimeDiagnosticsSummary={runtimeDiagnosticsSummary}
                 runtimeSessions={runtimeSessions}
                 backgroundTasks={backgroundTasks}
                 backgroundWorkerPool={backgroundWorkerPool}

@@ -48,6 +48,62 @@ type BrowserPluginStatus = {
 
 type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } | undefined>;
 
+type RuntimeDiagnosticsSummary = {
+    generatedAt?: number;
+    runtimeWarm?: {
+        lastWarmedAt?: number;
+        entries?: Array<{
+            mode: string;
+            warmedAt: number;
+            systemPromptChars: number;
+            longTermContextChars: number;
+            hasModelConfig: boolean;
+        }>;
+    };
+    phase0?: {
+        personaGeneration?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgSearchElapsedMs?: number;
+            avgKnowledgeFiles?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        knowledgeIngest?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgImportedFiles?: number;
+            avgTotalKnowledgeFiles?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        runtimeQueries?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgPromptChars?: number;
+            avgActiveSkillCount?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            byMode?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        skillInvocations?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgActiveSkillCount?: number;
+            bySkill?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        toolCalls?: {
+            count?: number;
+            successCount?: number;
+            successRate?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            byTool?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+    };
+};
+
 type FeatureFlags = {
     vectorRecommendation: boolean;
 };
@@ -1674,6 +1730,7 @@ interface ToolsSettingsSectionProps {
     handleRunAllAiToolDiagnostics: () => Promise<void>;
     runtimeTasks: AgentTaskSnapshot[];
     runtimeRoles: RoleSpec[];
+    runtimeDiagnosticsSummary: RuntimeDiagnosticsSummary | null;
     runtimeSessions: Array<{
         id: string;
         transcriptCount: number;
@@ -1773,6 +1830,7 @@ export function ToolsSettingsSection({
     handleRunAllAiToolDiagnostics,
     runtimeTasks,
     runtimeRoles,
+    runtimeDiagnosticsSummary,
     runtimeSessions,
     backgroundTasks,
     backgroundWorkerPool,
@@ -2283,6 +2341,167 @@ export function ToolsSettingsSection({
 
             {showDeveloperDiagnostics && (
                 <div className="space-y-4">
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-text-primary">阶段 0 基线观测</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    汇总成员 persona 生成、知识导入、runtime 查询、skill 激活和工具调用的最近 100 条基线数据。
+                                </p>
+                            </div>
+                            <div className="text-[11px] text-text-tertiary">
+                                {runtimeDiagnosticsSummary?.generatedAt
+                                    ? `更新于 ${new Date(runtimeDiagnosticsSummary.generatedAt).toLocaleString()}`
+                                    : '暂无观测数据'}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">Persona 生成</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.personaGeneration?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均耗时 {Number(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.avgElapsedMs ?? 0).toFixed(1)} ms
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">知识导入</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.knowledgeIngest?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均导入 {Number(runtimeDiagnosticsSummary?.phase0?.knowledgeIngest?.avgImportedFiles ?? 0).toFixed(1)} 个文件
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">Runtime 查询</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均 prompt {Number(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.avgPromptChars ?? 0).toFixed(1)} chars
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均 active skills {Number(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.avgActiveSkillCount ?? 0).toFixed(1)}
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">工具调用</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.toolCalls?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    成功率 {(Number(runtimeDiagnosticsSummary?.phase0?.toolCalls?.successRate ?? 0) * 100).toFixed(1)}%
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">按成员</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.byAdvisor ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.byAdvisor ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.advisorId ?? index)}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">
+                                                        {String(row.advisorName ?? row.advisorId ?? '未知成员')}
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary">
+                                                        {String(row.count ?? 0)} 次
+                                                    </div>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    persona {Number(row.avgElapsedMs ?? 0).toFixed(1)} ms
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无成员基线数据。</div>
+                                )}
+                            </div>
+
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">按 Runtime Mode</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.byMode ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.byMode ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.runtimeMode ?? index)}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">{String(row.runtimeMode ?? 'unknown')}</div>
+                                                    <div className="text-[10px] text-text-tertiary">{String(row.count ?? 0)} 次</div>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    prompt {Number(row.avgPromptChars ?? 0).toFixed(1)} chars
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    active skills {Number(row.avgActiveSkillCount ?? 0).toFixed(1)}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无 runtime 查询数据。</div>
+                                )}
+                            </div>
+
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">最近工具结果</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.toolCalls?.recent ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.toolCalls?.recent ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.sessionId ?? 'session')}:${String(row.toolName ?? index)}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">{String(row.toolName ?? 'tool')}</div>
+                                                    <span className={clsx(
+                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                        Boolean(row.success) ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'
+                                                    )}>
+                                                        {Boolean(row.success) ? 'success' : 'failed'}
+                                                    </span>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    {String(row.advisorName ?? row.advisorId ?? row.sessionId ?? '未绑定成员')}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无工具调用结果。</div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">Runtime Warm</div>
+                            {(runtimeDiagnosticsSummary?.runtimeWarm?.entries ?? []).length ? (
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                                    {(runtimeDiagnosticsSummary?.runtimeWarm?.entries ?? []).map((entry) => (
+                                        <div key={entry.mode} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-[11px] font-medium text-text-primary">{entry.mode}</div>
+                                                <div className="text-[10px] text-text-tertiary">
+                                                    {entry.hasModelConfig ? 'model' : 'default'}
+                                                </div>
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                prompt {entry.systemPromptChars} chars
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                long-term {entry.longTermContextChars} chars
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-[11px] text-text-tertiary">暂无 runtime warm 数据。</div>
+                            )}
+                        </div>
+                    </div>
+
                     <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                         <div className="flex items-start justify-between gap-3">
                             <div>

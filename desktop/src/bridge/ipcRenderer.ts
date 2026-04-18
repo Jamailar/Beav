@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 type Listener = (...args: any[]) => void;
+type GuardedFallbackValue<T> = T | null | (() => T | null);
+type InvokeGuardOptions<T> = {
+  timeoutMs?: number;
+  fallback?: GuardedFallbackValue<T>;
+  normalize?: (value: unknown) => T;
+};
 type ListenerRecord = {
   pending?: Promise<() => void>;
   dispose?: () => void;
@@ -25,9 +31,64 @@ function sendChannel(channel: string, payload?: unknown): void {
   });
 }
 
+function resolveGuardFallback<T>(channel: string, error: unknown, fallback?: GuardedFallbackValue<T>): T {
+  if (typeof fallback === 'function') {
+    return (fallback as () => T | null)() as T;
+  }
+  if (fallback !== undefined) {
+    return fallback as T;
+  }
+  return buildFallbackResponse(channel, error) as T;
+}
+
+async function invokeChannelGuarded<T = unknown>(
+  channel: string,
+  payload?: unknown,
+  options?: InvokeGuardOptions<T>,
+): Promise<T> {
+  const timeoutMs = Math.max(1, Number(options?.timeoutMs || 0));
+
+  try {
+    const value = timeoutMs > 0
+      ? await Promise.race<unknown>([
+          invokeChannel(channel, payload),
+          new Promise((resolve) => {
+            window.setTimeout(() => resolve(Symbol.for('__redbox_ipc_timeout__')), timeoutMs);
+          }),
+        ])
+      : await invokeChannel(channel, payload);
+
+    if (value === Symbol.for('__redbox_ipc_timeout__')) {
+      const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
+      console.warn(`[RedBox] invoke timed out for ${channel}:`, timeoutError.message);
+      return resolveGuardFallback(channel, timeoutError, options?.fallback);
+    }
+
+    if (options?.normalize) {
+      try {
+        return options.normalize(value);
+      } catch (error) {
+        console.warn(`[RedBox] invoke normalization failed for ${channel}:`, error);
+        return resolveGuardFallback(channel, error, options?.fallback);
+      }
+    }
+
+    return value as T;
+  } catch (error) {
+    console.warn(`[RedBox] guarded invoke failed for ${channel}:`, error);
+    return resolveGuardFallback(channel, error, options?.fallback);
+  }
+}
+
 function buildFallbackResponse(channel: string, error: unknown): any {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (channel === 'spaces:list') {
+    return {
+      activeSpaceId: 'default',
+      spaces: [{ id: 'default', name: '默认空间' }],
+    };
+  }
   if (channel === 'media:list') {
     return { success: true, assets: [] };
   }
@@ -100,6 +161,19 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   }
   if (channel === 'app:check-update') {
     return { success: true, hasUpdate: false };
+  }
+  if (channel === 'debug:get-runtime-summary') {
+    return {
+      generatedAt: Date.now(),
+      runtimeWarm: { lastWarmedAt: 0, entries: [] },
+      phase0: {
+        personaGeneration: { count: 0, byAdvisor: [], recent: [] },
+        knowledgeIngest: { count: 0, byAdvisor: [], recent: [] },
+        runtimeQueries: { count: 0, byAdvisor: [], byMode: [], recent: [] },
+        skillInvocations: { count: 0, bySkill: [], recent: [] },
+        toolCalls: { count: 0, successCount: 0, successRate: 0, byAdvisor: [], byTool: [], recent: [] },
+      }
+    };
   }
   if (
     channel.endsWith(':list')
@@ -185,12 +259,15 @@ function createIpcRenderer() {
     removeAllListeners,
     send: (channel: string, ...args: unknown[]) => sendChannel(channel, args.length <= 1 ? args[0] : args),
     invoke: (channel: string, ...args: unknown[]) => invokeChannel(channel, args.length <= 1 ? args[0] : args),
+    invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: InvokeGuardOptions<T>) =>
+      invokeChannelGuarded<T>(channel, payload, options),
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
+      getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
     },
     officialAuth: {

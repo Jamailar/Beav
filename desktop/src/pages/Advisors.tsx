@@ -115,8 +115,15 @@ export function Advisors({
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invoke('advisors:list') as Advisor[];
+            const list = await window.ipcRenderer.invokeGuarded<Advisor[] | null>('advisors:list', undefined, {
+                timeoutMs: 3200,
+                fallback: null,
+                normalize: (value) => Array.isArray(value) ? value as Advisor[] : [],
+            });
             if (requestId !== loadAdvisorsRequestRef.current) return [];
+            if (list == null) {
+                return hasLoadedSnapshotRef.current ? advisors : [];
+            }
             const normalizedList = Array.isArray(list) ? list : [];
             setAdvisors(normalizedList);
             setSelectedAdvisor((prev) => {
@@ -134,7 +141,7 @@ export function Advisors({
                 setIsLoading(false);
             }
         }
-    }, []);
+    }, [advisors]);
 
     // Listen for download progress
     useEffect(() => {
@@ -230,12 +237,24 @@ export function Advisors({
         }
 
         try {
-            let items = await window.ipcRenderer.chat.listContextSessions({
+            const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
                 contextId: advisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-            }) as ContextChatSessionListItem[];
+            }, {
+                timeoutMs: 3200,
+                fallback: null,
+                normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
+            });
+            if (requestId !== advisorSessionRequestRef.current) return;
+            if (list == null) {
+                if (!hasAdvisorSessionSnapshotRef.current) {
+                    setAdvisorSessions([]);
+                    setAdvisorSessionId(null);
+                }
+                return;
+            }
 
-            items = sortAdvisorSessionItems(Array.isArray(items) ? items : []);
+            let items = sortAdvisorSessionItems(Array.isArray(list) ? list : []);
 
             let nextSessionId =
                 options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
@@ -245,12 +264,22 @@ export function Advisors({
                         : items[0]?.id || null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
-                const created = await window.ipcRenderer.chat.createContextSession({
+                const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
                     contextId: advisor.id,
                     contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                     title: `与 ${advisor.name} 聊聊`,
                     initialContext: buildAdvisorInitialContext(advisor),
+                }, {
+                    timeoutMs: 3200,
+                    fallback: null,
                 });
+                if (!created) {
+                    if (!hasAdvisorSessionSnapshotRef.current) {
+                        setAdvisorSessions([]);
+                        setAdvisorSessionId(null);
+                    }
+                    return;
+                }
                 items = [{
                     id: created.id,
                     messageCount: 0,
@@ -346,12 +375,18 @@ export function Advisors({
         if (!selectedAdvisor) return;
         setIsHistoryLoading(true);
         try {
-            const created = await window.ipcRenderer.chat.createContextSession({
+            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
                 contextId: selectedAdvisor.id,
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                 title: `与 ${selectedAdvisor.name} 聊聊`,
                 initialContext: buildAdvisorInitialContext(selectedAdvisor),
+            }, {
+                timeoutMs: 3200,
+                fallback: null,
             });
+            if (!created) {
+                throw new Error('create advisor session timed out');
+            }
             setAdvisorSessionId(created.id);
             await loadAdvisorSessions(selectedAdvisor, {
                 preferredSessionId: created.id,
@@ -588,7 +623,7 @@ export function Advisors({
                         </div>
 
                         <div className="relative flex-1 min-h-0 bg-background">
-                            {isAdvisorSessionLoading ? (
+                            {isAdvisorSessionLoading && !advisorSessionId ? (
                                 <div className="absolute inset-0 flex items-center justify-center">
                                     <div className="flex flex-col items-center gap-3 text-text-tertiary">
                                         <div className="w-8 h-8 border-2 border-accent-primary border-t-transparent rounded-full animate-spin" />

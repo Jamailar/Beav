@@ -217,6 +217,7 @@ pub fn handle_advisor_channel(
                 Ok(result)
             }
             "advisors:upload-knowledge" => {
+                let started_at = now_ms();
                 let advisor_id = payload_value_as_string(payload).unwrap_or_default();
                 let selected = pick_files_native("选择要导入该成员知识库的文件", false, true)?;
                 if selected.is_empty() {
@@ -240,6 +241,40 @@ pub fn handle_advisor_channel(
                     advisor.updated_at = now_iso();
                     Ok(json!({ "success": true, "files": imported_files }))
                 })?;
+                let imported_file_count = imported
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len() as i64)
+                    .unwrap_or_default();
+                let total_knowledge_file_count = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.knowledge_files.len() as i64)
+                        .unwrap_or_default())
+                })?;
+                let _ = record_advisor_knowledge_ingest_metric(
+                    state,
+                    AdvisorKnowledgeIngestMetric {
+                        advisor_id: advisor_id.clone(),
+                        imported_file_count,
+                        total_knowledge_file_count,
+                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+                        created_at: now_i64(),
+                    },
+                );
+                log_timing_event(
+                    state,
+                    "advisor",
+                    &format!("advisors:upload-knowledge:{advisor_id}"),
+                    "advisors:upload-knowledge",
+                    started_at,
+                    Some(format!(
+                        "importedFiles={} totalKnowledgeFiles={}",
+                        imported_file_count, total_knowledge_file_count
+                    )),
+                );
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(imported)
             }
@@ -320,6 +355,7 @@ pub fn handle_advisor_channel(
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:generate-persona" => {
+                let started_at = now_ms();
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
                 let channel_name = payload_string(payload, "channelName")
@@ -345,12 +381,14 @@ pub fn handle_advisor_channel(
                 let advisor_knowledge = collect_advisor_knowledge_evidence(state, &advisor_id)?;
                 let manuscript_evidence =
                     collect_related_manuscript_evidence(state, &subject_names)?;
+                let search_started_at = now_ms();
                 let search_results = search_web_with_settings(
                     &settings_snapshot,
                     &format!("{channel_name} YouTube 博主 创作者 频道定位 内容风格"),
                     6,
                 )
                 .unwrap_or_default();
+                let search_elapsed_ms = now_ms().saturating_sub(search_started_at) as i64;
                 let (skill_name, skill_body, skill_references, skill_scripts) =
                     load_skill_bundle_sections(state, "agent-persona-creator");
                 let search_summary = if search_results.is_empty() {
@@ -545,6 +583,53 @@ pub fn handle_advisor_channel(
                             .map(ToString::to_string)
                     })
                     .unwrap_or_else(|| format!("模仿 {} 的内容风格与表达方式", channel_name));
+                let knowledge_file_count = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.knowledge_files.len() as i64)
+                        .unwrap_or_default())
+                })?;
+                let advisor_name = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.name.clone()))
+                })?;
+                let _ = record_advisor_persona_metric(
+                    state,
+                    AdvisorPersonaMetric {
+                        advisor_id: advisor_id.clone(),
+                        session_advisor_name: advisor_name,
+                        knowledge_language: normalize_optional_string(Some(
+                            payload_string(payload, "knowledgeLanguage")
+                                .unwrap_or_else(|| "中文".to_string()),
+                        )),
+                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+                        search_elapsed_ms: Some(search_elapsed_ms),
+                        search_hit_count: search_results.len() as i64,
+                        advisor_knowledge_hit_count: advisor_knowledge.len() as i64,
+                        manuscript_hit_count: manuscript_evidence.len() as i64,
+                        knowledge_file_count,
+                        created_at: now_i64(),
+                    },
+                );
+                log_timing_event(
+                    state,
+                    "advisor",
+                    &format!("advisors:generate-persona:{advisor_id}"),
+                    "advisors:generate-persona",
+                    started_at,
+                    Some(format!(
+                        "searchHits={} advisorKnowledgeHits={} manuscriptHits={} searchElapsedMs={}",
+                        search_results.len(),
+                        advisor_knowledge.len(),
+                        manuscript_evidence.len(),
+                        search_elapsed_ms
+                    )),
+                );
                 Ok(json!({
                     "success": true,
                     "prompt": final_markdown,

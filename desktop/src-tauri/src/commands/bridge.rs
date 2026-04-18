@@ -33,25 +33,34 @@ pub fn handle_bridge_channel(
             "subscriberCount": 0,
             "lastError": Value::Null,
         })),
-        "session-bridge:list-sessions" => with_store(state, |store| {
-            let sessions = list_sessions(&store);
-            Ok(json!(sessions
+        "session-bridge:list-sessions" => (|| {
+            let sessions = with_store(state, |store| Ok(list_sessions(&store)))?;
+            let transcript_meta_by_session_id = sessions
                 .iter()
-                .map(|session| {
-                    let transcript_meta = transcript_session_meta_by_id(state, &session.id)
+                .filter_map(|session| {
+                    transcript_session_meta_by_id(state, &session.id)
                         .ok()
-                        .flatten();
-                    session_bridge_summary_value(&store, session, transcript_meta.as_ref())
+                        .flatten()
+                        .map(|meta| (session.id.clone(), meta))
                 })
-                .collect::<Vec<_>>()))
-        }),
-        "session-bridge:get-session" => {
+                .collect::<std::collections::HashMap<_, _>>();
+            with_store(state, |store| {
+                Ok(json!(sessions
+                    .iter()
+                    .map(|session| {
+                        let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                        session_bridge_summary_value(&store, session, transcript_meta)
+                    })
+                    .collect::<Vec<_>>()))
+            })
+        })(),
+        "session-bridge:get-session" => (|| {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
+            let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                .ok()
+                .flatten();
             with_store(state, |store| {
                 let background_tasks = derived_background_tasks(&store);
-                let transcript_meta = transcript_session_meta_by_id(state, &session_id)
-                    .ok()
-                    .flatten();
                 Ok(session_bridge_detail_value(
                     &store,
                     &session_id,
@@ -59,7 +68,7 @@ pub fn handle_bridge_channel(
                     transcript_meta.as_ref(),
                 ))
             })
-        }
+        })(),
         "session-bridge:list-permissions" => Ok(json!([])),
         "session-bridge:create-session" => with_store_mut(state, |store| {
             let title =
