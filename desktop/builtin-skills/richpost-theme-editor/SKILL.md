@@ -1,0 +1,85 @@
+---
+allowedRuntimeModes: [chatroom]
+hookMode: inline
+autoActivate: false
+activationScope: session
+contextNote: 当前文件会话处于 richpost 图文主题编辑模式。目标不是改正文，而是调整首页、内容页和尾页对应的模板、tokens 与分页绑定规则，让主题编辑页左侧三张预览反映真实模板结果。
+promptPrefix: 你当前必须遵守 richpost-theme-editor。当前任务是修改 richpost 的模板层，而不是改正文内容。先把页面理解成首页、内容页、尾页三类母版；优先修改 layout.tokens.json 和 masters/*.master.html，只有在母版和 tokens 不足以达成目标时，才调整 richpost-page-plan.json 的 master、zones 或 styleOverrides。
+promptSuffix: 不要改 content.md，不要改 content-map.json，不要直接在 pages/page-xxx.html 里手写正文，也不要补写额外文案。模板调整完成后，结果必须仍然由当前工程的 tokens、masters 和 page-plan 渲染出来。
+maxPromptChars: 3200
+---
+# Richpost Theme Editor
+
+用于稿件页 `图文主题编辑` 全屏页面的专用技能。
+
+## 适用范围
+
+- richpost 主题编辑页里的模板修改
+- 首页、内容页、尾页三种版式的结构调整
+- 文字区域、安全区、标题区、图片区的布局重设
+- layout tokens、母版 HTML、分页方案的样式与结构联动
+
+如果任务是正文改写、标题润色、内容扩写、压缩段落，或普通图文排版微调，不要让本技能主导。
+
+## 当前工程真相层
+
+- `content.md`：正文唯一真相层
+- `content-map.json`：正文块映射，宿主自动生成
+- `layout.tokens.json`：主题 token，控制颜色、字号、行高、边距、宽度、圆角、阴影等基础样式
+- `masters/cover.master.html`：首页母版
+- `masters/body.master.html`：内容页母版
+- `masters/ending.master.html`：尾页母版
+- `richpost-page-plan.json`：页面使用哪张母版、哪些 block 进入哪个 zone
+- `layout.html`：图文总览壳
+- `pages/page-xxx.html`：最终渲染结果，只是产物，不是主题编辑主目标
+
+## 工作顺序
+
+1. 先判断需求属于哪一层：
+   - 视觉风格：改 `layout.tokens.json`
+   - 页面结构：改 `masters/*.master.html`
+   - 页面内容分配或 zone 绑定：改 `richpost-page-plan.json`
+2. 默认优先级固定为：
+   - `layout.tokens.json`
+   - `masters/*.master.html`
+   - `richpost-page-plan.json`
+3. 只有在前两层做不到的时候，才触碰分页方案。
+4. 不要把临时效果直接写死到 `pages/page-xxx.html`，除非宿主明确要求你保存最终渲染产物。
+
+## 模板编辑规则
+
+- 首页、内容页、尾页必须被当成三种独立母版处理。
+- 可以新增或调整这些模板元素：
+  - 背景层
+  - 图片层
+  - 遮罩层
+  - 标题容器
+  - 正文容器
+  - 标签条
+  - 装饰线
+  - 卡片容器
+  - 引文框
+- 可以调整文字区域的：
+  - 宽度
+  - 高度
+  - 对齐
+  - 内边距
+  - 相对位置
+  - 与图片区的层级关系
+- 可以让首页、内容页、尾页使用完全不同的布局。
+
+## 强制限制
+
+- 不要改写、删减、扩写或重组 `content.md` 正文。
+- 不要手改 `content-map.json`。
+- 不要在模板里硬编码正文文字。
+- 不要新增“总结页”“收束页”“小红书图文”这类正文外文案。
+- 不要引入外部字体 URL、外部 CSS 或远程 JS。
+- 如需换字体，只能用系统字体栈或宿主已有 preset。
+
+## 默认取舍
+
+- 用户只说“改主题”时，默认先改 `layout.tokens.json`。
+- 用户提到首页、尾页、文字区域、图文比例、内容容器时，默认改 `masters/*.master.html`。
+- 用户提到某一页该放哪些内容，或哪段内容应该落在哪个区域时，再改 `richpost-page-plan.json`。
+- 如果只是让预览更像真实主题，不要只做颜色替换，要以模板文件为主目标。

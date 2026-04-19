@@ -11,6 +11,12 @@ const KNOWLEDGE_API_CANDIDATES = [
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
 const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+const MENU_ROOT_ID = 'redbox-root';
+const MENU_PAGE_ID = 'redbox-save-page-auto';
+const MENU_SELECTION_ID = 'redbox-save-selection';
+const MENU_LINK_ID = 'redbox-save-link';
+const MENU_IMAGE_ID = 'redbox-save-image';
+const MENU_VIDEO_ID = 'redbox-save-video';
 
 let cachedKnowledgeApi = null;
 let cachedKnowledgeApiAt = 0;
@@ -47,17 +53,52 @@ function createLinkFallbackPageInfo(overrides = {}) {
   };
 }
 
+function ensureContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: MENU_ROOT_ID,
+      title: '保存到 RedBox',
+      contexts: ['page', 'selection', 'link', 'image', 'video'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_PAGE_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前页面内容到知识库',
+      contexts: ['page'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_SELECTION_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存选中文字到知识库',
+      contexts: ['selection'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_LINK_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前链接到知识库',
+      contexts: ['link'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_IMAGE_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前图片到素材库',
+      contexts: ['image'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_VIDEO_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前视频到知识库',
+      contexts: ['video'],
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'redbox-save-selection',
-    title: '保存选中文字到 RedBox',
-    contexts: ['selection'],
-  });
-  chrome.contextMenus.create({
-    id: 'redbox-save-page-link',
-    title: '保存当前页面链接到 RedBox',
-    contexts: ['page'],
-  });
+  ensureContextMenus();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureContextMenus();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -72,13 +113,34 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
-  if (info.menuItemId === 'redbox-save-selection') {
-    void saveSelectedTextFromTab(tab.id);
-    return;
-  }
-  if (info.menuItemId === 'redbox-save-page-link') {
-    void saveCurrentPageLinkFromTab(tab.id);
-  }
+  const run = async () => {
+    if (info.menuItemId === MENU_PAGE_ID) {
+      await saveCurrentPageFromTab(tab.id);
+      return;
+    }
+    if (info.menuItemId === MENU_SELECTION_ID) {
+      await saveSelectedTextFromTab(tab.id);
+      return;
+    }
+    if (info.menuItemId === MENU_LINK_ID) {
+      await saveLinkFromContext(tab, info);
+      return;
+    }
+    if (info.menuItemId === MENU_IMAGE_ID) {
+      await saveImageFromContext(tab, info);
+      return;
+    }
+    if (info.menuItemId === MENU_VIDEO_ID) {
+      await saveVideoFromContext(tab, info);
+    }
+  };
+  void run().catch((error) => {
+    pluginError('context-menu-action', {
+      menuItemId: String(info?.menuItemId || ''),
+      tabId: Number(tab?.id || 0) || null,
+      error: describeError(error),
+    });
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -129,8 +191,12 @@ async function handleMessage(message, sender) {
       return await saveYouTubeFromTab(tabId);
     case 'save-selection':
       return await saveSelectedTextFromTab(tabId);
+    case 'save-page-auto':
+      return await saveCurrentPageFromTab(tabId);
     case 'save-page-link':
       return await saveCurrentPageLinkFromTab(tabId);
+    case 'save-drag-image':
+      return await saveDraggedImagePayload(message?.payload, sender?.tab);
     default:
       return { success: false, error: 'Unsupported action' };
   }
@@ -370,6 +436,8 @@ async function postKnowledgeEntry(payload) {
   pluginLog('entry-submit', {
     endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/entries`,
     kind: String(payload?.kind || ''),
+    sourceDomain: String(payload?.source?.sourceDomain || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
     sourceUrl: String(payload?.source?.sourceUrl || ''),
     externalId: String(payload?.source?.externalId || ''),
   });
@@ -382,6 +450,24 @@ async function postKnowledgeEntry(payload) {
     entryId: response?.entryId || '',
     duplicate: Boolean(response?.duplicate),
     updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
+async function postKnowledgeMediaAssets(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('media-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/media-assets`,
+    sourceDomain: String(payload?.source?.sourceDomain || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
+    itemCount: Array.isArray(payload?.items) ? payload.items.length : 0,
+  });
+  const response = await fetchKnowledgeJson(endpoint, '/media-assets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  pluginLog('media-submit-success', {
+    imported: Number(response?.imported || 0),
   });
   return response;
 }
@@ -417,19 +503,178 @@ function replaceRichHtmlTokens(html, replacements) {
   return output;
 }
 
+function extractDomainFromUrl(value) {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  try {
+    return String(new URL(raw).hostname || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(normalizeText(value));
+}
+
+function isDirectResourceSource(value) {
+  const raw = normalizeText(value);
+  return isHttpUrl(raw) || raw.startsWith('data:');
+}
+
+function extractPathTitle(value) {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const lastSegment = String(parsed.pathname || '')
+      .split('/')
+      .filter(Boolean)
+      .pop() || '';
+    const clean = decodeURIComponent(lastSegment).replace(/\.[a-z0-9]+$/i, '').trim();
+    return clean;
+  } catch {
+    return '';
+  }
+}
+
+function inferSiteNameFromUrl(value) {
+  return extractDomainFromUrl(value).replace(/^www\./i, '');
+}
+
 function createKnowledgeSourceInput(fields = {}) {
+  const sourceLink = normalizeText(fields.sourceLink || fields.sourceUrl);
+  const sourceDomain = normalizeText(fields.sourceDomain) || extractDomainFromUrl(sourceLink);
   return {
     appId: 'redbox-capture',
     pluginId: 'redbox-browser-extension',
-    sourceUrl: normalizeText(fields.sourceUrl),
-    externalId: normalizeText(fields.externalId),
+    sourceDomain: sourceDomain || undefined,
+    sourceLink: sourceLink || undefined,
+    sourceUrl: sourceLink || undefined,
+    externalId: normalizeText(fields.externalId) || undefined,
     capturedAt: new Date().toISOString(),
+  };
+}
+
+function buildLinkTargetEntry(payload = {}) {
+  const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
+  const title = normalizeText(payload?.title) || extractPathTitle(sourceUrl) || '网页链接';
+  const description = normalizeText(payload?.description)
+    || normalizeText(payload?.text)
+    || normalizeText(payload?.excerpt)
+    || sourceUrl;
+
+  if (!sourceUrl) {
+    throw new Error('缺少可保存的链接地址');
+  }
+  if (!isHttpUrl(sourceUrl)) {
+    throw new Error('当前链接不是可保存的网页地址');
+  }
+
+  return {
+    kind: 'webpage',
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain,
+      externalId: `link-${hashString(sourceUrl)}`,
+    }),
+    content: {
+      title,
+      text: description,
+      excerpt: truncateText(description, 180),
+      description: truncateText(description, 500),
+      siteName: normalizeText(payload?.siteName) || inferSiteNameFromUrl(sourceUrl) || undefined,
+      tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : ['链接收藏'],
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+    },
+    options: {
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildVideoResourceEntry(payload = {}) {
+  const pageUrl = normalizeText(payload?.pageUrl || payload?.sourceLink || payload?.url);
+  const videoUrl = normalizeText(payload?.videoUrl || payload?.srcUrl);
+  const sourceLink = pageUrl || videoUrl;
+  const sourceDomain = extractDomainFromUrl(sourceLink);
+  const title = normalizeText(payload?.title)
+    || extractPathTitle(videoUrl)
+    || extractPathTitle(sourceLink)
+    || '视频内容';
+
+  if (!sourceLink) {
+    throw new Error('缺少可保存的视频来源');
+  }
+
+  return {
+    kind: 'webpage',
+    source: createKnowledgeSourceInput({
+      sourceLink,
+      sourceDomain,
+      externalId: `video-${hashString(`${sourceLink}\n${videoUrl}`)}`,
+    }),
+    content: {
+      title,
+      text: normalizeText(payload?.description) || videoUrl || sourceLink,
+      excerpt: truncateText(normalizeText(payload?.description) || title, 180),
+      description: truncateText(normalizeText(payload?.description) || videoUrl || sourceLink, 500),
+      siteName: inferSiteNameFromUrl(sourceLink) || undefined,
+      tags: ['视频'],
+    },
+    assets: {
+      videoUrl: videoUrl || undefined,
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+    },
+    options: {
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildImageAssetPayload(payload = {}) {
+  const pageUrl = normalizeText(payload?.pageUrl || payload?.sourceLink || payload?.url);
+  const imageUrl = normalizeText(payload?.imageUrl || payload?.srcUrl);
+  const sourceLink = pageUrl || imageUrl;
+  const sourceDomain = extractDomainFromUrl(sourceLink);
+  const title = normalizeText(payload?.title)
+    || extractPathTitle(imageUrl)
+    || extractPathTitle(sourceLink)
+    || '网页图片';
+
+  if (!imageUrl) {
+    throw new Error('缺少可保存的图片地址');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前图片资源暂不支持直接保存');
+  }
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink,
+      sourceDomain,
+      externalId: `image-${hashString(`${sourceLink}\n${imageUrl}`)}`,
+    }),
+    items: [
+      {
+        title,
+        source: imageUrl,
+      },
+    ],
   };
 }
 
 function buildSelectionEntry(payload) {
   const text = normalizeText(payload?.text);
   const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
   const title = normalizeText(payload?.title) || '网页摘录';
 
   if (!text) {
@@ -437,7 +682,7 @@ function buildSelectionEntry(payload) {
   }
 
   return {
-    kind: 'knowledge-note',
+    kind: 'text-note',
     source: createKnowledgeSourceInput({
       sourceUrl,
       externalId: `selection-${hashString(`${sourceUrl}\n${text}`)}`,
@@ -446,7 +691,7 @@ function buildSelectionEntry(payload) {
       title,
       text,
       excerpt: truncateText(text, 180),
-      siteName: sourceUrl,
+      siteName: sourceDomain || sourceUrl,
       tags: ['网页摘录'],
     },
     assets: {},
@@ -461,6 +706,7 @@ function buildSelectionEntry(payload) {
 
 function buildPageLinkEntry(payload) {
   const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
   const title = normalizeText(payload?.title) || '网页收藏';
   const richHtmlDocument = replaceRichHtmlTokens(
     payload?.richHtmlDocument,
@@ -489,7 +735,7 @@ function buildPageLinkEntry(payload) {
       excerpt: truncateText(payload?.excerpt || text, 180),
       html: richHtmlDocument || undefined,
       description: truncateText(text, 500),
-      siteName: normalizeText(payload?.siteName),
+      siteName: normalizeText(payload?.siteName) || sourceDomain || undefined,
       tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : [],
     },
     assets: {
@@ -508,6 +754,7 @@ function buildPageLinkEntry(payload) {
 function buildYouTubeEntry(payload) {
   const videoId = normalizeText(payload?.videoId);
   const videoUrl = normalizeText(payload?.videoUrl);
+  const sourceDomain = extractDomainFromUrl(videoUrl);
   const title = normalizeText(payload?.title);
 
   if (!videoId || !videoUrl || !title) {
@@ -524,6 +771,7 @@ function buildYouTubeEntry(payload) {
       title,
       description: normalizeText(payload?.description),
       text: normalizeText(payload?.description),
+      siteName: sourceDomain || 'youtube.com',
       tags: ['YouTube'],
     },
     assets: {
@@ -540,6 +788,7 @@ function buildYouTubeEntry(payload) {
 
 function buildXhsEntry(payload) {
   const sourceUrl = normalizeText(payload?.source);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
   const stableNoteId = normalizeText(payload?.noteId)
     || `xhs-${hashString(sourceUrl)}`;
   const videoAssetUrl = normalizeText(payload?.videoDataUrl)
@@ -551,8 +800,9 @@ function buildXhsEntry(payload) {
   return {
     kind,
     source: createKnowledgeSourceInput({
-      sourceUrl,
+      sourceLink: sourceUrl,
       externalId: stableNoteId,
+      sourceDomain,
     }),
     content: {
       title: normalizeText(payload?.title) || '小红书内容',
@@ -560,7 +810,7 @@ function buildXhsEntry(payload) {
       text,
       excerpt: truncateText(text, 180),
       description: truncateText(text, 500),
-      siteName: 'xiaohongshu.com',
+      siteName: sourceDomain,
       tags: ['小红书'],
       stats: {
         likes: Number(payload?.stats?.likes || 0),
@@ -608,6 +858,18 @@ async function saveSelectedTextFromTab(tabId) {
   };
 }
 
+async function saveCurrentPageFromTab(tabId) {
+  const inspection = await inspectPage(tabId);
+  const action = normalizeText(inspection?.pageInfo?.action) || 'save-page-link';
+  if (action === 'save-xhs') {
+    return await saveXhsNoteFromTab(tabId);
+  }
+  if (action === 'save-youtube') {
+    return await saveYouTubeFromTab(tabId);
+  }
+  return await saveCurrentPageLinkFromTab(tabId);
+}
+
 async function saveCurrentPageLinkFromTab(tabId) {
   const payload = await runExtraction(tabId, extractCurrentPageLinkPayload, { world: 'MAIN' });
   if (!payload || typeof payload !== 'object') {
@@ -649,6 +911,97 @@ async function saveXhsNoteFromTab(tabId) {
   return {
     success: true,
     mode: 'xhs',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveLinkFromContext(tab, info) {
+  const linkUrl = normalizeText(info?.linkUrl);
+  if (!linkUrl) {
+    throw new Error('未检测到可保存的链接');
+  }
+  if (!isHttpUrl(linkUrl)) {
+    throw new Error('当前链接不是可保存的网页地址');
+  }
+  const response = await postKnowledgeEntry(buildLinkTargetEntry({
+    url: linkUrl,
+    title: normalizeText(info?.linkText) || normalizeText(tab?.title),
+    description: linkUrl,
+    siteName: inferSiteNameFromUrl(linkUrl),
+    tags: ['链接收藏'],
+  }));
+  return {
+    success: true,
+    mode: 'link',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveImageFromContext(tab, info) {
+  const imageUrl = normalizeText(info?.srcUrl);
+  if (!imageUrl) {
+    throw new Error('未检测到可保存的图片');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前图片资源暂不支持直接保存');
+  }
+  const response = await postKnowledgeMediaAssets(buildImageAssetPayload({
+    imageUrl,
+    pageUrl: normalizeText(info?.pageUrl) || normalizeText(tab?.url),
+    title: normalizeText(tab?.title) || extractPathTitle(imageUrl) || '网页图片',
+  }));
+  return {
+    success: true,
+    mode: 'image',
+    imported: Number(response?.imported || 0),
+  };
+}
+
+async function saveDraggedImagePayload(payload, tab) {
+  const imageUrl = normalizeText(payload?.imageUrl || payload?.srcUrl);
+  if (!imageUrl) {
+    throw new Error('未检测到可保存的拖拽图片');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前拖拽图片暂不支持直接保存');
+  }
+
+  const response = await postKnowledgeMediaAssets(buildImageAssetPayload({
+    imageUrl,
+    pageUrl: normalizeText(payload?.pageUrl) || normalizeText(tab?.url),
+    title: normalizeText(payload?.title) || normalizeText(tab?.title) || extractPathTitle(imageUrl) || '网页图片',
+  }));
+  return {
+    success: true,
+    mode: 'image-drop',
+    imported: Number(response?.imported || 0),
+  };
+}
+
+async function saveVideoFromContext(tab, info) {
+  const tabUrl = normalizeText(tab?.url);
+  const resourceUrl = normalizeText(info?.srcUrl);
+  if (
+    /(^|\.)youtube\.com$/i.test(extractDomainFromUrl(tabUrl))
+    || extractDomainFromUrl(tabUrl) === 'youtu.be'
+    || /(^|\.)xiaohongshu\.com$/i.test(extractDomainFromUrl(tabUrl))
+  ) {
+    return await saveCurrentPageFromTab(tab.id);
+  }
+  if (resourceUrl && !isHttpUrl(resourceUrl)) {
+    return await saveCurrentPageFromTab(tab.id);
+  }
+
+  const response = await postKnowledgeEntry(buildVideoResourceEntry({
+    pageUrl: normalizeText(info?.pageUrl) || tabUrl,
+    videoUrl: resourceUrl,
+    title: normalizeText(tab?.title) || '视频内容',
+  }));
+  return {
+    success: true,
+    mode: 'video',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
   };

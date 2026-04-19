@@ -59,6 +59,9 @@ type EditorAiWorkspaceMode = {
     id: string;
     label: string;
     activeSkills: string[];
+    themeEditingId?: string | null;
+    themeEditingLabel?: string | null;
+    themeEditingFile?: string | null;
 };
 
 type FileNode = {
@@ -71,6 +74,9 @@ type FileNode = {
     draftType?: CreateKind | 'unknown';
     updatedAt?: number;
     summary?: string;
+    richpostPreviewFile?: string;
+    richpostPreviewFileUrl?: string;
+    richpostPreviewUpdatedAt?: number;
 };
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported' | 'external';
@@ -160,6 +166,8 @@ type FileCardMeta = {
     draftType: CreateKind | 'unknown';
     updatedAt?: number;
     summary: string;
+    richpostPreviewFileUrl?: string;
+    richpostPreviewUpdatedAt?: number;
 };
 
 type EditorDescriptor = {
@@ -274,8 +282,20 @@ type PackageState = {
         id?: string;
         label?: string;
         description?: string | null;
+        source?: string | null;
+        shellBg?: string | null;
+        pageBg?: string | null;
         surfaceColor?: string | null;
+        surfaceBg?: string | null;
+        surfaceBorder?: string | null;
+        surfaceShadow?: string | null;
+        surfaceRadius?: string | null;
+        imageRadius?: string | null;
+        previewCardBg?: string | null;
+        previewCardBorder?: string | null;
+        previewCardShadow?: string | null;
         textColor?: string | null;
+        mutedColor?: string | null;
         accentColor?: string | null;
         headingFont?: string | null;
         bodyFont?: string | null;
@@ -411,6 +431,7 @@ const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
 const MANUSCRIPTS_INITIAL_ASSET_LIMIT = 0;
 const MANUSCRIPTS_ACTIVE_ASSET_LIMIT = 60;
 const MANUSCRIPTS_CARD_RENDER_LIMIT = 80;
+const RICHPOST_CARD_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
 
 const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '3:4', label: '3:4' },
@@ -740,6 +761,8 @@ function collectFileMetaMap(nodes: FileNode[]): Record<string, FileCardMeta> {
                 draftType: item.draftType || 'unknown',
                 updatedAt: Number(item.updatedAt || 0) || undefined,
                 summary: item.summary || '',
+                richpostPreviewFileUrl: item.richpostPreviewFileUrl || undefined,
+                richpostPreviewUpdatedAt: Number(item.richpostPreviewUpdatedAt || 0) || undefined,
             };
         }
     };
@@ -2127,36 +2150,77 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 activeSkills: editorAiWorkspaceMode.activeSkills,
                 associatedPackageThemeId:
                     draftType === 'richpost'
-                        ? packageState?.richpostThemeId || null
+                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                            ? editorAiWorkspaceMode.themeEditingId || null
+                            : packageState?.richpostThemeId || null
                         : draftType === 'longform'
                             ? packageState?.longformLayoutPresetId || null
                             : null,
                 associatedPackageThemeLabel:
                     draftType === 'richpost'
+                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                            ? editorAiWorkspaceMode.themeEditingLabel || null
+                            : packageState?.richpostThemeLabel || null
+                        : draftType === 'longform'
+                            ? packageState?.longformLayoutPresetLabel || null
+                            : null,
+                associatedPackageAppliedThemeId:
+                    draftType === 'richpost'
+                        ? packageState?.richpostThemeId || null
+                        : draftType === 'longform'
+                            ? packageState?.longformLayoutPresetId || null
+                            : null,
+                associatedPackageAppliedThemeLabel:
+                    draftType === 'richpost'
                         ? packageState?.richpostThemeLabel || null
                         : draftType === 'longform'
                             ? packageState?.longformLayoutPresetLabel || null
                             : null,
+                associatedPackageThemeEditingId:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? editorAiWorkspaceMode.themeEditingId || null
+                        : null,
+                associatedPackageThemeEditingLabel:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? editorAiWorkspaceMode.themeEditingLabel || null
+                        : null,
+                associatedPackageThemeEditingFile:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? editorAiWorkspaceMode.themeEditingFile || null
+                        : null,
                 associatedPackageContentSource:
                     (draftType === 'richpost' || draftType === 'longform')
                         ? String(packageState?.manifest?.entry || 'content.md')
                         : editorFile,
                 associatedPackageStyleTargets:
                     draftType === 'richpost'
-                        ? [
-                            'manifest.richpostThemeId',
-                            'layout.tokens.json',
-                            'masters/*.master.html',
-                            'richpost-page-plan.json',
-                            'pages/page-xxx.html',
-                            'layout.html',
-                        ]
+                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                            ? [
+                                'richpost-themes.json',
+                                'layout.tokens.json',
+                                'masters/cover.master.html',
+                                'masters/body.master.html',
+                                'masters/ending.master.html',
+                                'richpost-page-plan.json',
+                                'layout.html',
+                                'pages/page-xxx.html',
+                            ]
+                            : [
+                                'manifest.richpostThemeId',
+                                'layout.tokens.json',
+                                'masters/*.master.html',
+                                'richpost-page-plan.json',
+                                'pages/page-xxx.html',
+                                'layout.html',
+                            ]
                         : draftType === 'longform'
                             ? ['manifest.longformLayoutPresetId', 'layout.html', 'wechat.html']
                             : [],
                 associatedPackageStyleEditRule:
                     draftType === 'richpost'
-                        ? '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
+                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                            ? '当前处于图文主题编辑模式。优先修改 layout.tokens.json 与首页、内容页、尾页母版；只有在母版和 tokens 不足以达成目标时，才调整 richpost-page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
+                            : '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
                         : draftType === 'longform'
                             ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
                             : null,
@@ -2165,12 +2229,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         ? {
                             contentSource: String(packageState?.manifest?.entry || 'content.md'),
                             contentMap: 'content-map.json',
+                            themeCatalogFile: 'richpost-themes.json',
                             layoutTokens: 'layout.tokens.json',
                             mastersDir: 'masters/*.master.html',
+                            coverMaster: 'masters/cover.master.html',
+                            bodyMaster: 'masters/body.master.html',
+                            endingMaster: 'masters/ending.master.html',
                             pagePlan: 'richpost-page-plan.json',
                             previewShell: 'layout.html',
                             pagesDir: 'pages/page-xxx.html',
                             themeSource: 'manifest.richpostThemeId',
+                            templateEditingFocus: editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                                ? ['cover', 'body', 'ending']
+                                : [],
                             currentMasters: Array.isArray(packageState?.richpostMasters)
                                 ? packageState.richpostMasters
                                     .map((item) => String(item?.id || '').trim())
@@ -2212,7 +2283,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }).catch((error) => {
             console.error('Failed to sync editor chat metadata:', error);
         });
-    }, [editorAiWorkspaceMode.activeSkills, editorAiWorkspaceMode.id, editorAiWorkspaceMode.label, editorBodyDirty, editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
+    }, [
+        editorAiWorkspaceMode.activeSkills,
+        editorAiWorkspaceMode.id,
+        editorAiWorkspaceMode.label,
+        editorAiWorkspaceMode.themeEditingFile,
+        editorAiWorkspaceMode.themeEditingId,
+        editorAiWorkspaceMode.themeEditingLabel,
+        editorBodyDirty,
+        editorChatSessionId,
+        editorDescriptor?.draftType,
+        editorDescriptor?.title,
+        editorFile,
+        fileMetaMap,
+        packageState,
+    ]);
 
     const handleAcceptEditorWriteProposal = useCallback(async () => {
         if (!editorFile || !editorWriteProposal) return;
@@ -2517,6 +2602,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 title: meta?.title || stripDraftExtension(file.name),
                 summary: meta?.summary || '',
                 draftType,
+                richpostPreviewFileUrl: meta?.richpostPreviewFileUrl || '',
+                richpostPreviewUpdatedAt: Number(meta?.richpostPreviewUpdatedAt || 0) || 0,
             };
         });
 
@@ -3020,10 +3107,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         onSelectLongformLayoutPreset={(presetId, target) => {
                             void handleSelectLongformLayoutPreset(presetId, target);
                         }}
-                        onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                        onRejectWriteProposal={() => {
-                            void handleRejectEditorWriteProposal();
-                        }}
+                            onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
+                            onPackageStateChange={(state) => setPackageState(state as PackageState)}
+                            onRejectWriteProposal={() => {
+                                void handleRejectEditorWriteProposal();
+                            }}
                     />
                 )}
             </div>
@@ -3340,41 +3428,73 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                     ? Clapperboard
                                                     : card.draftType === 'audio'
                                                         ? FileAudio
-                                                        : card.draftType === 'richpost'
+                                                    : card.draftType === 'richpost'
                                                             ? FileImage
                                                             : FileText;
+                                                const richpostPreviewSrc = card.draftType === 'richpost'
+                                                    ? resolveAssetUrl(
+                                                        card.richpostPreviewFileUrl
+                                                            ? `${card.richpostPreviewFileUrl}${card.richpostPreviewFileUrl.includes('?') ? '&' : '?'}v=${card.richpostPreviewUpdatedAt || card.updatedAt || 0}`
+                                                            : ''
+                                                    )
+                                                    : '';
+                                                const showRichpostPreview = card.draftType === 'richpost'
+                                                    && Boolean(card.summary.trim())
+                                                    && Boolean(richpostPreviewSrc);
+                                                const openDraftCard = () => {
+                                                    void openDraftEditor(card.file.path);
+                                                };
+                                                const handleDraftCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+                                                    if (event.key === 'Enter' || event.key === ' ') {
+                                                        event.preventDefault();
+                                                        openDraftCard();
+                                                    }
+                                                };
                                                 return (
                                                     <div key={card.id} className={clsx(layout === 'gallery' ? 'group' : 'rounded-xl border border-black/[0.04] bg-white/70 px-4 py-2.5 transition-all hover:bg-white hover:shadow-sm')}>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void openDraftEditor(card.file.path)}
-                                                            onContextMenu={(event) => openDraftContextMenu(event, card.file, card.title)}
-                                                            className={clsx(layout === 'gallery' ? 'w-full text-left' : 'flex w-full items-center gap-4 text-left')}
-                                                        >
-                                                            {layout === 'gallery' ? (
-                                                                <>
-                                                                    <div className={clsx(
-                                                                        'relative aspect-[5/6] overflow-hidden rounded-[14px] border border-black/[0.04] transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_12px_24px_-8px_rgba(0,0,0,0.12)]',
-                                                                        typeTheme.tile
-                                                                    )}>
+                                                        {layout === 'gallery' ? (
+                                                            <div
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={openDraftCard}
+                                                                onKeyDown={handleDraftCardKeyDown}
+                                                                onContextMenu={(event) => openDraftContextMenu(event, card.file, card.title)}
+                                                                className="block w-full text-left outline-none"
+                                                            >
+                                                                <div className={clsx(
+                                                                    'relative aspect-[5/6] overflow-hidden rounded-[14px] border border-black/[0.04] bg-white transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_12px_24px_-8px_rgba(0,0,0,0.12)] focus-visible:ring-2 focus-visible:ring-accent-primary/30',
+                                                                    !showRichpostPreview && typeTheme.tile
+                                                                )}>
+                                                                    {showRichpostPreview ? (
+                                                                        <iframe
+                                                                            title={`${card.title} 首屏预览`}
+                                                                            src={richpostPreviewSrc}
+                                                                            sandbox={RICHPOST_CARD_PREVIEW_SANDBOX}
+                                                                            loading="lazy"
+                                                                            className="h-full w-full pointer-events-none border-0 bg-white"
+                                                                        />
+                                                                    ) : (
                                                                         <div className="absolute inset-0 p-4 flex flex-col">
                                                                             <div className={clsx('inline-flex h-8 w-8 items-center justify-center rounded-lg shadow-sm', typeTheme.iconWrap)}>
                                                                                 <Icon className="h-4 w-4" />
                                                                             </div>
                                                                             <div className="mt-4 text-[9px] font-bold uppercase tracking-[0.24em] text-white/50">{resolveDraftTypeLabel(card.draftType)}</div>
-                                                                            <div className="mt-1.5 line-clamp-2 text-[15px] font-extrabold leading-tight text-white tracking-tight">{card.title}</div>
-                                                                            
-                                                                            <div className="mt-auto rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5 text-[10px] font-medium text-white/80 backdrop-blur-md">
-                                                                                <div className="line-clamp-2 leading-relaxed">{card.summary || '打开后继续编辑或交给 AI 处理。'}</div>
-                                                                            </div>
+                                                                            <div className="mt-1.5 line-clamp-3 text-[15px] font-extrabold leading-tight text-white tracking-tight">{card.title}</div>
                                                                         </div>
-                                                                    </div>
-                                                                    <div className="px-1 mt-2.5">
-                                                                        <div className="truncate text-[13px] font-bold text-text-primary group-hover:text-accent-primary transition-colors">{card.title}</div>
-                                                                        <div className="mt-0.5 text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter">{formatDateLabel(card.updatedAt)}</div>
-                                                                    </div>
-                                                                </>
-                                                            ) : (
+                                                                    )}
+                                                                </div>
+                                                                <div className="mt-2.5 px-1">
+                                                                    <div className="truncate text-[13px] font-bold text-text-primary transition-colors group-hover:text-accent-primary">{card.title}</div>
+                                                                    <div className="mt-0.5 text-[10px] font-bold uppercase tracking-tighter text-text-tertiary/60">{formatDateLabel(card.updatedAt)}</div>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                onClick={openDraftCard}
+                                                                onContextMenu={(event) => openDraftContextMenu(event, card.file, card.title)}
+                                                                className="flex w-full items-center gap-4 text-left"
+                                                            >
                                                                 <div className="flex min-w-0 items-center gap-4">
                                                                     <div className={clsx('flex h-9 w-9 items-center justify-center rounded-lg shadow-sm', typeTheme.tile)}>
                                                                         <Icon className="h-4 w-4 text-white" />
@@ -3384,8 +3504,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                         <div className="mt-0.5 truncate text-[11px] font-medium text-text-tertiary/70">{card.summary || card.file.path}</div>
                                                                     </div>
                                                                 </div>
-                                                            )}
-                                                        </button>
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 );
                                             }

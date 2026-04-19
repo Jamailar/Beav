@@ -382,7 +382,7 @@ struct AssistantStateRecord {
 impl Default for AssistantStateRecord {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             auto_start: true,
             keep_alive_when_no_window: true,
             host: "127.0.0.1".to_string(),
@@ -509,6 +509,8 @@ struct KnowledgeNoteStatsRecord {
 struct KnowledgeNoteRecord {
     id: String,
     r#type: Option<String>,
+    source_domain: Option<String>,
+    source_link: Option<String>,
     source_url: Option<String>,
     title: String,
     author: String,
@@ -551,6 +553,8 @@ struct DocumentKnowledgeSourceRecord {
 struct MediaAssetRecord {
     id: String,
     source: String,
+    source_domain: Option<String>,
+    source_link: Option<String>,
     project_id: Option<String>,
     title: Option<String>,
     prompt: Option<String>,
@@ -774,6 +778,12 @@ struct FileNode {
     updated_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_file_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_updated_at: Option<i64>,
 }
 
 fn now_ms() -> u128 {
@@ -1881,7 +1891,9 @@ fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
         "meta": {
             "sourceType": note.capture_kind,
             "folderPath": note.folder_path,
-            "sourceUrl": note.source_url
+            "sourceDomain": note.source_domain,
+            "sourceLink": note.source_link.clone().or(note.source_url.clone()),
+            "sourceUrl": note.source_link.clone().or(note.source_url.clone())
         }
     })
 }

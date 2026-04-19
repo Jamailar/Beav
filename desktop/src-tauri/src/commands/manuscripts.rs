@@ -10,7 +10,9 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
-use pulldown_cmark::{html::push_html, Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser};
+use pulldown_cmark::{
+    html::push_html, Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -28,6 +30,8 @@ const RICHPOST_FONT_SCALE_MIN: f64 = 0.8;
 const RICHPOST_FONT_SCALE_MAX: f64 = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN: f64 = 0.8;
 const RICHPOST_LINE_HEIGHT_SCALE_MAX: f64 = 1.4;
+const RICHPOST_THEME_PREVIEW_TITLE: &str = "RedBox";
+const RICHPOST_THEME_PREVIEW_BODY: &str = "用 AI 生产高质量内容。";
 const RICHPOST_MASTER_COVER: &str = "cover";
 const RICHPOST_MASTER_BODY: &str = "body";
 const RICHPOST_MASTER_ENDING: &str = "ending";
@@ -118,6 +122,30 @@ struct LongformLayoutPreset {
     accent: &'static str,
     layout_instructions: &'static str,
     wechat_instructions: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RichpostThemeSpec {
+    id: String,
+    label: String,
+    description: String,
+    shell_bg: String,
+    preview_card_bg: String,
+    preview_card_border: String,
+    preview_card_shadow: String,
+    page_bg: String,
+    surface_bg: String,
+    surface_border: String,
+    surface_shadow: String,
+    surface_radius: String,
+    image_radius: String,
+    text: String,
+    muted: String,
+    accent: String,
+    heading_font: String,
+    body_font: String,
+    source: String,
 }
 
 fn richpost_theme_catalog() -> &'static [RichpostThemePreset] {
@@ -270,19 +298,271 @@ fn longform_layout_preset_catalog() -> &'static [LongformLayoutPreset] {
     ]
 }
 
-fn richpost_theme_preset(theme_id: &str) -> &'static RichpostThemePreset {
-    richpost_theme_catalog()
-        .iter()
-        .find(|theme| theme.id == theme_id.trim())
-        .unwrap_or(&richpost_theme_catalog()[0])
+fn richpost_theme_spec_from_preset(theme: &RichpostThemePreset) -> RichpostThemeSpec {
+    RichpostThemeSpec {
+        id: theme.id.to_string(),
+        label: theme.label.to_string(),
+        description: theme.description.to_string(),
+        shell_bg: theme.shell_bg.to_string(),
+        preview_card_bg: theme.preview_card_bg.to_string(),
+        preview_card_border: theme.preview_card_border.to_string(),
+        preview_card_shadow: theme.preview_card_shadow.to_string(),
+        page_bg: theme.page_bg.to_string(),
+        surface_bg: theme.surface_bg.to_string(),
+        surface_border: theme.surface_border.to_string(),
+        surface_shadow: theme.surface_shadow.to_string(),
+        surface_radius: theme.surface_radius.to_string(),
+        image_radius: theme.image_radius.to_string(),
+        text: theme.text.to_string(),
+        muted: theme.muted.to_string(),
+        accent: theme.accent.to_string(),
+        heading_font: theme.heading_font.to_string(),
+        body_font: theme.body_font.to_string(),
+        source: "builtin".to_string(),
+    }
 }
 
-fn richpost_theme_from_manifest(manifest: &Value) -> &'static RichpostThemePreset {
-    manifest
+fn default_richpost_theme_spec() -> RichpostThemeSpec {
+    richpost_theme_spec_from_preset(&richpost_theme_catalog()[0])
+}
+
+fn richpost_theme_catalog_specs() -> Vec<RichpostThemeSpec> {
+    richpost_theme_catalog()
+        .iter()
+        .map(richpost_theme_spec_from_preset)
+        .collect::<Vec<_>>()
+}
+
+fn sanitize_richpost_theme_text(raw: Option<&str>, fallback: &str) -> String {
+    let sanitized = raw
+        .unwrap_or("")
+        .trim()
+        .replace(['<', '>', '{', '}'], "");
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn sanitize_richpost_theme_label(raw: Option<&str>, fallback: &str) -> String {
+    let normalized = raw
+        .unwrap_or("")
+        .trim()
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        fallback.to_string()
+    } else {
+        normalized.chars().take(32).collect::<String>()
+    }
+}
+
+fn sanitize_richpost_theme_description(raw: Option<&str>) -> String {
+    raw.unwrap_or("")
+        .trim()
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect::<String>()
+}
+
+fn sanitize_richpost_theme_id_fragment(raw: &str) -> String {
+    sanitize_richpost_master_name(raw).unwrap_or_else(|| "theme".to_string())
+}
+
+fn next_richpost_custom_theme_label(package_path: &std::path::Path) -> String {
+    let existing = richpost_theme_catalog_for_package(Some(package_path));
+    let base = "新主题";
+    if !existing.iter().any(|theme| theme.label.trim() == base) {
+        return base.to_string();
+    }
+    let mut index = 2usize;
+    loop {
+        let candidate = format!("{base} {index}");
+        if !existing.iter().any(|theme| theme.label.trim() == candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn read_custom_richpost_theme_specs(package_path: &std::path::Path) -> Vec<RichpostThemeSpec> {
+    read_json_value_or(&package_richpost_themes_path(package_path), json!({ "items": [] }))
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value::<RichpostThemeSpec>(item.clone()).ok())
+                .map(|mut theme| {
+                    theme.source = "custom".to_string();
+                    theme
+                })
+                .filter(|theme| !theme.id.trim().is_empty() && !theme.label.trim().is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn write_custom_richpost_theme_specs(
+    package_path: &std::path::Path,
+    themes: &[RichpostThemeSpec],
+) -> Result<(), String> {
+    let items = themes
+        .iter()
+        .map(|theme| {
+            json!({
+                "id": theme.id,
+                "label": theme.label,
+                "description": theme.description,
+                "shellBg": theme.shell_bg,
+                "previewCardBg": theme.preview_card_bg,
+                "previewCardBorder": theme.preview_card_border,
+                "previewCardShadow": theme.preview_card_shadow,
+                "pageBg": theme.page_bg,
+                "surfaceBg": theme.surface_bg,
+                "surfaceBorder": theme.surface_border,
+                "surfaceShadow": theme.surface_shadow,
+                "surfaceRadius": theme.surface_radius,
+                "imageRadius": theme.image_radius,
+                "text": theme.text,
+                "muted": theme.muted,
+                "accent": theme.accent,
+                "headingFont": theme.heading_font,
+                "bodyFont": theme.body_font,
+                "source": "custom"
+            })
+        })
+        .collect::<Vec<_>>();
+    write_json_value(
+        &package_richpost_themes_path(package_path),
+        &json!({
+            "version": 1,
+            "items": items,
+        }),
+    )
+}
+
+fn richpost_theme_spec_payload_value(theme: &RichpostThemeSpec) -> Value {
+    json!({
+        "id": theme.id,
+        "label": theme.label,
+        "description": theme.description,
+        "source": theme.source,
+        "shellBg": theme.shell_bg,
+        "pageBg": theme.page_bg,
+        "surfaceBg": theme.surface_bg,
+        "surfaceBorder": theme.surface_border,
+        "surfaceShadow": theme.surface_shadow,
+        "surfaceRadius": theme.surface_radius,
+        "imageRadius": theme.image_radius,
+        "previewCardBg": theme.preview_card_bg,
+        "previewCardBorder": theme.preview_card_border,
+        "previewCardShadow": theme.preview_card_shadow,
+        "textColor": theme.text,
+        "mutedColor": theme.muted,
+        "accentColor": theme.accent,
+        "headingFont": theme.heading_font,
+        "bodyFont": theme.body_font
+    })
+}
+
+fn richpost_theme_catalog_for_package(package_path: Option<&std::path::Path>) -> Vec<RichpostThemeSpec> {
+    let mut catalog = richpost_theme_catalog_specs();
+    if let Some(path) = package_path {
+        catalog.extend(read_custom_richpost_theme_specs(path));
+    }
+    catalog
+}
+
+fn richpost_theme_spec_from_manifest(
+    package_path: Option<&std::path::Path>,
+    manifest: &Value,
+) -> RichpostThemeSpec {
+    let theme_id = manifest
         .get("richpostThemeId")
         .and_then(Value::as_str)
-        .map(richpost_theme_preset)
-        .unwrap_or(&richpost_theme_catalog()[0])
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(theme_id) = theme_id {
+        if let Some(theme) = richpost_theme_catalog_for_package(package_path)
+            .into_iter()
+            .find(|theme| theme.id == theme_id)
+        {
+            return theme;
+        }
+    }
+    default_richpost_theme_spec()
+}
+
+fn richpost_theme_spec_by_id(
+    package_path: Option<&std::path::Path>,
+    theme_id: &str,
+) -> RichpostThemeSpec {
+    let normalized = theme_id.trim();
+    richpost_theme_catalog_for_package(package_path)
+        .into_iter()
+        .find(|theme| theme.id == normalized)
+        .unwrap_or_else(default_richpost_theme_spec)
+}
+
+fn normalize_richpost_theme_draft(
+    raw: &Value,
+    base_theme: &RichpostThemeSpec,
+    existing_theme_id: Option<&str>,
+    package_path: &std::path::Path,
+) -> RichpostThemeSpec {
+    let label = sanitize_richpost_theme_label(
+        raw.get("label").and_then(Value::as_str),
+        &base_theme.label,
+    );
+    let requested_id = raw.get("id").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let catalog = richpost_theme_catalog_for_package(Some(package_path));
+    let theme_id = if !requested_id.is_empty() && catalog.iter().any(|theme| theme.id == requested_id && theme.source == "custom") {
+        requested_id.to_string()
+    } else {
+        let base_fragment = sanitize_richpost_theme_id_fragment(&label);
+        let mut candidate = format!("custom-{base_fragment}");
+        if Some(candidate.as_str()) != existing_theme_id && catalog.iter().any(|theme| theme.id == candidate) {
+            let mut index = 2usize;
+            loop {
+                let next_candidate = format!("{candidate}-{index}");
+                if Some(next_candidate.as_str()) == existing_theme_id || !catalog.iter().any(|theme| theme.id == next_candidate) {
+                    candidate = next_candidate;
+                    break;
+                }
+                index += 1;
+            }
+        }
+        candidate
+    };
+    RichpostThemeSpec {
+        id: theme_id,
+        label,
+        description: sanitize_richpost_theme_description(raw.get("description").and_then(Value::as_str)),
+        shell_bg: sanitize_richpost_theme_text(raw.get("shellBg").and_then(Value::as_str), &base_theme.shell_bg),
+        preview_card_bg: sanitize_richpost_theme_text(raw.get("previewCardBg").and_then(Value::as_str), &base_theme.preview_card_bg),
+        preview_card_border: sanitize_richpost_theme_text(raw.get("previewCardBorder").and_then(Value::as_str), &base_theme.preview_card_border),
+        preview_card_shadow: sanitize_richpost_theme_text(raw.get("previewCardShadow").and_then(Value::as_str), &base_theme.preview_card_shadow),
+        page_bg: sanitize_richpost_theme_text(raw.get("pageBg").and_then(Value::as_str), &base_theme.page_bg),
+        surface_bg: sanitize_richpost_theme_text(raw.get("surfaceBg").and_then(Value::as_str), &base_theme.surface_bg),
+        surface_border: sanitize_richpost_theme_text(raw.get("surfaceBorder").and_then(Value::as_str), &base_theme.surface_border),
+        surface_shadow: sanitize_richpost_theme_text(raw.get("surfaceShadow").and_then(Value::as_str), &base_theme.surface_shadow),
+        surface_radius: sanitize_richpost_theme_text(raw.get("surfaceRadius").and_then(Value::as_str), &base_theme.surface_radius),
+        image_radius: sanitize_richpost_theme_text(raw.get("imageRadius").and_then(Value::as_str), &base_theme.image_radius),
+        text: sanitize_richpost_theme_text(raw.get("textColor").and_then(Value::as_str).or_else(|| raw.get("text").and_then(Value::as_str)), &base_theme.text),
+        muted: sanitize_richpost_theme_text(raw.get("mutedColor").and_then(Value::as_str).or_else(|| raw.get("muted").and_then(Value::as_str)), &base_theme.muted),
+        accent: sanitize_richpost_theme_text(raw.get("accentColor").and_then(Value::as_str).or_else(|| raw.get("accent").and_then(Value::as_str)), &base_theme.accent),
+        heading_font: sanitize_richpost_theme_text(raw.get("headingFont").and_then(Value::as_str), &base_theme.heading_font),
+        body_font: sanitize_richpost_theme_text(raw.get("bodyFont").and_then(Value::as_str), &base_theme.body_font),
+        source: "custom".to_string(),
+    }
 }
 
 fn clamp_richpost_font_scale(value: f64) -> f64 {
@@ -325,8 +605,7 @@ fn write_richpost_typography_settings_to_manifest(
     let Some(object) = manifest.as_object_mut() else {
         return;
     };
-    if (settings.font_scale - 1.0).abs() < 0.001
-        && (settings.line_height_scale - 1.0).abs() < 0.001
+    if (settings.font_scale - 1.0).abs() < 0.001 && (settings.line_height_scale - 1.0).abs() < 0.001
     {
         object.remove("richpostTypography");
         return;
@@ -408,10 +687,7 @@ fn richpost_css_var_string(value: &Value) -> Option<String> {
     }
 }
 
-fn merge_richpost_css_var_object(
-    target: &mut serde_json::Map<String, Value>,
-    raw: Option<&Value>,
-) {
+fn merge_richpost_css_var_object(target: &mut serde_json::Map<String, Value>, raw: Option<&Value>) {
     let Some(object) = raw.and_then(Value::as_object) else {
         return;
     };
@@ -426,7 +702,7 @@ fn merge_richpost_css_var_object(
     }
 }
 
-fn default_richpost_layout_tokens(theme: &RichpostThemePreset) -> Value {
+fn default_richpost_layout_tokens(theme: &RichpostThemeSpec) -> Value {
     json!({
         "version": 1,
         "themeId": theme.id,
@@ -469,7 +745,7 @@ fn default_richpost_layout_tokens(theme: &RichpostThemePreset) -> Value {
     })
 }
 
-fn normalize_richpost_layout_tokens_value(raw: &Value, theme: &RichpostThemePreset) -> Value {
+fn normalize_richpost_layout_tokens_value(raw: &Value, theme: &RichpostThemeSpec) -> Value {
     let mut normalized = default_richpost_layout_tokens(theme);
     if let Some(object) = normalized.as_object_mut() {
         if let Some(css_vars) = object.get_mut("cssVars").and_then(Value::as_object_mut) {
@@ -484,7 +760,10 @@ fn normalize_richpost_layout_tokens_value(raw: &Value, theme: &RichpostThemePres
                     let role_entry = role_target
                         .entry(role_key)
                         .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                    merge_richpost_css_var_object(role_entry.as_object_mut().unwrap(), Some(role_value));
+                    merge_richpost_css_var_object(
+                        role_entry.as_object_mut().unwrap(),
+                        Some(role_value),
+                    );
                 }
             }
         }
@@ -494,23 +773,21 @@ fn normalize_richpost_layout_tokens_value(raw: &Value, theme: &RichpostThemePres
     normalized
 }
 
-fn read_richpost_layout_tokens_value(
-    package_path: &std::path::Path,
-    manifest: &Value,
-) -> Value {
-    let theme = richpost_theme_from_manifest(manifest);
+fn read_richpost_layout_tokens_value(package_path: &std::path::Path, manifest: &Value) -> Value {
+    let theme = richpost_theme_spec_from_manifest(Some(package_path), manifest);
     let raw = read_json_value_or(
         &package_layout_tokens_path(package_path),
-        default_richpost_layout_tokens(theme),
+        default_richpost_layout_tokens(&theme),
     );
-    normalize_richpost_layout_tokens_value(&raw, theme)
+    normalize_richpost_layout_tokens_value(&raw, &theme)
 }
 
 fn write_richpost_layout_tokens_for_theme(
     package_path: &std::path::Path,
-    theme: &RichpostThemePreset,
+    theme: &RichpostThemeSpec,
 ) -> Result<Value, String> {
-    let normalized = normalize_richpost_layout_tokens_value(&default_richpost_layout_tokens(theme), theme);
+    let normalized =
+        normalize_richpost_layout_tokens_value(&default_richpost_layout_tokens(theme), theme);
     write_json_value(&package_layout_tokens_path(package_path), &normalized)?;
     Ok(normalized)
 }
@@ -588,11 +865,11 @@ fn ensure_richpost_layout_scaffold(
     package_path: &std::path::Path,
     manifest: &Value,
 ) -> Result<Value, String> {
-    let theme = richpost_theme_from_manifest(manifest);
+    let theme = richpost_theme_spec_from_manifest(Some(package_path), manifest);
     let tokens_path = package_layout_tokens_path(package_path);
     let refresh_builtin_tokens = !richpost_builtin_tokens_are_locked(manifest);
     let tokens = if refresh_builtin_tokens || !tokens_path.exists() {
-        write_richpost_layout_tokens_for_theme(package_path, theme)?
+        write_richpost_layout_tokens_for_theme(package_path, &theme)?
     } else {
         read_richpost_layout_tokens_value(package_path, manifest)
     };
@@ -608,16 +885,28 @@ fn ensure_richpost_layout_scaffold(
     Ok(tokens)
 }
 
-pub(crate) fn richpost_theme_catalog_value() -> Value {
-    json!(richpost_theme_catalog()
+pub(crate) fn richpost_theme_catalog_value(package_path: Option<&std::path::Path>) -> Value {
+    json!(richpost_theme_catalog_for_package(package_path)
         .iter()
         .map(|theme| {
             json!({
                 "id": theme.id,
                 "label": theme.label,
                 "description": theme.description,
+                "source": theme.source,
+                "shellBg": theme.shell_bg,
+                "pageBg": theme.page_bg,
                 "surfaceColor": theme.surface_bg,
+                "surfaceBg": theme.surface_bg,
+                "surfaceBorder": theme.surface_border,
+                "surfaceShadow": theme.surface_shadow,
+                "surfaceRadius": theme.surface_radius,
+                "imageRadius": theme.image_radius,
+                "previewCardBg": theme.preview_card_bg,
+                "previewCardBorder": theme.preview_card_border,
+                "previewCardShadow": theme.preview_card_shadow,
                 "textColor": theme.text,
+                "mutedColor": theme.muted,
                 "accentColor": theme.accent,
                 "headingFont": theme.heading_font,
                 "bodyFont": theme.body_font
@@ -626,12 +915,16 @@ pub(crate) fn richpost_theme_catalog_value() -> Value {
         .collect::<Vec<_>>())
 }
 
-pub(crate) fn richpost_theme_state_value(manifest: &Value) -> Value {
-    let theme = richpost_theme_from_manifest(manifest);
+pub(crate) fn richpost_theme_state_value(
+    package_path: &std::path::Path,
+    manifest: &Value,
+) -> Value {
+    let theme = richpost_theme_spec_from_manifest(Some(package_path), manifest);
     json!({
         "id": theme.id,
         "label": theme.label,
-        "description": theme.description
+        "description": theme.description,
+        "source": theme.source
     })
 }
 
@@ -1854,7 +2147,15 @@ fn richpost_zone_assignment_with_fragments(
 
 fn richpost_zone_block_ids(zones: &serde_json::Map<String, Value>) -> Vec<String> {
     let mut items = Vec::<String>::new();
-    for zone_name in ["title", "body", "media", "footer", "background", "overlay", "decoration"] {
+    for zone_name in [
+        "title",
+        "body",
+        "media",
+        "footer",
+        "background",
+        "overlay",
+        "decoration",
+    ] {
         if let Some(blocks) = zones
             .get(zone_name)
             .and_then(|value| value.get("blockIds"))
@@ -1887,7 +2188,15 @@ fn richpost_zone_block_ids(zones: &serde_json::Map<String, Value>) -> Vec<String
 
 fn richpost_zone_asset_ids(zones: &serde_json::Map<String, Value>) -> Vec<String> {
     let mut items = Vec::<String>::new();
-    for zone_name in ["background", "media", "footer", "overlay", "decoration", "title", "body"] {
+    for zone_name in [
+        "background",
+        "media",
+        "footer",
+        "overlay",
+        "decoration",
+        "title",
+        "body",
+    ] {
         if let Some(assets) = zones
             .get(zone_name)
             .and_then(|value| value.get("assetIds"))
@@ -1981,10 +2290,7 @@ fn richpost_body_chars_per_line(settings: RichpostTypographySettings) -> usize {
     ((22.0 / settings.font_scale).round() as i64).clamp(10, 28) as usize
 }
 
-fn richpost_heading_chars_per_line(
-    level: u8,
-    settings: RichpostTypographySettings,
-) -> usize {
+fn richpost_heading_chars_per_line(level: u8, settings: RichpostTypographySettings) -> usize {
     let base = match level {
         1 => 10.0,
         2 => 12.0,
@@ -2048,7 +2354,8 @@ fn richpost_block_line_cost_from_parts(
         };
         return wrapped_lines + spacing_lines;
     }
-    let wrapped_lines = richpost_estimated_wrapped_line_count(text, richpost_body_chars_per_line(settings));
+    let wrapped_lines =
+        richpost_estimated_wrapped_line_count(text, richpost_body_chars_per_line(settings));
     wrapped_lines + 1
 }
 
@@ -2467,10 +2774,7 @@ fn default_richpost_page_plan(
     let segment_pages = segments
         .iter()
         .flat_map(|segment| richpost_default_segment_pages(segment, typography))
-        .filter(|page| {
-            !(page.title_block_ids.is_empty()
-                && page.body_fragments.is_empty())
-        })
+        .filter(|page| !(page.title_block_ids.is_empty() && page.body_fragments.is_empty()))
         .collect::<Vec<_>>();
     for page_draft in segment_pages {
         let template = "text-stack";
@@ -2875,7 +3179,10 @@ fn richpost_zone_html(
         .filter_map(Value::as_object)
         .filter_map(|fragment| {
             let text = fragment.get("text").and_then(Value::as_str)?;
-            let kind = fragment.get("kind").and_then(Value::as_str).unwrap_or("paragraph");
+            let kind = fragment
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("paragraph");
             let level = fragment
                 .get("level")
                 .and_then(Value::as_u64)
@@ -3259,6 +3566,101 @@ fn render_richpost_preview_shell(
     )
 }
 
+fn render_richpost_theme_preview_html(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    typography: RichpostTypographySettings,
+) -> String {
+    render_richpost_theme_preview_page_html(
+        package_path,
+        theme,
+        typography,
+        RICHPOST_MASTER_BODY,
+    )
+}
+
+fn render_richpost_theme_preview_page_html(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    typography: RichpostTypographySettings,
+    master_id: &str,
+) -> String {
+    let blocks = vec![
+        PackageContentBlock {
+            id: "preview_h1".to_string(),
+            slot: "preview_h1".to_string(),
+            kind: "heading".to_string(),
+            level: Some(1),
+            text: RICHPOST_THEME_PREVIEW_TITLE.to_string(),
+            order: 0,
+            char_count: RICHPOST_THEME_PREVIEW_TITLE.chars().count(),
+        },
+        PackageContentBlock {
+            id: "preview_p1".to_string(),
+            slot: "preview_p1".to_string(),
+            kind: "paragraph".to_string(),
+            level: None,
+            text: RICHPOST_THEME_PREVIEW_BODY.to_string(),
+            order: 1,
+            char_count: RICHPOST_THEME_PREVIEW_BODY.chars().count(),
+        },
+    ];
+    let blocks_by_id = blocks
+        .into_iter()
+        .map(|block| (block.id.clone(), block))
+        .collect::<BTreeMap<_, _>>();
+    let preview_page = json!({
+        "id": "preview-page",
+        "master": master_id,
+        "template": "text-stack",
+        "blockIds": ["preview_h1", "preview_p1"],
+        "assetIds": [],
+        "zones": {
+            "title": {
+                "blockIds": ["preview_h1"]
+            },
+            "body": {
+                "blockIds": ["preview_p1"]
+            }
+        },
+        "styleOverrides": {}
+    });
+    let tokens =
+        normalize_richpost_layout_tokens_value(&default_richpost_layout_tokens(theme), theme);
+    render_richpost_page_html(
+        package_path,
+        RICHPOST_THEME_PREVIEW_TITLE,
+        &preview_page,
+        0,
+        1,
+        &blocks_by_id,
+        &BTreeMap::new(),
+        &tokens,
+        typography,
+    )
+}
+
+fn render_richpost_theme_preview_pages(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    typography: RichpostTypographySettings,
+) -> Vec<Value> {
+    [
+        (RICHPOST_MASTER_COVER, "首页"),
+        (RICHPOST_MASTER_BODY, "内容页"),
+        (RICHPOST_MASTER_ENDING, "尾页"),
+    ]
+    .into_iter()
+    .map(|(master_id, label)| {
+        json!({
+            "id": master_id,
+            "label": label,
+            "html": render_richpost_theme_preview_page_html(package_path, theme, typography, master_id),
+        })
+    })
+    .collect::<Vec<_>>()
+}
+
 fn persist_richpost_pages_from_plan(
     package_path: &std::path::Path,
     title: &str,
@@ -3335,16 +3737,15 @@ fn persist_richpost_page_plan(
 ) -> Result<Value, String> {
     let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
     let typography = richpost_typography_settings_from_manifest(&manifest);
-    let normalized =
-        normalize_richpost_page_plan(
-            raw_plan,
-            title,
-            blocks,
-            cover_asset,
-            image_assets,
-            source,
-            typography,
-        );
+    let normalized = normalize_richpost_page_plan(
+        raw_plan,
+        title,
+        blocks,
+        cover_asset,
+        image_assets,
+        source,
+        typography,
+    );
     write_json_value(&package_richpost_page_plan_path(package_path), &normalized)?;
     persist_richpost_pages_from_plan(
         package_path,
@@ -7144,19 +7545,231 @@ pub fn handle_manuscripts_channel(
                         json!({ "success": false, "error": "Only richpost packages support themes" }),
                     );
                 }
-                let theme = richpost_theme_preset(&theme_id);
+                let theme = richpost_theme_spec_by_id(Some(&full_path), &theme_id);
                 let mut manifest =
                     read_json_value_or(&package_manifest_path(&full_path), json!({}));
                 if let Some(object) = manifest.as_object_mut() {
-                    object.insert("richpostThemeId".to_string(), json!(theme.id));
+                    object.insert("richpostThemeId".to_string(), json!(theme.id.clone()));
                     object.insert("updatedAt".to_string(), json!(now_i64()));
                 }
                 write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                let _ = write_richpost_layout_tokens_for_theme(&full_path, theme)?;
+                let _ = write_richpost_layout_tokens_for_theme(&full_path, &theme)?;
                 Ok(json!({
                     "success": true,
                     "themeId": theme.id,
                     "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
+                }))
+            }
+            "manuscripts:preview-richpost-theme-draft" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Only richpost packages support richpost theme previews"
+                    }));
+                }
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let typography = richpost_typography_settings_from_manifest(&manifest);
+                let _ = ensure_richpost_layout_scaffold(&full_path, &manifest)?;
+                let base_theme_id = payload_string(&payload, "baseThemeId")
+                    .or_else(|| manifest.get("richpostThemeId").and_then(Value::as_str).map(ToString::to_string))
+                    .unwrap_or_default();
+                let base_theme = richpost_theme_spec_by_id(Some(&full_path), &base_theme_id);
+                let draft_theme = normalize_richpost_theme_draft(
+                    payload_field(&payload, "theme").unwrap_or(&Value::Null),
+                    &base_theme,
+                    payload_string(&payload, "existingThemeId").as_deref(),
+                    &full_path,
+                );
+                Ok(json!({
+                    "success": true,
+                    "theme": richpost_theme_spec_payload_value(&draft_theme),
+                    "previews": render_richpost_theme_preview_pages(&full_path, &draft_theme, typography),
+                    "html": render_richpost_theme_preview_html(&full_path, &draft_theme, typography),
+                }))
+            }
+            "manuscripts:create-richpost-custom-theme" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Only richpost packages support custom themes"
+                    }));
+                }
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let base_theme_id = payload_string(&payload, "baseThemeId")
+                    .or_else(|| manifest.get("richpostThemeId").and_then(Value::as_str).map(ToString::to_string))
+                    .unwrap_or_default();
+                let base_theme = richpost_theme_spec_by_id(Some(&full_path), &base_theme_id);
+                let default_label = next_richpost_custom_theme_label(&full_path);
+                let requested_theme = payload_field(&payload, "theme")
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "label": default_label }));
+                let theme = normalize_richpost_theme_draft(
+                    &requested_theme,
+                    &base_theme,
+                    None,
+                    &full_path,
+                );
+                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
+                custom_themes.retain(|item| item.id != theme.id);
+                custom_themes.push(theme.clone());
+                custom_themes.sort_by(|left, right| left.label.cmp(&right.label).then(left.id.cmp(&right.id)));
+                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
+                let package_state = crate::manuscript_package::get_manuscript_package_state(&full_path)?;
+                Ok(json!({
+                    "success": true,
+                    "themeId": theme.id,
+                    "themeFile": package_richpost_themes_path(&full_path).display().to_string(),
+                    "theme": richpost_theme_spec_payload_value(&theme),
+                    "state": package_state,
+                }))
+            }
+            "manuscripts:save-richpost-custom-theme" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Only richpost packages support custom themes"
+                    }));
+                }
+                let mut manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let base_theme_id = payload_string(&payload, "baseThemeId")
+                    .or_else(|| manifest.get("richpostThemeId").and_then(Value::as_str).map(ToString::to_string))
+                    .unwrap_or_default();
+                let base_theme = richpost_theme_spec_by_id(Some(&full_path), &base_theme_id);
+                let theme = normalize_richpost_theme_draft(
+                    payload_field(&payload, "theme").unwrap_or(&Value::Null),
+                    &base_theme,
+                    payload_string(&payload, "existingThemeId").as_deref(),
+                    &full_path,
+                );
+                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
+                custom_themes.retain(|item| item.id != theme.id);
+                custom_themes.push(theme.clone());
+                custom_themes.sort_by(|left, right| left.label.cmp(&right.label).then(left.id.cmp(&right.id)));
+                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
+                let apply_immediately = payload_field(&payload, "apply")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let state = if apply_immediately {
+                    if let Some(object) = manifest.as_object_mut() {
+                        object.insert("richpostThemeId".to_string(), json!(theme.id.clone()));
+                        object.insert("updatedAt".to_string(), json!(now_i64()));
+                    }
+                    write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                    let _ = write_richpost_layout_tokens_for_theme(&full_path, &theme)?;
+                    sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?
+                } else {
+                    crate::manuscript_package::get_manuscript_package_state(&full_path)?
+                };
+                Ok(json!({
+                    "success": true,
+                    "themeId": theme.id,
+                    "theme": richpost_theme_spec_payload_value(&theme),
+                    "state": state,
+                }))
+            }
+            "manuscripts:get-richpost-theme-previews" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Only richpost packages support richpost theme previews"
+                    }));
+                }
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let typography = richpost_typography_settings_from_manifest(&manifest);
+                let _ = ensure_richpost_layout_scaffold(&full_path, &manifest)?;
+                let requested_ids = payload_field(&payload, "themeIds")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        richpost_theme_catalog_for_package(Some(&full_path))
+                            .into_iter()
+                            .map(|theme| theme.id)
+                            .collect::<Vec<_>>()
+                    });
+                let catalog = richpost_theme_catalog_for_package(Some(&full_path));
+                let previews = requested_ids
+                    .into_iter()
+                    .filter_map(|theme_id| {
+                        catalog
+                            .iter()
+                            .find(|theme| theme.id == theme_id)
+                            .cloned()
+                            .map(|theme| {
+                                json!({
+                                    "id": theme.id,
+                                    "label": theme.label,
+                                    "html": render_richpost_theme_preview_html(&full_path, &theme, typography),
+                                })
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({
+                    "success": true,
+                    "previews": previews,
                 }))
             }
             "manuscripts:set-longform-layout-preset" => {
@@ -7238,9 +7851,11 @@ pub fn handle_manuscripts_channel(
                         json!({ "success": false, "error": "Only richpost packages support page plans" }),
                     );
                 }
-                let mut manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let mut manifest =
+                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
                 let current_typography = richpost_typography_settings_from_manifest(&manifest);
-                let requested_font_scale = payload_field(&payload, "fontScale").and_then(Value::as_f64);
+                let requested_font_scale =
+                    payload_field(&payload, "fontScale").and_then(Value::as_f64);
                 let requested_line_height_scale =
                     payload_field(&payload, "lineHeightScale").and_then(Value::as_f64);
                 if requested_font_scale.is_some() || requested_line_height_scale.is_some() {
@@ -8633,6 +9248,8 @@ pub fn handle_manuscripts_channel(
                     let asset = MediaAssetRecord {
                         id: make_id("media"),
                         source: "imported".to_string(),
+                        source_domain: None,
+                        source_link: None,
                         project_id: None,
                         title: source
                             .file_name()
@@ -9033,6 +9650,8 @@ pub fn handle_manuscripts_channel(
                         let asset = MediaAssetRecord {
                             id: make_id("media"),
                             source: "imported".to_string(),
+                            source_domain: None,
+                            source_link: None,
                             project_id: None,
                             title: file
                                 .file_name()
@@ -9624,7 +10243,9 @@ Remotion 读取结果 JSON：{}\n\
                     archive
                         .start_file(name, options)
                         .map_err(|error| error.to_string())?;
-                    archive.write_all(&bytes).map_err(|error| error.to_string())?;
+                    archive
+                        .write_all(&bytes)
+                        .map_err(|error| error.to_string())?;
                 }
 
                 archive.finish().map_err(|error| error.to_string())?;

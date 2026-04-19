@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use url::Url;
 
 use crate::{
     extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path, now_iso,
@@ -24,6 +25,17 @@ fn meta_string(meta: &Value, keys: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn source_domain_from_link(link: Option<&str>) -> Option<String> {
+    let raw = link?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Url::parse(raw)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|value| value.to_ascii_lowercase()))
+        .filter(|value| !value.is_empty())
 }
 
 fn optional_note_asset_url(base_dir: &Path, raw: Option<&Value>) -> Option<String> {
@@ -555,6 +567,24 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                     .and_then(|v| v.as_str())
                     .unwrap_or("imported")
                     .to_string(),
+                source_domain: item
+                    .get("sourceDomain")
+                    .or_else(|| item.get("source_domain"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        item.get("sourceLink")
+                            .or_else(|| item.get("source_link"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|value| source_domain_from_link(Some(value)))
+                    }),
+                source_link: item
+                    .get("sourceLink")
+                    .or_else(|| item.get("source_link"))
+                    .or_else(|| item.get("sourceUrl"))
+                    .or_else(|| item.get("source_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 project_id: item
                     .get("projectId")
                     .or_else(|| item.get("project_id"))
@@ -804,9 +834,35 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
             notes.push(KnowledgeNoteRecord {
                 id: note_id.clone(),
                 r#type: note_type,
+                source_domain: meta
+                    .get("sourceDomain")
+                    .or_else(|| meta.get("source_domain"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        meta.get("sourceLink")
+                            .or_else(|| meta.get("source_link"))
+                            .or_else(|| meta.get("sourceUrl"))
+                            .or_else(|| meta.get("source_url"))
+                            .or_else(|| meta.get("source"))
+                            .or_else(|| meta.get("url"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|value| source_domain_from_link(Some(value)))
+                    }),
+                source_link: meta
+                    .get("sourceLink")
+                    .or_else(|| meta.get("source_link"))
+                    .or_else(|| meta.get("sourceUrl"))
+                    .or_else(|| meta.get("source_url"))
+                    .or_else(|| meta.get("source"))
+                    .or_else(|| meta.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 source_url: meta
                     .get("sourceUrl")
                     .or_else(|| meta.get("source_url"))
+                    .or_else(|| meta.get("sourceLink"))
+                    .or_else(|| meta.get("source_link"))
                     .or_else(|| meta.get("source"))
                     .or_else(|| meta.get("url"))
                     .and_then(|v| v.as_str())

@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 use crate::{
     configure_background_command, decode_base64_bytes, generate_chat_response,
@@ -130,37 +131,82 @@ pub(crate) fn extract_cover_source(payload: &Value) -> Option<String> {
 }
 
 pub(crate) fn materialize_image_source(source: &str, target_dir: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
-    let trimmed = source.trim();
-    if let Some(data) = trimmed.strip_prefix("data:") {
-        let extension = if data.starts_with("image/png") {
+    fn extension_from_data_url_mime(data: &str) -> &'static str {
+        if data.starts_with("image/png") {
             "png"
         } else if data.starts_with("image/jpeg") || data.starts_with("image/jpg") {
             "jpg"
         } else if data.starts_with("image/gif") {
             "gif"
+        } else if data.starts_with("image/webp") {
+            "webp"
+        } else if data.starts_with("image/bmp") {
+            "bmp"
+        } else if data.starts_with("image/svg+xml") {
+            "svg"
         } else {
             "png"
-        };
+        }
+    }
+
+    fn extension_from_url_path(source: &str) -> Option<String> {
+        let parsed = Url::parse(source).ok()?;
+        let path = parsed.path().trim();
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|value| !value.is_empty())?;
+        Some(if extension == "jpeg" {
+            "jpg".to_string()
+        } else {
+            extension
+        })
+    }
+
+    fn extension_from_image_bytes(bytes: &[u8]) -> &'static str {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "png"
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "jpg"
+        } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            "gif"
+        } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            "webp"
+        } else if bytes.starts_with(b"BM") {
+            "bmp"
+        } else if bytes.starts_with(b"<svg") || bytes.windows(4).any(|chunk| chunk == b"<svg") {
+            "svg"
+        } else {
+            "png"
+        }
+    }
+
+    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
+    let trimmed = source.trim();
+    if let Some(data) = trimmed.strip_prefix("data:") {
+        let extension = extension_from_data_url_mime(data);
         let encoded = data
             .split_once(',')
             .map(|(_, body)| body)
             .ok_or_else(|| "无效 data URL".to_string())?;
         let bytes = decode_base64_bytes(encoded)?;
-        let path = target_dir.join(format!("cover-{}.{}", now_ms(), extension));
+        let path = target_dir.join(format!("image-{}.{}", now_ms(), extension));
         fs::write(&path, bytes).map_err(|error| error.to_string())?;
         return Ok(path);
     }
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         let bytes = run_curl_bytes("GET", trimmed, None, &[], None)?;
-        let path = target_dir.join(format!("cover-{}.jpg", now_ms()));
+        let extension = extension_from_url_path(trimmed)
+            .unwrap_or_else(|| extension_from_image_bytes(&bytes).to_string());
+        let path = target_dir.join(format!("image-{}.{}", now_ms(), extension));
         fs::write(&path, bytes).map_err(|error| error.to_string())?;
         return Ok(path);
     }
     if let Some(path) = resolve_local_path(trimmed).filter(|path| path.exists()) {
         return Ok(path);
     }
-    Err("未找到可用封面图".to_string())
+    Err("未找到可用图片源".to_string())
 }
 
 pub(crate) fn upload_wechat_thumb_media(

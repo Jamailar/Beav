@@ -15,6 +15,7 @@
 - `content.md`
 - `content-map.json`
 - `layout.tokens.json`
+- `richpost-themes.json`
 - `masters/cover.master.html`
 - `masters/body.master.html`
 - `masters/ending.master.html`
@@ -62,6 +63,8 @@
 8. 宿主再生成一个 `layout.html` 作为多页预览壳，iframe 读取每一页。
 9. 图文主题通过 `manifest.richpostThemeId` 控制默认 token 基线，只改样式层，不改正文层。
 10. 图文工具栏里的字体大小和行间距调整会写入 `manifest.richpostTypography`，并立即触发整套分页重排；主题提供基础值，用户调整是叠加覆盖值。
+11. 稿件画廊里的 `*.redpost` 卡片不会再伪造缩略图；只要正文非空且第一页 HTML 已生成，画廊就直接读取 `pages/` 里的第一页作为真实预览。
+12. `richpost-themes.json` 用来保存当前图文工程自己的自定义主题；抽屉里的主题目录会把内置主题和这份文件里的自定义主题合并返回。
 
 ### 长文工程 `*.redarticle`
 
@@ -87,6 +90,8 @@
   负责图文分页规划，只输出 JSON page plan
 - `builtin-skills/richpost-layout-designer/SKILL.md`
   负责稿件页 `图文排版` 模式下的专用排版约束，限制 AI 只改 richpost 的样式层和分页层，不改正文层
+- `builtin-skills/richpost-theme-editor/SKILL.md`
+  负责稿件页 `图文主题编辑` 全屏页的专用模板修改约束，要求 AI 优先改 `layout.tokens.json` 与首页/内容页/尾页母版，再决定是否需要调整 page plan
 - `prompts/library/templates/package_html_document_renderer.txt`
   负责长文 `layout.html` / `wechat.html` 全量生成
 - `builtin-skills/longform-layout-designer/SKILL.md`
@@ -102,7 +107,11 @@
 ## 宿主命令
 
 - `manuscripts:generate-richpost-page-plan`
+- `manuscripts:create-richpost-custom-theme`
+- `manuscripts:get-richpost-theme-previews`
+- `manuscripts:preview-richpost-theme-draft`
 - `manuscripts:render-richpost-pages`
+- `manuscripts:save-richpost-custom-theme`
 - `manuscripts:set-richpost-theme`
 - `manuscripts:set-longform-layout-preset`
 - `manuscripts:pick-richpost-export-path`
@@ -152,6 +161,12 @@
 - 稿件页进入 `图文排版` 模式时：
   - 当前文件会话会强制激活 `richpost-layout-designer`
   - AI 必须先按这个 skill 处理 richpost 主题、字体、分页和页面样式任务
+- 图文打开“添加主题”后的全屏主题编辑页时：
+  - 宿主会先在当前工程的 `richpost-themes.json` 中创建一个新的自定义主题条目
+  - 当前 AI 会话会绑定这条新主题的 `themeId / label / richpost-themes.json` 文件路径
+  - 当前文件会话会切到 `图文主题编辑` 模式
+  - 会强制激活 `richpost-layout-designer` + `richpost-theme-editor`
+  - AI 必须优先按 `layout.tokens.json`、`masters/cover.master.html`、`masters/body.master.html`、`masters/ending.master.html` 的顺序理解和修改模板层
 - 图文点击“导出”时：
   - 前端逐页加载 `pages/page-xxx.html`
   - 以 1080x1440 的 3:4 固定画布导出 PNG

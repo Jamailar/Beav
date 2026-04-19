@@ -292,6 +292,19 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
             disabled: Some(false),
         },
         SkillRecord {
+            name: "richpost-theme-editor".to_string(),
+            description: "图文主题编辑专用技能，用于 richpost 的首页、内容页、尾页母版与 layout tokens 调整，并强制只改模板层不改正文。".to_string(),
+            location: "redbox://skills/richpost-theme-editor".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/richpost-theme-editor/SKILL.md"
+            ))
+            .to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
             name: "longform-layout-designer".to_string(),
             description: "长文排版专用技能，用于 longform 的母版、分栏、字体和 layout/wechat HTML 样式调整，并强制保持正文内容不变。".to_string(),
             location: "redbox://skills/longform-layout-designer".to_string(),
@@ -421,7 +434,7 @@ pub fn default_store() -> AppStore {
         runtime_hooks: Vec::new(),
         skills: builtin_skill_records(),
         assistant_state: AssistantStateRecord {
-            enabled: false,
+            enabled: true,
             auto_start: true,
             keep_alive_when_no_window: true,
             host: "127.0.0.1".to_string(),
@@ -508,6 +521,24 @@ pub fn default_store() -> AppStore {
     }
 }
 
+fn should_enable_assistant_daemon_by_default(state: &AssistantStateRecord) -> bool {
+    if state.enabled || !state.auto_start || state.listening {
+        return false;
+    }
+
+    if state.last_error.as_deref() == Some("RedClaw assistant daemon stopped.") {
+        return false;
+    }
+
+    state.active_task_count == 0
+        && state.queued_peer_count == 0
+        && state.in_flight_keys.is_empty()
+        && matches!(
+            state.last_error.as_deref(),
+            None | Some("RedClaw assistant daemon is idle.")
+        )
+}
+
 pub fn load_store(path: &PathBuf) -> AppStore {
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
@@ -515,8 +546,15 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
     let skills_migrated = ensure_builtin_skills_present(&mut store);
+    let assistant_daemon_migrated = if should_enable_assistant_daemon_by_default(&store.assistant_state)
+    {
+        store.assistant_state.enabled = true;
+        true
+    } else {
+        false
+    };
     crate::session_manager::enforce_default_retention(&mut store);
-    if skills_migrated {
+    if skills_migrated || assistant_daemon_migrated {
         let _ = persist_store(path, &store);
     }
     store

@@ -434,8 +434,7 @@ fn cover_prompt_switch_enabled(raw: Option<&Value>, key: &str, default_value: bo
 }
 
 fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
-    let title_mode = payload_string(payload, "titleMode")
-        .unwrap_or_else(|| "titles".to_string());
+    let title_mode = payload_string(payload, "titleMode").unwrap_or_else(|| "titles".to_string());
     let title_prompt = normalize_optional_string(payload_string(payload, "titlePrompt"));
     let style_hint = normalize_optional_string(payload_string(payload, "styleHint"));
     let title_guide = normalize_optional_string(payload_string(payload, "titleGuide"));
@@ -456,7 +455,10 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
         parts.push("标题生成方式：用户不直接给标题，你需要先判断最适合写在封面上的主标题、副标题、角标或标签词，再把它们自然排进画面。".to_string());
         if let Some(prompt) = title_prompt {
             parts.push(format!("用户给你的标题方向与要求：{prompt}"));
-            parts.push("不要整段照抄上面的说明，要提炼成短句、强记忆点、适合封面点击的中文文案。".to_string());
+            parts.push(
+                "不要整段照抄上面的说明，要提炼成短句、强记忆点、适合封面点击的中文文案。"
+                    .to_string(),
+            );
         }
     } else {
         let normalized_titles = titles
@@ -767,6 +769,7 @@ pub fn handle_library_channel(
             | "knowledge:health"
             | "knowledge:ingest-entry"
             | "knowledge:ingest-document-source"
+            | "knowledge:ingest-media-assets"
             | "knowledge:batch-ingest"
             | "knowledge:delete-youtube"
             | "knowledge:retry-youtube-subtitle"
@@ -850,6 +853,13 @@ pub fn handle_library_channel(
                         format!("knowledge ingest document source payload 无效: {error}")
                     })?;
                 knowledge::ingest_document_source(Some(app), state, &request)
+            }
+            "knowledge:ingest-media-assets" => {
+                let request: knowledge::KnowledgeMediaAssetIngestRequest =
+                    serde_json::from_value(payload.clone()).map_err(|error| {
+                        format!("knowledge ingest media assets payload 无效: {error}")
+                    })?;
+                knowledge::ingest_media_assets(Some(app), state, &request)
             }
             "knowledge:batch-ingest" => {
                 let request: knowledge::KnowledgeBatchIngestRequest =
@@ -1225,6 +1235,8 @@ pub fn handle_library_channel(
                         let asset = MediaAssetRecord {
                             id: make_id("media"),
                             source: "imported".to_string(),
+                            source_domain: None,
+                            source_link: None,
                             project_id: None,
                             title: file
                                 .file_stem()

@@ -132,7 +132,7 @@ type AssistantDaemonWeixinLoginState = {
 };
 
 const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
-  enabled: false,
+  enabled: true,
   autoStart: true,
   keepAliveWhenNoWindow: true,
   host: '127.0.0.1',

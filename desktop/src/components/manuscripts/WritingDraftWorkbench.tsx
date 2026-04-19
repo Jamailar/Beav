@@ -1,12 +1,14 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
+  ArrowLeft,
   Columns,
   Download,
   FileText,
   Image as ImageIcon,
   Loader2,
   MessageSquare,
+  Plus,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -56,11 +58,44 @@ type RichpostThemePreset = {
   id?: string;
   label?: string;
   description?: string | null;
+  source?: string | null;
+  shellBg?: string | null;
+  pageBg?: string | null;
   surfaceColor?: string | null;
+  surfaceBg?: string | null;
+  surfaceBorder?: string | null;
+  surfaceShadow?: string | null;
+  surfaceRadius?: string | null;
+  imageRadius?: string | null;
+  previewCardBg?: string | null;
+  previewCardBorder?: string | null;
+  previewCardShadow?: string | null;
   textColor?: string | null;
+  mutedColor?: string | null;
   accentColor?: string | null;
   headingFont?: string | null;
   bodyFont?: string | null;
+};
+
+type RichpostThemeDraft = {
+  id?: string | null;
+  label: string;
+  description: string;
+  shellBg: string;
+  pageBg: string;
+  surfaceBg: string;
+  surfaceBorder: string;
+  surfaceShadow: string;
+  surfaceRadius: string;
+  imageRadius: string;
+  previewCardBg: string;
+  previewCardBorder: string;
+  previewCardShadow: string;
+  textColor: string;
+  mutedColor: string;
+  accentColor: string;
+  headingFont: string;
+  bodyFont: string;
 };
 
 type LongformLayoutPreset = {
@@ -76,7 +111,12 @@ type AiWorkspaceMode = {
   id: string;
   label: string;
   activeSkills: string[];
+  themeEditingId?: string | null;
+  themeEditingLabel?: string | null;
+  themeEditingFile?: string | null;
 };
+
+type PackageStateLike = Record<string, unknown>;
 
 export interface WritingDraftWorkbenchProps {
   draftType: WritingDraftType;
@@ -118,6 +158,7 @@ export interface WritingDraftWorkbenchProps {
   onSelectRichpostTheme?: (themeId: string) => void;
   onUpdateRichpostTypography?: (settings: { fontScale: number; lineHeightScale: number }) => void | Promise<void>;
   onSelectLongformLayoutPreset?: (presetId: string, target: 'layout' | 'wechat') => void;
+  onPackageStateChange?: (state: PackageStateLike) => void;
 }
 
 const LONGFORM_SHORTCUTS = [
@@ -135,9 +176,9 @@ const RICHPOST_SHORTCUTS = [
 ];
 
 const RICHPOST_LAYOUT_SKILL_NAME = 'richpost-layout-designer';
+const RICHPOST_THEME_EDITOR_SKILL_NAME = 'richpost-theme-editor';
 const LONGFORM_LAYOUT_SKILL_NAME = 'longform-layout-designer';
 const PRESET_PREVIEW_TITLE = 'RedBox';
-const PRESET_PREVIEW_BODY = '用 AI 生产高质量内容。';
 const RICHPOST_FONT_SCALE_MIN = 0.8;
 const RICHPOST_FONT_SCALE_MAX = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN = 0.8;
@@ -148,77 +189,207 @@ function clampScale(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Number(value.toFixed(2))));
 }
 
-function normalizePreviewColor(value: string | null | undefined, fallback: string): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
-}
-
-function toRgba(value: string | null | undefined, alpha: number, fallback: string): string {
-  const normalized = normalizePreviewColor(value, '').replace(/^#/, '');
-  if (!normalized) return fallback;
-  const expanded = normalized.length === 3
-    ? normalized.split('').map((char) => char + char).join('')
-    : normalized;
-  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) {
-    return fallback;
-  }
-  const red = parseInt(expanded.slice(0, 2), 16);
-  const green = parseInt(expanded.slice(2, 4), 16);
-  const blue = parseInt(expanded.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-}
-
-type PresetPreviewThumbnailProps = {
-  surfaceColor?: string | null;
-  textColor?: string | null;
-  accentColor?: string | null;
-  headingFont?: string | null;
-  bodyFont?: string | null;
-  active?: boolean;
+type RichpostThemePreviewRecord = {
+  id: string;
+  label?: string;
+  html: string;
 };
 
-function PresetPreviewThumbnail({
-  surfaceColor,
-  textColor,
-  accentColor,
-  headingFont,
-  bodyFont,
+function RichpostThemePreviewFrame({
+  html,
   active = false,
-}: PresetPreviewThumbnailProps) {
-  const surface = normalizePreviewColor(surfaceColor, '#ffffff');
-  const text = normalizePreviewColor(textColor, '#111111');
-  const accent = normalizePreviewColor(accentColor, text);
-  const shellBorder = toRgba(text, active ? 0.16 : 0.08, 'rgba(17,17,17,0.08)');
-  const shellGlow = toRgba(accent, active ? 0.22 : 0.14, 'rgba(17,17,17,0.10)');
-  const accentWash = toRgba(accent, 0.12, 'rgba(17,17,17,0.06)');
-  const divider = toRgba(accent, 0.82, accent);
-  const bodyTone = toRgba(text, 0.78, text);
-
-  const pageStyle: CSSProperties = {
-    background: `linear-gradient(180deg, ${accentWash} 0%, ${surface} 38%, ${surface} 100%)`,
-    borderColor: shellBorder,
-    boxShadow: `0 16px 36px ${shellGlow}`,
-    color: text,
-  };
-  const headingStyle: CSSProperties = {
-    color: text,
-    fontFamily: normalizePreviewColor(headingFont, bodyFont || ''),
-  };
-  const bodyStyle: CSSProperties = {
-    color: bodyTone,
-    fontFamily: normalizePreviewColor(bodyFont, headingFont || ''),
-  };
-
+}: {
+  html?: string | null;
+  active?: boolean;
+}) {
   return (
-    <div className="pointer-events-none w-full select-none">
-      <div className="aspect-[3/4] border px-4 py-5" style={pageStyle}>
-        <div className="flex h-full flex-col">
-          <div className="text-[20px] font-semibold leading-[1.1]" style={headingStyle}>
-            {PRESET_PREVIEW_TITLE}
+    <div
+      className={clsx(
+        'w-full overflow-hidden rounded-[14px] bg-surface-secondary/55 transition',
+        active ? 'ring-1 ring-accent-primary/35' : ''
+      )}
+    >
+      <div className="pointer-events-none aspect-[3/4] w-full bg-white">
+        {html ? (
+          <iframe
+            title={PRESET_PREVIEW_TITLE}
+            srcDoc={html}
+            sandbox={RICHPOST_PREVIEW_SANDBOX}
+            className="h-full w-full border-0 bg-white"
+            tabIndex={-1}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-[11px] text-text-tertiary">
+            预览加载中
           </div>
-          <div className="mt-3 h-px w-12" style={{ background: divider }} />
-          <div className="mt-4 text-[11px] leading-[1.85]" style={bodyStyle}>
-            {PRESET_PREVIEW_BODY}
+        )}
+      </div>
+    </div>
+  );
+}
+
+const DEFAULT_RICHPOST_THEME_DRAFT: RichpostThemeDraft = {
+  id: null,
+  label: '新主题',
+  description: '',
+  shellBg: 'linear-gradient(180deg,#fff8ef 0%,#f5ede1 100%)',
+  pageBg: '#ffffff',
+  surfaceBg: '#ffffff',
+  surfaceBorder: 'rgba(34,24,18,.08)',
+  surfaceShadow: '0 14px 34px rgba(17,17,17,.06)',
+  surfaceRadius: '0px',
+  imageRadius: '0px',
+  previewCardBg: 'rgba(255,255,255,.82)',
+  previewCardBorder: 'rgba(34,24,18,.08)',
+  previewCardShadow: '0 18px 48px rgba(88,59,36,.08)',
+  textColor: '#111111',
+  mutedColor: '#6b625a',
+  accentColor: '#111111',
+  headingFont: '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+  bodyFont: '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+};
+
+function normalizeRichpostThemeDraft(theme?: RichpostThemePreset | null): RichpostThemeDraft {
+  return {
+    id: typeof theme?.id === 'string' ? theme.id : null,
+    label: typeof theme?.label === 'string' && theme.label.trim() ? theme.label : DEFAULT_RICHPOST_THEME_DRAFT.label,
+    description: typeof theme?.description === 'string' ? theme.description : '',
+    shellBg: typeof theme?.shellBg === 'string' && theme.shellBg.trim() ? theme.shellBg : DEFAULT_RICHPOST_THEME_DRAFT.shellBg,
+    pageBg: typeof theme?.pageBg === 'string' && theme.pageBg.trim() ? theme.pageBg : DEFAULT_RICHPOST_THEME_DRAFT.pageBg,
+    surfaceBg: typeof (theme?.surfaceBg || theme?.surfaceColor) === 'string' && String(theme?.surfaceBg || theme?.surfaceColor).trim()
+      ? String(theme?.surfaceBg || theme?.surfaceColor)
+      : DEFAULT_RICHPOST_THEME_DRAFT.surfaceBg,
+    surfaceBorder: typeof theme?.surfaceBorder === 'string' && theme.surfaceBorder.trim() ? theme.surfaceBorder : DEFAULT_RICHPOST_THEME_DRAFT.surfaceBorder,
+    surfaceShadow: typeof theme?.surfaceShadow === 'string' && theme.surfaceShadow.trim() ? theme.surfaceShadow : DEFAULT_RICHPOST_THEME_DRAFT.surfaceShadow,
+    surfaceRadius: typeof theme?.surfaceRadius === 'string' && theme.surfaceRadius.trim() ? theme.surfaceRadius : DEFAULT_RICHPOST_THEME_DRAFT.surfaceRadius,
+    imageRadius: typeof theme?.imageRadius === 'string' && theme.imageRadius.trim() ? theme.imageRadius : DEFAULT_RICHPOST_THEME_DRAFT.imageRadius,
+    previewCardBg: typeof theme?.previewCardBg === 'string' && theme.previewCardBg.trim() ? theme.previewCardBg : DEFAULT_RICHPOST_THEME_DRAFT.previewCardBg,
+    previewCardBorder: typeof theme?.previewCardBorder === 'string' && theme.previewCardBorder.trim() ? theme.previewCardBorder : DEFAULT_RICHPOST_THEME_DRAFT.previewCardBorder,
+    previewCardShadow: typeof theme?.previewCardShadow === 'string' && theme.previewCardShadow.trim() ? theme.previewCardShadow : DEFAULT_RICHPOST_THEME_DRAFT.previewCardShadow,
+    textColor: typeof theme?.textColor === 'string' && theme.textColor.trim() ? theme.textColor : DEFAULT_RICHPOST_THEME_DRAFT.textColor,
+    mutedColor: typeof theme?.mutedColor === 'string' && theme.mutedColor.trim() ? theme.mutedColor : DEFAULT_RICHPOST_THEME_DRAFT.mutedColor,
+    accentColor: typeof theme?.accentColor === 'string' && theme.accentColor.trim() ? theme.accentColor : DEFAULT_RICHPOST_THEME_DRAFT.accentColor,
+    headingFont: typeof theme?.headingFont === 'string' && theme.headingFont.trim() ? theme.headingFont : DEFAULT_RICHPOST_THEME_DRAFT.headingFont,
+    bodyFont: typeof theme?.bodyFont === 'string' && theme.bodyFont.trim() ? theme.bodyFont : DEFAULT_RICHPOST_THEME_DRAFT.bodyFont,
+  };
+}
+
+function RichpostThemeEditorOverlay({
+  previews,
+  isPreviewLoading,
+  editorChatSessionId,
+  isActive,
+  shortcuts,
+  onClose,
+}: {
+  previews: RichpostThemePreviewRecord[];
+  isPreviewLoading: boolean;
+  editorChatSessionId: string | null;
+  isActive: boolean;
+  shortcuts: Array<{ label: string; text: string }>;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[120] bg-[radial-gradient(circle_at_top_left,rgba(251,239,223,0.92),rgba(244,237,229,0.96)_34%,rgba(239,235,229,0.98)_68%,rgba(232,229,225,1)_100%)] text-text-primary">
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.55),transparent_42%,rgba(0,0,0,0.03))]" />
+      <div className="relative flex h-full min-h-0 flex-col">
+        <header className="flex items-center justify-between border-b border-black/6 px-6 py-4 backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-black/8 bg-white/75 text-text-secondary transition hover:bg-white hover:text-text-primary"
+              aria-label="返回主题抽屉"
+              title="返回"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">图文主题编辑</div>
+              <div className="mt-1 text-[20px] font-semibold text-text-primary">新建图文主题</div>
+            </div>
           </div>
+          <div className="rounded-full border border-black/6 bg-white/70 px-3 py-1.5 text-[12px] text-text-tertiary">通过对话修改首页、内容页和尾页风格</div>
+        </header>
+
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px]">
+          <section className="min-h-0 overflow-y-auto border-r border-black/6 px-6 py-6">
+            <div className="mx-auto max-w-[1100px]">
+              <div className="mb-5">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">编辑视图</div>
+                <div className="mt-2 text-[22px] font-semibold text-text-primary">首页、内容页、尾页</div>
+              </div>
+              <div className="grid gap-5 xl:grid-cols-3">
+                {(previews.length ? previews : [
+                  { id: 'cover', label: '首页', html: '' },
+                  { id: 'body', label: '内容页', html: '' },
+                  { id: 'ending', label: '尾页', html: '' },
+                ]).map((preview) => (
+                  <div key={preview.id} className="rounded-[28px] border border-black/6 bg-white/72 p-4 shadow-[0_22px_60px_rgba(15,23,42,0.06)] backdrop-blur-xl">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-[12px] font-semibold tracking-[0.08em] text-text-secondary">{preview.label || preview.id}</div>
+                      <div className="rounded-full border border-black/6 bg-white/76 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">3:4</div>
+                    </div>
+                    <div className="relative">
+                      <RichpostThemePreviewFrame html={preview.html} />
+                      <div className="pointer-events-none absolute inset-x-[13%] top-[24%] bottom-[16%] flex items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-white/58 backdrop-blur-[1px]">
+                        <div className="text-[22px] font-black tracking-[0.22em] text-black/24">文字区域</div>
+                      </div>
+                      {isPreviewLoading ? (
+                        <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-white/45 backdrop-blur-[2px]">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/88 px-3 py-1.5 text-[12px] text-text-secondary shadow-sm">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            更新中
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <aside className="min-h-0 border-l border-black/6 bg-white/72 backdrop-blur-xl">
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="border-b border-black/6 px-5 py-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">对话修改</div>
+                <div className="mt-2 text-[18px] font-semibold text-text-primary">直接描述你想要的主题风格</div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {editorChatSessionId ? (
+                  <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
+                    <ChatWorkspace
+                      isActive={isActive}
+                      fixedSessionId={editorChatSessionId}
+                      showClearButton={false}
+                      showWelcomeShortcuts={false}
+                      showComposerShortcuts
+                      fixedSessionContextIndicatorMode="corner-ring"
+                      contentLayout="wide"
+                      contentWidthPreset="default"
+                      allowFileUpload
+                      messageWorkflowPlacement="bottom"
+                      messageWorkflowVariant="compact"
+                      messageWorkflowEmphasis="default"
+                      welcomeTitle="图文排版"
+                      welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
+                      shortcuts={shortcuts}
+                      welcomeShortcuts={shortcuts}
+                      fixedSessionBannerText="图文主题编辑"
+                    />
+                  </Suspense>
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-center">
+                    <div>
+                      <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
+                      <div className="mt-3 text-sm text-text-secondary">正在初始化 AI 会话...</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     </div>
@@ -681,6 +852,7 @@ export function WritingDraftWorkbench({
   onSelectRichpostTheme,
   onUpdateRichpostTypography,
   onSelectLongformLayoutPreset,
+  onPackageStateChange,
 }: WritingDraftWorkbenchProps) {
   const normalizedRichpostFontScaleProp = clampScale(
     richpostFontScaleProp ?? 1,
@@ -700,11 +872,24 @@ export function WritingDraftWorkbench({
   const [isExportingRichpostImages, setIsExportingRichpostImages] = useState(false);
   const [isRichpostThemeDrawerOpen, setIsRichpostThemeDrawerOpen] = useState(false);
   const [isLongformLayoutDrawerOpen, setIsLongformLayoutDrawerOpen] = useState(false);
+  const [isRichpostThemeEditorOpen, setIsRichpostThemeEditorOpen] = useState(false);
+  const [isCreatingRichpostThemeEditor, setIsCreatingRichpostThemeEditor] = useState(false);
+  const [richpostThemePreviewHtmlMap, setRichpostThemePreviewHtmlMap] = useState<Record<string, string>>({});
+  const [isLoadingRichpostThemePreviews, setIsLoadingRichpostThemePreviews] = useState(false);
+  const [richpostThemeEditorDraft, setRichpostThemeEditorDraft] = useState<RichpostThemeDraft>(DEFAULT_RICHPOST_THEME_DRAFT);
+  const [richpostThemeEditorBaseThemeId, setRichpostThemeEditorBaseThemeId] = useState<string | null>(null);
+  const [richpostThemeEditorThemeId, setRichpostThemeEditorThemeId] = useState<string | null>(null);
+  const [richpostThemeEditorThemeLabel, setRichpostThemeEditorThemeLabel] = useState<string | null>(null);
+  const [richpostThemeEditorThemeFile, setRichpostThemeEditorThemeFile] = useState<string | null>(null);
+  const [richpostThemeEditorPreviewPages, setRichpostThemeEditorPreviewPages] = useState<RichpostThemePreviewRecord[]>([]);
+  const [isLoadingRichpostThemeEditorPreview, setIsLoadingRichpostThemeEditorPreview] = useState(false);
   const committedRichpostTypographyRef = useRef({
     fontScale: normalizedRichpostFontScaleProp,
     lineHeightScale: normalizedRichpostLineHeightScaleProp,
   });
   const pendingRichpostTypographyRef = useRef<{ fontScale: number; lineHeightScale: number } | null>(null);
+  const richpostThemePreviewRequestIdRef = useRef(0);
+  const richpostThemeEditorPreviewRequestIdRef = useRef(0);
 
   useEffect(() => {
     setActiveTab('manuscript');
@@ -725,6 +910,11 @@ export function WritingDraftWorkbench({
   useEffect(() => {
     setIsRichpostThemeDrawerOpen(false);
     setIsLongformLayoutDrawerOpen(false);
+    setIsRichpostThemeEditorOpen(false);
+    setIsCreatingRichpostThemeEditor(false);
+    setRichpostThemeEditorThemeId(null);
+    setRichpostThemeEditorThemeLabel(null);
+    setRichpostThemeEditorThemeFile(null);
   }, [activeTab, filePath, draftType, isSplitCompareEnabled, splitPreviewTab]);
 
   const isRichPost = draftType === 'richpost';
@@ -779,6 +969,16 @@ export function WritingDraftWorkbench({
   }, [splitPreviewOptions, splitPreviewTab]);
 
   const aiWorkspaceMode = useMemo<AiWorkspaceMode>(() => {
+    if (isRichPost && isRichpostThemeEditorOpen) {
+      return {
+        id: 'richpost-theme-editing',
+        label: '图文主题编辑',
+        activeSkills: [RICHPOST_LAYOUT_SKILL_NAME, RICHPOST_THEME_EDITOR_SKILL_NAME],
+        themeEditingId: richpostThemeEditorThemeId,
+        themeEditingLabel: richpostThemeEditorThemeLabel,
+        themeEditingFile: richpostThemeEditorThemeFile,
+      };
+    }
     const isRichpostLayoutMode = isRichPost
       && (
         activeTab === 'richpost'
@@ -808,7 +1008,17 @@ export function WritingDraftWorkbench({
       return { id: 'article-layout', label: '长文排版', activeSkills: [] };
     }
     return { id: 'manuscript-editing', label: '稿件编辑', activeSkills: [] };
-  }, [activeTab, isLongform, isRichPost, isSplitCompareEnabled, splitPreviewTab]);
+  }, [
+    activeTab,
+    isLongform,
+    isRichPost,
+    isRichpostThemeEditorOpen,
+    isSplitCompareEnabled,
+    richpostThemeEditorThemeFile,
+    richpostThemeEditorThemeId,
+    richpostThemeEditorThemeLabel,
+    splitPreviewTab,
+  ]);
 
   useEffect(() => {
     onAiWorkspaceModeChange?.(aiWorkspaceMode);
@@ -856,6 +1066,52 @@ export function WritingDraftWorkbench({
     () => richpostThemePresets.filter((theme) => typeof theme?.id === 'string' && theme.id.trim()),
     [richpostThemePresets]
   );
+  const activeRichpostThemePreset = useMemo(
+    () => normalizedThemePresets.find((theme) => String(theme.id || '') === String(richpostThemeId || '')) || normalizedThemePresets[0] || null,
+    [normalizedThemePresets, richpostThemeId]
+  );
+  const openRichpostThemeEditor = () => {
+    if (!filePath || isCreatingRichpostThemeEditor) return;
+    const baseTheme = activeRichpostThemePreset || normalizedThemePresets[0] || null;
+    const baseThemeId = typeof baseTheme?.id === 'string' ? baseTheme.id : null;
+    setIsCreatingRichpostThemeEditor(true);
+    void window.ipcRenderer.invoke('manuscripts:create-richpost-custom-theme', {
+      filePath,
+      baseThemeId,
+    }).then((result) => {
+      const payload = result as {
+        success?: boolean;
+        error?: string;
+        theme?: RichpostThemePreset | null;
+        state?: PackageStateLike;
+        themeFile?: string | null;
+      } | null;
+      if (!payload?.success || !payload.theme) {
+        throw new Error(payload?.error || '创建主题失败');
+      }
+      setRichpostThemeEditorDraft(normalizeRichpostThemeDraft(payload.theme));
+      setRichpostThemeEditorBaseThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : baseThemeId);
+      setRichpostThemeEditorThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : null);
+      setRichpostThemeEditorThemeLabel(typeof payload.theme.label === 'string' ? payload.theme.label : '新主题');
+      setRichpostThemeEditorThemeFile(typeof payload.themeFile === 'string' ? payload.themeFile : null);
+      setRichpostThemeEditorPreviewPages([]);
+      if (payload.state) {
+        onPackageStateChange?.(payload.state);
+      }
+      setIsRichpostThemeDrawerOpen(false);
+      setIsRichpostThemeEditorOpen(true);
+    }).catch((error) => {
+      console.error('Failed to create richpost custom theme:', error);
+      void appAlert(error instanceof Error ? error.message : '创建主题失败');
+    }).finally(() => {
+      setIsCreatingRichpostThemeEditor(false);
+    });
+  };
+
+  const richpostThemePreviewKey = useMemo(
+    () => normalizedThemePresets.map((theme) => String(theme.id || '')).join('|'),
+    [normalizedThemePresets]
+  );
 
   const normalizedLongformLayoutPresets = useMemo(
     () => longformLayoutPresets.filter((preset) => typeof preset?.id === 'string' && preset.id.trim()),
@@ -866,6 +1122,98 @@ export function WritingDraftWorkbench({
     () => splitPreviewOptions.find((item) => item.id === splitPreviewTab)?.label || '排版',
     [splitPreviewOptions, splitPreviewTab]
   );
+
+  useEffect(() => {
+    setRichpostThemePreviewHtmlMap({});
+  }, [filePath]);
+
+  useEffect(() => {
+    if (!isRichPost || !isRichpostThemeEditorOpen || !filePath) {
+      return;
+    }
+    const requestId = ++richpostThemeEditorPreviewRequestIdRef.current;
+    setIsLoadingRichpostThemeEditorPreview(true);
+    const timeoutId = window.setTimeout(() => {
+      void window.ipcRenderer.invoke('manuscripts:preview-richpost-theme-draft', {
+        filePath,
+        baseThemeId: richpostThemeEditorBaseThemeId,
+        theme: richpostThemeEditorDraft,
+      }).then((result) => {
+        if (richpostThemeEditorPreviewRequestIdRef.current !== requestId) {
+          return;
+        }
+        const previews = Array.isArray((result as { previews?: RichpostThemePreviewRecord[] } | null | undefined)?.previews)
+          ? ((result as { previews?: RichpostThemePreviewRecord[] }).previews || []).map((item) => ({
+            id: String(item?.id || ''),
+            label: typeof item?.label === 'string' ? item.label : '',
+            html: typeof item?.html === 'string' ? item.html : '',
+          })).filter((item) => item.id)
+          : [];
+        setRichpostThemeEditorPreviewPages(previews);
+      }).catch((error) => {
+        if (richpostThemeEditorPreviewRequestIdRef.current !== requestId) {
+          return;
+        }
+        console.error('Failed to preview custom richpost theme draft:', error);
+      }).finally(() => {
+        if (richpostThemeEditorPreviewRequestIdRef.current === requestId) {
+          setIsLoadingRichpostThemeEditorPreview(false);
+        }
+      });
+    }, 140);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    filePath,
+    isRichPost,
+    isRichpostThemeEditorOpen,
+    richpostThemeEditorBaseThemeId,
+    richpostThemeEditorDraft,
+  ]);
+
+  useEffect(() => {
+    if (!isRichPost || !isRichpostThemeDrawerOpen || !filePath || !richpostThemePreviewKey) {
+      return;
+    }
+    const requestId = ++richpostThemePreviewRequestIdRef.current;
+    setIsLoadingRichpostThemePreviews(true);
+    void window.ipcRenderer.invoke('manuscripts:get-richpost-theme-previews', {
+      filePath,
+      themeIds: normalizedThemePresets.map((theme) => String(theme.id || '')).filter(Boolean),
+    }).then((result) => {
+      if (richpostThemePreviewRequestIdRef.current !== requestId) {
+        return;
+      }
+      const nextMap = Array.isArray((result as { previews?: RichpostThemePreviewRecord[] } | null | undefined)?.previews)
+        ? ((result as { previews?: RichpostThemePreviewRecord[] }).previews || []).reduce<Record<string, string>>((accumulator, item) => {
+          const themeId = String(item?.id || '').trim();
+          const html = typeof item?.html === 'string' ? item.html : '';
+          if (themeId && html.trim()) {
+            accumulator[themeId] = html;
+          }
+          return accumulator;
+        }, {})
+        : {};
+      setRichpostThemePreviewHtmlMap(nextMap);
+    }).catch((error) => {
+      if (richpostThemePreviewRequestIdRef.current !== requestId) {
+        return;
+      }
+      console.error('Failed to load richpost theme previews:', error);
+    }).finally(() => {
+      if (richpostThemePreviewRequestIdRef.current === requestId) {
+        setIsLoadingRichpostThemePreviews(false);
+      }
+    });
+  }, [
+    filePath,
+    isRichPost,
+    isRichpostThemeDrawerOpen,
+    layoutPreview?.updatedAt,
+    normalizedThemePresets,
+    richpostThemePreviewKey,
+  ]);
 
   const renderPreviewContent = (tab: WritingWorkbenchTab, compact = false) => {
     if (tab === 'layout') {
@@ -977,10 +1325,14 @@ export function WritingDraftWorkbench({
                 </button>
               </div>
               <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
+                {isLoadingRichpostThemePreviews && Object.keys(richpostThemePreviewHtmlMap).length === 0 ? (
+                  <div className="pb-3 text-[11px] text-text-tertiary">主题预览加载中</div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-x-3 gap-y-4">
                   {normalizedThemePresets.map((theme) => {
                     const themeId = String(theme.id || '');
                     const active = themeId === richpostThemeId;
+                    const previewHtml = richpostThemePreviewHtmlMap[themeId] || '';
                     return (
                       <button
                         key={themeId}
@@ -1000,12 +1352,8 @@ export function WritingDraftWorkbench({
                           {theme.label || themeId}
                         </div>
                         <div className="mt-2">
-                          <PresetPreviewThumbnail
-                            surfaceColor={theme.surfaceColor}
-                            textColor={theme.textColor}
-                            accentColor={theme.accentColor}
-                            headingFont={theme.headingFont}
-                            bodyFont={theme.bodyFont}
+                          <RichpostThemePreviewFrame
+                            html={previewHtml}
                             active={active}
                           />
                         </div>
@@ -1013,6 +1361,17 @@ export function WritingDraftWorkbench({
                     );
                   })}
                 </div>
+              </div>
+              <div className="border-t border-border px-3 py-3">
+                <button
+                  type="button"
+                  onClick={openRichpostThemeEditor}
+                  disabled={isCreatingRichpostThemeEditor}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-accent-primary/28 bg-accent-primary/6 px-4 py-3 text-[13px] font-semibold text-accent-primary transition hover:bg-accent-primary/10"
+                >
+                  {isCreatingRichpostThemeEditor ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  {isCreatingRichpostThemeEditor ? '创建中' : '添加主题'}
+                </button>
               </div>
             </aside>
           </>
@@ -1168,6 +1527,7 @@ export function WritingDraftWorkbench({
   };
 
   return (
+    <>
     <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] bg-surface-primary text-text-primary">
       <section className="relative min-h-0 border-r border-border bg-background">
         <div className="flex h-full min-h-0 flex-col">
@@ -1404,5 +1764,21 @@ export function WritingDraftWorkbench({
         </div>
       </aside>
     </div>
+    {isRichPost && isRichpostThemeEditorOpen ? (
+      <RichpostThemeEditorOverlay
+        previews={richpostThemeEditorPreviewPages}
+        isPreviewLoading={isLoadingRichpostThemeEditorPreview}
+        editorChatSessionId={editorChatSessionId}
+        isActive={isActive}
+        shortcuts={shortcuts}
+        onClose={() => {
+          setIsRichpostThemeEditorOpen(false);
+          setRichpostThemeEditorThemeId(null);
+          setRichpostThemeEditorThemeLabel(null);
+          setRichpostThemeEditorThemeFile(null);
+        }}
+      />
+    ) : null}
+    </>
   );
 }

@@ -1,6 +1,6 @@
 use crate::persistence::{
-    apply_knowledge_hydration_snapshot, load_knowledge_hydration_snapshot, with_store,
-    with_store_mut,
+    apply_knowledge_hydration_snapshot, ensure_store_hydrated_for_media,
+    load_knowledge_hydration_snapshot, with_store, with_store_mut,
 };
 use crate::workspace_loaders::read_json_file;
 use crate::*;
@@ -9,8 +9,9 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
+use url::Url;
 
-const DEFAULT_KNOWLEDGE_API_BODY_LIMIT: usize = 1_024 * 1_024;
+const DEFAULT_KNOWLEDGE_API_BODY_LIMIT: usize = 16 * 1_024 * 1_024;
 const DEFAULT_KNOWLEDGE_BATCH_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -19,6 +20,8 @@ pub(crate) struct KnowledgeSourceInput {
     pub app_id: Option<String>,
     pub plugin_id: Option<String>,
     pub external_id: Option<String>,
+    pub source_domain: Option<String>,
+    pub source_link: Option<String>,
     pub source_url: Option<String>,
     pub captured_at: Option<String>,
 }
@@ -133,6 +136,23 @@ pub(crate) struct KnowledgeDocumentSourceIngestRequest {
 pub(crate) struct KnowledgeBatchIngestRequest {
     pub entries: Vec<KnowledgeEntryIngestRequest>,
     pub document_sources: Vec<KnowledgeDocumentSourceIngestRequest>,
+    pub media_assets: Vec<KnowledgeMediaAssetIngestRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeMediaAssetItemInput {
+    pub title: Option<String>,
+    pub source: String,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct KnowledgeMediaAssetIngestRequest {
+    pub space_id: Option<String>,
+    pub source: KnowledgeSourceInput,
+    pub items: Vec<KnowledgeMediaAssetItemInput>,
 }
 
 fn normalize_string(value: Option<String>) -> Option<String> {
@@ -147,6 +167,28 @@ fn normalize_vec(values: Vec<String>) -> Vec<String> {
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
         .collect()
+}
+
+fn source_link_from_input(source: &KnowledgeSourceInput) -> Option<String> {
+    normalize_string(source.source_link.clone())
+        .or_else(|| normalize_string(source.source_url.clone()))
+}
+
+fn domain_from_link(raw: &str) -> Option<String> {
+    Url::parse(raw)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|value| value.to_ascii_lowercase()))
+        .filter(|value| !value.is_empty())
+}
+
+fn source_domain_from_input(source: &KnowledgeSourceInput) -> Option<String> {
+    normalize_string(source.source_domain.clone())
+        .map(|value| value.to_ascii_lowercase())
+        .or_else(|| {
+            source_link_from_input(source)
+                .as_deref()
+                .and_then(domain_from_link)
+        })
 }
 
 fn ensure_supported_space(
@@ -327,11 +369,93 @@ fn note_content_markdown(content: &KnowledgeEntryContentInput) -> Option<String>
         .or_else(|| normalize_string(content.excerpt.clone()))
 }
 
+fn normalize_entry_kind(kind: &str) -> String {
+    match kind.trim() {
+        "text" => "text-note".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn note_meta_type(kind: &str) -> String {
+    if kind == "text-note" {
+        "text".to_string()
+    } else {
+        kind.to_string()
+    }
+}
+
+fn truncated_plain_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = trimmed.chars();
+    let compact = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{compact}...")
+    } else {
+        compact
+    }
+}
+
+fn title_from_source_url(source_url: &str) -> Option<String> {
+    let parsed = Url::parse(source_url).ok()?;
+    let last_segment = parsed
+        .path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+        .unwrap_or_default();
+    let stem = Path::new(last_segment)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    stem.or_else(|| parsed.host_str().map(ToString::to_string))
+}
+
+fn derive_note_title(request: &KnowledgeEntryIngestRequest, normalized_kind: &str) -> String {
+    if let Some(title) = normalize_string(Some(request.content.title.clone())) {
+        return title;
+    }
+    for candidate in [
+        request.content.excerpt.clone(),
+        request.content.text.clone(),
+        request.content.description.clone(),
+        request.content.summary.clone(),
+        request.content.transcript.clone(),
+    ] {
+        if let Some(value) = normalize_string(candidate) {
+            return truncated_plain_text(&value, 48);
+        }
+    }
+    if let Some(source_url) = source_link_from_input(&request.source) {
+        if let Some(title) = title_from_source_url(&source_url) {
+            return title;
+        }
+    }
+    if normalized_kind == "text-note" {
+        "未命名文本摘录".to_string()
+    } else {
+        "未命名知识内容".to_string()
+    }
+}
+
+fn derive_note_author(request: &KnowledgeEntryIngestRequest, normalized_kind: &str) -> String {
+    normalize_string(request.content.author.clone()).unwrap_or_else(|| {
+        if normalized_kind == "text-note" {
+            "文本摘录".to_string()
+        } else if source_link_from_input(&request.source).is_some() {
+            "原文链接".to_string()
+        } else {
+            "手动导入".to_string()
+        }
+    })
+}
+
 fn resolve_note_seed(request: &KnowledgeEntryIngestRequest) -> String {
     normalize_string(request.source.external_id.clone())
         .or_else(|| normalize_string(request.options.dedupe_key.clone()))
-        .or_else(|| normalize_string(request.source.source_url.clone()))
+        .or_else(|| source_link_from_input(&request.source))
         .or_else(|| normalize_string(Some(request.content.title.clone())))
+        .or_else(|| normalize_string(request.content.excerpt.clone()))
+        .or_else(|| normalize_string(request.content.text.clone()))
         .unwrap_or_else(|| make_id("knowledge"))
 }
 
@@ -353,7 +477,7 @@ fn find_existing_note_entry_id(
             return Ok(Some(entry_id));
         }
     }
-    if let Some(source_url) = normalize_string(request.source.source_url.clone()) {
+    if let Some(source_url) = source_link_from_input(&request.source) {
         let existing = with_store(state, |store| {
             Ok(store
                 .knowledge_notes
@@ -416,8 +540,9 @@ fn ingest_youtube_entry(
 
     let video_id = normalize_string(request.source.external_id.clone())
         .ok_or_else(|| "youtube-video 缺少 source.externalId / videoId".to_string())?;
-    let video_url = normalize_string(request.source.source_url.clone())
+    let video_url = source_link_from_input(&request.source)
         .ok_or_else(|| "youtube-video 缺少 source.sourceUrl / videoUrl".to_string())?;
+    let source_domain = source_domain_from_input(&request.source);
     let title = normalize_string(Some(request.content.title.clone()))
         .ok_or_else(|| "youtube-video 缺少 content.title".to_string())?;
     let description = normalize_string(request.content.description.clone())
@@ -468,6 +593,8 @@ fn ingest_youtube_entry(
         "status": "completed",
         "createdAt": created_at,
         "subtitleFile": subtitle_file,
+        "sourceDomain": source_domain,
+        "sourceLink": video_url,
         "sourceAppId": normalize_string(request.source.app_id.clone()),
         "sourcePluginId": normalize_string(request.source.plugin_id.clone()),
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
@@ -516,8 +643,10 @@ fn ingest_note_entry(
         }));
     }
 
-    let title = normalize_string(Some(request.content.title.clone()))
-        .ok_or_else(|| "knowledge entry 缺少 content.title".to_string())?;
+    let normalized_kind = normalize_entry_kind(&request.kind);
+    let title = derive_note_title(request, &normalized_kind);
+    let source_link = source_link_from_input(&request.source);
+    let source_domain = source_domain_from_input(&request.source);
     let entry_id = existing_entry_id
         .clone()
         .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
@@ -542,15 +671,17 @@ fn ingest_note_entry(
     let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
     let meta = json!({
         "id": entry_id,
-        "type": normalize_string(Some(request.kind.clone())).unwrap_or_else(|| "knowledge-note".to_string()),
-        "captureKind": normalize_string(Some(request.kind.clone())).unwrap_or_else(|| "knowledge-note".to_string()),
-        "sourceUrl": normalize_string(request.source.source_url.clone()),
+        "type": note_meta_type(&normalized_kind),
+        "captureKind": normalized_kind,
+        "sourceDomain": source_domain.clone(),
+        "sourceLink": source_link.clone(),
+        "sourceUrl": source_link.clone(),
         "sourceAppId": normalize_string(request.source.app_id.clone()),
         "sourcePluginId": normalize_string(request.source.plugin_id.clone()),
         "externalId": normalize_string(request.source.external_id.clone()),
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
         "title": title,
-        "author": normalize_string(request.content.author.clone()).unwrap_or_else(|| "原文链接".to_string()),
+        "author": derive_note_author(request, &normalized_kind),
         "excerpt": normalize_string(request.content.excerpt.clone()),
         "description": normalize_string(request.content.description.clone()),
         "siteName": normalize_string(request.content.site_name.clone()),
@@ -577,14 +708,14 @@ fn ingest_note_entry(
             "knowledge:note-updated",
             json!({
                 "noteId": entry_id,
-                "kind": request.kind,
+                "kind": normalized_kind,
                 "hasTranscript": normalize_string(request.content.transcript.clone()).is_some(),
             }),
         )),
     )?;
     Ok(json!({
         "success": true,
-        "kind": request.kind,
+        "kind": normalized_kind,
         "duplicate": existing_entry_id.is_some(),
         "updated": existing_entry_id.is_some(),
         "entryId": entry_id,
@@ -592,6 +723,148 @@ fn ingest_note_entry(
             "summarize": request.options.summarize,
             "transcribe": request.options.transcribe,
         },
+    }))
+}
+
+fn relative_media_path_from_absolute(media_root: &Path, absolute_path: &Path) -> Option<String> {
+    let normalized = normalize_legacy_workspace_path(absolute_path);
+    normalized
+        .strip_prefix(media_root)
+        .ok()
+        .map(|value| normalize_relative_path(value.to_string_lossy().as_ref()))
+}
+
+fn title_from_media_source(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with("data:") {
+        return None;
+    }
+    if let Ok(parsed) = Url::parse(trimmed) {
+        let last_segment = parsed
+            .path_segments()
+            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+            .unwrap_or_default();
+        return Path::new(last_segment)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+    }
+    Path::new(trimmed)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn create_media_asset_record(
+    media_root: &Path,
+    asset_path: &Path,
+    source: &KnowledgeSourceInput,
+    item: &KnowledgeMediaAssetItemInput,
+) -> Result<MediaAssetRecord, String> {
+    let normalized = normalize_legacy_workspace_path(asset_path);
+    let (guessed_mime_type, kind, _) = guess_mime_and_kind(&normalized);
+    let requested_mime_type = normalize_string(item.mime_type.clone());
+    let mime_type = requested_mime_type
+        .clone()
+        .filter(|value| value.starts_with("image/"))
+        .unwrap_or_else(|| guessed_mime_type.clone());
+    let is_image = kind == "image" || mime_type.starts_with("image/");
+    if !is_image {
+        return Err(format!(
+            "media-assets 仅支持图片导入，当前文件不是图片: {}",
+            normalized.display()
+        ));
+    }
+    let relative_path = relative_media_path_from_absolute(media_root, &normalized)
+        .ok_or_else(|| "素材路径不在 workspace media 目录内".to_string())?;
+    let title =
+        normalize_string(item.title.clone()).or_else(|| title_from_media_source(&item.source));
+    let timestamp = now_iso();
+    Ok(MediaAssetRecord {
+        id: make_id("media"),
+        source: "knowledge-api".to_string(),
+        source_domain: source_domain_from_input(source),
+        source_link: source_link_from_input(source),
+        project_id: None,
+        title,
+        prompt: None,
+        provider: None,
+        provider_template: None,
+        model: None,
+        aspect_ratio: None,
+        size: None,
+        quality: None,
+        mime_type: Some(mime_type),
+        relative_path: Some(relative_path),
+        bound_manuscript_path: None,
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+        absolute_path: Some(normalized.display().to_string()),
+        preview_url: Some(file_url_for_path(&normalized)),
+        exists: true,
+    })
+}
+
+pub(crate) fn ingest_media_assets(
+    _app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    request: &KnowledgeMediaAssetIngestRequest,
+) -> Result<Value, String> {
+    ensure_supported_space(state, request.space_id.as_deref())?;
+    let _ = ensure_store_hydrated_for_media(state);
+    if request.items.is_empty() {
+        return Err("media-assets 至少需要一个 item".to_string());
+    }
+    if request.items.len() > DEFAULT_KNOWLEDGE_BATCH_LIMIT {
+        return Err(format!(
+            "单次 media-assets 最多支持 {} 项",
+            DEFAULT_KNOWLEDGE_BATCH_LIMIT
+        ));
+    }
+
+    let media_root = media_root(state)?;
+    let imports_root = media_root.join("imports").join("knowledge-api");
+    fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
+
+    let mut assets = Vec::new();
+    for item in &request.items {
+        let source = normalize_string(Some(item.source.clone()))
+            .ok_or_else(|| "media-assets item 缺少 source".to_string())?;
+        let materialized =
+            if let Some(local_path) = resolve_local_path(&source).filter(|path| path.exists()) {
+                let (_, copied) = copy_file_into_dir(&local_path, &imports_root)?;
+                copied
+            } else {
+                materialize_image_source(&source, &imports_root)?
+            };
+        match create_media_asset_record(&media_root, &materialized, &request.source, item) {
+            Ok(asset) => assets.push(asset),
+            Err(error) => {
+                if materialized.starts_with(&imports_root) {
+                    let _ = fs::remove_file(&materialized);
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    with_store_mut(state, |store| {
+        for asset in &assets {
+            store.media_assets.push(asset.clone());
+        }
+        Ok(())
+    })?;
+    crate::commands::library::persist_media_workspace_catalog(state)?;
+
+    Ok(json!({
+        "success": true,
+        "kind": "media-assets",
+        "imported": assets.len(),
+        "assets": assets,
     }))
 }
 
@@ -615,14 +888,15 @@ pub(crate) fn ingest_entry(
     state: &State<'_, AppState>,
     request: &KnowledgeEntryIngestRequest,
 ) -> Result<Value, String> {
-    let kind = request.kind.trim();
+    let normalized_kind = normalize_entry_kind(&request.kind);
+    let kind = normalized_kind.as_str();
     if kind.is_empty() {
         return Err("knowledge entry kind 不能为空".to_string());
     }
     match kind {
         "youtube-video" => ingest_youtube_entry(app, state, request),
         "xhs-note" | "xhs-video" | "link-article" | "wechat-article" | "knowledge-note"
-        | "webpage" | "article" => ingest_note_entry(app, state, request),
+        | "webpage" | "article" | "text-note" => ingest_note_entry(app, state, request),
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
 }
@@ -692,7 +966,7 @@ pub(crate) fn batch_ingest(
     state: &State<'_, AppState>,
     request: &KnowledgeBatchIngestRequest,
 ) -> Result<Value, String> {
-    let total = request.entries.len() + request.document_sources.len();
+    let total = request.entries.len() + request.document_sources.len() + request.media_assets.len();
     if total == 0 {
         return Err("batch-ingest 不能为空".to_string());
     }
@@ -715,6 +989,12 @@ pub(crate) fn batch_ingest(
             "result": ingest_document_source(app, state, document_source)?,
         }));
     }
+    for media_assets in &request.media_assets {
+        results.push(json!({
+            "type": "media-assets",
+            "result": ingest_media_assets(app, state, media_assets)?,
+        }));
+    }
     Ok(json!({
         "success": true,
         "count": results.len(),
@@ -727,6 +1007,7 @@ pub(crate) fn knowledge_http_health(
     body_limit_bytes: usize,
     batch_limit: usize,
 ) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_media(state);
     let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None)?;
     let snapshot = with_store(state, |store| {
         Ok(json!({
@@ -735,10 +1016,32 @@ pub(crate) fn knowledge_http_health(
                 "entries": page.kind_counts.get("redbook-note").and_then(|value| value.as_i64()).unwrap_or(0),
                 "youtubeVideos": page.kind_counts.get("youtube-video").and_then(|value| value.as_i64()).unwrap_or(0),
                 "documentSources": page.kind_counts.get("document-source").and_then(|value| value.as_i64()).unwrap_or(0),
+                "mediaAssets": store.media_assets.len(),
             },
             "limits": {
                 "bodyBytes": body_limit_bytes,
                 "batchItems": batch_limit,
+            },
+            "routes": {
+                "entries": "/api/knowledge/entries",
+                "documentSources": "/api/knowledge/document-sources",
+                "mediaAssets": "/api/knowledge/media-assets",
+                "batchIngest": "/api/knowledge/batch-ingest",
+            },
+            "capabilities": {
+                "sourceFields": ["sourceDomain", "sourceLink", "sourceUrl"],
+                "entryKinds": [
+                    "youtube-video",
+                    "xhs-note",
+                    "xhs-video",
+                    "link-article",
+                    "wechat-article",
+                    "knowledge-note",
+                    "webpage",
+                    "article",
+                    "text-note",
+                ],
+                "mediaAssetKinds": ["image"],
             },
             "spaceId": store.active_space_id,
         }))
@@ -766,6 +1069,8 @@ pub(crate) fn save_youtube_note(
             app_id: Some("redbox".to_string()),
             plugin_id: None,
             external_id: Some(input.video_id.clone()),
+            source_domain: domain_from_link(&input.video_url),
+            source_link: Some(input.video_url.clone()),
             source_url: Some(input.video_url.clone()),
             captured_at: None,
         },

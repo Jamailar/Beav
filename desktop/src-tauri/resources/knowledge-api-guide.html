@@ -255,8 +255,8 @@
     <div class="container">
       <header>
         <div class="badge">API Developer Guide</div>
-        <h1>知识库导入接口</h1>
-        <div class="subtitle">供浏览器扩展及第三方应用调用的本地 API，用于快速导入知识素材。</div>
+        <h1>知识与素材导入接口</h1>
+        <div class="subtitle">供浏览器扩展及第三方应用调用的本地 API，用于把知识条目写入知识库，把纯图片写入素材库。</div>
       </header>
 
       <div class="grid">
@@ -292,12 +292,36 @@
                 <span class="path">/entries</span>
               </div>
               <div class="endpoint-body">
-                <div class="endpoint-desc">导入单条记录（网页、笔记、视频信息）。</div>
+                <div class="endpoint-desc">导入单条知识记录（网页、笔记、视频、纯文字）。</div>
                 <pre>{
   "kind": "link-article",
-  "source": { "sourceUrl": "https://..." },
+  "source": {
+    "sourceDomain": "example.com",
+    "sourceLink": "https://example.com/article",
+    "sourceUrl": "https://example.com/article"
+  },
   "content": { "title": "标题", "text": "正文内容" },
   "options": { "allowUpdate": true }
+}</pre>
+              </div>
+            </div>
+
+            <div class="endpoint">
+              <div class="endpoint-header">
+                <span class="method post">POST</span>
+                <span class="path">/media-assets</span>
+              </div>
+              <div class="endpoint-body">
+                <div class="endpoint-desc">导入纯图片素材，写入素材库而不是知识库。</div>
+                <pre>{
+  "source": {
+    "sourceDomain": "www.xiaohongshu.com",
+    "sourceLink": "https://www.xiaohongshu.com/explore/...",
+    "sourceUrl": "https://www.xiaohongshu.com/explore/..."
+  },
+  "items": [
+    { "title": "封面图", "source": "https://example.com/image.webp" }
+  ]
 }</pre>
               </div>
             </div>
@@ -316,6 +340,20 @@
 }</pre>
               </div>
             </div>
+
+            <div class="endpoint">
+              <div class="endpoint-header">
+                <span class="method post">POST</span>
+                <span class="path">/batch-ingest</span>
+              </div>
+              <div class="endpoint-body">
+                <div class="endpoint-desc">混合提交 entries、media-assets、document-sources。</div>
+                <pre>{
+  "entries": [{ "kind": "text-note", "content": { "text": "一段纯文字摘录" } }],
+  "mediaAssets": [{ "items": [{ "source": "data:image/png;base64,..." }] }]
+}</pre>
+              </div>
+            </div>
           </section>
         </main>
 
@@ -324,11 +362,26 @@
             <h3>支持类型 (Kinds)</h3>
             <div class="chip-group">
               <span class="chip">xhs-note</span>
+              <span class="chip">xhs-video</span>
               <span class="chip">wechat-article</span>
               <span class="chip">youtube-video</span>
               <span class="chip">link-article</span>
+              <span class="chip">text-note</span>
+              <span class="chip">media-assets(image)</span>
               <span class="chip">tracked-folder</span>
               <span class="chip">obsidian-vault</span>
+            </div>
+          </div>
+
+          <div class="card side-card" style="margin-top: 24px;">
+            <h3>来源字段</h3>
+            <div class="list-item">
+              <div class="list-title">sourceDomain</div>
+              <div class="list-desc">仅保存域名，方便按站点分类。</div>
+            </div>
+            <div class="list-item">
+              <div class="list-title">sourceLink / sourceUrl</div>
+              <div class="list-desc">保存完整原始链接；`sourceUrl` 目前作为兼容镜像保留。</div>
             </div>
           </div>
 

@@ -125,6 +125,21 @@ const VIDEO_GENERATION_MODE_OPTIONS = [
     { value: 'continuation', label: '视频续写' },
 ] as const;
 
+function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
+    const normalized = String(source || '').trim().toLowerCase();
+    if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') {
+        return normalized;
+    }
+    return 'imported';
+}
+
+function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
+    return {
+        ...asset,
+        source: normalizeMediaAssetSource(asset.source),
+    };
+}
+
 function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
     if (mimeType.startsWith('video/')) return true;
@@ -261,7 +276,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             if (!mediaResult?.success) {
                 setError(mediaResult?.error || '加载媒体库失败');
             } else {
-                const nextAssets = Array.isArray(mediaResult.assets) ? mediaResult.assets : [];
+                const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : []).map(normalizeMediaAsset);
                 setAssets(nextAssets);
                 setDrafts((prev) => Object.fromEntries(
                     Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
@@ -813,7 +828,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
                             const busy = workingId === asset.id;
                             const isExpanded = expandedAssetId === asset.id;
-                            const sourceMeta = SOURCE_META[asset.source];
+                            const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
                             return (
                                 <div key={asset.id} className="group border border-border rounded-2xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                                     <div className="relative aspect-[4/5] bg-surface-secondary">

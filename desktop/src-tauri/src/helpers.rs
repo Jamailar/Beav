@@ -164,6 +164,10 @@ pub(crate) fn package_richpost_page_plan_path(package_path: &Path) -> PathBuf {
     package_path.join("richpost-page-plan.json")
 }
 
+pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
+    package_path.join("richpost-themes.json")
+}
+
 pub(crate) fn package_richpost_masters_dir(package_path: &Path) -> PathBuf {
     package_path.join("masters")
 }
@@ -430,6 +434,12 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
     } else {
         Some(markdown_summary(&entry_content, 72))
     };
+    let (richpost_preview_file, richpost_preview_file_url, richpost_preview_updated_at) =
+        if draft_type == "richpost" {
+            resolve_richpost_first_page_preview(path)
+        } else {
+            (None, None, None)
+        };
     FileNode {
         name: file_name.to_string(),
         path: relative,
@@ -440,6 +450,9 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
         draft_type: Some(draft_type),
         updated_at,
         summary,
+        richpost_preview_file,
+        richpost_preview_file_url,
+        richpost_preview_updated_at,
     }
 }
 
@@ -479,7 +492,48 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         draft_type: Some(draft_type),
         updated_at,
         summary,
+        richpost_preview_file: None,
+        richpost_preview_file_url: None,
+        richpost_preview_updated_at: None,
     }
+}
+
+fn path_updated_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+}
+
+fn resolve_richpost_first_page_preview(
+    package_path: &Path,
+) -> (Option<String>, Option<String>, Option<i64>) {
+    let page_plan = read_json_value_or(&package_richpost_page_plan_path(package_path), json!({}));
+    let Some(page_id) = page_plan
+        .get("pages")
+        .and_then(Value::as_array)
+        .and_then(|pages| {
+            pages.iter().find_map(|page| {
+                page.get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+    else {
+        return (None, None, None);
+    };
+    let page_path = package_richpost_page_html_path(package_path, &page_id);
+    if !page_path.exists() {
+        return (None, None, None);
+    }
+    (
+        Some(page_path.display().to_string()),
+        Some(file_url_for_path(&page_path)),
+        path_updated_at_ms(&page_path),
+    )
 }
 
 pub(crate) fn resolve_manuscript_path(
@@ -554,6 +608,9 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 draft_type: None,
                 updated_at,
                 summary: None,
+                richpost_preview_file: None,
+                richpost_preview_file_url: None,
+                richpost_preview_updated_at: None,
             });
         } else if file_type.is_file() {
             if file_name.ends_with(".md") {
@@ -567,12 +624,11 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                     status: None,
                     title: None,
                     draft_type: None,
-                    updated_at: fs::metadata(&path)
-                        .ok()
-                        .and_then(|meta| meta.modified().ok())
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| duration.as_millis() as i64),
+                    updated_at: path_updated_at_ms(&path),
                     summary: None,
+                    richpost_preview_file: None,
+                    richpost_preview_file_url: None,
+                    richpost_preview_updated_at: None,
                 });
             }
         }

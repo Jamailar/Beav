@@ -2832,7 +2832,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .to_string();
     let package_kind = get_package_kind_from_file_name(file_name);
     let richpost_theme = if package_kind == Some("post") {
-        Some(richpost_theme_state_value(&manifest))
+        Some(richpost_theme_state_value(package_path, &manifest))
     } else {
         None
     };
@@ -3122,7 +3122,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             Value::Null
         },
         "richpostThemeCatalog": if package_kind == Some("post") {
-            richpost_theme_catalog_value()
+            richpost_theme_catalog_value(Some(package_path))
         } else {
             Value::Null
         },

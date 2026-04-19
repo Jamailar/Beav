@@ -703,6 +703,8 @@ pub fn handle_generation_channel(
             let asset = MediaAssetRecord {
                 id: make_id("media"),
                 source: "generated".to_string(),
+                source_domain: None,
+                source_link: None,
                 project_id: project_id.clone(),
                 title: title
                     .clone()

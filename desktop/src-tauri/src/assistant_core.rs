@@ -629,6 +629,13 @@ fn handle_knowledge_http_request(
             let response = knowledge::ingest_document_source(Some(app), &state, &request)?;
             Ok((200, "OK", response))
         }
+        ("POST", "media-assets") => {
+            let request: knowledge::KnowledgeMediaAssetIngestRequest =
+                serde_json::from_str(body)
+                    .map_err(|error| format!("knowledge media assets request 无法解析: {error}"))?;
+            let response = knowledge::ingest_media_assets(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
         ("POST", "batch-ingest") => {
             let request: knowledge::KnowledgeBatchIngestRequest = serde_json::from_str(body)
                 .map_err(|error| format!("knowledge batch request 无法解析: {error}"))?;
