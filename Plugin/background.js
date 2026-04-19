@@ -1,6 +1,38 @@
-const API_ROOT = 'http://127.0.0.1:23456/api';
+const KNOWLEDGE_API_CANDIDATES = [
+  {
+    baseUrl: 'http://127.0.0.1:31937',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://localhost:31937',
+    endpointPath: '/api/knowledge',
+  },
+];
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
+const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+
+let cachedKnowledgeApi = null;
+let cachedKnowledgeApiAt = 0;
+
+function describeError(error) {
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+  return String(error);
+}
+
+function pluginLog(scope, details) {
+  console.log(`[redbox-plugin][${scope}]`, details);
+}
+
+function pluginWarn(scope, details) {
+  console.warn(`[redbox-plugin][${scope}]`, details);
+}
+
+function pluginError(scope, details) {
+  console.error(`[redbox-plugin][${scope}]`, details);
+}
 
 function createLinkFallbackPageInfo(overrides = {}) {
   return {
@@ -55,6 +87,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await handleMessage(message, sender);
       sendResponse(result);
     } catch (error) {
+      pluginError('runtime-message', {
+        type: message?.type || 'unknown',
+        tabId: Number(message?.tabId || sender?.tab?.id || 0) || null,
+        error: describeError(error),
+      });
       sendResponse({
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -66,6 +103,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   const tabId = Number(message?.tabId || sender?.tab?.id || 0);
+  pluginLog('handle-message', {
+    type: message?.type || 'unknown',
+    tabId: tabId || null,
+    senderTabUrl: String(sender?.tab?.url || ''),
+  });
 
   switch (message?.type) {
     case 'page-state:update':
@@ -193,12 +235,23 @@ function detectCaptureTargetFromUrl(rawUrl) {
 
 async function checkDesktopServer() {
   try {
-    const response = await fetch(`${API_ROOT}/status`, { method: 'GET' });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return { success: true };
+    const endpoint = await resolveKnowledgeApiEndpoint();
+    const response = await fetchKnowledgeJson(endpoint, '/health', {
+      method: 'GET',
+    });
+    pluginLog('healthcheck-success', {
+      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      counts: response?.counts || null,
+    });
+    return {
+      success: true,
+      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      health: response,
+    };
   } catch (error) {
+    pluginError('healthcheck-failed', {
+      error: describeError(error),
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -206,14 +259,84 @@ async function checkDesktopServer() {
   }
 }
 
-async function postJson(endpoint, payload) {
-  const response = await fetch(`${API_ROOT}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
+  const now = Date.now();
+  if (
+    !forceRefresh &&
+    cachedKnowledgeApi &&
+    (now - cachedKnowledgeApiAt) < KNOWLEDGE_API_CACHE_TTL_MS
+  ) {
+    return cachedKnowledgeApi;
+  }
+
+  let lastError = null;
+  const attemptedUrls = [];
+  for (const candidate of KNOWLEDGE_API_CANDIDATES) {
+    const probeUrl = `${candidate.baseUrl}${candidate.endpointPath}/health`;
+    attemptedUrls.push(probeUrl);
+    try {
+      pluginLog('endpoint-probe', {
+        url: probeUrl,
+      });
+      const response = await fetchKnowledgeJson(candidate, '/health', {
+        method: 'GET',
+      });
+      if (response?.success) {
+        cachedKnowledgeApi = candidate;
+        cachedKnowledgeApiAt = now;
+        pluginLog('endpoint-selected', {
+          url: `${candidate.baseUrl}${candidate.endpointPath}`,
+        });
+        return candidate;
+      }
+      lastError = new Error(response?.error || 'Knowledge API healthcheck failed');
+      pluginWarn('endpoint-probe-non-success', {
+        url: probeUrl,
+        response,
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      pluginWarn('endpoint-probe-failed', {
+        url: probeUrl,
+        error: describeError(lastError),
+      });
+    }
+  }
+
+  throw new Error(
+    `未连接到 RedBox Knowledge API。已尝试: ${attemptedUrls.join(', ')}。` +
+    `最后错误: ${lastError?.message || 'unknown error'}。` +
+    ' 请确认桌面应用已启动，并且 assistant daemon 正在监听 127.0.0.1:31937。'
+  );
+}
+
+async function fetchKnowledgeJson(endpoint, path, init = {}) {
+  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
+  const headers = new Headers(init.headers || {});
+  const method = String(init.method || 'GET').toUpperCase();
+  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  pluginLog('http-request', {
+    method,
+    url,
   });
+
+  let response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    pluginError('http-network-failed', {
+      method,
+      url,
+      error: describeError(error),
+    });
+    throw new Error(`请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   let data = null;
   try {
@@ -223,10 +346,239 @@ async function postJson(endpoint, payload) {
   }
 
   if (!response.ok || data?.success === false) {
+    pluginError('http-response-failed', {
+      method,
+      url,
+      status: response.status,
+      body: data,
+    });
     throw new Error(data?.error || `HTTP ${response.status}`);
   }
 
+  pluginLog('http-response', {
+    method,
+    url,
+    status: response.status,
+    success: data?.success !== false,
+  });
+
   return data || { success: true };
+}
+
+async function postKnowledgeEntry(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('entry-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/entries`,
+    kind: String(payload?.kind || ''),
+    sourceUrl: String(payload?.source?.sourceUrl || ''),
+    externalId: String(payload?.source?.externalId || ''),
+  });
+  const response = await fetchKnowledgeJson(endpoint, '/entries', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  pluginLog('entry-submit-success', {
+    kind: String(payload?.kind || ''),
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function truncateText(value, maxLength) {
+  const normalized = normalizeText(value);
+  if (!normalized || normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function hashString(value) {
+  const input = String(value || '');
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function replaceRichHtmlTokens(html, replacements) {
+  let output = String(html || '');
+  for (const item of Array.isArray(replacements) ? replacements : []) {
+    const token = normalizeText(item?.token);
+    const url = normalizeText(item?.url);
+    if (!token || !url) continue;
+    output = output.split(token).join(url);
+  }
+  return output;
+}
+
+function createKnowledgeSourceInput(fields = {}) {
+  return {
+    appId: 'redbox-capture',
+    pluginId: 'redbox-browser-extension',
+    sourceUrl: normalizeText(fields.sourceUrl),
+    externalId: normalizeText(fields.externalId),
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function buildSelectionEntry(payload) {
+  const text = normalizeText(payload?.text);
+  const sourceUrl = normalizeText(payload?.url);
+  const title = normalizeText(payload?.title) || '网页摘录';
+
+  if (!text) {
+    throw new Error('当前页面没有选中文字');
+  }
+
+  return {
+    kind: 'knowledge-note',
+    source: createKnowledgeSourceInput({
+      sourceUrl,
+      externalId: `selection-${hashString(`${sourceUrl}\n${text}`)}`,
+    }),
+    content: {
+      title,
+      text,
+      excerpt: truncateText(text, 180),
+      siteName: sourceUrl,
+      tags: ['网页摘录'],
+    },
+    assets: {},
+    options: {
+      dedupeKey: `selection:${hashString(`${sourceUrl}\n${text}`)}`,
+      allowUpdate: false,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildPageLinkEntry(payload) {
+  const sourceUrl = normalizeText(payload?.url);
+  const title = normalizeText(payload?.title) || '网页收藏';
+  const richHtmlDocument = replaceRichHtmlTokens(
+    payload?.richHtmlDocument,
+    payload?.richHtmlImageMap,
+  );
+  const kind = normalizeText(payload?.captureKind)
+    || (payload?.type === 'link-article' ? 'link-article' : 'webpage');
+  const text = normalizeText(payload?.text)
+    || normalizeText(payload?.excerpt)
+    || sourceUrl;
+
+  if (!sourceUrl) {
+    throw new Error('当前页面缺少可保存的链接地址');
+  }
+
+  return {
+    kind,
+    source: createKnowledgeSourceInput({
+      sourceUrl,
+      externalId: `page-${hashString(sourceUrl)}`,
+    }),
+    content: {
+      title,
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(payload?.excerpt || text, 180),
+      html: richHtmlDocument || undefined,
+      description: truncateText(text, 500),
+      siteName: normalizeText(payload?.siteName),
+      tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : [],
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+      imageUrls: Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [],
+    },
+    options: {
+      dedupeKey: undefined,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildYouTubeEntry(payload) {
+  const videoId = normalizeText(payload?.videoId);
+  const videoUrl = normalizeText(payload?.videoUrl);
+  const title = normalizeText(payload?.title);
+
+  if (!videoId || !videoUrl || !title) {
+    throw new Error('当前页面不是可识别的 YouTube 视频页');
+  }
+
+  return {
+    kind: 'youtube-video',
+    source: createKnowledgeSourceInput({
+      sourceUrl: videoUrl,
+      externalId: videoId,
+    }),
+    content: {
+      title,
+      description: normalizeText(payload?.description),
+      text: normalizeText(payload?.description),
+      tags: ['YouTube'],
+    },
+    assets: {
+      thumbnailUrl: normalizeText(payload?.thumbnailUrl) || undefined,
+    },
+    options: {
+      dedupeKey: videoId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildXhsEntry(payload) {
+  const sourceUrl = normalizeText(payload?.source);
+  const stableNoteId = normalizeText(payload?.noteId)
+    || `xhs-${hashString(sourceUrl)}`;
+  const videoAssetUrl = normalizeText(payload?.videoDataUrl)
+    || normalizeText(payload?.videoUrl);
+  const imageUrls = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+  const kind = videoAssetUrl && imageUrls.length === 0 ? 'xhs-video' : 'xhs-note';
+  const text = normalizeText(payload?.text) || normalizeText(payload?.content);
+
+  return {
+    kind,
+    source: createKnowledgeSourceInput({
+      sourceUrl,
+      externalId: stableNoteId,
+    }),
+    content: {
+      title: normalizeText(payload?.title) || '小红书内容',
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(text, 180),
+      description: truncateText(text, 500),
+      siteName: 'xiaohongshu.com',
+      tags: ['小红书'],
+      stats: {
+        likes: Number(payload?.stats?.likes || 0),
+        collects: Number(payload?.stats?.collects || 0),
+      },
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || imageUrls[0] || undefined,
+      imageUrls,
+      videoUrl: videoAssetUrl || undefined,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
 }
 
 async function runExtraction(tabId, func, options = {}) {
@@ -247,14 +599,12 @@ async function runExtraction(tabId, func, options = {}) {
 
 async function saveSelectedTextFromTab(tabId) {
   const payload = await runExtraction(tabId, extractSelectedTextPayload);
-  if (!payload || typeof payload !== 'object' || !payload?.text) {
-    throw new Error('当前页面没有选中文字');
-  }
-  const response = await postJson('/save-text', payload);
+  const response = await postKnowledgeEntry(buildSelectionEntry(payload));
   return {
     success: true,
     mode: 'selection',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
 }
 
@@ -263,27 +613,22 @@ async function saveCurrentPageLinkFromTab(tabId) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('当前页面内容提取失败，请刷新页面后重试');
   }
-  if (!String(payload.url || '').trim()) {
-    throw new Error('当前页面缺少可保存的链接地址');
-  }
-  const response = await postJson('/save-text', payload);
+  const response = await postKnowledgeEntry(buildPageLinkEntry(payload));
   return {
     success: true,
     mode: 'page-link',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
 }
 
 async function saveYouTubeFromTab(tabId) {
   const payload = await runExtraction(tabId, extractYouTubePayload);
-  if (!payload?.videoId) {
-    throw new Error('当前页面不是可识别的 YouTube 视频页');
-  }
-  const response = await postJson('/youtube-notes', payload);
+  const response = await postKnowledgeEntry(buildYouTubeEntry(payload));
   return {
     success: true,
     mode: 'youtube',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
   };
 }
@@ -300,11 +645,12 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
-  const response = await postJson('/notes', payload);
+  const response = await postKnowledgeEntry(buildXhsEntry(payload));
   return {
     success: true,
     mode: 'xhs',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
 }
 
@@ -709,7 +1055,7 @@ async function extractCurrentPageLinkPayload() {
       if (!/^https?:\/\//i.test(target)) return '';
       try {
         const response = await fetch(target, {
-          credentials: 'include',
+          credentials: 'omit',
           cache: 'force-cache',
         });
         if (!response.ok) return '';
@@ -1507,7 +1853,7 @@ async function extractXhsNotePayload() {
     if (!/^https?:\/\//i.test(target)) return '';
     try {
       const response = await fetch(target, {
-        credentials: 'include',
+        credentials: 'omit',
         cache: 'force-cache',
       });
       if (!response.ok) return '';
@@ -1542,9 +1888,22 @@ async function extractXhsNotePayload() {
   const localizedVideoDataUrl = videoUrl && String(videoUrl).startsWith('blob:')
     ? (await fetchBinaryAsDataUrl(videoUrl))
     : '';
+  const stableStateNoteId = String(
+    stateNote?.noteId
+    || stateNote?.id
+    || stateNote?.note_id
+    || getCurrentOpenedNoteId()
+    || '',
+  ).trim();
+  const stablePathNoteId = String(location.pathname || '')
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    || '';
+  const stableNoteId = stableStateNoteId || stablePathNoteId || `xhs-${Date.now()}`;
 
   return {
-    noteId: `xhs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    noteId: stableNoteId,
     title,
     author: getAuthor(root),
     content,
@@ -1594,6 +1953,19 @@ function detectCaptureTarget() {
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
+    function isCommentRelatedNode(el) {
+      if (!el || !el.closest) return false;
+      return Boolean(
+        el.closest('.comments-el') ||
+        el.closest('.comment-list') ||
+        el.closest('.comment-item') ||
+        el.closest('.comment-container') ||
+        el.closest('.comments-container') ||
+        el.closest('[class*="comment"]') ||
+        el.closest('[id*="comment"]')
+      );
+    }
+
     function getInitialState() {
       const scripts = document.querySelectorAll('script');
       for (const script of scripts) {

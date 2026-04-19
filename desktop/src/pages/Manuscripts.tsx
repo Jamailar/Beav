@@ -242,14 +242,31 @@ type PackageState = {
     contentMapExists?: boolean;
     contentMapFile?: string | null;
     contentMapUpdatedAt?: number | null;
+    layoutTokensExists?: boolean;
+    layoutTokensFile?: string | null;
+    layoutTokensUpdatedAt?: number | null;
     richpostPagePlanExists?: boolean;
     richpostPagePlanFile?: string | null;
     richpostPagePlanUpdatedAt?: number | null;
+    richpostMastersDir?: string | null;
+    richpostMasterCount?: number;
+    richpostMasters?: Array<{
+        id?: string;
+        file?: string | null;
+        fileUrl?: string | null;
+        updatedAt?: number | null;
+    }>;
     richpostTheme?: {
         id?: string | null;
         label?: string | null;
         description?: string | null;
     } | null;
+    richpostTypography?: {
+        fontScale?: number | null;
+        lineHeightScale?: number | null;
+    } | null;
+    richpostFontScale?: number | null;
+    richpostLineHeightScale?: number | null;
     richpostThemeId?: string | null;
     richpostThemeLabel?: string | null;
     richpostThemeDescription?: string | null;
@@ -851,6 +868,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const folderContextMenuRef = useRef<HTMLDivElement | null>(null);
     const assetContextMenuRef = useRef<HTMLDivElement | null>(null);
     const draftContextMenuRef = useRef<HTMLDivElement | null>(null);
+    const editorFileRef = useRef<string | null>(null);
+    const editorBodyRef = useRef('');
+    const editorFrontmatterBlockRef = useRef<string | null>(null);
+    const editorMetadataRef = useRef<Record<string, unknown>>({});
+    const editorBodyDirtyRef = useRef(false);
+    const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
+    const richpostTypographyRequestIdRef = useRef(0);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter !== 'drafts';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
@@ -858,6 +882,26 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
         [editorBody, editorFrontmatterBlock]
     );
+
+    useEffect(() => {
+        editorFileRef.current = editorFile;
+    }, [editorFile]);
+
+    useEffect(() => {
+        editorBodyRef.current = editorBody;
+    }, [editorBody]);
+
+    useEffect(() => {
+        editorFrontmatterBlockRef.current = editorFrontmatterBlock;
+    }, [editorFrontmatterBlock]);
+
+    useEffect(() => {
+        editorMetadataRef.current = editorMetadata;
+    }, [editorMetadata]);
+
+    useEffect(() => {
+        editorBodyDirtyRef.current = editorBodyDirty;
+    }, [editorBodyDirty]);
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
@@ -1501,16 +1545,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, []);
 
-    const ensureLatestEditorContentSaved = useCallback(async () => {
-        if (!editorFile) return true;
-        if (!editorBodyDirty && !isSavingEditorBody) return true;
+    const runEditorSave = useCallback(async (options?: { alertOnError?: boolean }) => {
+        const snapshotFile = editorFileRef.current;
+        if (!snapshotFile) return true;
+        const snapshotContent = composeMarkdownWithFrontmatter(
+            editorBodyRef.current,
+            editorFrontmatterBlockRef.current
+        );
+        const snapshotMetadata = { ...editorMetadataRef.current };
+        const snapshotMetadataKey = JSON.stringify(snapshotMetadata);
+
+        setIsSavingEditorBody(true);
         try {
-            setIsSavingEditorBody(true);
-            const nextContent = composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock);
             const result = await window.ipcRenderer.invoke('manuscripts:save', {
-                path: editorFile,
-                content: nextContent,
-                metadata: editorMetadata,
+                path: snapshotFile,
+                content: snapshotContent,
+                metadata: snapshotMetadata,
             }) as { success?: boolean; error?: string; state?: PackageState; newPath?: string; title?: string | null };
             if (!result?.success) {
                 throw new Error(result?.error || '保存失败');
@@ -1521,21 +1571,71 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (typeof result.title === 'string' && result.title.trim()) {
                 const nextTitle = result.title.trim();
                 setEditorDescriptor((current) => current ? { ...current, title: nextTitle } : current);
-                setEditorMetadata((current) => ({ ...current, title: nextTitle }));
+                setEditorMetadata((current) => {
+                    const nextMetadata = { ...current, title: nextTitle };
+                    editorMetadataRef.current = nextMetadata;
+                    return nextMetadata;
+                });
             }
-            if (typeof result.newPath === 'string' && result.newPath.trim() && result.newPath !== editorFile) {
+            if (typeof result.newPath === 'string' && result.newPath.trim() && result.newPath !== snapshotFile) {
+                editorFileRef.current = result.newPath;
                 setEditorFile(result.newPath);
                 await loadData();
             }
-            setEditorBodyDirty(false);
+            const latestContent = composeMarkdownWithFrontmatter(
+                editorBodyRef.current,
+                editorFrontmatterBlockRef.current
+            );
+            const latestMetadataKey = JSON.stringify(editorMetadataRef.current || {});
+            const latestFile = editorFileRef.current;
+            const isStillCurrent = latestFile === snapshotFile
+                && latestContent === snapshotContent
+                && latestMetadataKey === snapshotMetadataKey;
+            if (isStillCurrent) {
+                editorBodyDirtyRef.current = false;
+                setEditorBodyDirty(false);
+            }
             return true;
         } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '保存失败');
+            if (options?.alertOnError !== false) {
+                void appAlert(error instanceof Error ? error.message : '保存失败');
+            }
             return false;
         } finally {
             setIsSavingEditorBody(false);
         }
-    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, isSavingEditorBody, loadData]);
+    }, [loadData]);
+
+    const ensureLatestEditorContentSaved = useCallback(async () => {
+        if (!editorFileRef.current) return true;
+        let attempt = 0;
+        while (attempt < 4) {
+            if (editorSavePromiseRef.current) {
+                const completed = await editorSavePromiseRef.current;
+                if (!completed) {
+                    return false;
+                }
+            }
+            if (!editorBodyDirtyRef.current && !editorSavePromiseRef.current) {
+                return true;
+            }
+            const savePromise = runEditorSave({ alertOnError: true }).finally(() => {
+                if (editorSavePromiseRef.current === savePromise) {
+                    editorSavePromiseRef.current = null;
+                }
+            });
+            editorSavePromiseRef.current = savePromise;
+            const succeeded = await savePromise;
+            if (!succeeded) {
+                return false;
+            }
+            if (!editorBodyDirtyRef.current) {
+                return true;
+            }
+            attempt += 1;
+        }
+        return !editorBodyDirtyRef.current;
+    }, [runEditorSave]);
 
     const handleGeneratePackageHtml = useCallback(async (target: 'layout' | 'wechat') => {
         if (!editorFile) return;
@@ -1602,6 +1702,37 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setWorkingId((current) => current === workingKey ? null : current);
         }
     }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId]);
+
+    const handleUpdateRichpostTypography = useCallback(async (settings: {
+        fontScale: number;
+        lineHeightScale: number;
+    }) => {
+        if (!editorFile) return;
+        const requestFile = editorFile;
+        const requestId = ++richpostTypographyRequestIdRef.current;
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:render-richpost-pages', {
+                filePath: requestFile,
+                fontScale: settings.fontScale,
+                lineHeightScale: settings.lineHeightScale,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '更新图文排版失败');
+            }
+            if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
+                return;
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
+                return;
+            }
+            console.error('Failed to update richpost typography:', error);
+            void appAlert(error instanceof Error ? error.message : '更新图文排版失败');
+        }
+    }, [editorFile, ensureLatestEditorContentSaved]);
 
     const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
         if (!editorFile || !presetId.trim()) return;
@@ -1927,40 +2058,26 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     ]);
 
     useEffect(() => {
-        if (!editorFile || !editorBodyDirty) return;
-        const timer = window.setTimeout(async () => {
-            try {
-                setIsSavingEditorBody(true);
-                const nextContent = composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock);
-                const result = await window.ipcRenderer.invoke('manuscripts:save', {
-                    path: editorFile,
-                    content: nextContent,
-                    metadata: editorMetadata,
-                }) as { success?: boolean; error?: string; state?: PackageState; newPath?: string; title?: string | null };
-                if (!result?.success) {
-                    throw new Error(result?.error || '保存失败');
+        if (!editorFile || !editorBodyDirty || isSavingEditorBody) return;
+        const timer = window.setTimeout(() => {
+            const savePromise = runEditorSave({ alertOnError: false }).finally(() => {
+                if (editorSavePromiseRef.current === savePromise) {
+                    editorSavePromiseRef.current = null;
                 }
-                if (result.state) {
-                    setPackageState(result.state);
-                }
-                if (typeof result.title === 'string' && result.title.trim()) {
-                    const nextTitle = result.title.trim();
-                    setEditorDescriptor((current) => current ? { ...current, title: nextTitle } : current);
-                    setEditorMetadata((current) => ({ ...current, title: nextTitle }));
-                }
-                if (typeof result.newPath === 'string' && result.newPath.trim() && result.newPath !== editorFile) {
-                    setEditorFile(result.newPath);
-                    await loadData();
-                }
-                setEditorBodyDirty(false);
-            } catch (error) {
-                console.error('Failed to save editor body:', error);
-            } finally {
-                setIsSavingEditorBody(false);
-            }
-        }, 700);
+            });
+            editorSavePromiseRef.current = savePromise;
+            void savePromise;
+        }, 250);
         return () => window.clearTimeout(timer);
-    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, loadData]);
+    }, [
+        editorBody,
+        editorBodyDirty,
+        editorFile,
+        editorFrontmatterBlock,
+        editorMetadata,
+        isSavingEditorBody,
+        runEditorSave,
+    ]);
 
     useEffect(() => {
         if (!editorFile) {
@@ -2026,13 +2143,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         : editorFile,
                 associatedPackageStyleTargets:
                     draftType === 'richpost'
-                        ? ['manifest.richpostThemeId', 'layout.html', 'pages/page-xxx.html']
+                        ? [
+                            'manifest.richpostThemeId',
+                            'layout.tokens.json',
+                            'masters/*.master.html',
+                            'richpost-page-plan.json',
+                            'pages/page-xxx.html',
+                            'layout.html',
+                        ]
                         : draftType === 'longform'
                             ? ['manifest.longformLayoutPresetId', 'layout.html', 'wechat.html']
                             : [],
                 associatedPackageStyleEditRule:
                     draftType === 'richpost'
-                        ? '修改图文主题或排版时，只能改 richpostThemeId 或图文页面 HTML，不能改 content.md 的正文内容。'
+                        ? '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
                         : draftType === 'longform'
                             ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
                             : null,
@@ -2041,10 +2165,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         ? {
                             contentSource: String(packageState?.manifest?.entry || 'content.md'),
                             contentMap: 'content-map.json',
+                            layoutTokens: 'layout.tokens.json',
+                            mastersDir: 'masters/*.master.html',
                             pagePlan: 'richpost-page-plan.json',
                             previewShell: 'layout.html',
                             pagesDir: 'pages/page-xxx.html',
                             themeSource: 'manifest.richpostThemeId',
+                            currentMasters: Array.isArray(packageState?.richpostMasters)
+                                ? packageState.richpostMasters
+                                    .map((item) => String(item?.id || '').trim())
+                                    .filter(Boolean)
+                                : [],
                         }
                         : draftType === 'longform'
                             ? {
@@ -2863,6 +2994,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         wechatPreview={articleWechatPreview}
                         hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
                         richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
+                        richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
+                        richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
                         richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
                         isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
                         longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
@@ -2880,6 +3013,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         }}
                         onSelectRichpostTheme={(themeId) => {
                             void handleSelectRichpostTheme(themeId);
+                        }}
+                        onUpdateRichpostTypography={(settings) => {
+                            void handleUpdateRichpostTypography(settings);
                         }}
                         onSelectLongformLayoutPreset={(presetId, target) => {
                             void handleSelectLongformLayoutPreset(presetId, target);

@@ -137,9 +137,7 @@ type AssistantDaemonStatus = {
         webhookUrl: string;
     };
     knowledgeApi: {
-        enabled: boolean;
         endpointPath: string;
-        authToken?: string;
         webhookUrl: string;
     };
     weixin: {
@@ -180,11 +178,6 @@ type AssistantDaemonDraft = {
         replyUsingChatId: boolean;
     };
     relay: {
-        enabled: boolean;
-        endpointPath: string;
-        authToken: string;
-    };
-    knowledgeApi: {
         enabled: boolean;
         endpointPath: string;
         authToken: string;
@@ -467,7 +460,7 @@ interface RemoteChannelCardProps {
     children: ReactNode;
 }
 
-type ApiSectionId = 'overview' | 'knowledge' | 'daemon' | 'listen' | 'status' | 'logs';
+type ApiSectionId = 'overview' | 'daemon' | 'listen' | 'status' | 'logs';
 
 interface ApiSectionCardProps {
     title: string;
@@ -620,7 +613,6 @@ function RemoteConnectionSettingsSectionInner({
     const [expandedChannelId, setExpandedChannelId] = useState<RemoteChannelId | null>('weixin');
     const [expandedApiSections, setExpandedApiSections] = useState<Record<ApiSectionId, boolean>>({
         overview: true,
-        knowledge: true,
         daemon: true,
         listen: true,
         status: true,
@@ -690,7 +682,7 @@ function RemoteConnectionSettingsSectionInner({
                     <ApiSectionCard
                         title="远程 API 与后台值守"
                         eyebrow="概览"
-                        description="配置 Knowledge API、后台运行方式和监听地址。"
+                        description="管理本地监听地址、后台常驻与第三方接入方式。"
                         expanded={expandedApiSections.overview}
                         onToggle={() => handleToggleApiSection('overview')}
                         actions={(
@@ -718,14 +710,6 @@ function RemoteConnectionSettingsSectionInner({
                         <div className="flex flex-wrap gap-2">
                             <span className={clsx(
                                 'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                                assistantDaemonDraft.knowledgeApi.enabled
-                                    ? 'border-emerald-300/70 bg-emerald-500/10 text-emerald-700'
-                                    : 'border-border bg-surface-secondary/60 text-text-tertiary',
-                            )}>
-                                Knowledge API {assistantDaemonDraft.knowledgeApi.enabled ? '已启用' : '已关闭'}
-                            </span>
-                            <span className={clsx(
-                                'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
                                 assistantDaemonDraft.enabled
                                     ? 'border-sky-300/70 bg-sky-500/10 text-sky-700'
                                     : 'border-border bg-surface-secondary/60 text-text-tertiary',
@@ -739,61 +723,8 @@ function RemoteConnectionSettingsSectionInner({
                     </ApiSectionCard>
 
                     <ApiSectionCard
-                        title="Knowledge API"
-                        eyebrow="Step 1"
-                        description="控制对外知识库 API 是否开放，并配置访问路径和凭据。"
-                        expanded={expandedApiSections.knowledge}
-                        onToggle={() => handleToggleApiSection('knowledge')}
-                        actions={(
-                            <button
-                                type="button"
-                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, enabled: !prev.knowledgeApi.enabled } }))}
-                                className="ui-switch-track"
-                                data-size="md"
-                                data-state={assistantDaemonDraft.knowledgeApi.enabled ? 'on' : 'off'}
-                                aria-label="Knowledge API 开关"
-                            >
-                                <span className="ui-switch-thumb" />
-                            </button>
-                        )}
-                    >
-                        <div className="rounded-[18px] border border-border bg-surface-secondary/20 p-3.5">
-                            <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">当前入口</div>
-                            <div className="mt-1.5 break-all text-sm font-medium text-text-primary">
-                                {assistantDaemonStatus?.knowledgeApi?.webhookUrl || 'HTTP 未生成'}
-                            </div>
-                            <div className="mt-2 text-[11px] leading-5 text-text-tertiary">
-                                健康检查：
-                                <code className="ml-1 rounded bg-surface-secondary px-1.5 py-0.5">
-                                    {(assistantDaemonStatus?.knowledgeApi?.webhookUrl || assistantDaemonDraft.knowledgeApi.endpointPath)}/health
-                                </code>
-                            </div>
-                        </div>
-
-                        <div className="mt-4 space-y-3">
-                            <div>
-                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">API 根路径</label>
-                                <input
-                                    type="text"
-                                    value={assistantDaemonDraft.knowledgeApi.endpointPath}
-                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, endpointPath: e.target.value } }))}
-                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Bearer Token</label>
-                                <PasswordInput
-                                    value={assistantDaemonDraft.knowledgeApi.authToken}
-                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, knowledgeApi: { ...prev.knowledgeApi, authToken: e.target.value } }))}
-                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
-                                />
-                            </div>
-                        </div>
-                    </ApiSectionCard>
-
-                    <ApiSectionCard
                         title="后台值守"
-                        eyebrow="Step 2"
+                        eyebrow="Step 1"
                         description="控制后台进程常驻、任务处理与远程入口的长期运行方式。"
                         expanded={expandedApiSections.daemon}
                         onToggle={() => handleToggleApiSection('daemon')}
@@ -2182,10 +2113,10 @@ export function ToolsSettingsSection({
                     <button
                         type="button"
                         onClick={() => void handleOpenKnowledgeApiGuide()}
-                        className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                        <FolderOpen className="w-3 h-3" />
-                        打开文档页
+                        <FolderOpen className="h-3 w-3" />
+                        打开文档
                     </button>
                 </div>
             </div>

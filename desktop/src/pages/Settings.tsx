@@ -106,11 +106,6 @@ type AssistantDaemonDraft = {
     endpointPath: string;
     authToken: string;
   };
-  knowledgeApi: {
-    enabled: boolean;
-    endpointPath: string;
-    authToken: string;
-  };
   weixin: {
     enabled: boolean;
     endpointPath: string;
@@ -157,11 +152,6 @@ const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
     endpointPath: '/hooks/channel/relay',
     authToken: '',
   },
-  knowledgeApi: {
-    enabled: true,
-    endpointPath: '/api/knowledge',
-    authToken: '',
-  },
   weixin: {
     enabled: false,
     endpointPath: '/hooks/weixin/relay',
@@ -198,11 +188,6 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
       enabled: status.relay?.enabled !== false,
       endpointPath: String(status.relay?.endpointPath || '/hooks/channel/relay'),
       authToken: String(status.relay?.authToken || ''),
-    },
-    knowledgeApi: {
-      enabled: status.knowledgeApi?.enabled !== false,
-      endpointPath: String(status.knowledgeApi?.endpointPath || '/api/knowledge'),
-      authToken: String(status.knowledgeApi?.authToken || ''),
     },
     weixin: {
       enabled: Boolean(status.weixin?.enabled),
@@ -2218,11 +2203,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       enabled: assistantDaemonDraft.relay.enabled,
       endpointPath: String(assistantDaemonDraft.relay.endpointPath || '').trim(),
       authToken: String(assistantDaemonDraft.relay.authToken || '').trim() || undefined,
-    },
-    knowledgeApi: {
-      enabled: assistantDaemonDraft.knowledgeApi.enabled,
-      endpointPath: String(assistantDaemonDraft.knowledgeApi.endpointPath || '').trim(),
-      authToken: String(assistantDaemonDraft.knowledgeApi.authToken || '').trim() || undefined,
     },
     weixin: {
       enabled: assistantDaemonDraft.weixin.enabled,

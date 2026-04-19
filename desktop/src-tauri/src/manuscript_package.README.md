@@ -14,8 +14,13 @@
 - `manifest.json`
 - `content.md`
 - `content-map.json`
+- `layout.tokens.json`
+- `masters/cover.master.html`
+- `masters/body.master.html`
+- `masters/ending.master.html`
 - `richpost-page-plan.json`
 - `manifest.json` 内的 `richpostThemeId`
+- `manifest.json` 内的 `richpostTypography`
 - `layout.html`
 - `pages/page-001.html`
 - `pages/page-002.html`
@@ -48,10 +53,15 @@
 2. 保存正文时，宿主重建 `content-map.json`。
 3. 保存正文时，宿主总是按当前 Markdown 全量重排 `richpost-page-plan.json`。
 4. 连续三个空行会被解释为强制分页，优先切开页面段落。
-5. AI 点击生成时，只输出一次性的分页规划 JSON，不输出最终 HTML；后续正文再编辑，仍会被自动重排覆盖。
-6. 宿主根据当前分页方案渲染每个 `pages/page-xxx.html`。
-7. 宿主再生成一个 `layout.html` 作为多页预览壳，iframe 读取每一页。
-8. 图文主题通过 `manifest.richpostThemeId` 控制，只改样式层，不改正文层。
+5. 图文样式层拆成三部分：
+   - `layout.tokens.json`
+   - `masters/*.master.html`
+   - `richpost-page-plan.json`
+6. AI 点击生成时，只输出一次性的分页规划 JSON，不输出最终 HTML；后续正文再编辑，仍会被自动重排覆盖。
+7. 宿主根据当前母版、token 和分页方案渲染每个 `pages/page-xxx.html`。
+8. 宿主再生成一个 `layout.html` 作为多页预览壳，iframe 读取每一页。
+9. 图文主题通过 `manifest.richpostThemeId` 控制默认 token 基线，只改样式层，不改正文层。
+10. 图文工具栏里的字体大小和行间距调整会写入 `manifest.richpostTypography`，并立即触发整套分页重排；主题提供基础值，用户调整是叠加覆盖值。
 
 ### 长文工程 `*.redarticle`
 
@@ -65,11 +75,11 @@
 ### 宿主
 
 - `src-tauri/src/commands/manuscripts.rs`
-  负责正文解析、分页方案生成、页面 HTML 渲染、最终文件写回
+  负责正文解析、分页方案生成、母版注入、token 合成、页面 HTML 渲染、最终文件写回
 - `src-tauri/src/manuscript_package.rs`
-  负责工程状态读取，把分页方案和每页 HTML 资产暴露给前端
+  负责工程状态读取，把 token、母版、分页方案和每页 HTML 资产暴露给前端
 - `src-tauri/src/helpers.rs`
-  负责 `richpost-page-plan.json`、`pages/` 等路径约定
+  负责 `layout.tokens.json`、`masters/`、`richpost-page-plan.json`、`pages/` 等路径约定
 
 ### AI
 
@@ -113,6 +123,10 @@
 
 - 新建图文工程时，默认写入：
   - `content-map.json`
+  - `layout.tokens.json`
+  - `masters/cover.master.html`
+  - `masters/body.master.html`
+  - `masters/ending.master.html`
   - `richpost-page-plan.json`
   - `layout.html`
   - `pages/` 下首版分页 HTML
@@ -128,8 +142,13 @@
   - 后续再编辑正文时，这份 AI 方案会被自动重排覆盖
 - 图文切换预设主题时：
   - 只更新 `manifest.richpostThemeId`
+  - 同步重写 `layout.tokens.json`
   - 宿主重渲染全部 `pages/page-xxx.html`
   - 正文 `content.md` 和 `content-map.json` 不会被改写
+- 图文调整字体大小 / 行间距时：
+  - 只更新 `manifest.richpostTypography`
+  - 宿主立即按新的分页输入重排全部 `pages/page-xxx.html`
+  - 导出图片和当前预览继续使用同一组排版结果
 - 稿件页进入 `图文排版` 模式时：
   - 当前文件会话会强制激活 `richpost-layout-designer`
   - AI 必须先按这个 skill 处理 richpost 主题、字体、分页和页面样式任务
@@ -152,6 +171,7 @@
 
 - 图文保存时只重建结构化内容映射、默认分页方案和页面文件，不重新请求 AI
 - 自动重排只做本地 JSON/HTML 生成，不走浏览器测量和模型调用，成本很低
+- richpost 页面的最终渲染改成 `tokens + master + page-plan` 合成，不再走写死的 Rust 模板分支
 - 前端预览直接读取真实文件，不在渲染层拼接大段 HTML 字符串
 - `layout.html` 只做预览壳，把多页卡片拆到 `pages/` 下独立加载
 

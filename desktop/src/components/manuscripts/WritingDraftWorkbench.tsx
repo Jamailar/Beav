@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import clsx from 'clsx';
 import {
   Columns,
@@ -8,7 +8,6 @@ import {
   Loader2,
   MessageSquare,
   Sparkles,
-  Type,
   X,
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
@@ -102,6 +101,8 @@ export interface WritingDraftWorkbenchProps {
   wechatPreview?: HtmlPreviewSource | null;
   richpostPages?: RichPostPagePreview[];
   richpostThemeId?: string | null;
+  richpostFontScale?: number | null;
+  richpostLineHeightScale?: number | null;
   richpostThemePresets?: RichpostThemePreset[];
   isApplyingRichpostTheme?: boolean;
   longformLayoutPresetId?: string | null;
@@ -115,6 +116,7 @@ export interface WritingDraftWorkbenchProps {
   onRejectWriteProposal?: () => void;
   onAiWorkspaceModeChange?: (mode: AiWorkspaceMode) => void;
   onSelectRichpostTheme?: (themeId: string) => void;
+  onUpdateRichpostTypography?: (settings: { fontScale: number; lineHeightScale: number }) => void | Promise<void>;
   onSelectLongformLayoutPreset?: (presetId: string, target: 'layout' | 'wechat') => void;
 }
 
@@ -136,6 +138,15 @@ const RICHPOST_LAYOUT_SKILL_NAME = 'richpost-layout-designer';
 const LONGFORM_LAYOUT_SKILL_NAME = 'longform-layout-designer';
 const PRESET_PREVIEW_TITLE = 'RedBox';
 const PRESET_PREVIEW_BODY = '用 AI 生产高质量内容。';
+const RICHPOST_FONT_SCALE_MIN = 0.8;
+const RICHPOST_FONT_SCALE_MAX = 1.6;
+const RICHPOST_LINE_HEIGHT_SCALE_MIN = 0.8;
+const RICHPOST_LINE_HEIGHT_SCALE_MAX = 1.4;
+
+function clampScale(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(max, Math.max(min, Number(value.toFixed(2))));
+}
 
 function normalizePreviewColor(value: string | null | undefined, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -231,9 +242,10 @@ function buildRichpostExportPageReadPath(packageFilePath: string, pageId: string
   return `${normalizedPackagePath}/pages/${pageId}.html`;
 }
 
-function injectRichpostExportScale(html: string, fontScale: number): string {
-  const normalizedScale = Number.isFinite(fontScale) ? Math.min(1.6, Math.max(0.8, fontScale)) : 1;
-  const scaleScript = `<script>document.documentElement.style.setProperty('--rb-font-scale', '${normalizedScale}');</script>`;
+function injectRichpostExportScale(html: string, fontScale: number, lineHeightScale: number): string {
+  const normalizedFontScale = clampScale(fontScale, RICHPOST_FONT_SCALE_MIN, RICHPOST_FONT_SCALE_MAX);
+  const normalizedLineHeightScale = clampScale(lineHeightScale, RICHPOST_LINE_HEIGHT_SCALE_MIN, RICHPOST_LINE_HEIGHT_SCALE_MAX);
+  const scaleScript = `<script>(()=>{const apply=()=>{document.documentElement.style.setProperty('--rb-font-scale','${normalizedFontScale}');document.documentElement.style.setProperty('--rb-line-height-scale','${normalizedLineHeightScale}');const host=document.querySelector('.rb-page-host');if(!host)return;const computed=window.getComputedStyle(host);const rawBase=Number.parseFloat((computed.getPropertyValue('--rb-body-line-height')||'').trim()||'1.9');const base=Number.isFinite(rawBase)?rawBase:1.9;host.style.setProperty('--rb-runtime-body-line-height',String((base*${normalizedLineHeightScale}).toFixed(3)));};if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',apply,{once:true});}else{apply();}})();</script>`;
   if (/<\/body>/i.test(html)) {
     return html.replace(/<\/body>/i, `${scaleScript}</body>`);
   }
@@ -288,14 +300,49 @@ async function waitForIframeContentReady(frame: HTMLIFrameElement): Promise<Docu
   return doc;
 }
 
-async function loadRichpostExportPageHtml(packageFilePath: string, pageId: string, fontScale: number): Promise<string> {
+async function loadRichpostExportPageHtml(
+  packageFilePath: string,
+  pageId: string,
+  fontScale: number,
+  lineHeightScale: number
+): Promise<string> {
   const readPath = buildRichpostExportPageReadPath(packageFilePath, pageId);
   const result = await window.ipcRenderer.invoke('manuscripts:read', readPath) as { content?: string };
   const html = String(result?.content || '');
   if (!html.trim()) {
     throw new Error(`第 ${pageId} 页 HTML 为空`);
   }
-  return injectRichpostExportScale(html, fontScale);
+  return injectRichpostExportScale(html, fontScale, lineHeightScale);
+}
+
+function TextScaleIcon({ large = false }: { large?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={clsx(
+        'select-none font-semibold leading-none tracking-[-0.04em]',
+        large ? 'text-[17px]' : 'text-[13px]'
+      )}
+    >
+      A
+    </span>
+  );
+}
+
+function LineHeightIcon({ expanded = false }: { expanded?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={clsx(
+        'inline-flex flex-col justify-center',
+        expanded ? 'gap-[3px]' : 'gap-[1px]'
+      )}
+    >
+      <span className="h-px w-3 bg-current" />
+      <span className="h-px w-3 bg-current" />
+      <span className="h-px w-3 bg-current" />
+    </span>
+  );
 }
 
 async function renderRichpostHtmlToPng(html: string, pageId: string): Promise<string> {
@@ -376,6 +423,7 @@ function RichPostPreview({
   imageAssets,
   hasGeneratedHtml,
   fontScale = 1,
+  lineHeightScale = 1,
   compact = false,
 }: {
   title: string;
@@ -387,6 +435,7 @@ function RichPostPreview({
   imageAssets: MediaAssetLike[];
   hasGeneratedHtml?: boolean;
   fontScale?: number;
+  lineHeightScale?: number;
   compact?: boolean;
 }) {
   const galleryAssets = imageAssets.slice(0, 4);
@@ -397,7 +446,7 @@ function RichPostPreview({
   const previewFrameUrl = buildPreviewFrameUrl(
     previewSource?.fileUrl || previewSource?.filePath,
     previewSource?.updatedAt,
-    { fontScale }
+    { fontScale, lineHeightScale }
   );
   const hasHtmlFile = Boolean(previewSource?.exists);
   const hasPreviewContent = Boolean(previewSource?.hasContent || previewHtml?.trim());
@@ -412,6 +461,7 @@ function RichPostPreview({
             {pages.map((page) => {
               const frameUrl = buildPreviewFrameUrl(page.fileUrl || page.filePath, page.updatedAt, {
                 fontScale,
+                lineHeightScale,
               });
               return (
                 <section key={page.id} className="border border-border bg-surface-primary p-4 shadow-sm">
@@ -614,6 +664,8 @@ export function WritingDraftWorkbench({
   wechatPreview = null,
   richpostPages = [],
   richpostThemeId = null,
+  richpostFontScale: richpostFontScaleProp = 1,
+  richpostLineHeightScale: richpostLineHeightScaleProp = 1,
   richpostThemePresets = [],
   isApplyingRichpostTheme = false,
   longformLayoutPresetId = null,
@@ -627,15 +679,32 @@ export function WritingDraftWorkbench({
   onRejectWriteProposal,
   onAiWorkspaceModeChange,
   onSelectRichpostTheme,
+  onUpdateRichpostTypography,
   onSelectLongformLayoutPreset,
 }: WritingDraftWorkbenchProps) {
+  const normalizedRichpostFontScaleProp = clampScale(
+    richpostFontScaleProp ?? 1,
+    RICHPOST_FONT_SCALE_MIN,
+    RICHPOST_FONT_SCALE_MAX
+  );
+  const normalizedRichpostLineHeightScaleProp = clampScale(
+    richpostLineHeightScaleProp ?? 1,
+    RICHPOST_LINE_HEIGHT_SCALE_MIN,
+    RICHPOST_LINE_HEIGHT_SCALE_MAX
+  );
   const [activeTab, setActiveTab] = useState<WritingWorkbenchTab>('manuscript');
   const [isSplitCompareEnabled, setIsSplitCompareEnabled] = useState(false);
   const [splitPreviewTab, setSplitPreviewTab] = useState<WritingWorkbenchTab>('layout');
-  const [richpostFontScale, setRichpostFontScale] = useState(1);
+  const [richpostFontScale, setRichpostFontScale] = useState(normalizedRichpostFontScaleProp);
+  const [richpostLineHeightScale, setRichpostLineHeightScale] = useState(normalizedRichpostLineHeightScaleProp);
   const [isExportingRichpostImages, setIsExportingRichpostImages] = useState(false);
   const [isRichpostThemeDrawerOpen, setIsRichpostThemeDrawerOpen] = useState(false);
   const [isLongformLayoutDrawerOpen, setIsLongformLayoutDrawerOpen] = useState(false);
+  const committedRichpostTypographyRef = useRef({
+    fontScale: normalizedRichpostFontScaleProp,
+    lineHeightScale: normalizedRichpostLineHeightScaleProp,
+  });
+  const pendingRichpostTypographyRef = useRef<{ fontScale: number; lineHeightScale: number } | null>(null);
 
   useEffect(() => {
     setActiveTab('manuscript');
@@ -643,8 +712,15 @@ export function WritingDraftWorkbench({
   }, [draftType, filePath]);
 
   useEffect(() => {
-    setRichpostFontScale(1);
-  }, [filePath, draftType]);
+    const nextTypography = {
+      fontScale: normalizedRichpostFontScaleProp,
+      lineHeightScale: normalizedRichpostLineHeightScaleProp,
+    };
+    committedRichpostTypographyRef.current = nextTypography;
+    pendingRichpostTypographyRef.current = null;
+    setRichpostFontScale(nextTypography.fontScale);
+    setRichpostLineHeightScale(nextTypography.lineHeightScale);
+  }, [draftType, filePath, normalizedRichpostFontScaleProp, normalizedRichpostLineHeightScaleProp]);
 
   useEffect(() => {
     setIsRichpostThemeDrawerOpen(false);
@@ -738,6 +814,44 @@ export function WritingDraftWorkbench({
     onAiWorkspaceModeChange?.(aiWorkspaceMode);
   }, [aiWorkspaceMode, onAiWorkspaceModeChange]);
 
+  useEffect(() => {
+    if (!isRichPost || !onUpdateRichpostTypography) return;
+    const nextTypography = {
+      fontScale: clampScale(richpostFontScale, RICHPOST_FONT_SCALE_MIN, RICHPOST_FONT_SCALE_MAX),
+      lineHeightScale: clampScale(
+        richpostLineHeightScale,
+        RICHPOST_LINE_HEIGHT_SCALE_MIN,
+        RICHPOST_LINE_HEIGHT_SCALE_MAX
+      ),
+    };
+    const committed = committedRichpostTypographyRef.current;
+    const pending = pendingRichpostTypographyRef.current;
+    const matchesCommitted = (
+      nextTypography.fontScale === committed.fontScale
+      && nextTypography.lineHeightScale === committed.lineHeightScale
+    );
+    const matchesPending = pending
+      && nextTypography.fontScale === pending.fontScale
+      && nextTypography.lineHeightScale === pending.lineHeightScale;
+    if (matchesCommitted || matchesPending) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      pendingRichpostTypographyRef.current = nextTypography;
+      void Promise.resolve(onUpdateRichpostTypography(nextTypography)).catch((error) => {
+        console.error('Failed to update richpost typography:', error);
+      });
+    }, 160);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    isRichPost,
+    onUpdateRichpostTypography,
+    richpostFontScale,
+    richpostLineHeightScale,
+  ]);
+
   const normalizedThemePresets = useMemo(
     () => richpostThemePresets.filter((theme) => typeof theme?.id === 'string' && theme.id.trim()),
     [richpostThemePresets]
@@ -795,6 +909,7 @@ export function WritingDraftWorkbench({
           imageAssets={imageAssets}
           hasGeneratedHtml={hasGeneratedHtml}
           fontScale={richpostFontScale}
+          lineHeightScale={richpostLineHeightScale}
           compact={compact}
         />
       );
@@ -1019,7 +1134,12 @@ export function WritingDraftWorkbench({
       for (let index = 0; index < exportablePages.length; index += 1) {
         const page = exportablePages[index];
         const entryName = buildRichpostExportImagePath(picked.path, index);
-        const html = await loadRichpostExportPageHtml(filePath, page.id, richpostFontScale);
+        const html = await loadRichpostExportPageHtml(
+          filePath,
+          page.id,
+          richpostFontScale,
+          richpostLineHeightScale
+        );
         const dataUrl = await renderRichpostHtmlToPng(html, page.id);
         const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
         archiveEntries.push({ name: entryName, dataBase64 });
@@ -1037,6 +1157,14 @@ export function WritingDraftWorkbench({
     } finally {
       setIsExportingRichpostImages(false);
     }
+  };
+
+  const adjustRichpostFontScale = (delta: number) => {
+    setRichpostFontScale((current) => clampScale(current + delta, RICHPOST_FONT_SCALE_MIN, RICHPOST_FONT_SCALE_MAX));
+  };
+
+  const adjustRichpostLineHeightScale = (delta: number) => {
+    setRichpostLineHeightScale((current) => clampScale(current + delta, RICHPOST_LINE_HEIGHT_SCALE_MIN, RICHPOST_LINE_HEIGHT_SCALE_MAX));
   };
 
   return (
@@ -1077,40 +1205,57 @@ export function WritingDraftWorkbench({
               </button>
             ) : null}
             {isRichPost && activeTab === 'richpost' ? (
-              <div className="ml-auto flex items-center gap-2">
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => adjustRichpostFontScale(-0.1)}
+                  disabled={richpostFontScale <= RICHPOST_FONT_SCALE_MIN}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
+                  aria-label="缩小文字"
+                  title="缩小文字"
+                >
+                  <TextScaleIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustRichpostFontScale(0.1)}
+                  disabled={richpostFontScale >= RICHPOST_FONT_SCALE_MAX}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
+                  aria-label="放大文字"
+                  title="放大文字"
+                >
+                  <TextScaleIcon large />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustRichpostLineHeightScale(-0.08)}
+                  disabled={richpostLineHeightScale <= RICHPOST_LINE_HEIGHT_SCALE_MIN}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
+                  aria-label="缩小行间距"
+                  title="缩小行间距"
+                >
+                  <LineHeightIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => adjustRichpostLineHeightScale(0.08)}
+                  disabled={richpostLineHeightScale >= RICHPOST_LINE_HEIGHT_SCALE_MAX}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
+                  aria-label="放大行间距"
+                  title="放大行间距"
+                >
+                  <LineHeightIcon expanded />
+                </button>
                 <button
                   type="button"
                   onClick={() => void handleExportRichpostImages()}
                   disabled={isExportingRichpostImages}
-                  className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-sm text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-40"
+                  className="ml-1 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-40"
                   aria-label="导出图文图片"
                   title="导出图文图片"
                 >
                   {isExportingRichpostImages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                   <span>{isExportingRichpostImages ? '导出中' : '导出'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRichpostFontScale((current) => Math.max(0.8, Number((current - 0.1).toFixed(2))))}
-                  disabled={richpostFontScale <= 0.8}
-                  className="inline-flex items-center justify-center rounded-full border border-border px-3 py-1.5 text-sm text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-40"
-                  aria-label="缩小文字"
-                  title="缩小文字"
-                >
-                  <Type className="h-3 w-3" />
-                </button>
-                <div className="min-w-[52px] text-center text-xs font-medium text-text-secondary">
-                  {Math.round(richpostFontScale * 100)}%
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRichpostFontScale((current) => Math.min(1.6, Number((current + 0.1).toFixed(2))))}
-                  disabled={richpostFontScale >= 1.6}
-                  className="inline-flex items-center justify-center rounded-full border border-border px-3 py-1.5 text-sm text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-40"
-                  aria-label="放大文字"
-                  title="放大文字"
-                >
-                  <Type className="h-4 w-4" />
                 </button>
               </div>
             ) : null}

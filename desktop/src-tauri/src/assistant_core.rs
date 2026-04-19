@@ -73,6 +73,21 @@ fn assistant_channel_public_value(channel: &Value, base_url: &str, fallback_path
     value
 }
 
+fn knowledge_api_public_value(channel: &Value, base_url: &str, fallback_path: &str) -> Value {
+    let endpoint_path = normalize_endpoint_path(
+        channel.get("endpointPath").and_then(|item| item.as_str()),
+        fallback_path,
+    );
+    json!({
+        "endpointPath": endpoint_path,
+        "webhookUrl": if base_url.is_empty() {
+            String::new()
+        } else {
+            format!("{base_url}{endpoint_path}")
+        }
+    })
+}
+
 fn normalize_request_path(path: &str) -> String {
     let without_query = path.split_once('?').map(|(head, _)| head).unwrap_or(path);
     let clean = without_query
@@ -136,13 +151,8 @@ fn assistant_route_kind_for_path(path: &str, state: &AssistantStateRecord) -> &'
 }
 
 fn knowledge_api_endpoint_path(state: &AssistantStateRecord) -> String {
-    normalize_endpoint_path(
-        state
-            .knowledge_api
-            .get("endpointPath")
-            .and_then(|item| item.as_str()),
-        "/api/knowledge",
-    )
+    let _ = state;
+    "/api/knowledge".to_string()
 }
 
 fn is_knowledge_api_path(path: &str, state: &AssistantStateRecord) -> bool {
@@ -342,7 +352,7 @@ pub(crate) fn assistant_state_value(state: &AssistantStateRecord) -> Value {
         "feishu": assistant_channel_public_value(&state.feishu, &base_url, "/hooks/feishu/events"),
         "relay": assistant_channel_public_value(&state.relay, &base_url, "/hooks/channel/relay"),
         "weixin": assistant_channel_public_value(&state.weixin, &base_url, "/hooks/weixin/relay"),
-        "knowledgeApi": assistant_channel_public_value(&state.knowledge_api, &base_url, "/api/knowledge"),
+        "knowledgeApi": knowledge_api_public_value(&state.knowledge_api, &base_url, "/api/knowledge"),
     })
 }
 
@@ -580,40 +590,13 @@ pub(crate) fn validate_assistant_request(
     Ok(None)
 }
 
-fn validate_knowledge_api_request(
-    headers: &HashMap<String, String>,
-    assistant_state: &AssistantStateRecord,
-) -> Result<(), String> {
-    let enabled = assistant_state
-        .knowledge_api
-        .get("enabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(true);
-    if !enabled {
-        return Err("Knowledge API 当前未启用".to_string());
-    }
-    if let Some(expected) = assistant_state
-        .knowledge_api
-        .get("authToken")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-    {
-        if extract_bearer_or_token(headers) != expected {
-            return Err("Knowledge API auth token mismatch".to_string());
-        }
-    }
-    Ok(())
-}
-
 fn handle_knowledge_http_request(
     app: &AppHandle,
     assistant_state: &AssistantStateRecord,
     method: &str,
     path: &str,
-    headers: &HashMap<String, String>,
     body: &str,
 ) -> Result<(u16, &'static str, Value), String> {
-    validate_knowledge_api_request(headers, assistant_state)?;
     let base_path = knowledge_api_endpoint_path(assistant_state);
     let normalized_path = normalize_request_path(path);
     let subpath = normalized_path
@@ -784,7 +767,6 @@ pub(crate) fn run_assistant_listener(
                             &assistant_snapshot,
                             &method,
                             &path,
-                            &headers,
                             &body,
                         ) {
                             Ok((status, status_text, body)) => {
@@ -968,9 +950,7 @@ mod tests {
                 "availableAccountIds": []
             }),
             knowledge_api: json!({
-                "enabled": true,
                 "endpointPath": "/api/knowledge/custom",
-                "authToken": "",
                 "webhookUrl": ""
             }),
         }
@@ -1001,7 +981,7 @@ mod tests {
             value
                 .pointer("/knowledgeApi/webhookUrl")
                 .and_then(|item| item.as_str()),
-            Some("http://127.0.0.1:31937/api/knowledge/custom")
+            Some("http://127.0.0.1:31937/api/knowledge")
         );
     }
 
@@ -1024,7 +1004,8 @@ mod tests {
             assistant_route_kind_for_path("/hooks/feishu/events", &state),
             "generic"
         );
-        assert!(is_knowledge_api_path(
+        assert!(is_knowledge_api_path("/api/knowledge/entries", &state));
+        assert!(!is_knowledge_api_path(
             "/api/knowledge/custom/entries",
             &state
         ));

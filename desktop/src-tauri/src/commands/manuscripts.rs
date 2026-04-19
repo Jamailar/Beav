@@ -10,6 +10,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
+use pulldown_cmark::{html::push_html, Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -23,6 +24,18 @@ const DEFAULT_EDITOR_MOTION_PROMPT: &str =
     "请根据当前时间线和脚本，生成适合短视频的对象动画与节奏设计。默认不要额外标题、说明或字幕。";
 const PACKAGE_HTML_LAYOUT_TARGET: &str = "layout";
 const PACKAGE_HTML_WECHAT_TARGET: &str = "wechat";
+const RICHPOST_FONT_SCALE_MIN: f64 = 0.8;
+const RICHPOST_FONT_SCALE_MAX: f64 = 1.6;
+const RICHPOST_LINE_HEIGHT_SCALE_MIN: f64 = 0.8;
+const RICHPOST_LINE_HEIGHT_SCALE_MAX: f64 = 1.4;
+const RICHPOST_MASTER_COVER: &str = "cover";
+const RICHPOST_MASTER_BODY: &str = "body";
+const RICHPOST_MASTER_ENDING: &str = "ending";
+const RICHPOST_DEFAULT_MASTER_NAMES: [&str; 3] = [
+    RICHPOST_MASTER_COVER,
+    RICHPOST_MASTER_BODY,
+    RICHPOST_MASTER_ENDING,
+];
 
 #[derive(Debug, Clone)]
 struct ParsedPackageBlock {
@@ -48,6 +61,29 @@ struct PackageBoundAsset {
     title: String,
     url: String,
     role: String,
+}
+
+#[derive(Default)]
+struct RichpostAutoPageDraft {
+    title_block_ids: Vec<String>,
+    body_block_ids: Vec<String>,
+    body_fragments: Vec<Value>,
+    line_cost: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RichpostTypographySettings {
+    font_scale: f64,
+    line_height_scale: f64,
+}
+
+impl Default for RichpostTypographySettings {
+    fn default() -> Self {
+        Self {
+            font_scale: 1.0,
+            line_height_scale: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -249,6 +285,61 @@ fn richpost_theme_from_manifest(manifest: &Value) -> &'static RichpostThemePrese
         .unwrap_or(&richpost_theme_catalog()[0])
 }
 
+fn clamp_richpost_font_scale(value: f64) -> f64 {
+    ((value.clamp(RICHPOST_FONT_SCALE_MIN, RICHPOST_FONT_SCALE_MAX)) * 100.0).round() / 100.0
+}
+
+fn clamp_richpost_line_height_scale(value: f64) -> f64 {
+    ((value.clamp(
+        RICHPOST_LINE_HEIGHT_SCALE_MIN,
+        RICHPOST_LINE_HEIGHT_SCALE_MAX,
+    )) * 100.0)
+        .round()
+        / 100.0
+}
+
+fn richpost_typography_settings(
+    font_scale: Option<f64>,
+    line_height_scale: Option<f64>,
+) -> RichpostTypographySettings {
+    RichpostTypographySettings {
+        font_scale: clamp_richpost_font_scale(font_scale.unwrap_or(1.0)),
+        line_height_scale: clamp_richpost_line_height_scale(line_height_scale.unwrap_or(1.0)),
+    }
+}
+
+fn richpost_typography_settings_from_manifest(manifest: &Value) -> RichpostTypographySettings {
+    let raw = manifest.get("richpostTypography");
+    richpost_typography_settings(
+        raw.and_then(|value| value.get("fontScale"))
+            .and_then(Value::as_f64),
+        raw.and_then(|value| value.get("lineHeightScale"))
+            .and_then(Value::as_f64),
+    )
+}
+
+fn write_richpost_typography_settings_to_manifest(
+    manifest: &mut Value,
+    settings: RichpostTypographySettings,
+) {
+    let Some(object) = manifest.as_object_mut() else {
+        return;
+    };
+    if (settings.font_scale - 1.0).abs() < 0.001
+        && (settings.line_height_scale - 1.0).abs() < 0.001
+    {
+        object.remove("richpostTypography");
+        return;
+    }
+    object.insert(
+        "richpostTypography".to_string(),
+        json!({
+            "fontScale": settings.font_scale,
+            "lineHeightScale": settings.line_height_scale,
+        }),
+    );
+}
+
 fn longform_layout_preset(preset_id: &str) -> &'static LongformLayoutPreset {
     longform_layout_preset_catalog()
         .iter()
@@ -262,6 +353,259 @@ fn longform_layout_preset_from_manifest(manifest: &Value) -> &'static LongformLa
         .and_then(Value::as_str)
         .map(longform_layout_preset)
         .unwrap_or(&longform_layout_preset_catalog()[0])
+}
+
+fn sanitize_richpost_master_name(raw: &str) -> Option<String> {
+    let mut sanitized = String::new();
+    let mut last_was_dash = false;
+    for ch in raw.trim().chars() {
+        let lowered = ch.to_ascii_lowercase();
+        let is_valid = lowered.is_ascii_alphanumeric() || lowered == '-' || lowered == '_';
+        if is_valid {
+            sanitized.push(lowered);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            sanitized.push('-');
+            last_was_dash = true;
+        }
+    }
+    let normalized = sanitized.trim_matches('-').trim_matches('_').to_string();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn sanitize_richpost_css_var_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if !trimmed.starts_with("--rb-") {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn richpost_css_var_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn merge_richpost_css_var_object(
+    target: &mut serde_json::Map<String, Value>,
+    raw: Option<&Value>,
+) {
+    let Some(object) = raw.and_then(Value::as_object) else {
+        return;
+    };
+    for (key, value) in object {
+        let Some(name) = sanitize_richpost_css_var_name(key) else {
+            continue;
+        };
+        let Some(serialized) = richpost_css_var_string(value) else {
+            continue;
+        };
+        target.insert(name, json!(serialized));
+    }
+}
+
+fn default_richpost_layout_tokens(theme: &RichpostThemePreset) -> Value {
+    json!({
+        "version": 1,
+        "themeId": theme.id,
+        "cssVars": {
+            "--rb-shell-bg": theme.shell_bg,
+            "--rb-preview-card-bg": theme.preview_card_bg,
+            "--rb-preview-card-border": theme.preview_card_border,
+            "--rb-preview-card-shadow": theme.preview_card_shadow,
+            "--rb-page-bg": theme.page_bg,
+            "--rb-surface-bg": theme.surface_bg,
+            "--rb-surface-border": theme.surface_border,
+            "--rb-surface-shadow": theme.surface_shadow,
+            "--rb-surface-radius": theme.surface_radius,
+            "--rb-image-radius": theme.image_radius,
+            "--rb-text": theme.text,
+            "--rb-muted": theme.muted,
+            "--rb-accent": theme.accent,
+            "--rb-heading-font": theme.heading_font,
+            "--rb-body-font": theme.body_font,
+            "--rb-page-padding": "clamp(18px, 3.6vw, 32px)",
+            "--rb-zone-gap": "14px",
+            "--rb-body-font-size": "calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale))",
+            "--rb-body-line-height": "1.92",
+            "--rb-heading-h1-size": "calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale))",
+            "--rb-heading-h2-size": "calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale))",
+            "--rb-heading-h3-size": "calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale))",
+            "--rb-heading-h4-size": "calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale))",
+            "--rb-heading-h5-size": "calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale))",
+            "--rb-heading-h6-size": "calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale))",
+            "--rb-content-max-width": "100%",
+            "--rb-title-max-width": "100%",
+            "--rb-strong-weight": "700",
+            "--rb-link-decoration": "underline"
+        },
+        "roleCssVars": {
+            "cover": {},
+            "body": {},
+            "ending": {}
+        }
+    })
+}
+
+fn normalize_richpost_layout_tokens_value(raw: &Value, theme: &RichpostThemePreset) -> Value {
+    let mut normalized = default_richpost_layout_tokens(theme);
+    if let Some(object) = normalized.as_object_mut() {
+        if let Some(css_vars) = object.get_mut("cssVars").and_then(Value::as_object_mut) {
+            merge_richpost_css_var_object(css_vars, raw.get("cssVars"));
+        }
+        if let Some(role_target) = object.get_mut("roleCssVars").and_then(Value::as_object_mut) {
+            if let Some(raw_roles) = raw.get("roleCssVars").and_then(Value::as_object) {
+                for (role_name, role_value) in raw_roles {
+                    let Some(role_key) = sanitize_richpost_master_name(role_name) else {
+                        continue;
+                    };
+                    let role_entry = role_target
+                        .entry(role_key)
+                        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                    merge_richpost_css_var_object(role_entry.as_object_mut().unwrap(), Some(role_value));
+                }
+            }
+        }
+        object.insert("themeId".to_string(), json!(theme.id));
+        object.insert("version".to_string(), json!(1));
+    }
+    normalized
+}
+
+fn read_richpost_layout_tokens_value(
+    package_path: &std::path::Path,
+    manifest: &Value,
+) -> Value {
+    let theme = richpost_theme_from_manifest(manifest);
+    let raw = read_json_value_or(
+        &package_layout_tokens_path(package_path),
+        default_richpost_layout_tokens(theme),
+    );
+    normalize_richpost_layout_tokens_value(&raw, theme)
+}
+
+fn write_richpost_layout_tokens_for_theme(
+    package_path: &std::path::Path,
+    theme: &RichpostThemePreset,
+) -> Result<Value, String> {
+    let normalized = normalize_richpost_layout_tokens_value(&default_richpost_layout_tokens(theme), theme);
+    write_json_value(&package_layout_tokens_path(package_path), &normalized)?;
+    Ok(normalized)
+}
+
+fn richpost_builtin_tokens_are_locked(manifest: &Value) -> bool {
+    manifest
+        .get("richpostTokensCustomized")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn richpost_builtin_masters_are_locked(manifest: &Value) -> bool {
+    manifest
+        .get("richpostMastersCustomized")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn default_richpost_master_fragment(master_name: &str) -> &'static str {
+    let _ = master_name;
+    r#"<style>
+.rb-page-host .rb-stage {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  padding: var(--rb-page-padding);
+}
+.rb-page-host .rb-zone-background,
+.rb-page-host .rb-zone-overlay,
+.rb-page-host .rb-zone-decoration {
+  position: absolute;
+  inset: 0;
+}
+.rb-page-host .rb-zone-background .page-asset,
+.rb-page-host .rb-zone-background img {
+  width: 100%;
+  height: 100%;
+}
+.rb-page-host .rb-zone-background img {
+  object-fit: cover;
+}
+.rb-page-host .rb-stage-stack {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rb-zone-gap);
+  align-items: flex-start;
+}
+.rb-page-host .rb-zone-title,
+.rb-page-host .rb-zone-body,
+.rb-page-host .rb-zone-media,
+.rb-page-host .rb-zone-footer {
+  width: min(100%, var(--rb-content-max-width));
+  max-width: 100%;
+}
+.rb-page-host .rb-zone-media .page-asset img {
+  object-fit: cover;
+}
+</style>
+<div class="rb-stage">
+  <div class="rb-zone rb-zone-background">{{zone:background}}</div>
+  <div class="rb-zone rb-zone-overlay">{{zone:overlay}}</div>
+  <div class="rb-zone rb-zone-decoration">{{zone:decoration}}</div>
+  <div class="rb-stage-stack">
+    <header class="rb-zone rb-zone-title">{{zone:title}}</header>
+    <main class="rb-zone rb-zone-body">{{zone:body}}</main>
+    <div class="rb-zone rb-zone-media">{{zone:media}}</div>
+    <footer class="rb-zone rb-zone-footer">{{zone:footer}}</footer>
+  </div>
+</div>"#
+}
+
+fn ensure_richpost_layout_scaffold(
+    package_path: &std::path::Path,
+    manifest: &Value,
+) -> Result<Value, String> {
+    let theme = richpost_theme_from_manifest(manifest);
+    let tokens_path = package_layout_tokens_path(package_path);
+    let refresh_builtin_tokens = !richpost_builtin_tokens_are_locked(manifest);
+    let tokens = if refresh_builtin_tokens || !tokens_path.exists() {
+        write_richpost_layout_tokens_for_theme(package_path, theme)?
+    } else {
+        read_richpost_layout_tokens_value(package_path, manifest)
+    };
+    let masters_dir = package_richpost_masters_dir(package_path);
+    fs::create_dir_all(&masters_dir).map_err(|error| error.to_string())?;
+    let refresh_builtin_masters = !richpost_builtin_masters_are_locked(manifest);
+    for master_name in RICHPOST_DEFAULT_MASTER_NAMES {
+        let path = package_richpost_master_path(package_path, master_name);
+        if refresh_builtin_masters || !path.exists() {
+            write_text_file(&path, default_richpost_master_fragment(master_name))?;
+        }
+    }
+    Ok(tokens)
 }
 
 pub(crate) fn richpost_theme_catalog_value() -> Value {
@@ -1325,19 +1669,51 @@ fn render_package_slot_text(value: &str) -> String {
     escape_html(value).replace('\n', "<br />")
 }
 
-fn render_package_block_fragment(block: &PackageContentBlock) -> String {
-    if package_block_is_page_break(&block.kind) {
+fn render_markdown_fragment_html(value: &str) -> String {
+    let options = MarkdownOptions::ENABLE_STRIKETHROUGH | MarkdownOptions::ENABLE_TABLES;
+    let parser = MarkdownParser::new_ext(value, options).map(|event| match event {
+        MarkdownEvent::SoftBreak => MarkdownEvent::HardBreak,
+        other => other,
+    });
+    let mut html = String::new();
+    push_html(&mut html, parser);
+    if html.trim().is_empty() {
+        render_package_slot_text(value)
+    } else {
+        html.trim().to_string()
+    }
+}
+
+fn unwrap_single_paragraph_html(html: &str) -> String {
+    let trimmed = html.trim();
+    if let Some(inner) = trimmed
+        .strip_prefix("<p>")
+        .and_then(|value| value.strip_suffix("</p>"))
+    {
+        inner.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn render_package_block_fragment_parts(kind: &str, level: Option<u8>, text: &str) -> String {
+    if package_block_is_page_break(kind) {
         return String::new();
     }
-    let content = render_package_slot_text(&block.text);
-    if block.kind == "heading" {
-        let level = block.level.unwrap_or(2).clamp(1, 6);
+    if kind == "heading" {
+        let level = level.unwrap_or(2).clamp(1, 6);
+        let content = unwrap_single_paragraph_html(&render_markdown_fragment_html(text));
         format!(
             "<section class=\"rb-block rb-heading rb-heading-level-{level}\"><h{level}>{content}</h{level}></section>"
         )
     } else {
-        format!("<section class=\"rb-block rb-paragraph\"><p>{content}</p></section>")
+        let content = render_markdown_fragment_html(text);
+        format!("<section class=\"rb-block rb-paragraph\">{content}</section>")
     }
+}
+
+fn render_package_block_fragment(block: &PackageContentBlock) -> String {
+    render_package_block_fragment_parts(&block.kind, block.level, &block.text)
 }
 
 fn collect_package_bound_assets(
@@ -1424,6 +1800,110 @@ fn normalize_richpost_template(value: &str) -> &'static str {
     }
 }
 
+fn richpost_master_name_from_template(template: &str) -> String {
+    match normalize_richpost_template(template) {
+        "cover" => RICHPOST_MASTER_COVER.to_string(),
+        "ending" => RICHPOST_MASTER_ENDING.to_string(),
+        _ => RICHPOST_MASTER_BODY.to_string(),
+    }
+}
+
+fn richpost_master_role(master_name: &str, template: &str) -> &'static str {
+    match sanitize_richpost_master_name(master_name).as_deref() {
+        Some(RICHPOST_MASTER_COVER) => RICHPOST_MASTER_COVER,
+        Some(RICHPOST_MASTER_ENDING) => RICHPOST_MASTER_ENDING,
+        Some(RICHPOST_MASTER_BODY) => RICHPOST_MASTER_BODY,
+        _ => match normalize_richpost_template(template) {
+            "cover" => RICHPOST_MASTER_COVER,
+            "ending" => RICHPOST_MASTER_ENDING,
+            _ => RICHPOST_MASTER_BODY,
+        },
+    }
+}
+
+fn sanitize_richpost_zone_name(raw: &str) -> Option<String> {
+    sanitize_richpost_master_name(raw)
+}
+
+fn richpost_page_style_overrides_for_template(template: &str) -> Value {
+    let _ = template;
+    Value::Object(serde_json::Map::new())
+}
+
+fn richpost_zone_assignment_value(block_ids: Vec<String>, asset_ids: Vec<String>) -> Value {
+    richpost_zone_assignment_with_fragments(block_ids, asset_ids, Vec::new())
+}
+
+fn richpost_zone_assignment_with_fragments(
+    block_ids: Vec<String>,
+    asset_ids: Vec<String>,
+    fragments: Vec<Value>,
+) -> Value {
+    let mut object = serde_json::Map::new();
+    if !block_ids.is_empty() {
+        object.insert("blockIds".to_string(), json!(block_ids));
+    }
+    if !asset_ids.is_empty() {
+        object.insert("assetIds".to_string(), json!(asset_ids));
+    }
+    if !fragments.is_empty() {
+        object.insert("fragments".to_string(), Value::Array(fragments));
+    }
+    Value::Object(object)
+}
+
+fn richpost_zone_block_ids(zones: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut items = Vec::<String>::new();
+    for zone_name in ["title", "body", "media", "footer", "background", "overlay", "decoration"] {
+        if let Some(blocks) = zones
+            .get(zone_name)
+            .and_then(|value| value.get("blockIds"))
+            .and_then(Value::as_array)
+        {
+            for block_id in blocks.iter().filter_map(Value::as_str) {
+                if !items.iter().any(|item| item == block_id) {
+                    items.push(block_id.to_string());
+                }
+            }
+        }
+        if let Some(fragments) = zones
+            .get(zone_name)
+            .and_then(|value| value.get("fragments"))
+            .and_then(Value::as_array)
+        {
+            for source_block_id in fragments
+                .iter()
+                .filter_map(|fragment| fragment.get("sourceBlockId"))
+                .filter_map(Value::as_str)
+            {
+                if !items.iter().any(|item| item == source_block_id) {
+                    items.push(source_block_id.to_string());
+                }
+            }
+        }
+    }
+    items
+}
+
+fn richpost_zone_asset_ids(zones: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut items = Vec::<String>::new();
+    for zone_name in ["background", "media", "footer", "overlay", "decoration", "title", "body"] {
+        if let Some(assets) = zones
+            .get(zone_name)
+            .and_then(|value| value.get("assetIds"))
+            .and_then(Value::as_array)
+        {
+            items.extend(
+                assets
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string),
+            );
+        }
+    }
+    items
+}
+
 fn richpost_block_ids(blocks: &[PackageContentBlock]) -> Vec<String> {
     blocks
         .iter()
@@ -1490,18 +1970,477 @@ fn richpost_asset_outline_prompt(
     lines.join("\n")
 }
 
-fn richpost_chunk_default_block_ids(block_ids: &[String], chunk_size: usize) -> Vec<Vec<String>> {
-    if block_ids.is_empty() {
-        return vec![Vec::new()];
+fn ceil_div_usize(value: usize, divisor: usize) -> usize {
+    if divisor == 0 {
+        return value;
     }
-    let mut chunks = Vec::<Vec<String>>::new();
-    let mut index = 0usize;
-    while index < block_ids.len() {
-        let end = (index + chunk_size).min(block_ids.len());
-        chunks.push(block_ids[index..end].to_vec());
-        index = end;
+    value.div_ceil(divisor)
+}
+
+fn richpost_body_chars_per_line(settings: RichpostTypographySettings) -> usize {
+    ((22.0 / settings.font_scale).round() as i64).clamp(10, 28) as usize
+}
+
+fn richpost_heading_chars_per_line(
+    level: u8,
+    settings: RichpostTypographySettings,
+) -> usize {
+    let base = match level {
+        1 => 10.0,
+        2 => 12.0,
+        3 => 14.0,
+        _ => 16.0,
+    };
+    ((base / settings.font_scale).round() as i64).clamp(6, 20) as usize
+}
+
+fn richpost_page_line_limit(settings: RichpostTypographySettings) -> usize {
+    let density = settings.font_scale * settings.line_height_scale;
+    ((24.0 / density.max(0.1)).round() as i64).clamp(10, 40) as usize
+}
+
+fn richpost_zone_fragment_value(
+    source_block_id: &str,
+    kind: &str,
+    level: Option<u8>,
+    text: &str,
+    continued_from_previous: bool,
+    continues_to_next: bool,
+) -> Value {
+    json!({
+        "sourceBlockId": source_block_id,
+        "kind": kind,
+        "level": level,
+        "text": text,
+        "continuedFromPrevious": continued_from_previous,
+        "continuesToNext": continues_to_next
+    })
+}
+
+fn richpost_estimated_wrapped_line_count(text: &str, chars_per_line: usize) -> usize {
+    let mut line_count = 0usize;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        line_count += ceil_div_usize(trimmed.chars().count().max(1), chars_per_line.max(1));
     }
-    chunks
+    line_count.max(1)
+}
+
+fn richpost_block_line_cost_from_parts(
+    kind: &str,
+    level: Option<u8>,
+    text: &str,
+    settings: RichpostTypographySettings,
+) -> usize {
+    if package_block_is_page_break(kind) {
+        return 0;
+    }
+    if kind == "heading" {
+        let chars_per_line = richpost_heading_chars_per_line(level.unwrap_or(2), settings);
+        let wrapped_lines = richpost_estimated_wrapped_line_count(text, chars_per_line);
+        let spacing_lines = match level.unwrap_or(2) {
+            1 => 2,
+            2 => 2,
+            _ => 1,
+        };
+        return wrapped_lines + spacing_lines;
+    }
+    let wrapped_lines = richpost_estimated_wrapped_line_count(text, richpost_body_chars_per_line(settings));
+    wrapped_lines + 1
+}
+
+fn richpost_default_block_line_cost(
+    block: &PackageContentBlock,
+    settings: RichpostTypographySettings,
+) -> usize {
+    richpost_block_line_cost_from_parts(&block.kind, block.level, &block.text, settings)
+}
+
+fn richpost_split_text_for_char_budget(text: &str, max_chars: usize) -> (String, String) {
+    if max_chars == 0 {
+        return (String::new(), text.trim().to_string());
+    }
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return (text.trim().to_string(), String::new());
+    }
+    let ideal_byte = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| text.len());
+    let prefix = &text[..ideal_byte];
+    let sentence_cut = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| matches!(ch, '。' | '！' | '？' | '；' | ';' | '\n'))
+        .map(|(index, ch)| index + ch.len_utf8());
+    let soft_cut = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| matches!(ch, '，' | '、' | ',' | ':' | '：' | ' ' | '\t'))
+        .map(|(index, ch)| index + ch.len_utf8());
+    let mut split_byte = sentence_cut.or(soft_cut).unwrap_or(ideal_byte);
+    let accepted_chars = text[..split_byte].chars().count();
+    if accepted_chars < (max_chars / 2).max(1) {
+        split_byte = ideal_byte;
+    }
+    let head = text[..split_byte].trim_end().to_string();
+    let tail = text[split_byte..].trim_start().to_string();
+    if head.is_empty() || tail.is_empty() {
+        let head = text[..ideal_byte].trim_end().to_string();
+        let tail = text[ideal_byte..].trim_start().to_string();
+        return (head, tail);
+    }
+    (head, tail)
+}
+
+fn richpost_split_paragraph_for_available_lines(
+    text: &str,
+    available_lines: usize,
+    settings: RichpostTypographySettings,
+) -> (String, String) {
+    let content_lines = available_lines.saturating_sub(1).max(1);
+    richpost_split_text_for_char_budget(
+        text,
+        content_lines.saturating_mul(richpost_body_chars_per_line(settings)),
+    )
+}
+
+fn richpost_push_completed_auto_page(
+    pages: &mut Vec<RichpostAutoPageDraft>,
+    current: &mut RichpostAutoPageDraft,
+) {
+    if current.title_block_ids.is_empty()
+        && current.body_block_ids.is_empty()
+        && current.body_fragments.is_empty()
+    {
+        return;
+    }
+    pages.push(std::mem::take(current));
+}
+
+fn richpost_default_segment_pages(
+    segment: &[PackageContentBlock],
+    settings: RichpostTypographySettings,
+) -> Vec<RichpostAutoPageDraft> {
+    if segment.is_empty() {
+        return vec![RichpostAutoPageDraft::default()];
+    }
+    const HEADING_WRAP_GUARD: usize = 5;
+    const MIN_FRAGMENT_LINES: usize = 4;
+    let page_line_limit = richpost_page_line_limit(settings);
+
+    let mut pages = Vec::<RichpostAutoPageDraft>::new();
+    let mut current = RichpostAutoPageDraft::default();
+
+    for block in segment {
+        if block.kind == "heading" {
+            let line_cost = richpost_default_block_line_cost(block, settings);
+            let should_wrap = !(current.title_block_ids.is_empty()
+                && current.body_block_ids.is_empty()
+                && current.body_fragments.is_empty())
+                && (current.line_cost + line_cost > page_line_limit
+                    || current.line_cost > page_line_limit.saturating_sub(HEADING_WRAP_GUARD));
+            if should_wrap {
+                richpost_push_completed_auto_page(&mut pages, &mut current);
+            }
+            if current.body_fragments.is_empty() {
+                current.title_block_ids.push(block.id.clone());
+            } else {
+                current.body_fragments.push(richpost_zone_fragment_value(
+                    &block.id,
+                    &block.kind,
+                    block.level,
+                    &block.text,
+                    false,
+                    false,
+                ));
+            }
+            current.line_cost += line_cost;
+            continue;
+        }
+
+        let full_line_cost = richpost_default_block_line_cost(block, settings);
+        if current.line_cost + full_line_cost <= page_line_limit {
+            current.body_fragments.push(richpost_zone_fragment_value(
+                &block.id,
+                &block.kind,
+                block.level,
+                &block.text,
+                false,
+                false,
+            ));
+            current.line_cost += full_line_cost;
+            continue;
+        }
+
+        let mut remaining = block.text.clone();
+        let mut continued_from_previous = false;
+        loop {
+            let available_lines = page_line_limit.saturating_sub(current.line_cost);
+            let fragment_budget = available_lines;
+            let remaining_line_cost =
+                richpost_block_line_cost_from_parts(&block.kind, block.level, &remaining, settings);
+            if remaining_line_cost <= available_lines {
+                current.body_fragments.push(richpost_zone_fragment_value(
+                    &block.id,
+                    &block.kind,
+                    block.level,
+                    &remaining,
+                    continued_from_previous,
+                    false,
+                ));
+                current.line_cost += remaining_line_cost;
+                break;
+            }
+            if available_lines < MIN_FRAGMENT_LINES {
+                richpost_push_completed_auto_page(&mut pages, &mut current);
+                continue;
+            }
+            let (head, tail) =
+                richpost_split_paragraph_for_available_lines(&remaining, fragment_budget, settings);
+            if head.trim().is_empty() || tail.trim().is_empty() {
+                if current.line_cost == 0 {
+                    current.body_block_ids.push(block.id.clone());
+                    current.line_cost += remaining_line_cost;
+                    break;
+                }
+                richpost_push_completed_auto_page(&mut pages, &mut current);
+                continue;
+            }
+            let fragment_line_cost =
+                richpost_block_line_cost_from_parts(&block.kind, block.level, &head, settings);
+            current.body_fragments.push(richpost_zone_fragment_value(
+                &block.id,
+                &block.kind,
+                block.level,
+                &head,
+                continued_from_previous,
+                true,
+            ));
+            current.line_cost += fragment_line_cost;
+            richpost_push_completed_auto_page(&mut pages, &mut current);
+            remaining = tail;
+            continued_from_previous = true;
+        }
+    }
+
+    richpost_push_completed_auto_page(&mut pages, &mut current);
+    if pages.is_empty() {
+        vec![RichpostAutoPageDraft::default()]
+    } else {
+        pages
+    }
+}
+
+fn split_richpost_zone_blocks(
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    master_name: &str,
+    block_ids: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut title_ids = Vec::<String>::new();
+    let mut body_ids = Vec::<String>::new();
+    let mut in_title = true;
+    for block_id in block_ids {
+        let is_heading = blocks_by_id
+            .get(block_id)
+            .map(|block| block.kind == "heading")
+            .unwrap_or(false);
+        if in_title && is_heading {
+            title_ids.push(block_id.clone());
+            continue;
+        }
+        in_title = false;
+        body_ids.push(block_id.clone());
+    }
+    if title_ids.is_empty() && master_name == RICHPOST_MASTER_COVER {
+        if let Some(first) = body_ids.first().cloned() {
+            title_ids.push(first);
+            body_ids.remove(0);
+        }
+    }
+    (title_ids, body_ids)
+}
+
+fn build_default_richpost_zones(
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    master_name: &str,
+    template: &str,
+    block_ids: &[String],
+    asset_ids: &[String],
+) -> Value {
+    let (title_ids, body_ids) = split_richpost_zone_blocks(blocks_by_id, master_name, block_ids);
+    let mut zones = serde_json::Map::<String, Value>::new();
+    if !title_ids.is_empty() {
+        zones.insert(
+            "title".to_string(),
+            richpost_zone_assignment_value(title_ids, Vec::new()),
+        );
+    }
+    if !body_ids.is_empty() {
+        zones.insert(
+            "body".to_string(),
+            richpost_zone_assignment_value(body_ids, Vec::new()),
+        );
+    }
+    if !asset_ids.is_empty() {
+        let normalized_template = normalize_richpost_template(template);
+        if master_name == RICHPOST_MASTER_COVER || master_name == RICHPOST_MASTER_ENDING {
+            zones.insert(
+                "background".to_string(),
+                richpost_zone_assignment_value(Vec::new(), asset_ids.to_vec()),
+            );
+        } else if normalized_template == "image-focus" {
+            let background_assets = vec![asset_ids[0].clone()];
+            zones.insert(
+                "background".to_string(),
+                richpost_zone_assignment_value(Vec::new(), background_assets),
+            );
+            if asset_ids.len() > 1 {
+                zones.insert(
+                    "media".to_string(),
+                    richpost_zone_assignment_value(Vec::new(), asset_ids[1..].to_vec()),
+                );
+            }
+        } else {
+            zones.insert(
+                "media".to_string(),
+                richpost_zone_assignment_value(Vec::new(), asset_ids.to_vec()),
+            );
+        }
+    }
+    Value::Object(zones)
+}
+
+fn normalize_richpost_style_overrides(raw: Option<&Value>, template: &str) -> Value {
+    let mut normalized = richpost_page_style_overrides_for_template(template)
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    merge_richpost_css_var_object(&mut normalized, raw);
+    Value::Object(normalized)
+}
+
+fn normalize_richpost_zones(
+    raw: Option<&Value>,
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    master_name: &str,
+    template: &str,
+    legacy_block_ids: &[String],
+    legacy_asset_ids: &[String],
+    assigned_block_ids: &mut BTreeSet<String>,
+    valid_asset_ids: &BTreeSet<String>,
+) -> Value {
+    let mut normalized_zones = serde_json::Map::<String, Value>::new();
+    if let Some(object) = raw.and_then(Value::as_object) {
+        for (zone_name, zone_value) in object {
+            let Some(zone_key) = sanitize_richpost_zone_name(zone_name) else {
+                continue;
+            };
+            let block_ids = zone_value
+                .get("blockIds")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| blocks_by_id.contains_key(*value))
+                        .filter(|value| assigned_block_ids.insert((*value).to_string()))
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let asset_ids = zone_value
+                .get("assetIds")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| valid_asset_ids.contains(*value))
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let fragments = zone_value
+                .get("fragments")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_object)
+                        .filter_map(|fragment| {
+                            let source_block_id = fragment
+                                .get("sourceBlockId")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| blocks_by_id.contains_key(*value))?;
+                            assigned_block_ids.insert(source_block_id.to_string());
+                            let source_block = blocks_by_id.get(source_block_id)?;
+                            let text = fragment
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())?;
+                            Some(richpost_zone_fragment_value(
+                                source_block_id,
+                                fragment
+                                    .get("kind")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(&source_block.kind),
+                                fragment
+                                    .get("level")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|value| u8::try_from(value).ok())
+                                    .or(source_block.level),
+                                text,
+                                fragment
+                                    .get("continuedFromPrevious")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false),
+                                fragment
+                                    .get("continuesToNext")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false),
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if block_ids.is_empty() && asset_ids.is_empty() {
+                if fragments.is_empty() {
+                    continue;
+                }
+            }
+            normalized_zones.insert(
+                zone_key,
+                richpost_zone_assignment_with_fragments(block_ids, asset_ids, fragments),
+            );
+        }
+    }
+
+    if normalized_zones.is_empty() {
+        let fallback_block_ids = legacy_block_ids
+            .iter()
+            .filter(|block_id| assigned_block_ids.insert((*block_id).to_string()))
+            .cloned()
+            .collect::<Vec<_>>();
+        return build_default_richpost_zones(
+            blocks_by_id,
+            master_name,
+            template,
+            &fallback_block_ids,
+            legacy_asset_ids,
+        );
+    }
+
+    Value::Object(normalized_zones)
 }
 
 fn default_richpost_page_plan(
@@ -1510,78 +2449,102 @@ fn default_richpost_page_plan(
     cover_asset: Option<&PackageBoundAsset>,
     image_assets: &[PackageBoundAsset],
     source: &str,
+    typography: RichpostTypographySettings,
 ) -> Value {
-    let mut segments = richpost_block_segments(blocks);
+    let segments = richpost_block_segments(blocks);
     let mut pages = Vec::<Value>::new();
-    let mut next_image_index = 0usize;
-
-    if let Some(first_segment) = segments.first_mut() {
-        let cover_blocks = first_segment
-            .iter()
-            .take(2)
-            .map(|block| block.id.clone())
-            .collect::<Vec<_>>();
-        first_segment.drain(0..cover_blocks.len());
-        let mut asset_ids = Vec::<Value>::new();
-        if let Some(asset) = cover_asset {
-            asset_ids.push(json!(asset.id.clone()));
-        } else if let Some(asset) = image_assets.first() {
-            asset_ids.push(json!(asset.id.clone()));
-            next_image_index = 1;
-        }
-        pages.push(json!({
-            "template": "cover",
-            "blockIds": cover_blocks,
-            "assetIds": asset_ids
-        }));
-    }
-
-    let segment_chunks = segments
+    let blocks_by_id = blocks
         .iter()
-        .flat_map(|segment| {
-            let block_ids = segment
-                .iter()
-                .map(|block| block.id.clone())
-                .collect::<Vec<_>>();
-            richpost_chunk_default_block_ids(&block_ids, 3)
+        .map(|block| (block.id.clone(), block.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut available_asset_ids = Vec::<String>::new();
+    if let Some(asset) = cover_asset {
+        available_asset_ids.push(asset.id.clone());
+    }
+    available_asset_ids.extend(image_assets.iter().map(|asset| asset.id.clone()));
+    let mut next_asset_index = 0usize;
+
+    let segment_pages = segments
+        .iter()
+        .flat_map(|segment| richpost_default_segment_pages(segment, typography))
+        .filter(|page| {
+            !(page.title_block_ids.is_empty()
+                && page.body_fragments.is_empty())
         })
-        .filter(|chunk| !chunk.is_empty())
         .collect::<Vec<_>>();
-    let last_chunk_index = segment_chunks.len().saturating_sub(1);
-    for (chunk_index, chunk) in segment_chunks.into_iter().enumerate() {
-        let is_last = chunk_index == last_chunk_index;
-        let template = if is_last && chunk.len() <= 2 {
-            "ending"
-        } else if next_image_index < image_assets.len() {
-            if chunk_index % 2 == 0 {
-                "text-image"
-            } else {
-                "image-focus"
-            }
-        } else {
-            "text-stack"
-        };
-        let asset_ids = if matches!(template, "text-image" | "image-focus")
-            && next_image_index < image_assets.len()
-        {
-            let asset_id = image_assets[next_image_index].id.clone();
-            next_image_index += 1;
-            vec![json!(asset_id)]
+    for page_draft in segment_pages {
+        let template = "text-stack";
+        let asset_ids = if next_asset_index < available_asset_ids.len() {
+            let asset_id = available_asset_ids[next_asset_index].clone();
+            next_asset_index += 1;
+            vec![asset_id]
         } else {
             Vec::new()
         };
+        let master = RICHPOST_MASTER_BODY.to_string();
+        let mut page_block_ids = page_draft.title_block_ids.clone();
+        for source_block_id in page_draft
+            .body_fragments
+            .iter()
+            .filter_map(|fragment| fragment.get("sourceBlockId"))
+            .filter_map(Value::as_str)
+        {
+            if !page_block_ids.iter().any(|item| item == source_block_id) {
+                page_block_ids.push(source_block_id.to_string());
+            }
+        }
+        let mut zones = serde_json::Map::<String, Value>::new();
+        if !page_draft.title_block_ids.is_empty() {
+            zones.insert(
+                "title".to_string(),
+                richpost_zone_assignment_value(page_draft.title_block_ids.clone(), Vec::new()),
+            );
+        }
+        if !page_draft.body_fragments.is_empty() {
+            zones.insert(
+                "body".to_string(),
+                richpost_zone_assignment_with_fragments(
+                    Vec::new(),
+                    Vec::new(),
+                    page_draft.body_fragments.clone(),
+                ),
+            );
+        }
+        if !asset_ids.is_empty() {
+            zones.insert(
+                "media".to_string(),
+                richpost_zone_assignment_value(Vec::new(), asset_ids.clone()),
+            );
+        }
         pages.push(json!({
+            "master": master,
             "template": template,
-            "blockIds": chunk,
-            "assetIds": asset_ids
+            "blockIds": page_block_ids,
+            "assetIds": asset_ids.clone(),
+            "zones": Value::Object(zones),
+            "styleOverrides": richpost_page_style_overrides_for_template(template)
         }));
     }
 
     if pages.is_empty() {
+        let fallback_assets = available_asset_ids
+            .first()
+            .cloned()
+            .map(|asset_id| vec![asset_id])
+            .unwrap_or_default();
         pages.push(json!({
-            "template": "cover",
+            "master": RICHPOST_MASTER_BODY,
+            "template": "text-stack",
             "blockIds": [],
-            "assetIds": cover_asset.map(|asset| vec![json!(asset.id.clone())]).unwrap_or_default()
+            "assetIds": fallback_assets.clone(),
+            "zones": build_default_richpost_zones(
+                &blocks_by_id,
+                RICHPOST_MASTER_BODY,
+                "text-stack",
+                &[],
+                &fallback_assets
+            ),
+            "styleOverrides": richpost_page_style_overrides_for_template("text-stack")
         }));
     }
 
@@ -1613,9 +2576,14 @@ fn normalize_richpost_page_plan(
     cover_asset: Option<&PackageBoundAsset>,
     image_assets: &[PackageBoundAsset],
     source: &str,
+    typography: RichpostTypographySettings,
 ) -> Value {
-    let block_ids = richpost_block_ids(blocks);
-    let valid_block_ids = block_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let all_block_ids = richpost_block_ids(blocks);
+    let blocks_by_id = blocks
+        .iter()
+        .filter(|block| !package_block_is_page_break(&block.kind))
+        .map(|block| (block.id.clone(), block.clone()))
+        .collect::<BTreeMap<_, _>>();
     let valid_asset_ids = richpost_asset_records(cover_asset, image_assets)
         .iter()
         .map(|asset| asset.id.clone())
@@ -1634,7 +2602,12 @@ fn normalize_richpost_page_plan(
                     .and_then(Value::as_str)
                     .unwrap_or("text-stack"),
             );
-            let block_ids = object
+            let master = object
+                .get("master")
+                .and_then(Value::as_str)
+                .and_then(sanitize_richpost_master_name)
+                .unwrap_or_else(|| richpost_master_name_from_template(template));
+            let legacy_block_ids = object
                 .get("blockIds")
                 .and_then(Value::as_array)
                 .map(|items| {
@@ -1642,13 +2615,12 @@ fn normalize_richpost_page_plan(
                         .iter()
                         .filter_map(Value::as_str)
                         .map(str::trim)
-                        .filter(|value| valid_block_ids.contains(*value))
-                        .filter(|value| assigned_block_ids.insert((*value).to_string()))
+                        .filter(|value| blocks_by_id.contains_key(*value))
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let asset_ids = object
+            let legacy_asset_ids = object
                 .get("assetIds")
                 .and_then(Value::as_array)
                 .map(|items| {
@@ -1661,26 +2633,43 @@ fn normalize_richpost_page_plan(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let zones = normalize_richpost_zones(
+                object.get("zones"),
+                &blocks_by_id,
+                richpost_master_role(&master, template),
+                template,
+                &legacy_block_ids,
+                &legacy_asset_ids,
+                &mut assigned_block_ids,
+                &valid_asset_ids,
+            );
+            let Some(zone_object) = zones.as_object() else {
+                continue;
+            };
+            let block_ids = richpost_zone_block_ids(zone_object);
+            let asset_ids = richpost_zone_asset_ids(zone_object);
             if block_ids.is_empty() && asset_ids.is_empty() {
                 continue;
             }
             normalized_pages.push(json!({
+                "master": master,
                 "template": template,
                 "blockIds": block_ids,
-                "assetIds": asset_ids
+                "assetIds": asset_ids,
+                "zones": zones,
+                "styleOverrides": normalize_richpost_style_overrides(object.get("styleOverrides"), template)
             }));
         }
     }
 
-    let remaining_block_ids = block_ids
+    let remaining_block_ids = all_block_ids
         .into_iter()
         .filter(|block_id| !assigned_block_ids.contains(block_id))
         .collect::<Vec<_>>();
     let already_used_assets = normalized_pages
         .iter()
-        .filter_map(|page| page.get("assetIds").and_then(Value::as_array))
-        .flat_map(|items| items.iter().filter_map(Value::as_str))
-        .map(ToString::to_string)
+        .filter_map(|page| page.get("zones").and_then(Value::as_object))
+        .flat_map(richpost_zone_asset_ids)
         .collect::<BTreeSet<_>>();
     let remaining_image_assets = image_assets
         .iter()
@@ -1698,20 +2687,31 @@ fn normalize_richpost_page_plan(
             None,
             &remaining_image_assets,
             "system-overflow",
+            typography,
         );
         if let Some(pages) = fallback.get("pages").and_then(Value::as_array) {
             normalized_pages.extend(pages.iter().cloned().map(|page| {
                 json!({
+                    "master": page.get("master").cloned().unwrap_or_else(|| json!(RICHPOST_MASTER_BODY)),
                     "template": page.get("template").cloned().unwrap_or_else(|| json!("text-stack")),
                     "blockIds": page.get("blockIds").cloned().unwrap_or_else(|| json!([])),
-                    "assetIds": page.get("assetIds").cloned().unwrap_or_else(|| json!([]))
+                    "assetIds": page.get("assetIds").cloned().unwrap_or_else(|| json!([])),
+                    "zones": page.get("zones").cloned().unwrap_or_else(|| json!({})),
+                    "styleOverrides": page.get("styleOverrides").cloned().unwrap_or_else(|| json!({}))
                 })
             }));
         }
     }
 
     if normalized_pages.is_empty() {
-        return default_richpost_page_plan(title, blocks, cover_asset, image_assets, source);
+        return default_richpost_page_plan(
+            title,
+            blocks,
+            cover_asset,
+            image_assets,
+            source,
+            typography,
+        );
     }
 
     let pages = normalized_pages
@@ -1768,11 +2768,124 @@ fn richpost_page_plan_outline(blocks: &[PackageContentBlock]) -> String {
         .join("\n")
 }
 
-fn richpost_page_blocks_html(
+fn richpost_css_var_map_from_tokens(
+    tokens: &Value,
+    role: &str,
+    style_overrides: Option<&Value>,
+) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::<String, String>::new();
+    if let Some(object) = tokens.get("cssVars").and_then(Value::as_object) {
+        for (key, value) in object {
+            let Some(name) = sanitize_richpost_css_var_name(key) else {
+                continue;
+            };
+            let Some(text) = richpost_css_var_string(value) else {
+                continue;
+            };
+            map.insert(name, text);
+        }
+    }
+    if let Some(object) = tokens
+        .get("roleCssVars")
+        .and_then(|value| value.get(role))
+        .and_then(Value::as_object)
+    {
+        for (key, value) in object {
+            let Some(name) = sanitize_richpost_css_var_name(key) else {
+                continue;
+            };
+            let Some(text) = richpost_css_var_string(value) else {
+                continue;
+            };
+            map.insert(name, text);
+        }
+    }
+    if let Some(object) = style_overrides.and_then(Value::as_object) {
+        for (key, value) in object {
+            let Some(name) = sanitize_richpost_css_var_name(key) else {
+                continue;
+            };
+            let Some(text) = richpost_css_var_string(value) else {
+                continue;
+            };
+            map.insert(name, text);
+        }
+    }
+    map
+}
+
+fn richpost_css_var_style_attr(vars: &BTreeMap<String, String>) -> String {
+    vars.iter()
+        .map(|(key, value)| format!("{}:{};", escape_html(key), escape_html(value)))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn richpost_token_value(tokens: &Value, key: &str) -> String {
+    tokens
+        .get("cssVars")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(key))
+        .and_then(richpost_css_var_string)
+        .unwrap_or_default()
+}
+
+fn richpost_zone_html(
     page: &Value,
+    zone_name: &str,
     blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    assets_by_id: &BTreeMap<String, PackageBoundAsset>,
 ) -> String {
-    page.get("blockIds")
+    let Some(zone) = page
+        .get("zones")
+        .and_then(Value::as_object)
+        .and_then(|zones| zones.get(zone_name))
+        .and_then(Value::as_object)
+    else {
+        return String::new();
+    };
+    let asset_html = zone
+        .get("assetIds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|asset_id| assets_by_id.get(asset_id))
+                .map(|asset| {
+                    format!(
+                        "<figure class=\"page-asset\" data-asset-id=\"{}\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
+                        escape_html(&asset.id),
+                        escape_html(&asset.url),
+                        escape_html(&asset.title)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+        ;
+    let fragment_array = zone
+        .get("fragments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let fragment_html = fragment_array
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|fragment| {
+            let text = fragment.get("text").and_then(Value::as_str)?;
+            let kind = fragment.get("kind").and_then(Value::as_str).unwrap_or("paragraph");
+            let level = fragment
+                .get("level")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok());
+            Some(render_package_block_fragment_parts(kind, level, text))
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let block_html = zone
+        .get("blockIds")
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -1783,85 +2896,113 @@ fn richpost_page_blocks_html(
                 .collect::<Vec<_>>()
                 .join("")
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let render_fragments_first = fragment_array.iter().any(|fragment| {
+        fragment
+            .get("continuedFromPrevious")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    let zone_content = if fragment_html.is_empty() {
+        block_html
+    } else if block_html.is_empty() {
+        fragment_html
+    } else if render_fragments_first {
+        format!("{fragment_html}{block_html}")
+    } else {
+        format!("{block_html}{fragment_html}")
+    };
+    format!("{asset_html}{zone_content}")
 }
 
-fn richpost_page_asset_html(
+fn read_richpost_master_fragment(
+    package_path: &std::path::Path,
+    master_name: &str,
+    template: &str,
+) -> String {
+    let sanitized = sanitize_richpost_master_name(master_name)
+        .unwrap_or_else(|| richpost_master_name_from_template(template));
+    let role = richpost_master_role(&sanitized, template);
+    let path = package_richpost_master_path(package_path, &sanitized);
+    fs::read_to_string(&path)
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .unwrap_or_else(|| default_richpost_master_fragment(role).to_string())
+}
+
+fn render_richpost_master_fragment(
+    master_fragment: &str,
     page: &Value,
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
     assets_by_id: &BTreeMap<String, PackageBoundAsset>,
 ) -> String {
-    page.get("assetIds")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .filter_map(|asset_id| assets_by_id.get(asset_id))
-                .map(|asset| {
-                    format!(
-                        "<figure class=\"page-asset\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
-                        escape_html(&asset.url),
-                        escape_html(&asset.title)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default()
+    let mut zone_names = vec![
+        "background".to_string(),
+        "overlay".to_string(),
+        "decoration".to_string(),
+        "title".to_string(),
+        "body".to_string(),
+        "media".to_string(),
+        "footer".to_string(),
+    ];
+    if let Some(object) = page.get("zones").and_then(Value::as_object) {
+        for zone_name in object.keys() {
+            if !zone_names.iter().any(|item| item == zone_name) {
+                zone_names.push(zone_name.clone());
+            }
+        }
+    }
+    let mut rendered = master_fragment.to_string();
+    for zone_name in zone_names {
+        rendered = rendered.replace(
+            &format!("{{{{zone:{zone_name}}}}}"),
+            &richpost_zone_html(page, &zone_name, blocks_by_id, assets_by_id),
+        );
+    }
+    rendered
 }
 
 fn render_richpost_page_html(
+    package_path: &std::path::Path,
     title: &str,
     page: &Value,
-    _page_index: usize,
+    page_index: usize,
     _total_pages: usize,
     blocks_by_id: &BTreeMap<String, PackageContentBlock>,
     assets_by_id: &BTreeMap<String, PackageBoundAsset>,
-    theme: &RichpostThemePreset,
+    tokens: &Value,
+    typography: RichpostTypographySettings,
 ) -> String {
     let template = normalize_richpost_template(
         page.get("template")
             .and_then(Value::as_str)
             .unwrap_or("text-stack"),
     );
-    let blocks_html = richpost_page_blocks_html(page, blocks_by_id);
-    let asset_html = richpost_page_asset_html(page, assets_by_id);
-    let template_class = match template {
-        "cover" => "tpl-cover",
-        "text-image" => "tpl-text-image",
-        "image-focus" => "tpl-image-focus",
-        "quote" => "tpl-quote",
-        "ending" => "tpl-ending",
-        _ => "tpl-text-stack",
-    };
-    let content_html = match template {
-        "cover" => format!("<div class=\"hero\">{}{}</div>", asset_html, blocks_html),
-        "text-image" => format!(
-            "{}<main class=\"page-body\">{}</main>",
-            asset_html,
-            blocks_html
-        ),
-        "image-focus" => format!(
-            "<div class=\"focus-media\">{}</div><div class=\"focus-copy\"><div class=\"focus-card\">{}</div></div>",
-            asset_html,
-            blocks_html
-        ),
-        "quote" => format!(
-            "<main class=\"page-body\">{}{}</main>",
-            asset_html,
-            blocks_html
-        ),
-        "ending" => format!(
-            "<main class=\"page-body\">{}{}</main>",
-            asset_html,
-            blocks_html
-        ),
-        _ => format!(
-            "<main class=\"page-body\">{}{}</main>",
-            asset_html,
-            blocks_html
-        ),
-    };
+    let master_name = page
+        .get("master")
+        .and_then(Value::as_str)
+        .and_then(sanitize_richpost_master_name)
+        .unwrap_or_else(|| richpost_master_name_from_template(template));
+    let master_role = richpost_master_role(&master_name, template);
+    let page_css_vars =
+        richpost_css_var_map_from_tokens(tokens, master_role, page.get("styleOverrides"));
+    let page_style_attr = richpost_css_var_style_attr(&page_css_vars);
+    let page_id = page
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("page-{:03}", page_index + 1));
+    let page_title = page
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("{title} - 第 {} 页", page_index + 1));
+    let master_fragment = read_richpost_master_fragment(package_path, &master_name, template);
+    let page_markup =
+        render_richpost_master_fragment(&master_fragment, page, blocks_by_id, assets_by_id);
 
     format!(
         r#"<!doctype html>
@@ -1871,134 +3012,149 @@ fn render_richpost_page_html(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{}</title>
   <style>
-    :root {{
-      --rb-font-scale: 1;
-      --rb-page-bg: {};
-      --rb-surface-bg: {};
-      --rb-surface-border: {};
-      --rb-surface-shadow: {};
-      --rb-surface-radius: {};
-      --rb-image-radius: {};
-      --rb-text: {};
-      --rb-muted: {};
-      --rb-accent: {};
-      --rb-heading-font: {};
-      --rb-body-font: {};
-    }}
+    :root {{ --rb-font-scale: 1; --rb-line-height-scale: 1; }}
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; width: 100%; min-height: 100%; overflow: hidden; }}
     body {{
       min-height: 100vh;
-      background: var(--rb-page-bg);
-      color: var(--rb-text);
-      font-family: var(--rb-body-font);
+      background: var(--rb-page-bg, #ffffff);
+      color: var(--rb-text, #111111);
+      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
     }}
-    .page {{
+    .rb-page-host {{
       position: relative;
       width: 100%;
       min-height: 100vh;
       aspect-ratio: 3 / 4;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
+      background: var(--rb-page-bg, #ffffff);
+      color: var(--rb-text, #111111);
       overflow: hidden;
+      isolation: isolate;
     }}
-    .surface {{
-      position: relative;
-      width: 100%;
-      height: 100%;
-      background: var(--rb-surface-bg);
-      border: 1px solid var(--rb-surface-border);
-      border-radius: var(--rb-surface-radius);
-      box-shadow: var(--rb-surface-shadow);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }}
-    .surface-inner {{
-      padding: clamp(22px, 5.2vw, 56px);
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }}
-    .hero {{
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }}
-    .page-body, .focus-copy, .focus-card {{
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }}
-    .focus-media {{
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }}
+    .rb-zone {{ min-width: 0; }}
+    .rb-zone:empty {{ display: none; }}
+    .rb-zone-overlay,
+    .rb-zone-decoration {{ pointer-events: none; }}
     .page-asset {{
-      margin: 0;
-    }}
-    .page-asset img {{
       width: 100%;
+      margin: 0;
+      max-width: 100%;
+    }}
+    .page-asset + .page-asset {{ margin-top: var(--rb-zone-gap, 16px); }}
+    .page-asset img {{
       display: block;
-      object-fit: cover;
-      border-radius: var(--rb-image-radius);
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      border-radius: var(--rb-image-radius, 0px);
     }}
-    .rb-block + .rb-block {{
-      margin-top: 16px;
+    .rb-block {{ min-width: 0; }}
+    .rb-block + .rb-block {{ margin-top: var(--rb-zone-gap, 16px); }}
+    .rb-heading {{
+      width: min(100%, var(--rb-title-max-width, 100%));
     }}
-    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 {{
+    .rb-heading h1,
+    .rb-heading h2,
+    .rb-heading h3,
+    .rb-heading h4,
+    .rb-heading h5,
+    .rb-heading h6 {{
       margin: 0;
-      line-height: 1.38;
-      color: var(--rb-text);
-      font-family: var(--rb-heading-font);
+      color: var(--rb-text, #111111);
+      font-family: var(--rb-heading-font, var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif));
+      font-weight: 700;
+      line-height: 1.22;
+      letter-spacing: -0.02em;
     }}
-    .rb-heading h1 {{ font-size: calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale)); }}
-    .rb-heading h2 {{ font-size: calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale)); }}
-    .rb-heading h3 {{ font-size: calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale)); }}
-    .rb-heading h4 {{ font-size: calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale)); }}
-    .rb-heading h5 {{ font-size: calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale)); }}
-    .rb-heading h6 {{ font-size: calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale)); }}
-    .rb-paragraph p {{
+    .rb-heading h1 {{ font-size: var(--rb-heading-h1-size, calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale))); }}
+    .rb-heading h2 {{ font-size: var(--rb-heading-h2-size, calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale))); }}
+    .rb-heading h3 {{ font-size: var(--rb-heading-h3-size, calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale))); }}
+    .rb-heading h4 {{ font-size: var(--rb-heading-h4-size, calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale))); }}
+    .rb-heading h5 {{ font-size: var(--rb-heading-h5-size, calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale))); }}
+    .rb-heading h6 {{ font-size: var(--rb-heading-h6-size, calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale))); }}
+    .rb-paragraph {{
+      width: min(100%, var(--rb-content-max-width, 100%));
+    }}
+    .rb-paragraph > :first-child {{ margin-top: 0; }}
+    .rb-paragraph > :last-child {{ margin-bottom: 0; }}
+    .rb-paragraph p,
+    .rb-paragraph li,
+    .rb-paragraph blockquote,
+    .rb-paragraph td,
+    .rb-paragraph th {{
+      color: var(--rb-text, #111111);
+      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
+      font-size: var(--rb-body-font-size, calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale)));
+      line-height: var(--rb-runtime-body-line-height, var(--rb-body-line-height, 1.9));
+    }}
+    .rb-paragraph strong {{ font-weight: var(--rb-strong-weight, 700); }}
+    .rb-paragraph a {{
+      color: var(--rb-accent, #111111);
+      text-decoration: var(--rb-link-decoration, underline);
+    }}
+    .rb-paragraph ul,
+    .rb-paragraph ol {{
       margin: 0;
-      font-size: calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale));
-      line-height: 1.92;
-      color: var(--rb-text);
-      font-family: var(--rb-body-font);
+      padding-left: 1.25em;
+    }}
+    .rb-paragraph blockquote {{
+      margin: 0;
+      padding-left: 1em;
+      border-left: 3px solid var(--rb-accent, #111111);
+      color: var(--rb-muted, #666666);
+    }}
+    .rb-paragraph table {{
+      margin: 0;
+      border-collapse: collapse;
+    }}
+    .rb-paragraph hr {{
+      border: 0;
+      border-top: 1px solid var(--rb-surface-border, rgba(17,17,17,0.08));
+      margin: calc(var(--rb-zone-gap, 16px) * 1.1) 0;
     }}
   </style>
   <script>
     (() => {{
-      const raw = Number(new URLSearchParams(window.location.search).get('fontScale') || '1');
-      const scale = Number.isFinite(raw) ? Math.min(1.6, Math.max(0.8, raw)) : 1;
-      document.documentElement.style.setProperty('--rb-font-scale', String(scale));
+      const applyRuntimeTypography = (fontScale, lineHeightScale) => {{
+        document.documentElement.style.setProperty('--rb-font-scale', String(fontScale));
+        document.documentElement.style.setProperty('--rb-line-height-scale', String(lineHeightScale));
+        const host = document.querySelector('.rb-page-host');
+        if (!host) return;
+        const computed = window.getComputedStyle(host);
+        const rawBaseLineHeight = Number.parseFloat(computed.getPropertyValue('--rb-body-line-height').trim() || '1.9');
+        const baseLineHeight = Number.isFinite(rawBaseLineHeight) ? rawBaseLineHeight : 1.9;
+        host.style.setProperty('--rb-runtime-body-line-height', String((baseLineHeight * lineHeightScale).toFixed(3)));
+      }};
+      const params = new URLSearchParams(window.location.search);
+      const defaultFontScale = {};
+      const defaultLineHeightScale = {};
+      const rawFontScale = Number(params.get('fontScale') || String(defaultFontScale));
+      const fontScale = Number.isFinite(rawFontScale) ? Math.min(1.6, Math.max(0.8, rawFontScale)) : defaultFontScale;
+      const rawLineHeightScale = Number(params.get('lineHeightScale') || String(defaultLineHeightScale));
+      const lineHeightScale = Number.isFinite(rawLineHeightScale) ? Math.min(1.4, Math.max(0.8, rawLineHeightScale)) : defaultLineHeightScale;
+      const run = () => applyRuntimeTypography(fontScale, lineHeightScale);
+      if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', run, {{ once: true }});
+      }} else {{
+        run();
+      }}
     }})();
   </script>
 </head>
-<body class="{template_class}">
-  <section class="page">
-    <article class="surface">
-      <div class="surface-inner">
-        {content_html}
-      </div>
-    </article>
+<body>
+  <section class="rb-page-host" data-page-id="{}" data-master="{}" data-template="{}" style="{}">
+    {}
   </section>
 </body>
 </html>"#,
-        escape_html(title),
-        theme.page_bg,
-        theme.surface_bg,
-        theme.surface_border,
-        theme.surface_shadow,
-        theme.surface_radius,
-        theme.image_radius,
-        theme.text,
-        theme.muted,
-        theme.accent,
-        theme.heading_font,
-        theme.body_font,
+        escape_html(&page_title),
+        typography.font_scale,
+        typography.line_height_scale,
+        escape_html(&page_id),
+        escape_html(master_role),
+        escape_html(template),
+        page_style_attr,
+        page_markup,
     )
 }
 
@@ -2006,7 +3162,8 @@ fn render_richpost_preview_shell(
     title: &str,
     plan: &Value,
     _package_path: &std::path::Path,
-    theme: &RichpostThemePreset,
+    tokens: &Value,
+    typography: RichpostTypographySettings,
 ) -> String {
     let pages = plan
         .get("pages")
@@ -2027,6 +3184,14 @@ fn render_richpost_preview_shell(
         })
         .collect::<Vec<_>>()
         .join("");
+    let shell_bg = richpost_token_value(tokens, "--rb-shell-bg");
+    let preview_card_bg = richpost_token_value(tokens, "--rb-preview-card-bg");
+    let preview_card_border = richpost_token_value(tokens, "--rb-preview-card-border");
+    let preview_card_shadow = richpost_token_value(tokens, "--rb-preview-card-shadow");
+    let text_color = richpost_token_value(tokens, "--rb-text");
+    let muted_color = richpost_token_value(tokens, "--rb-muted");
+    let heading_font = richpost_token_value(tokens, "--rb-heading-font");
+    let body_font = richpost_token_value(tokens, "--rb-body-font");
     format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -2055,16 +3220,19 @@ fn render_richpost_preview_shell(
   </style>
   <script>
     (() => {{
-      const raw = new URLSearchParams(window.location.search).get('fontScale');
-      if (!raw) return;
-      const scale = Number(raw);
-      if (!Number.isFinite(scale)) return;
+      const params = new URLSearchParams(window.location.search);
+      const defaultFontScale = String({});
+      const defaultLineHeightScale = String({});
+      const rawFontScale = params.get('fontScale') || defaultFontScale;
+      const rawLineHeightScale = params.get('lineHeightScale') || defaultLineHeightScale;
       document.addEventListener('DOMContentLoaded', () => {{
         document.querySelectorAll('iframe').forEach((frame) => {{
           const src = frame.getAttribute('src');
           if (!src) return;
-          const separator = src.includes('?') ? '&' : '?';
-          frame.setAttribute('src', `${{src}}${{separator}}fontScale=${{encodeURIComponent(String(scale))}}`);
+          const nextUrl = new URL(src, window.location.href);
+          nextUrl.searchParams.set('fontScale', rawFontScale);
+          nextUrl.searchParams.set('lineHeightScale', rawLineHeightScale);
+          frame.setAttribute('src', nextUrl.toString());
         }});
       }});
     }})();
@@ -2077,14 +3245,16 @@ fn render_richpost_preview_shell(
 </body>
 </html>"#,
         escape_html(title),
-        theme.shell_bg,
-        theme.preview_card_bg,
-        theme.text,
-        theme.muted,
-        theme.preview_card_border,
-        theme.preview_card_shadow,
-        theme.heading_font,
-        theme.body_font,
+        shell_bg,
+        preview_card_bg,
+        text_color,
+        muted_color,
+        preview_card_border,
+        preview_card_shadow,
+        heading_font,
+        body_font,
+        typography.font_scale,
+        typography.line_height_scale,
         cards
     )
 }
@@ -2098,7 +3268,8 @@ fn persist_richpost_pages_from_plan(
     plan: &Value,
 ) -> Result<(), String> {
     let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let theme = richpost_theme_from_manifest(&manifest);
+    let tokens = ensure_richpost_layout_scaffold(package_path, &manifest)?;
+    let typography = richpost_typography_settings_from_manifest(&manifest);
     let pages_dir = package_richpost_pages_dir(package_path);
     fs::create_dir_all(&pages_dir).map_err(|error| error.to_string())?;
     let blocks_by_id = blocks
@@ -2120,13 +3291,15 @@ fn persist_richpost_pages_from_plan(
             continue;
         };
         let html = render_richpost_page_html(
+            package_path,
             title,
             page,
             index,
             pages.len(),
             &blocks_by_id,
             &assets_by_id,
-            theme,
+            &tokens,
+            typography,
         );
         let path = package_richpost_page_html_path(package_path, page_id);
         write_text_file(&path, &html)?;
@@ -2146,7 +3319,7 @@ fn persist_richpost_pages_from_plan(
     }
     write_text_file(
         &package_layout_html_path(package_path),
-        &render_richpost_preview_shell(title, plan, package_path, theme),
+        &render_richpost_preview_shell(title, plan, package_path, &tokens, typography),
     )?;
     Ok(())
 }
@@ -2160,8 +3333,18 @@ fn persist_richpost_page_plan(
     raw_plan: &Value,
     source: &str,
 ) -> Result<Value, String> {
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    let typography = richpost_typography_settings_from_manifest(&manifest);
     let normalized =
-        normalize_richpost_page_plan(raw_plan, title, blocks, cover_asset, image_assets, source);
+        normalize_richpost_page_plan(
+            raw_plan,
+            title,
+            blocks,
+            cover_asset,
+            image_assets,
+            source,
+            typography,
+        );
     write_json_value(&package_richpost_page_plan_path(package_path), &normalized)?;
     persist_richpost_pages_from_plan(
         package_path,
@@ -2256,6 +3439,8 @@ pub(crate) fn sync_manuscript_package_html_assets(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| title_from_relative_path(file_name));
+    let typography = richpost_typography_settings_from_manifest(&manifest);
+    let _ = ensure_richpost_layout_scaffold(package_path, &manifest)?;
     let content = content_override
         .map(ToString::to_string)
         .unwrap_or_else(|| {
@@ -2282,6 +3467,7 @@ pub(crate) fn sync_manuscript_package_html_assets(
         } else {
             "markdown-auto-reflow"
         },
+        typography,
     );
     let _ = target_override;
     persist_richpost_page_plan(
@@ -2745,6 +3931,8 @@ fn generate_richpost_page_plan(
     }
     let content_map_path = package_content_map_path(package_path);
     let blocks = build_package_content_blocks(&content_map_path, body);
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    let typography = richpost_typography_settings_from_manifest(&manifest);
     let (cover_asset, image_assets) = collect_package_bound_assets(Some(state), package_path)?;
     let default_plan = default_richpost_page_plan(
         title,
@@ -2752,6 +3940,7 @@ fn generate_richpost_page_plan(
         cover_asset.as_ref(),
         &image_assets,
         "system-default",
+        typography,
     );
     let prompt = render_redbox_prompt(
         &load_redbox_prompt_or_embedded(
@@ -2799,6 +3988,7 @@ fn generate_richpost_page_plan(
         cover_asset.as_ref(),
         &image_assets,
         "ai",
+        typography,
     ))
 }
 
@@ -5962,6 +7152,7 @@ pub fn handle_manuscripts_channel(
                     object.insert("updatedAt".to_string(), json!(now_i64()));
                 }
                 write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                let _ = write_richpost_layout_tokens_for_theme(&full_path, theme)?;
                 Ok(json!({
                     "success": true,
                     "themeId": theme.id,
@@ -6046,6 +7237,22 @@ pub fn handle_manuscripts_channel(
                     return Ok(
                         json!({ "success": false, "error": "Only richpost packages support page plans" }),
                     );
+                }
+                let mut manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let current_typography = richpost_typography_settings_from_manifest(&manifest);
+                let requested_font_scale = payload_field(&payload, "fontScale").and_then(Value::as_f64);
+                let requested_line_height_scale =
+                    payload_field(&payload, "lineHeightScale").and_then(Value::as_f64);
+                if requested_font_scale.is_some() || requested_line_height_scale.is_some() {
+                    let next_typography = richpost_typography_settings(
+                        requested_font_scale.or(Some(current_typography.font_scale)),
+                        requested_line_height_scale.or(Some(current_typography.line_height_scale)),
+                    );
+                    write_richpost_typography_settings_to_manifest(&mut manifest, next_typography);
+                    if let Some(object) = manifest.as_object_mut() {
+                        object.insert("updatedAt".to_string(), json!(now_i64()));
+                    }
+                    write_json_value(&package_manifest_path(&full_path), &manifest)?;
                 }
                 Ok(json!({
                     "success": true,

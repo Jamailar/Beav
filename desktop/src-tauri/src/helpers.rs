@@ -156,8 +156,20 @@ pub(crate) fn package_wechat_template_path(package_path: &Path) -> PathBuf {
     package_path.join("wechat.template.html")
 }
 
+pub(crate) fn package_layout_tokens_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.tokens.json")
+}
+
 pub(crate) fn package_richpost_page_plan_path(package_path: &Path) -> PathBuf {
     package_path.join("richpost-page-plan.json")
+}
+
+pub(crate) fn package_richpost_masters_dir(package_path: &Path) -> PathBuf {
+    package_path.join("masters")
+}
+
+pub(crate) fn package_richpost_master_path(package_path: &Path, master_name: &str) -> PathBuf {
+    package_richpost_masters_dir(package_path).join(format!("{master_name}.master.html"))
 }
 
 pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {

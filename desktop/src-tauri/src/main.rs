@@ -426,9 +426,7 @@ impl Default for AssistantStateRecord {
                 "availableAccountIds": []
             }),
             knowledge_api: json!({
-                "enabled": true,
                 "endpointPath": "/api/knowledge",
-                "authToken": "",
                 "webhookUrl": ""
             }),
         }
@@ -6446,6 +6444,13 @@ fn main() {
                 commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state)
             {
                 eprintln!("[RedBox redclaw runtime restore] {error}");
+            }
+            if let Err(error) = commands::assistant_daemon::ensure_assistant_daemon_running(
+                app.handle(),
+                &state,
+                true,
+            ) {
+                eprintln!("[RedBox assistant daemon restore] {error}");
             }
             if let Err(error) =
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])

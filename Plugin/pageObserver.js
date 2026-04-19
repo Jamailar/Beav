@@ -3,6 +3,8 @@ let latestUrl = location.href;
 let updateTimer = null;
 let fastPollTimer = null;
 let fastPollUntil = 0;
+let urlWatchTimer = null;
+let observerStopped = false;
 
 const EMIT_DEBOUNCE_MS = 40;
 const FAST_POLL_INTERVAL_MS = 120;
@@ -140,16 +142,54 @@ function detectPageInfo() {
     return createLinkFallbackPageInfo();
 }
 
+function stopObservers() {
+    observerStopped = true;
+    if (updateTimer) {
+        clearTimeout(updateTimer);
+        updateTimer = null;
+    }
+    if (fastPollTimer) {
+        clearInterval(fastPollTimer);
+        fastPollTimer = null;
+    }
+    if (urlWatchTimer) {
+        clearInterval(urlWatchTimer);
+        urlWatchTimer = null;
+    }
+    observer.disconnect();
+}
+
+function isContextInvalidatedError(error) {
+    const message = String(error?.message || error || '');
+    return message.includes('Extension context invalidated');
+}
+
 function emitPageState() {
+    if (observerStopped) return;
     latestPageInfo = detectPageInfo();
-    chrome.runtime.sendMessage({
-        type: 'page-state:update',
-        pageInfo: latestPageInfo,
-        url: location.href,
-    }).catch(() => {});
+    try {
+        chrome.runtime.sendMessage({
+            type: 'page-state:update',
+            pageInfo: latestPageInfo,
+            url: location.href,
+        }).catch((error) => {
+            if (isContextInvalidatedError(error)) {
+                stopObservers();
+                return;
+            }
+            console.warn('[redbox-plugin][page-observer] page-state:update failed', error);
+        });
+    } catch (error) {
+        if (isContextInvalidatedError(error)) {
+            stopObservers();
+            return;
+        }
+        console.warn('[redbox-plugin][page-observer] page-state:update threw', error);
+    }
 }
 
 function scheduleEmit(delay = EMIT_DEBOUNCE_MS) {
+    if (observerStopped) return;
     if (updateTimer) {
         clearTimeout(updateTimer);
     }
@@ -162,6 +202,7 @@ function scheduleEmit(delay = EMIT_DEBOUNCE_MS) {
 }
 
 function startFastPolling(duration = FAST_POLL_DURATION_MS) {
+    if (observerStopped) return;
     fastPollUntil = Math.max(fastPollUntil, Date.now() + duration);
     if (fastPollTimer) return;
 
@@ -175,6 +216,10 @@ function startFastPolling(duration = FAST_POLL_DURATION_MS) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (observerStopped) {
+        sendResponse({ success: false, error: 'observer-stopped' });
+        return false;
+    }
     if (message?.type === 'page-state:get') {
         if (!latestPageInfo || latestUrl !== location.href) {
             latestUrl = location.href;
@@ -197,7 +242,7 @@ observer.observe(document.documentElement, {
     characterData: false,
 });
 
-setInterval(() => {
+urlWatchTimer = setInterval(() => {
     if (latestUrl !== location.href) {
         latestUrl = location.href;
         scheduleEmit(0);

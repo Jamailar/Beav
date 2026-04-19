@@ -465,9 +465,7 @@ pub fn default_store() -> AppStore {
                 "availableAccountIds": []
             }),
             knowledge_api: json!({
-                "enabled": true,
                 "endpointPath": "/api/knowledge",
-                "authToken": "",
                 "webhookUrl": ""
             }),
         },

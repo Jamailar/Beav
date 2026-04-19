@@ -427,6 +427,90 @@ fn cover_template_record_from_payload(
     })
 }
 
+fn cover_prompt_switch_enabled(raw: Option<&Value>, key: &str, default_value: bool) -> bool {
+    raw.and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(default_value)
+}
+
+fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
+    let title_mode = payload_string(payload, "titleMode")
+        .unwrap_or_else(|| "titles".to_string());
+    let title_prompt = normalize_optional_string(payload_string(payload, "titlePrompt"));
+    let style_hint = normalize_optional_string(payload_string(payload, "styleHint"));
+    let title_guide = normalize_optional_string(payload_string(payload, "titleGuide"));
+    let template_name = normalize_optional_string(payload_string(payload, "templateName"));
+    let prompt_switches = payload_field(payload, "promptSwitches");
+
+    let mut parts = vec![
+        "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
+        "画面比例固定为 3:4，标题区域必须清晰、可读、适合直接作为封面文案。".to_string(),
+        "不要出现提示词原文、排版说明、水印、AI 字样或调试文字。".to_string(),
+    ];
+
+    if let Some(name) = template_name {
+        parts.push(format!("当前使用模板：{name}。"));
+    }
+
+    if title_mode == "prompt" {
+        parts.push("标题生成方式：用户不直接给标题，你需要先判断最适合写在封面上的主标题、副标题、角标或标签词，再把它们自然排进画面。".to_string());
+        if let Some(prompt) = title_prompt {
+            parts.push(format!("用户给你的标题方向与要求：{prompt}"));
+            parts.push("不要整段照抄上面的说明，要提炼成短句、强记忆点、适合封面点击的中文文案。".to_string());
+        }
+    } else {
+        let normalized_titles = titles
+            .iter()
+            .filter_map(|item| {
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())?;
+                let label = item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("main");
+                Some(format!("{label}：{text}"))
+            })
+            .collect::<Vec<_>>();
+        if !normalized_titles.is_empty() {
+            parts.push(format!(
+                "标题生成方式：优先使用并忠实体现以下标题组，不要随意偏离核心信息。{}",
+                normalized_titles.join(" / ")
+            ));
+        }
+    }
+
+    if let Some(guide) = title_guide {
+        parts.push(format!("标题风格参考：{guide}"));
+    }
+    if let Some(style) = style_hint {
+        parts.push(format!("模板风格参考：{style}"));
+    }
+
+    let mut switch_notes: Vec<&str> = Vec::new();
+    if cover_prompt_switch_enabled(prompt_switches, "learnTypography", true) {
+        switch_notes.push("尽量学习模板图的标题字体、字重、描边、阴影和排版节奏");
+    }
+    if cover_prompt_switch_enabled(prompt_switches, "learnColorMood", true) {
+        switch_notes.push("尽量学习模板图的主辅色与整体色彩氛围");
+    }
+    if cover_prompt_switch_enabled(prompt_switches, "beautifyFace", false) {
+        switch_notes.push("人物允许轻度自然美颜，但不能失真");
+    }
+    if cover_prompt_switch_enabled(prompt_switches, "replaceBackground", false) {
+        switch_notes.push("允许在不破坏主体的前提下重绘或替换背景");
+    }
+    if !switch_notes.is_empty() {
+        parts.push(format!("额外生成约束：{}。", switch_notes.join("；")));
+    }
+
+    parts.join("\n")
+}
+
 fn summary_to_legacy_note(summary: &KnowledgeCatalogSummary) -> Value {
     json!({
         "id": summary.item_id,
@@ -1421,11 +1505,7 @@ pub fn handle_library_channel(
                     .and_then(|value| value.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let prompt = titles
-                    .iter()
-                    .filter_map(|item| item.get("text").and_then(|value| value.as_str()))
-                    .collect::<Vec<_>>()
-                    .join(" / ");
+                let prompt = build_cover_generation_prompt(payload, &titles);
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let auth_runtime = state
                     .auth_runtime

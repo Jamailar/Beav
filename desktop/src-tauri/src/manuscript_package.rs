@@ -18,8 +18,9 @@ use crate::{
     get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
     now_iso, now_ms, package_assets_path, package_content_map_path, package_cover_path,
     package_editor_project_path, package_entry_path, package_images_path, package_layout_html_path,
-    package_layout_template_path, package_manifest_path, package_remotion_input_props_path,
-    package_remotion_path, package_richpost_page_html_path, package_richpost_page_plan_path,
+    package_layout_template_path, package_layout_tokens_path, package_manifest_path,
+    package_remotion_input_props_path, package_remotion_path, package_richpost_master_path,
+    package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
     package_richpost_pages_dir, package_scene_ui_path, package_timeline_path,
     package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
     parse_json_value_from_text, read_json_value_or, redbox_project_root, resolve_manuscript_path,
@@ -2842,12 +2843,15 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     };
     let content_map_path = package_content_map_path(package_path);
     let content_map_exists = content_map_path.exists();
+    let layout_tokens_path = package_layout_tokens_path(package_path);
+    let layout_tokens_exists = layout_tokens_path.exists();
     let layout_template_path = package_layout_template_path(package_path);
     let layout_template_exists = layout_template_path.exists();
     let wechat_template_path = package_wechat_template_path(package_path);
     let wechat_template_exists = wechat_template_path.exists();
     let richpost_page_plan_path = package_richpost_page_plan_path(package_path);
     let richpost_page_plan_exists = richpost_page_plan_path.exists();
+    let richpost_masters_dir = package_richpost_masters_dir(package_path);
     let richpost_pages_dir = package_richpost_pages_dir(package_path);
     let richpost_page_plan = if package_kind == Some("post") {
         Some(read_json_value_or(
@@ -2856,6 +2860,40 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         ))
     } else {
         None
+    };
+    let richpost_masters = if package_kind == Some("post") && richpost_masters_dir.exists() {
+        let mut masters = fs::read_dir(&richpost_masters_dir)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_file() {
+                    return None;
+                }
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if !file_name.ends_with(".master.html") {
+                    return None;
+                }
+                let master_id = file_name.trim_end_matches(".master.html").to_string();
+                let master_path = package_richpost_master_path(package_path, &master_id);
+                Some(json!({
+                    "id": master_id,
+                    "file": master_path.display().to_string(),
+                    "fileUrl": file_url_for_path(&master_path),
+                    "updatedAt": file_modified_at_ms(&master_path)
+                }))
+            })
+            .collect::<Vec<_>>();
+        masters.sort_by(|left, right| {
+            left.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .cmp(right.get("id").and_then(Value::as_str).unwrap_or(""))
+        });
+        masters
+    } else {
+        Vec::new()
     };
     let richpost_pages = if package_kind == Some("post") {
         richpost_page_plan
@@ -2998,6 +3036,15 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         Value::Null
     };
+    let richpost_typography = manifest
+        .get("richpostTypography")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "fontScale": 1.0,
+                "lineHeightScale": 1.0
+            })
+        });
     Ok(json!({
         "manifest": {
             "packageKind": get_package_kind_from_file_name(file_name),
@@ -3023,6 +3070,13 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             Value::Null
         },
         "contentMapUpdatedAt": file_modified_at_ms(&content_map_path),
+        "layoutTokensExists": layout_tokens_exists,
+        "layoutTokensFile": if layout_tokens_exists {
+            json!(layout_tokens_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutTokensUpdatedAt": file_modified_at_ms(&layout_tokens_path),
         "richpostPagePlanExists": richpost_page_plan_exists,
         "richpostPagePlanFile": if richpost_page_plan_exists {
             json!(richpost_page_plan_path.display().to_string())
@@ -3046,6 +3100,27 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             .and_then(|value| value.get("description"))
             .cloned()
             .unwrap_or(Value::Null),
+        "richpostTypography": if package_kind == Some("post") {
+            richpost_typography.clone()
+        } else {
+            Value::Null
+        },
+        "richpostFontScale": if package_kind == Some("post") {
+            richpost_typography
+                .get("fontScale")
+                .cloned()
+                .unwrap_or(json!(1.0))
+        } else {
+            Value::Null
+        },
+        "richpostLineHeightScale": if package_kind == Some("post") {
+            richpost_typography
+                .get("lineHeightScale")
+                .cloned()
+                .unwrap_or(json!(1.0))
+        } else {
+            Value::Null
+        },
         "richpostThemeCatalog": if package_kind == Some("post") {
             richpost_theme_catalog_value()
         } else {
@@ -3077,6 +3152,13 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         } else {
             Value::Null
         },
+        "richpostMastersDir": if richpost_masters_dir.exists() {
+            json!(richpost_masters_dir.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostMasterCount": richpost_masters.len(),
+        "richpostMasters": richpost_masters,
         "richpostPageCount": richpost_pages.len(),
         "richpostPages": richpost_pages,
         "layoutTemplateExists": layout_template_exists,

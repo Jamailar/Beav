@@ -1240,9 +1240,7 @@ declare global {
             webhookUrl: string;
           };
           knowledgeApi: {
-            enabled: boolean;
             endpointPath: string;
-            authToken?: string;
             webhookUrl: string;
           };
           weixin: {
@@ -1286,11 +1284,6 @@ declare global {
             endpointPath?: string;
             authToken?: string;
           };
-          knowledgeApi?: {
-            enabled?: boolean;
-            endpointPath?: string;
-            authToken?: string;
-          };
           weixin?: {
             enabled?: boolean;
             endpointPath?: string;
@@ -1322,11 +1315,6 @@ declare global {
             replyUsingChatId?: boolean;
           };
           relay?: {
-            enabled?: boolean;
-            endpointPath?: string;
-            authToken?: string;
-          };
-          knowledgeApi?: {
             enabled?: boolean;
             endpointPath?: string;
             authToken?: string;
