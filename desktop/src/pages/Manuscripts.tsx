@@ -27,7 +27,7 @@ import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
-import { renderRichpostPageUrlToPng } from '../components/manuscripts/richpostPreviewImage';
+import { loadRichpostPreviewHtml, renderRichpostHtmlToPng } from '../components/manuscripts/richpostPreviewImage';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -382,6 +382,9 @@ type PackageState = {
 type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
+const RICHPOST_CARD_PREVIEW_WIDTH = 360;
+const RICHPOST_CARD_PREVIEW_HEIGHT = 480;
+const RICHPOST_CARD_PREVIEW_DEBOUNCE_MS = 700;
 
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
     if (kind === 'longform') return ARTICLE_DRAFT_EXTENSION;
@@ -931,6 +934,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
     const richpostTypographyRequestIdRef = useRef(0);
     const richpostPreviewGenerationRef = useRef<Set<string>>(new Set());
+    const richpostCardPreviewTimerRef = useRef<number | null>(null);
+    const richpostCardPreviewRenderedAtRef = useRef<Record<string, number>>({});
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter !== 'drafts';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
@@ -958,6 +963,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         editorBodyDirtyRef.current = editorBodyDirty;
     }, [editorBodyDirty]);
+
+    useEffect(() => () => {
+        if (richpostCardPreviewTimerRef.current != null) {
+            window.clearTimeout(richpostCardPreviewTimerRef.current);
+            richpostCardPreviewTimerRef.current = null;
+        }
+    }, []);
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
@@ -1601,6 +1613,64 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, []);
 
+    const generateRichpostCardPreview = useCallback(async (
+        targetFilePath: string,
+        pageFilePath: string,
+        pageUpdatedAt: number,
+    ) => {
+        if (!targetFilePath || !pageFilePath || !pageUpdatedAt) return;
+        if (richpostPreviewGenerationRef.current.has(targetFilePath)) return;
+        richpostPreviewGenerationRef.current.add(targetFilePath);
+        try {
+            const html = await loadRichpostPreviewHtml(pageFilePath);
+            const dataUrl = await renderRichpostHtmlToPng(html, targetFilePath, {
+                width: RICHPOST_CARD_PREVIEW_WIDTH,
+                height: RICHPOST_CARD_PREVIEW_HEIGHT,
+            });
+            const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+            const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-card-preview', {
+                filePath: targetFilePath,
+                dataBase64,
+            }) as { success?: boolean; fileUrl?: string; updatedAt?: number; error?: string };
+            if (!saved?.success || !saved.fileUrl) {
+                throw new Error(saved?.error || '保存图文封面失败');
+            }
+            richpostCardPreviewRenderedAtRef.current[targetFilePath] = pageUpdatedAt;
+            setRichpostPreviewOverrides((prev) => ({
+                ...prev,
+                [targetFilePath]: {
+                    fileUrl: saved.fileUrl || '',
+                    updatedAt: Number(saved.updatedAt || Date.now()) || Date.now(),
+                },
+            }));
+            void loadTree();
+        } catch (previewError) {
+            console.error('Failed to build richpost card preview:', previewError);
+        } finally {
+            richpostPreviewGenerationRef.current.delete(targetFilePath);
+        }
+    }, [loadTree]);
+
+    const scheduleRichpostCardPreviewFromState = useCallback((
+        targetFilePath: string,
+        state?: PackageState | null,
+        delayMs: number = RICHPOST_CARD_PREVIEW_DEBOUNCE_MS,
+    ) => {
+        if (!targetFilePath) return;
+        const firstPage = state?.richpostPages?.find((page) => page?.exists && page.file);
+        const pageFilePath = String(firstPage?.file || '').trim();
+        const pageUpdatedAt = Number(firstPage?.updatedAt || 0) || 0;
+        if (!pageFilePath || !pageUpdatedAt) return;
+        if ((richpostCardPreviewRenderedAtRef.current[targetFilePath] || 0) >= pageUpdatedAt) return;
+        if (richpostCardPreviewTimerRef.current != null) {
+            window.clearTimeout(richpostCardPreviewTimerRef.current);
+        }
+        richpostCardPreviewTimerRef.current = window.setTimeout(() => {
+            richpostCardPreviewTimerRef.current = null;
+            void generateRichpostCardPreview(targetFilePath, pageFilePath, pageUpdatedAt);
+        }, delayMs);
+    }, [generateRichpostCardPreview]);
+
     const runEditorSave = useCallback(async (options?: { alertOnError?: boolean }) => {
         const snapshotFile = editorFileRef.current;
         if (!snapshotFile) return true;
@@ -1623,6 +1693,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             if (result.state) {
                 setPackageState(result.state);
+                if ((result.state.richpostPages?.length || 0) > 0) {
+                    scheduleRichpostCardPreviewFromState(snapshotFile, result.state, 120);
+                }
             }
             if (typeof result.title === 'string' && result.title.trim()) {
                 const nextTitle = result.title.trim();
@@ -1660,7 +1733,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         } finally {
             setIsSavingEditorBody(false);
         }
-    }, [loadData]);
+    }, [loadData, scheduleRichpostCardPreviewFromState]);
 
     const ensureLatestEditorContentSaved = useCallback(async () => {
         if (!editorFileRef.current) return true;
@@ -2696,29 +2769,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         void (async () => {
             for (const card of pendingCards) {
                 if (cancelled) return;
-                richpostPreviewGenerationRef.current.add(card.file.path);
                 try {
-                    const dataUrl = await renderRichpostPageUrlToPng(card.richpostPreviewPageFileUrl, card.id);
-                    const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-                    const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-card-preview', {
-                        filePath: card.file.path,
-                        dataBase64,
-                    }) as { success?: boolean; fileUrl?: string; updatedAt?: number; error?: string };
-                    if (!saved?.success || !saved.fileUrl) {
-                        throw new Error(saved?.error || '保存图文缩略图失败');
-                    }
+                    await generateRichpostCardPreview(
+                        card.file.path,
+                        card.richpostPreviewPageFile || '',
+                        Number(card.richpostPreviewPageUpdatedAt || 0) || Date.now(),
+                    );
                     if (cancelled) return;
-                    setRichpostPreviewOverrides((prev) => ({
-                        ...prev,
-                        [card.file.path]: {
-                            fileUrl: saved.fileUrl || '',
-                            updatedAt: Number(saved.updatedAt || Date.now()) || Date.now(),
-                        },
-                    }));
                 } catch (error) {
                     console.error('Failed to build richpost card preview:', error);
-                } finally {
-                    richpostPreviewGenerationRef.current.delete(card.file.path);
                 }
             }
         })();
@@ -2726,7 +2785,18 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return () => {
             cancelled = true;
         };
-    }, [contentCards, filter, mode, richpostPreviewOverrides]);
+    }, [contentCards, filter, generateRichpostCardPreview, mode, richpostPreviewOverrides]);
+
+    useEffect(() => {
+        if (!editorFile || editorDescriptor?.draftType !== 'richpost') return;
+        scheduleRichpostCardPreviewFromState(editorFile, packageState);
+        return () => {
+            if (richpostCardPreviewTimerRef.current != null) {
+                window.clearTimeout(richpostCardPreviewTimerRef.current);
+                richpostCardPreviewTimerRef.current = null;
+            }
+        };
+    }, [editorDescriptor?.draftType, editorFile, packageState, scheduleRichpostCardPreviewFromState]);
 
     const bindableImageAssets = useMemo(
         () => assets.filter((asset) => inferAssetKind(asset) === 'image'),

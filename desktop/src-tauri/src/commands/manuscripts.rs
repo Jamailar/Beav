@@ -7658,7 +7658,12 @@ pub fn handle_manuscripts_channel(
             }
             "manuscripts:read" => {
                 let relative = payload_value_as_string(&payload).unwrap_or_default();
-                let path = resolve_manuscript_path(state, &relative)?;
+                let direct_path = std::path::PathBuf::from(&relative);
+                let path = if direct_path.is_absolute() && direct_path.exists() {
+                    direct_path
+                } else {
+                    resolve_manuscript_path(state, &relative)?
+                };
                 if path.is_dir()
                     && is_manuscript_package_name(
                         path.file_name()

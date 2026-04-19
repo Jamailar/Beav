@@ -70,6 +70,11 @@ export function injectRichpostPreviewScale(
   return `${html}${scaleScript}`;
 }
 
+type RichpostPngRenderOptions = {
+  width?: number;
+  height?: number;
+};
+
 async function waitForIframeContentReady(frame: HTMLIFrameElement): Promise<Document> {
   const doc = await new Promise<Document>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -240,7 +245,12 @@ async function materializeRichpostBackgroundImage(doc: Document): Promise<void> 
   });
 }
 
-async function renderRichpostFrameToPng(frame: HTMLIFrameElement): Promise<string> {
+async function renderRichpostFrameToPng(
+  frame: HTMLIFrameElement,
+  options?: RichpostPngRenderOptions
+): Promise<string> {
+  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
+  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
   const doc = await waitForIframeContentReady(frame);
   await materializeRichpostBackgroundImage(doc);
   const backgroundSource = extractRichpostBackgroundSource(doc);
@@ -264,16 +274,16 @@ async function renderRichpostFrameToPng(frame: HTMLIFrameElement): Promise<strin
   const foregroundDataUrl = await toPng(target, {
     cacheBust: true,
     pixelRatio: 1,
-    width: 1080,
-    height: 1440,
-    canvasWidth: 1080,
-    canvasHeight: 1440,
+    width,
+    height,
+    canvasWidth: width,
+    canvasHeight: height,
     ...(backgroundSource ? {} : { backgroundColor: '#ffffff' }),
   });
   if (!backgroundSource) {
     return foregroundDataUrl;
   }
-  return await composeRichpostExportLayers(backgroundSource, foregroundDataUrl, 1080, 1440);
+  return await composeRichpostExportLayers(backgroundSource, foregroundDataUrl, width, height);
 }
 
 export async function loadRichpostPreviewHtml(
@@ -296,48 +306,60 @@ export async function loadRichpostPreviewHtml(
   );
 }
 
-export async function renderRichpostPageUrlToPng(sourceUrl: string, pageId: string): Promise<string> {
+export async function renderRichpostPageUrlToPng(
+  sourceUrl: string,
+  pageId: string,
+  options?: RichpostPngRenderOptions
+): Promise<string> {
   void pageId;
   if (!String(sourceUrl || '').trim()) {
     throw new Error('图文预览页地址为空');
   }
+  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
+  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
   const frame = document.createElement('iframe');
   frame.src = sourceUrl;
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
   frame.style.position = 'fixed';
   frame.style.left = '-20000px';
   frame.style.top = '0';
-  frame.style.width = '1080px';
-  frame.style.height = '1440px';
+  frame.style.width = `${width}px`;
+  frame.style.height = `${height}px`;
   frame.style.border = '0';
   frame.style.opacity = '0';
   frame.style.pointerEvents = 'none';
   frame.style.background = '#ffffff';
   document.body.appendChild(frame);
   try {
-    return await renderRichpostFrameToPng(frame);
+    return await renderRichpostFrameToPng(frame, { width, height });
   } finally {
     frame.remove();
   }
 }
 
-export async function renderRichpostHtmlToPng(html: string, pageId: string): Promise<string> {
+export async function renderRichpostHtmlToPng(
+  html: string,
+  pageId: string,
+  options?: RichpostPngRenderOptions
+): Promise<string> {
   void pageId;
+  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
+  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
   const frame = document.createElement('iframe');
   frame.srcdoc = materializeRichpostBackgroundInHtml(html);
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
   frame.style.position = 'fixed';
   frame.style.left = '-20000px';
   frame.style.top = '0';
-  frame.style.width = '1080px';
-  frame.style.height = '1440px';
+  frame.style.width = `${width}px`;
+  frame.style.height = `${height}px`;
   frame.style.border = '0';
   frame.style.opacity = '0';
   frame.style.pointerEvents = 'none';
   frame.style.background = '#ffffff';
   document.body.appendChild(frame);
   try {
-    return await renderRichpostFrameToPng(frame);
+    return await renderRichpostFrameToPng(frame, { width, height });
   } finally {
     frame.remove();
   }

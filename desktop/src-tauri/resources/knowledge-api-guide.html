@@ -238,8 +238,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 14px 16px;
+        gap: 10px;
+        padding: 11px 13px;
         cursor: pointer;
         transition: background-color 160ms ease;
       }
@@ -265,14 +265,14 @@
 
       .module-title {
         margin: 0;
-        font-size: 17px;
+        font-size: 15px;
         letter-spacing: -0.03em;
       }
 
       .module-desc {
         margin: 4px 0 0;
         color: var(--text-secondary);
-        font-size: 12px;
+        font-size: 11px;
       }
 
       .module-meta {
@@ -281,7 +281,7 @@
         gap: 8px;
         flex-shrink: 0;
         color: var(--text-tertiary);
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 700;
       }
 
@@ -299,7 +299,7 @@
       }
 
       .module-body {
-        padding: 0 16px 16px;
+        padding: 0 13px 13px;
         border-top: 1px solid var(--border);
       }
 
@@ -494,6 +494,43 @@
         margin: 0 0 10px;
         color: var(--text-secondary);
         font-size: 12px;
+      }
+
+      .api-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .api-head-actions {
+        flex-shrink: 0;
+      }
+
+      .mini-copy-btn {
+        appearance: none;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgb(255 255 255 / 0.55);
+        color: var(--text);
+        padding: 6px 10px;
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: 160ms ease;
+      }
+
+      .mini-copy-btn:hover {
+        border-color: var(--border-strong);
+        background: var(--surface);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .mini-copy-btn {
+          background: rgb(255 255 255 / 0.04);
+        }
       }
 
       .fact {
@@ -823,14 +860,10 @@
             <div class="module-body">
               <div class="action-row">
                 <button class="primary-btn" type="button" id="install-plugin-btn">一键安装插件</button>
-                <button class="ghost-link" type="button" id="open-extension-page-btn">打开扩展管理页</button>
+                <a class="ghost-link" id="open-extension-page-btn" href="#" target="_blank" rel="noopener noreferrer">打开插件设置页</a>
               </div>
               <div class="micro-note">
                 先在 RedBox 的 设置 → 工具 里点击“一键准备插件”。
-              </div>
-              <div class="tag-row" style="margin-top: 14px; margin-bottom: 0;">
-                <span class="tag">Chrome: chrome://extensions</span>
-                <span class="tag">Edge: edge://extensions</span>
               </div>
               <div class="step-list" id="plugin-install-steps">
                 <div class="step-row">
@@ -866,10 +899,15 @@
               </div>
             </summary>
             <div class="module-body">
-              <div class="mini-list" style="margin-bottom: 16px;">
-                <div class="mini-item">
-                  <strong>支持内容</strong>
-                  <p>知识条目、文档源、图片素材、批量导入。</p>
+              <div class="api-head">
+                <div class="mini-list" style="margin-bottom: 0; flex: 1;">
+                  <div class="mini-item">
+                    <strong>支持内容</strong>
+                    <p>知识条目、文档源、图片素材、批量导入。</p>
+                  </div>
+                </div>
+                <div class="api-head-actions">
+                  <button class="mini-copy-btn" type="button" id="copy-markdown-btn-side">复制 Markdown</button>
                 </div>
               </div>
 
@@ -968,14 +1006,6 @@
               </div>
           </section>
 
-          <section class="api-section">
-              <h3>Markdown 版本</h3>
-              <p class="section-desc">复制整页内容为 Markdown。</p>
-              <div class="markdown-box">
-                <p>包含导入方式、接口说明和请求示例。</p>
-                <button class="primary-btn" type="button" id="copy-markdown-btn-side">一键复制 Markdown</button>
-              </div>
-          </section>
             </div>
           </details>
       </div>
@@ -1528,35 +1558,48 @@
           '',
           ...guide.importMethods.plugin.steps.map((step, index) => `${index + 1}. ${step}`),
           '',
-          '如果浏览器没有自动打开扩展管理页，可手动输入：',
-          '- Chrome: chrome://extensions',
-          '- Edge: edge://extensions'
+          '如果没有自动打开，请手动打开浏览器扩展管理页。'
         ].join('\n');
       }
 
-      function extensionManagerCandidates() {
+      function extensionManagerUrl() {
         const ua = navigator.userAgent.toLowerCase();
         if (ua.includes('edg/')) {
-          return ['edge://extensions'];
+          return 'edge://extensions';
         }
         if (ua.includes('chrome') || ua.includes('chromium')) {
-          return ['chrome://extensions', 'edge://extensions'];
+          return 'chrome://extensions';
         }
-        return ['chrome://extensions', 'edge://extensions'];
+        return '';
       }
 
       function openExtensionManager() {
-        for (const url of extensionManagerCandidates()) {
-          try {
-            const popup = window.open(url, '_blank', 'noopener,noreferrer');
-            if (popup) {
-              return true;
-            }
-          } catch (error) {
-            console.warn('Open extension manager failed', error);
-          }
+        const link = document.getElementById('open-extension-page-btn');
+        if (!(link instanceof HTMLAnchorElement) || !link.href || link.getAttribute('href') === '#') {
+          return false;
         }
-        return false;
+        try {
+          link.click();
+          return true;
+        } catch (error) {
+          console.warn('Open extension manager failed', error);
+          return false;
+        }
+      }
+
+      function setupExtensionPageLink() {
+        const link = document.getElementById('open-extension-page-btn');
+        if (!(link instanceof HTMLAnchorElement)) {
+          return;
+        }
+        const url = extensionManagerUrl();
+        if (!url) {
+          link.setAttribute('href', '#');
+          link.setAttribute('aria-disabled', 'true');
+          return;
+        }
+        link.href = url;
+        link.removeAttribute('aria-disabled');
       }
 
       async function copyPlainText(text, button) {
@@ -1620,12 +1663,7 @@
           flashButtonText(button, opened ? '已打开扩展页' : '请手动打开');
         }
       });
-      document.getElementById('open-extension-page-btn').addEventListener('click', (event) => {
-        const button = event.currentTarget;
-        const opened = openExtensionManager();
-        flashButtonText(button, opened ? '已打开' : '请手动打开');
-      });
-
+      setupExtensionPageLink();
       render();
     </script>
   </body>
