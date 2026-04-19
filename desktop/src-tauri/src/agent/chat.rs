@@ -5,6 +5,7 @@ use crate::agent::{
     emit_session_agent_completion, execute_prepared_session_agent_turn, ChatExchangeRequest,
     PreparedSessionAgentTurn, SessionAgentTurnKind,
 };
+use crate::chat_title::spawn_chat_session_auto_title;
 use crate::commands::chat_state::resolve_runtime_mode_for_session;
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::persistence::with_store;
@@ -98,6 +99,13 @@ pub fn run_chat_send_turn(
 ) -> Result<CompletedChatSendTurn, String> {
     let execution = execute_prepared_session_agent_turn(Some(app), state, prepared_turn)?;
     emit_session_agent_completion(app, state, &execution, SessionAgentTurnKind::ChatSend)?;
+    spawn_chat_session_auto_title(
+        app.clone(),
+        execution.session_id().to_string(),
+        prepared_turn.display_content().to_string(),
+        prepared_turn.request().attachment.clone(),
+        prepared_turn.request().model_config.cloned(),
+    );
     let is_redclaw_session = with_store(state, |store| {
         Ok(resolve_runtime_mode_for_session(&store, execution.session_id()) == "redclaw")
     })?;

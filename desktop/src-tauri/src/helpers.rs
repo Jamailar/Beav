@@ -156,6 +156,18 @@ pub(crate) fn package_wechat_template_path(package_path: &Path) -> PathBuf {
     package_path.join("wechat.template.html")
 }
 
+pub(crate) fn package_richpost_page_plan_path(package_path: &Path) -> PathBuf {
+    package_path.join("richpost-page-plan.json")
+}
+
+pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {
+    package_path.join("pages")
+}
+
+pub(crate) fn package_richpost_page_html_path(package_path: &Path, page_id: &str) -> PathBuf {
+    package_richpost_pages_dir(package_path).join(format!("{page_id}.html"))
+}
+
 pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
     fs::read_to_string(path)
         .ok()

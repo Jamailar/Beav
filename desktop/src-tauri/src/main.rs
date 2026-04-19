@@ -6,6 +6,7 @@ mod app_shared;
 mod assistant_core;
 mod auth;
 mod chat_helpers;
+mod chat_title;
 mod commands;
 mod desktop_io;
 mod diagnostics;
@@ -6418,6 +6419,7 @@ fn main() {
             ipc_send,
             commands::spaces::spaces_list,
             commands::advisor_ops::advisors_list,
+            commands::advisor_ops::advisors_list_templates,
             commands::library::knowledge_list,
             commands::library::knowledge_list_youtube,
             commands::library::knowledge_docs_list,

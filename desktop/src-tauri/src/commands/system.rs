@@ -5,8 +5,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    now_iso, payload_field, payload_string, payload_value_as_string, refresh_runtime_warm_state,
-    store_root, update_workspace_root_cache, AppState,
+    now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
+    refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
 
 fn knowledge_api_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -41,6 +41,7 @@ pub fn handle_system_channel(
         | "app:startup-migration-status"
         | "app:open-knowledge-api-guide"
         | "app:open-path"
+        | "settings:pick-workspace-dir"
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
@@ -78,6 +79,15 @@ pub fn handle_system_channel(
                         .ok_or_else(|| "path is required".to_string())?;
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path }))
+                }
+                "settings:pick-workspace-dir" => {
+                    let selected = pick_files_native("选择工作区目录", true, false)?;
+                    let path = selected.first().map(|item| item.display().to_string());
+                    Ok(json!({
+                        "success": path.is_some(),
+                        "canceled": path.is_none(),
+                        "path": path,
+                    }))
                 }
                 "db:get-settings" => with_store(state, |store| {
                     let runtime = state

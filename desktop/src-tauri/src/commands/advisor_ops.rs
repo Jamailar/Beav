@@ -1,8 +1,67 @@
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdvisorTemplateRecord {
+    #[serde(default)]
+    id: String,
+    name: String,
+    #[serde(default)]
+    avatar: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    personality: String,
+    #[serde(default)]
+    system_prompt: String,
+    #[serde(default)]
+    knowledge_language: Option<String>,
+}
+
+fn advisor_templates_root() -> Result<std::path::PathBuf, String> {
+    let root = redbox_prompt_library_root()
+        .join("runtime")
+        .join("advisors")
+        .join("templates");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn normalize_advisor_template(
+    template: AdvisorTemplateRecord,
+    fallback_id: &str,
+) -> AdvisorTemplateRecord {
+    let normalized_id =
+        normalize_optional_string(Some(template.id)).unwrap_or_else(|| fallback_id.to_string());
+    let normalized_name =
+        normalize_optional_string(Some(template.name)).unwrap_or_else(|| normalized_id.clone());
+
+    AdvisorTemplateRecord {
+        id: normalized_id,
+        name: normalized_name,
+        avatar: normalize_optional_string(Some(template.avatar))
+            .unwrap_or_else(|| "🧠".to_string()),
+        description: normalize_optional_string(Some(template.description)).unwrap_or_default(),
+        category: normalize_optional_string(Some(template.category)).unwrap_or_default(),
+        tags: template
+            .tags
+            .into_iter()
+            .filter_map(|item| normalize_optional_string(Some(item)))
+            .collect(),
+        personality: normalize_optional_string(Some(template.personality)).unwrap_or_default(),
+        system_prompt: normalize_optional_string(Some(template.system_prompt)).unwrap_or_default(),
+        knowledge_language: normalize_optional_string(template.knowledge_language),
+    }
+}
 
 fn refresh_advisor_videos(
     state: &State<'_, AppState>,
@@ -104,9 +163,44 @@ pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, 
     })
 }
 
+pub(crate) fn advisors_list_templates_value() -> Result<Value, String> {
+    let root = advisor_templates_root()?;
+    let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
+    let mut templates = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("读取模板失败 {}: {error}", path.display()))?;
+        let parsed: AdvisorTemplateRecord = serde_json::from_str(&content)
+            .map_err(|error| format!("模板格式无效 {}: {error}", path.display()))?;
+        let fallback_id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("advisor-template");
+        templates.push(normalize_advisor_template(parsed, fallback_id));
+    }
+
+    templates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(json!(templates))
+}
+
 #[tauri::command]
 pub async fn advisors_list(state: State<'_, AppState>) -> Result<Value, String> {
     advisors_list_value(&state)
+}
+
+#[tauri::command]
+pub async fn advisors_list_templates() -> Result<Value, String> {
+    advisors_list_templates_value()
 }
 
 pub fn handle_advisor_channel(
@@ -118,6 +212,7 @@ pub fn handle_advisor_channel(
     if !matches!(
         channel,
         "advisors:list"
+            | "advisors:list-templates"
             | "advisors:create"
             | "advisors:update"
             | "advisors:delete"
@@ -146,6 +241,7 @@ pub fn handle_advisor_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "advisors:list" => advisors_list_value(state),
+            "advisors:list-templates" => advisors_list_templates_value(),
             "advisors:create" => {
                 let advisor = with_store_mut(state, |store| {
                     let timestamp = now_iso();

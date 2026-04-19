@@ -10,13 +10,14 @@ use crate::events::{
 use crate::helpers::{
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
     extract_markdown_frontmatter_block, get_draft_type_from_file_name, normalize_relative_path,
-    strip_markdown_frontmatter, VIDEO_DRAFT_EXTENSION,
+    strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION,
+    POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
 use crate::runtime::SkillRecord;
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
-use crate::{make_id, now_iso, payload_field, payload_string, AppState};
+use crate::{make_id, now_iso, payload_field, payload_string, resolve_manuscript_path, AppState};
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
@@ -47,6 +48,11 @@ struct BoundWritingSessionTarget {
     file_path: String,
     draft_type: String,
     title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AuthoringTargetPreference {
+    preferred_extension: &'static str,
 }
 
 impl CliArgs {
@@ -295,9 +301,10 @@ impl<'a> AppCliExecutor<'a> {
                     .string(&["path"])
                     .or_else(|| args.positionals.first().cloned())
                     .ok_or_else(|| "manuscripts write requires --path".to_string())?;
+                let normalized_path = self.normalize_manuscript_target_path(&path);
                 let mut merged = merge_payload(&args.options, payload);
                 if let Some(object) = merged.as_object_mut() {
-                    object.insert("path".to_string(), json!(path));
+                    object.insert("path".to_string(), json!(normalized_path.clone()));
                     if !object.contains_key("content") {
                         object.insert(
                             "content".to_string(),
@@ -306,7 +313,7 @@ impl<'a> AppCliExecutor<'a> {
                     }
                 }
                 let maybe_proposal = self.maybe_queue_writing_manuscript_proposal(
-                    &path,
+                    &normalized_path,
                     payload_string(&merged, "content").unwrap_or_default(),
                     payload_field(&merged, "metadata"),
                 )?;
@@ -362,8 +369,7 @@ impl<'a> AppCliExecutor<'a> {
                     .string(&["path"])
                     .or_else(|| args.positionals.first().cloned())
                     .ok_or_else(|| "manuscripts create requires --path".to_string())?;
-                let normalized =
-                    ensure_manuscript_file_name(&normalize_relative_path(&relative), ".md");
+                let normalized = self.normalize_manuscript_target_path(&relative);
                 let (parent_path, name) = split_parent_and_name(&normalized);
                 self.call_channel(
                     "manuscripts:create-file",
@@ -1467,6 +1473,94 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         })
         .ok()
         .flatten()
+    }
+
+    fn current_authoring_target_preference(&self) -> Option<AuthoringTargetPreference> {
+        if let Some(target) = self.bound_writing_session_target() {
+            let draft_type = target.draft_type.to_ascii_lowercase();
+            let preferred_extension = match draft_type.as_str() {
+                "longform" => ARTICLE_DRAFT_EXTENSION,
+                "richpost" => POST_DRAFT_EXTENSION,
+                _ => return None,
+            };
+            return Some(AuthoringTargetPreference {
+                preferred_extension,
+            });
+        }
+
+        let session_id = self.session_id?;
+        with_store(self.state, |store| {
+            let metadata = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|session| session.metadata.as_ref());
+            let Some(metadata) = metadata else {
+                return Ok(None);
+            };
+            let intent = payload_string(metadata, "intent")
+                .or_else(|| {
+                    metadata
+                        .get("taskHints")
+                        .and_then(|value| payload_string(value, "intent"))
+                })
+                .unwrap_or_default();
+            if intent != "manuscript_creation" {
+                return Ok(None);
+            }
+            let platform = payload_string(metadata, "platform").or_else(|| {
+                metadata
+                    .get("taskHints")
+                    .and_then(|value| payload_string(value, "platform"))
+            });
+            let preference = match platform.as_deref() {
+                Some("wechat_official_account") => AuthoringTargetPreference {
+                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
+                },
+                Some("xiaohongshu") => AuthoringTargetPreference {
+                    preferred_extension: POST_DRAFT_EXTENSION,
+                },
+                _ => AuthoringTargetPreference {
+                    preferred_extension: POST_DRAFT_EXTENSION,
+                },
+            };
+            Ok(Some(preference))
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn normalize_manuscript_target_path(&self, requested_path: &str) -> String {
+        let normalized = normalize_relative_path(requested_path);
+        if normalized.trim().is_empty() {
+            return normalized;
+        }
+        let Some(preference) = self.current_authoring_target_preference() else {
+            return ensure_manuscript_file_name(&normalized, ".md");
+        };
+        let resolved = resolve_manuscript_path(self.state, &normalized).ok();
+        let target_exists = resolved.as_ref().map(|path| path.exists()).unwrap_or(false);
+        if normalized.ends_with(preference.preferred_extension) {
+            return normalized;
+        }
+        if normalized.ends_with(ARTICLE_DRAFT_EXTENSION)
+            || normalized.ends_with(POST_DRAFT_EXTENSION)
+            || normalized.ends_with(VIDEO_DRAFT_EXTENSION)
+            || normalized.ends_with(AUDIO_DRAFT_EXTENSION)
+        {
+            return normalized;
+        }
+        if normalized.ends_with(".md") {
+            if target_exists {
+                return normalized;
+            }
+            let stem = normalized.trim_end_matches(".md");
+            return format!("{stem}{}", preference.preferred_extension);
+        }
+        if target_exists {
+            return normalized;
+        }
+        ensure_manuscript_file_name(&normalized, preference.preferred_extension)
     }
 
     fn maybe_queue_writing_manuscript_proposal(

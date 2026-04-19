@@ -9,9 +9,11 @@ use crate::manuscript_package::{
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
+use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use tauri::{AppHandle, State};
 
 const DEFAULT_TIMELINE_CLIP_MS: i64 = 4000;
@@ -42,8 +44,406 @@ struct PackageContentBlock {
 
 #[derive(Debug, Clone)]
 struct PackageBoundAsset {
+    id: String,
     title: String,
     url: String,
+    role: String,
+}
+
+#[derive(Clone, Copy)]
+struct RichpostThemePreset {
+    id: &'static str,
+    label: &'static str,
+    description: &'static str,
+    shell_bg: &'static str,
+    preview_card_bg: &'static str,
+    preview_card_border: &'static str,
+    preview_card_shadow: &'static str,
+    page_bg: &'static str,
+    surface_bg: &'static str,
+    surface_border: &'static str,
+    surface_shadow: &'static str,
+    surface_radius: &'static str,
+    image_radius: &'static str,
+    text: &'static str,
+    muted: &'static str,
+    accent: &'static str,
+    heading_font: &'static str,
+    body_font: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct LongformLayoutPreset {
+    id: &'static str,
+    label: &'static str,
+    description: &'static str,
+    surface_bg: &'static str,
+    text: &'static str,
+    accent: &'static str,
+    layout_instructions: &'static str,
+    wechat_instructions: &'static str,
+}
+
+fn richpost_theme_catalog() -> &'static [RichpostThemePreset] {
+    &[
+        RichpostThemePreset {
+            id: "clean-white",
+            label: "纯白极简",
+            description: "白底黑字，适合信息密度高的图文页。",
+            shell_bg: "linear-gradient(180deg,#fff8ef 0%,#f5ede1 100%)",
+            preview_card_bg: "rgba(255,255,255,.82)",
+            preview_card_border: "rgba(34,24,18,.08)",
+            preview_card_shadow: "0 18px 48px rgba(88,59,36,.08)",
+            page_bg: "#ffffff",
+            surface_bg: "#ffffff",
+            surface_border: "rgba(34,24,18,.08)",
+            surface_shadow: "0 14px 34px rgba(17,17,17,.06)",
+            surface_radius: "0px",
+            image_radius: "0px",
+            text: "#111111",
+            muted: "#6b625a",
+            accent: "#111111",
+            heading_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+            body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+        },
+        RichpostThemePreset {
+            id: "warm-editorial",
+            label: "暖调杂志",
+            description: "偏杂志感的暖纸色背景，标题更有版面感。",
+            shell_bg: "linear-gradient(180deg,#f8efe4 0%,#efe1d2 100%)",
+            preview_card_bg: "rgba(255,250,243,.84)",
+            preview_card_border: "rgba(92,63,42,.12)",
+            preview_card_shadow: "0 18px 52px rgba(94,60,37,.1)",
+            page_bg: "#f7efe4",
+            surface_bg: "#fffaf3",
+            surface_border: "rgba(92,63,42,.12)",
+            surface_shadow: "0 16px 40px rgba(94,60,37,.08)",
+            surface_radius: "0px",
+            image_radius: "0px",
+            text: "#2d2218",
+            muted: "#7a6a5a",
+            accent: "#8e5a35",
+            heading_font: "\"Source Han Serif SC\",\"Noto Serif SC\",\"Songti SC\",serif",
+            body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+        },
+        RichpostThemePreset {
+            id: "soft-pastel",
+            label: "柔雾奶油",
+            description: "浅粉奶油底，适合轻内容和生活方式图文。",
+            shell_bg: "linear-gradient(180deg,#fff6f3 0%,#f6ebe7 100%)",
+            preview_card_bg: "rgba(255,248,246,.88)",
+            preview_card_border: "rgba(145,96,92,.12)",
+            preview_card_shadow: "0 18px 48px rgba(158,110,102,.08)",
+            page_bg: "#fff8f5",
+            surface_bg: "#fffdfc",
+            surface_border: "rgba(145,96,92,.12)",
+            surface_shadow: "0 16px 38px rgba(158,110,102,.08)",
+            surface_radius: "0px",
+            image_radius: "0px",
+            text: "#4a342f",
+            muted: "#8f7068",
+            accent: "#d68074",
+            heading_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+            body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+        },
+        RichpostThemePreset {
+            id: "mint-notebook",
+            label: "薄荷手帐",
+            description: "清淡绿色调，更适合教程、方法和清单型图文。",
+            shell_bg: "linear-gradient(180deg,#f4fbf6 0%,#e7f2ea 100%)",
+            preview_card_bg: "rgba(247,252,248,.86)",
+            preview_card_border: "rgba(60,105,78,.12)",
+            preview_card_shadow: "0 18px 46px rgba(54,96,72,.08)",
+            page_bg: "#f4fbf6",
+            surface_bg: "#fbfffc",
+            surface_border: "rgba(60,105,78,.12)",
+            surface_shadow: "0 16px 38px rgba(54,96,72,.08)",
+            surface_radius: "0px",
+            image_radius: "0px",
+            text: "#1f3428",
+            muted: "#5d7c6b",
+            accent: "#2e7d59",
+            heading_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+            body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+        },
+        RichpostThemePreset {
+            id: "midnight-glow",
+            label: "夜色荧幕",
+            description: "深色主题，适合情绪化或视觉感更强的图文稿。",
+            shell_bg: "linear-gradient(180deg,#181818 0%,#101010 100%)",
+            preview_card_bg: "rgba(25,25,25,.9)",
+            preview_card_border: "rgba(255,255,255,.1)",
+            preview_card_shadow: "0 20px 60px rgba(0,0,0,.32)",
+            page_bg: "#101010",
+            surface_bg: "#1a1a1a",
+            surface_border: "rgba(255,255,255,.1)",
+            surface_shadow: "0 18px 44px rgba(0,0,0,.28)",
+            surface_radius: "0px",
+            image_radius: "0px",
+            text: "#f5efe7",
+            muted: "#cabfb5",
+            accent: "#f3c87a",
+            heading_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+            body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+        },
+    ]
+}
+
+fn longform_layout_preset_catalog() -> &'static [LongformLayoutPreset] {
+    &[
+        LongformLayoutPreset {
+            id: "clean-reading",
+            label: "清朗阅读",
+            description: "简洁阅读页，标题清楚，正文克制，适合大多数长文稿件。",
+            surface_bg: "#ffffff",
+            text: "#171717",
+            accent: "#171717",
+            layout_instructions: "采用清晰、克制、稳定的长文阅读页。可以有导语区、章节分隔和轻量强调，但不要花哨。正文默认单栏，只有在局部信息块确实需要时才做双栏。",
+            wechat_instructions: "转成适合公众号正文的清朗单栏版式。标题、导语、引用层级明确，段落宽度和留白稳定，不要做真正多栏正文。",
+        },
+        LongformLayoutPreset {
+            id: "editorial-columns",
+            label: "杂志分栏",
+            description: "更强的版面感，适合专题、评论和叙事型长文。",
+            surface_bg: "#fbf7f0",
+            text: "#241d18",
+            accent: "#8c5a34",
+            layout_instructions: "采用偏杂志化的长文母版。允许在 layout.html 中使用双栏正文、跨栏章节标题、导语卡片和图片穿插，但阅读仍要稳定，不要做网页导航。",
+            wechat_instructions: "保留杂志感的气质，但必须适配公众号单栏正文。可以用大标题、导语卡片、章节分隔和图片穿插，不要保留真实双栏排版。",
+        },
+        LongformLayoutPreset {
+            id: "serif-notes",
+            label: "衬线笔记",
+            description: "偏文稿和随笔感，适合观点、读书、散文类长文。",
+            surface_bg: "#f8f3ea",
+            text: "#2e261f",
+            accent: "#7a5636",
+            layout_instructions: "采用偏文稿和随笔感的长文版式。标题可以用衬线感更强的层级，正文节奏舒展，留白更宽，强调阅读沉浸感。",
+            wechat_instructions: "保持文稿和随笔气质，但仍按公众号单栏阅读页输出。可以强化标题、引文和章节间距，不要出现多栏正文或复杂浮动布局。",
+        },
+        LongformLayoutPreset {
+            id: "report-brief",
+            label: "信息简报",
+            description: "更适合方法、复盘、知识整理和说明型长文。",
+            surface_bg: "#f5f8fc",
+            text: "#1d2733",
+            accent: "#1f5fa6",
+            layout_instructions: "采用更偏信息简报的长文母版。适合清晰的小标题、摘要框、清单、引用和图文说明。layout.html 可以局部使用两栏信息区，但正文主链路仍以易读为先。",
+            wechat_instructions: "把信息简报风格转成公众号友好的单栏信息阅读页。摘要框、清单、提示块可以保留，但正文保持单栏，不做报表式分栏。",
+        },
+    ]
+}
+
+fn richpost_theme_preset(theme_id: &str) -> &'static RichpostThemePreset {
+    richpost_theme_catalog()
+        .iter()
+        .find(|theme| theme.id == theme_id.trim())
+        .unwrap_or(&richpost_theme_catalog()[0])
+}
+
+fn richpost_theme_from_manifest(manifest: &Value) -> &'static RichpostThemePreset {
+    manifest
+        .get("richpostThemeId")
+        .and_then(Value::as_str)
+        .map(richpost_theme_preset)
+        .unwrap_or(&richpost_theme_catalog()[0])
+}
+
+fn longform_layout_preset(preset_id: &str) -> &'static LongformLayoutPreset {
+    longform_layout_preset_catalog()
+        .iter()
+        .find(|preset| preset.id == preset_id.trim())
+        .unwrap_or(&longform_layout_preset_catalog()[0])
+}
+
+fn longform_layout_preset_from_manifest(manifest: &Value) -> &'static LongformLayoutPreset {
+    manifest
+        .get("longformLayoutPresetId")
+        .and_then(Value::as_str)
+        .map(longform_layout_preset)
+        .unwrap_or(&longform_layout_preset_catalog()[0])
+}
+
+pub(crate) fn richpost_theme_catalog_value() -> Value {
+    json!(richpost_theme_catalog()
+        .iter()
+        .map(|theme| {
+            json!({
+                "id": theme.id,
+                "label": theme.label,
+                "description": theme.description,
+                "surfaceColor": theme.surface_bg,
+                "textColor": theme.text,
+                "accentColor": theme.accent,
+                "headingFont": theme.heading_font,
+                "bodyFont": theme.body_font
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+pub(crate) fn richpost_theme_state_value(manifest: &Value) -> Value {
+    let theme = richpost_theme_from_manifest(manifest);
+    json!({
+        "id": theme.id,
+        "label": theme.label,
+        "description": theme.description
+    })
+}
+
+pub(crate) fn longform_layout_preset_catalog_value() -> Value {
+    json!(longform_layout_preset_catalog()
+        .iter()
+        .map(|preset| {
+            json!({
+                "id": preset.id,
+                "label": preset.label,
+                "description": preset.description,
+                "surfaceColor": preset.surface_bg,
+                "textColor": preset.text,
+                "accentColor": preset.accent
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+pub(crate) fn longform_layout_preset_state_value(manifest: &Value) -> Value {
+    let preset = longform_layout_preset_from_manifest(manifest);
+    json!({
+        "id": preset.id,
+        "label": preset.label,
+        "description": preset.description
+    })
+}
+
+fn package_block_is_page_break(kind: &str) -> bool {
+    kind == "page-break"
+}
+
+fn normalize_manuscript_title_candidate(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_was_space = false;
+    for ch in value.trim().chars() {
+        let mapped = if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            '-'
+        } else {
+            ch
+        };
+        if mapped.is_whitespace() {
+            if !last_was_space {
+                normalized.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+        normalized.push(mapped);
+        last_was_space = false;
+    }
+    normalized.trim().to_string()
+}
+
+fn is_untitled_manuscript_label(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.is_empty() || normalized == "未命名" || normalized.starts_with("untitled-")
+}
+
+fn is_auto_generated_manuscript_stem(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && (trimmed.chars().all(|ch| ch.is_ascii_digit())
+            || trimmed.eq_ignore_ascii_case("untitled")
+            || trimmed.to_ascii_lowercase().starts_with("untitled-"))
+}
+
+fn first_markdown_heading_text(content: &str) -> Option<String> {
+    let normalized = strip_markdown_frontmatter(content).replace("\r\n", "\n");
+    normalized
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find_map(|line| parse_markdown_heading(line).map(|(_, text)| text))
+        .map(|text| normalize_manuscript_title_candidate(&text))
+        .filter(|text| !text.is_empty())
+}
+
+fn build_manuscript_renamed_relative_path(
+    current_relative: &str,
+    current_file_name: &str,
+    next_stem: &str,
+) -> String {
+    let parent_rel = normalize_relative_path(
+        current_relative
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or(""),
+    );
+    let mut target_relative = join_relative(&parent_rel, next_stem);
+    if !target_relative.contains('.') {
+        if current_file_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
+            target_relative = format!(
+                "{}{}",
+                normalize_relative_path(&target_relative),
+                ARTICLE_DRAFT_EXTENSION
+            );
+        } else if current_file_name.ends_with(POST_DRAFT_EXTENSION) {
+            target_relative = format!(
+                "{}{}",
+                normalize_relative_path(&target_relative),
+                POST_DRAFT_EXTENSION
+            );
+        } else if current_file_name.ends_with(VIDEO_DRAFT_EXTENSION) {
+            target_relative = format!(
+                "{}{}",
+                normalize_relative_path(&target_relative),
+                VIDEO_DRAFT_EXTENSION
+            );
+        } else if current_file_name.ends_with(AUDIO_DRAFT_EXTENSION) {
+            target_relative = format!(
+                "{}{}",
+                normalize_relative_path(&target_relative),
+                AUDIO_DRAFT_EXTENSION
+            );
+        } else {
+            target_relative = ensure_markdown_extension(&target_relative);
+        }
+    } else {
+        target_relative = normalize_relative_path(&target_relative);
+    }
+    target_relative
+}
+
+fn choose_auto_named_manuscript_relative(
+    state: &State<'_, AppState>,
+    current_relative: &str,
+    current_file_name: &str,
+    next_title: &str,
+) -> Result<String, String> {
+    let base_title = normalize_manuscript_title_candidate(next_title);
+    if base_title.is_empty() {
+        return Ok(normalize_relative_path(current_relative));
+    }
+    let current_normalized = normalize_relative_path(current_relative);
+    let mut attempt = 0usize;
+    loop {
+        let candidate_title = if attempt == 0 {
+            base_title.clone()
+        } else {
+            format!("{}-{}", base_title, attempt + 1)
+        };
+        let candidate_relative = build_manuscript_renamed_relative_path(
+            &current_normalized,
+            current_file_name,
+            &candidate_title,
+        );
+        if candidate_relative == current_normalized {
+            return Ok(candidate_relative);
+        }
+        let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
+        if !candidate_path.exists() {
+            return Ok(candidate_relative);
+        }
+        attempt += 1;
+    }
 }
 
 fn ensure_export_extension(path: std::path::PathBuf, extension: &str) -> std::path::PathBuf {
@@ -514,14 +914,6 @@ fn build_remotion_best_practices_prompt_patch(
     sections.join("\n\n")
 }
 
-fn supported_package_html_targets(package_kind: &str) -> Vec<&'static str> {
-    match package_kind {
-        "article" => vec![PACKAGE_HTML_LAYOUT_TARGET, PACKAGE_HTML_WECHAT_TARGET],
-        "post" => vec![PACKAGE_HTML_LAYOUT_TARGET],
-        _ => Vec::new(),
-    }
-}
-
 fn package_html_file_path(package_path: &std::path::Path, target: &str) -> std::path::PathBuf {
     if target == PACKAGE_HTML_WECHAT_TARGET {
         package_wechat_html_path(package_path)
@@ -591,12 +983,33 @@ fn parse_package_markdown_blocks(content: &str) -> Vec<ParsedPackageBlock> {
     let normalized = strip_markdown_frontmatter(content).replace("\r\n", "\n");
     let mut blocks = Vec::<ParsedPackageBlock>::new();
     let mut paragraph_lines = Vec::<String>::new();
+    let mut blank_run = 0usize;
     for line in normalized.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || matches!(trimmed, "---" | "***" | "___") {
+        if trimmed.is_empty() {
             push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
+            blank_run += 1;
+            if blank_run >= 3
+                && !blocks
+                    .last()
+                    .map(|block| package_block_is_page_break(&block.kind))
+                    .unwrap_or(false)
+            {
+                blocks.push(ParsedPackageBlock {
+                    kind: "page-break".to_string(),
+                    level: None,
+                    text: String::new(),
+                });
+                blank_run = 0;
+            }
             continue;
         }
+        if matches!(trimmed, "---" | "***" | "___") {
+            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
+            blank_run = 0;
+            continue;
+        }
+        blank_run = 0;
         if let Some((level, text)) = parse_markdown_heading(trimmed) {
             push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
             blocks.push(ParsedPackageBlock {
@@ -721,9 +1134,64 @@ fn compute_exact_package_block_matches(
     matches
 }
 
+fn compute_text_only_package_block_matches(
+    previous: &[PackageContentBlock],
+    next: &[ParsedPackageBlock],
+    used_previous: &BTreeSet<usize>,
+    assigned_ids: &[Option<String>],
+) -> Vec<(usize, usize)> {
+    let mut matches = Vec::<(usize, usize)>::new();
+    let mut claimed_previous = used_previous.clone();
+    for (next_index, next_block) in next.iter().enumerate() {
+        if assigned_ids
+            .get(next_index)
+            .and_then(|value| value.as_ref())
+            .is_some()
+        {
+            continue;
+        }
+        let next_text_key = normalize_package_block_text(&next_block.text);
+        if next_text_key.is_empty() {
+            continue;
+        }
+        let best_previous = previous
+            .iter()
+            .enumerate()
+            .filter(|(previous_index, previous_block)| {
+                !claimed_previous.contains(previous_index)
+                    && normalize_package_block_text(&previous_block.text) == next_text_key
+            })
+            .min_by_key(|(previous_index, previous_block)| {
+                let kind_penalty = if previous_block.kind == next_block.kind {
+                    0usize
+                } else {
+                    1usize
+                };
+                let level_penalty = if previous_block.level == next_block.level {
+                    0usize
+                } else {
+                    1usize
+                };
+                (
+                    kind_penalty,
+                    level_penalty,
+                    previous_index.abs_diff(next_index),
+                )
+            })
+            .map(|(previous_index, _)| previous_index);
+        if let Some(previous_index) = best_previous {
+            claimed_previous.insert(previous_index);
+            matches.push((previous_index, next_index));
+        }
+    }
+    matches
+}
+
 fn package_block_id_prefix(kind: &str, level: Option<u8>) -> String {
     if kind == "heading" {
         format!("h{}", level.unwrap_or(2))
+    } else if package_block_is_page_break(kind) {
+        "pb".to_string()
     } else {
         "p".to_string()
     }
@@ -772,6 +1240,16 @@ fn build_package_content_blocks(
     }
 
     for (previous_index, next_index) in exact_matches {
+        assigned_ids[next_index] = Some(previous_blocks[previous_index].id.clone());
+        used_previous.insert(previous_index);
+    }
+
+    for (previous_index, next_index) in compute_text_only_package_block_matches(
+        &previous_blocks,
+        &parsed_blocks,
+        &used_previous,
+        &assigned_ids,
+    ) {
         assigned_ids[next_index] = Some(previous_blocks[previous_index].id.clone());
         used_previous.insert(previous_index);
     }
@@ -848,6 +1326,9 @@ fn render_package_slot_text(value: &str) -> String {
 }
 
 fn render_package_block_fragment(block: &PackageContentBlock) -> String {
+    if package_block_is_page_break(&block.kind) {
+        return String::new();
+    }
     let content = render_package_slot_text(&block.text);
     if block.kind == "heading" {
         let level = block.level.unwrap_or(2).clamp(1, 6);
@@ -857,53 +1338,6 @@ fn render_package_block_fragment(block: &PackageContentBlock) -> String {
     } else {
         format!("<section class=\"rb-block rb-paragraph\"><p>{content}</p></section>")
     }
-}
-
-fn inject_package_html_tail(template: &str, tail_html: &str) -> String {
-    if tail_html.trim().is_empty() {
-        return template.to_string();
-    }
-    let lower = template.to_ascii_lowercase();
-    for marker in ["</main>", "</article>", "</body>"] {
-        if let Some(index) = lower.rfind(marker) {
-            let mut next = String::with_capacity(template.len() + tail_html.len());
-            next.push_str(&template[..index]);
-            next.push_str(tail_html);
-            next.push_str(&template[index..]);
-            return next;
-        }
-    }
-    format!("{template}{tail_html}")
-}
-
-fn asset_slot_url(asset: Option<&PackageBoundAsset>) -> String {
-    asset.map(|item| escape_html(&item.url)).unwrap_or_default()
-}
-
-fn render_package_asset_figure_html(asset: &PackageBoundAsset, class_name: &str) -> String {
-    format!(
-        "<figure class=\"{class_name}\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
-        escape_html(&asset.url),
-        escape_html(&asset.title)
-    )
-}
-
-fn render_package_asset_gallery_html(images: &[PackageBoundAsset]) -> String {
-    if images.is_empty() {
-        return String::new();
-    }
-    let items = images
-        .iter()
-        .map(|asset| {
-            format!(
-                "<figure class=\"rb-gallery-item\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
-                escape_html(&asset.url),
-                escape_html(&asset.title)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    format!("<section class=\"rb-gallery\">{items}</section>")
 }
 
 fn collect_package_bound_assets(
@@ -941,6 +1375,7 @@ fn collect_package_bound_assets(
             let asset = store.media_assets.iter().find(|item| item.id == asset_id)?;
             let url = asset_prompt_url(asset)?;
             Some(PackageBoundAsset {
+                id: asset.id.clone(),
                 title: asset
                     .title
                     .as_deref()
@@ -949,9 +1384,16 @@ fn collect_package_bound_assets(
                     .unwrap_or(asset.id.as_str())
                     .to_string(),
                 url,
+                role: "image".to_string(),
             })
         };
-        let cover = cover_asset_id.as_deref().and_then(resolve_asset);
+        let cover = cover_asset_id
+            .as_deref()
+            .and_then(resolve_asset)
+            .map(|mut asset| {
+                asset.role = "cover".to_string();
+                asset
+            });
         let images = image_asset_ids
             .iter()
             .filter_map(|asset_id| resolve_asset(asset_id))
@@ -960,234 +1402,781 @@ fn collect_package_bound_assets(
     })
 }
 
-fn build_package_asset_slot_map(
-    state: Option<&State<'_, AppState>>,
-    package_path: &std::path::Path,
-) -> Result<BTreeMap<String, String>, String> {
-    let (cover_asset, image_assets) = collect_package_bound_assets(state, package_path)?;
-    let mut slots = BTreeMap::<String, String>::new();
-    slots.insert(
-        "cover_url".to_string(),
-        asset_slot_url(cover_asset.as_ref()),
-    );
-    slots.insert(
-        "cover_figure".to_string(),
-        cover_asset
-            .as_ref()
-            .map(|asset| render_package_asset_figure_html(asset, "rb-cover"))
-            .unwrap_or_default(),
-    );
-    slots.insert(
-        "image_gallery".to_string(),
-        render_package_asset_gallery_html(&image_assets),
-    );
-    slots.insert("image_count".to_string(), image_assets.len().to_string());
-    for (index, asset) in image_assets.iter().enumerate() {
-        let slot_index = index + 1;
-        slots.insert(format!("image_{}_url", slot_index), escape_html(&asset.url));
-        slots.insert(
-            format!("image_{}_alt", slot_index),
-            escape_html(&asset.title),
-        );
-    }
-    Ok(slots)
+fn richpost_template_catalog() -> &'static [&'static str] {
+    &[
+        "cover",
+        "text-stack",
+        "text-image",
+        "image-focus",
+        "quote",
+        "ending",
+    ]
 }
 
-fn default_package_html_template(package_kind: &str, target: &str) -> String {
-    match (package_kind, target) {
-        ("article", PACKAGE_HTML_WECHAT_TARGET) => r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{slot:document_title}}</title>
-  <style>
-    :root { color-scheme: light; --bg:#f5f4ef; --paper:#fffdf8; --text:#1f1a16; --muted:#7b6f63; --line:#e6ddd2; --accent:#8b5e3c; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:linear-gradient(180deg,#f7f4ed 0%,#efe8dc 100%); color:var(--text); font-family:"PingFang SC","Noto Serif SC","Source Han Serif SC",serif; }
-    .page { max-width:760px; margin:0 auto; padding:32px 18px 48px; }
-    .card { background:var(--paper); border:1px solid rgba(139,94,60,.12); border-radius:28px; overflow:hidden; box-shadow:0 20px 60px rgba(79,50,28,.08); }
-    .hero { padding:28px 28px 16px; }
-    .hero h1 { margin:0; font-size:30px; line-height:1.28; letter-spacing:.02em; }
-    .hero p { margin:12px 0 0; color:var(--muted); font-size:14px; }
-    .rb-cover img, .rb-gallery img { display:block; width:100%; height:auto; }
-    .rb-cover { margin:0; border-bottom:1px solid var(--line); }
-    .content { padding:28px; }
-    .rb-block + .rb-block { margin-top:18px; }
-    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 { margin:0; line-height:1.45; }
-    .rb-heading h2 { font-size:24px; margin-top:8px; }
-    .rb-heading h3 { font-size:20px; }
-    .rb-paragraph p { margin:0; font-size:17px; line-height:1.9; color:#2a241f; }
-    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:24px 0; }
-    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
-    @media (max-width: 640px) {
-      .hero, .content { padding:22px; }
-      .hero h1 { font-size:26px; }
-      .rb-paragraph p { font-size:16px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <article class="card">
-      {{asset:cover_figure}}
-      <header class="hero">
-        <h1>{{slot:document_title}}</h1>
-        <p>自动从 Markdown 正文渲染</p>
-      </header>
-      <main class="content">
-        {{slot:content_all}}
-        {{asset:image_gallery}}
-      </main>
-    </article>
-  </div>
-</body>
-</html>"#.to_string(),
-        ("post", _) => r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{slot:document_title}}</title>
-  <style>
-    :root { color-scheme: light; --bg:#fbf8f2; --card:#ffffff; --text:#231c17; --muted:#857160; --line:#efe4d5; --accent:#d87f4d; }
-    * { box-sizing: border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#fff4ea 0%,#fbf8f2 48%,#f5efe6 100%); color:var(--text); font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
-    .shell { max-width:560px; margin:0 auto; padding:24px 16px 40px; }
-    .note { background:rgba(255,255,255,.92); border:1px solid rgba(216,127,77,.14); border-radius:28px; overflow:hidden; box-shadow:0 18px 48px rgba(111,68,40,.12); backdrop-filter:blur(12px); }
-    .cover img, .rb-gallery img { display:block; width:100%; height:auto; }
-    .cover { margin:0; }
-    .header { padding:22px 22px 10px; }
-    .header h1 { margin:0; font-size:28px; line-height:1.26; }
-    .content { padding:8px 22px 26px; }
-    .rb-block + .rb-block { margin-top:14px; }
-    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 { margin:0; line-height:1.4; }
-    .rb-heading h2 { font-size:21px; }
-    .rb-heading h3 { font-size:18px; }
-    .rb-paragraph p { margin:0; font-size:16px; line-height:1.86; color:#342a22; }
-    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:18px 0 20px; }
-    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <article class="note">
-      <figure class="cover">{{asset:cover_figure}}</figure>
-      <header class="header">
-        <h1>{{slot:document_title}}</h1>
-      </header>
-      <main class="content">
-        {{asset:image_gallery}}
-        {{slot:content_all}}
-      </main>
-    </article>
-  </div>
-</body>
-</html>"#.to_string(),
-        _ => r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{slot:document_title}}</title>
-  <style>
-    :root { color-scheme: light; --bg:#f4f1ec; --paper:#fffdfa; --text:#221d18; --muted:#75685a; --line:#eadfd2; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family:"PingFang SC","Noto Serif SC","Source Han Serif SC",serif; }
-    .page { max-width:1024px; margin:0 auto; padding:40px 20px 56px; }
-    .paper { background:var(--paper); border:1px solid rgba(34,29,24,.08); border-radius:28px; padding:36px; box-shadow:0 20px 60px rgba(64,47,36,.08); }
-    .paper h1 { margin:0 0 28px; font-size:40px; line-height:1.18; }
-    .rb-block + .rb-block { margin-top:20px; }
-    .rb-heading h2 { margin:0; font-size:28px; line-height:1.4; }
-    .rb-heading h3 { margin:0; font-size:22px; line-height:1.45; }
-    .rb-paragraph p { margin:0; font-size:18px; line-height:1.95; color:#2f2822; }
-    .rb-cover img, .rb-gallery img { display:block; width:100%; height:auto; }
-    .rb-cover { margin:0 0 28px; overflow:hidden; border-radius:20px; }
-    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:28px 0; }
-    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
-    @media (max-width: 760px) {
-      .page { padding:20px 14px 32px; }
-      .paper { padding:22px; }
-      .paper h1 { font-size:30px; margin-bottom:22px; }
-      .rb-paragraph p { font-size:16px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <article class="paper">
-      {{asset:cover_figure}}
-      <h1>{{slot:document_title}}</h1>
-      {{slot:content_all}}
-      {{asset:image_gallery}}
-    </article>
-  </div>
-</body>
-</html>"#.to_string(),
+fn normalize_richpost_template(value: &str) -> &'static str {
+    match value.trim() {
+        "cover" => "cover",
+        "text-image" => "text-image",
+        "image-focus" => "image-focus",
+        "quote" => "quote",
+        "ending" => "ending",
+        _ => "text-stack",
     }
 }
 
-fn ensure_package_html_template_file(
-    package_path: &std::path::Path,
-    package_kind: &str,
-    target: &str,
-) -> Result<(), String> {
-    let path = package_html_template_path(package_path, target);
-    let should_seed = fs::metadata(&path)
-        .map(|metadata| metadata.len() == 0)
-        .unwrap_or(true);
-    if should_seed {
-        write_text_file(&path, &default_package_html_template(package_kind, target))?;
-    }
-    Ok(())
+fn richpost_block_ids(blocks: &[PackageContentBlock]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|block| !package_block_is_page_break(&block.kind))
+        .map(|block| block.id.clone())
+        .collect::<Vec<_>>()
 }
 
-fn render_package_html_template(
-    template: &str,
+fn richpost_block_segments(blocks: &[PackageContentBlock]) -> Vec<Vec<PackageContentBlock>> {
+    let mut segments = Vec::<Vec<PackageContentBlock>>::new();
+    let mut current = Vec::<PackageContentBlock>::new();
+    for block in blocks {
+        if package_block_is_page_break(&block.kind) {
+            if !current.is_empty() {
+                segments.push(current);
+                current = Vec::new();
+            }
+            continue;
+        }
+        current.push(block.clone());
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+fn richpost_asset_records(
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+) -> Vec<PackageBoundAsset> {
+    let mut items = Vec::<PackageBoundAsset>::new();
+    if let Some(asset) = cover_asset {
+        items.push(asset.clone());
+    }
+    items.extend(image_assets.iter().cloned());
+    items
+}
+
+fn richpost_asset_outline_prompt(
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+) -> String {
+    let mut lines = Vec::<String>::new();
+    if let Some(asset) = cover_asset {
+        lines.push(format!(
+            "- id={} | role=cover | title={} | url={}",
+            asset.id, asset.title, asset.url
+        ));
+    }
+    if image_assets.is_empty() {
+        lines.push("- 无额外配图".to_string());
+    } else {
+        lines.extend(image_assets.iter().enumerate().map(|(index, asset)| {
+            format!(
+                "- id={} | role=image | imageIndex={} | title={} | url={}",
+                asset.id,
+                index + 1,
+                asset.title,
+                asset.url
+            )
+        }));
+    }
+    lines.join("\n")
+}
+
+fn richpost_chunk_default_block_ids(block_ids: &[String], chunk_size: usize) -> Vec<Vec<String>> {
+    if block_ids.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut chunks = Vec::<Vec<String>>::new();
+    let mut index = 0usize;
+    while index < block_ids.len() {
+        let end = (index + chunk_size).min(block_ids.len());
+        chunks.push(block_ids[index..end].to_vec());
+        index = end;
+    }
+    chunks
+}
+
+fn default_richpost_page_plan(
     title: &str,
     blocks: &[PackageContentBlock],
-    asset_slots: &BTreeMap<String, String>,
-) -> String {
-    let mut rendered = template.to_string();
-    let uses_content_all = rendered.contains("{{slot:content_all}}");
-    let all_content = blocks
-        .iter()
-        .map(render_package_block_fragment)
-        .collect::<Vec<_>>()
-        .join("");
-    rendered = rendered.replace("{{slot:document_title}}", &render_package_slot_text(title));
-    rendered = rendered.replace("{{slot:content_all}}", &all_content);
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+    source: &str,
+) -> Value {
+    let mut segments = richpost_block_segments(blocks);
+    let mut pages = Vec::<Value>::new();
+    let mut next_image_index = 0usize;
 
-    let mut consumed_slots = BTreeSet::<String>::new();
-    for block in blocks {
-        let token = format!("{{{{slot:{}}}}}", block.slot);
-        if rendered.contains(&token) {
-            consumed_slots.insert(block.slot.clone());
-            rendered = rendered.replace(&token, &render_package_slot_text(&block.text));
+    if let Some(first_segment) = segments.first_mut() {
+        let cover_blocks = first_segment
+            .iter()
+            .take(2)
+            .map(|block| block.id.clone())
+            .collect::<Vec<_>>();
+        first_segment.drain(0..cover_blocks.len());
+        let mut asset_ids = Vec::<Value>::new();
+        if let Some(asset) = cover_asset {
+            asset_ids.push(json!(asset.id.clone()));
+        } else if let Some(asset) = image_assets.first() {
+            asset_ids.push(json!(asset.id.clone()));
+            next_image_index = 1;
+        }
+        pages.push(json!({
+            "template": "cover",
+            "blockIds": cover_blocks,
+            "assetIds": asset_ids
+        }));
+    }
+
+    let segment_chunks = segments
+        .iter()
+        .flat_map(|segment| {
+            let block_ids = segment
+                .iter()
+                .map(|block| block.id.clone())
+                .collect::<Vec<_>>();
+            richpost_chunk_default_block_ids(&block_ids, 3)
+        })
+        .filter(|chunk| !chunk.is_empty())
+        .collect::<Vec<_>>();
+    let last_chunk_index = segment_chunks.len().saturating_sub(1);
+    for (chunk_index, chunk) in segment_chunks.into_iter().enumerate() {
+        let is_last = chunk_index == last_chunk_index;
+        let template = if is_last && chunk.len() <= 2 {
+            "ending"
+        } else if next_image_index < image_assets.len() {
+            if chunk_index % 2 == 0 {
+                "text-image"
+            } else {
+                "image-focus"
+            }
+        } else {
+            "text-stack"
+        };
+        let asset_ids = if matches!(template, "text-image" | "image-focus")
+            && next_image_index < image_assets.len()
+        {
+            let asset_id = image_assets[next_image_index].id.clone();
+            next_image_index += 1;
+            vec![json!(asset_id)]
+        } else {
+            Vec::new()
+        };
+        pages.push(json!({
+            "template": template,
+            "blockIds": chunk,
+            "assetIds": asset_ids
+        }));
+    }
+
+    if pages.is_empty() {
+        pages.push(json!({
+            "template": "cover",
+            "blockIds": [],
+            "assetIds": cover_asset.map(|asset| vec![json!(asset.id.clone())]).unwrap_or_default()
+        }));
+    }
+
+    let normalized_pages = pages
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut page)| {
+            if let Some(object) = page.as_object_mut() {
+                object.insert("id".to_string(), json!(format!("page-{:03}", index + 1)));
+            }
+            page
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "version": 1,
+        "title": title,
+        "generatedAt": now_i64(),
+        "source": source,
+        "pageCount": normalized_pages.len(),
+        "pages": normalized_pages
+    })
+}
+
+fn normalize_richpost_page_plan(
+    raw: &Value,
+    title: &str,
+    blocks: &[PackageContentBlock],
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+    source: &str,
+) -> Value {
+    let block_ids = richpost_block_ids(blocks);
+    let valid_block_ids = block_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let valid_asset_ids = richpost_asset_records(cover_asset, image_assets)
+        .iter()
+        .map(|asset| asset.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut assigned_block_ids = BTreeSet::<String>::new();
+    let mut normalized_pages = Vec::<Value>::new();
+
+    if let Some(pages) = raw.get("pages").and_then(Value::as_array) {
+        for page in pages {
+            let Some(object) = page.as_object() else {
+                continue;
+            };
+            let template = normalize_richpost_template(
+                object
+                    .get("template")
+                    .and_then(Value::as_str)
+                    .unwrap_or("text-stack"),
+            );
+            let block_ids = object
+                .get("blockIds")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| valid_block_ids.contains(*value))
+                        .filter(|value| assigned_block_ids.insert((*value).to_string()))
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let asset_ids = object
+                .get("assetIds")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| valid_asset_ids.contains(*value))
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if block_ids.is_empty() && asset_ids.is_empty() {
+                continue;
+            }
+            normalized_pages.push(json!({
+                "template": template,
+                "blockIds": block_ids,
+                "assetIds": asset_ids
+            }));
         }
     }
 
-    let tail_html = if uses_content_all {
-        String::new()
-    } else {
-        blocks
-            .iter()
-            .filter(|block| !consumed_slots.contains(&block.slot))
-            .map(render_package_block_fragment)
-            .collect::<Vec<_>>()
-            .join("")
+    let remaining_block_ids = block_ids
+        .into_iter()
+        .filter(|block_id| !assigned_block_ids.contains(block_id))
+        .collect::<Vec<_>>();
+    let already_used_assets = normalized_pages
+        .iter()
+        .filter_map(|page| page.get("assetIds").and_then(Value::as_array))
+        .flat_map(|items| items.iter().filter_map(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let remaining_image_assets = image_assets
+        .iter()
+        .filter(|asset| !already_used_assets.contains(&asset.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !remaining_block_ids.is_empty() {
+        let fallback = default_richpost_page_plan(
+            title,
+            &blocks
+                .iter()
+                .filter(|block| remaining_block_ids.contains(&block.id))
+                .cloned()
+                .collect::<Vec<_>>(),
+            None,
+            &remaining_image_assets,
+            "system-overflow",
+        );
+        if let Some(pages) = fallback.get("pages").and_then(Value::as_array) {
+            normalized_pages.extend(pages.iter().cloned().map(|page| {
+                json!({
+                    "template": page.get("template").cloned().unwrap_or_else(|| json!("text-stack")),
+                    "blockIds": page.get("blockIds").cloned().unwrap_or_else(|| json!([])),
+                    "assetIds": page.get("assetIds").cloned().unwrap_or_else(|| json!([]))
+                })
+            }));
+        }
+    }
+
+    if normalized_pages.is_empty() {
+        return default_richpost_page_plan(title, blocks, cover_asset, image_assets, source);
+    }
+
+    let pages = normalized_pages
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut page)| {
+            if let Some(object) = page.as_object_mut() {
+                object.insert("id".to_string(), json!(format!("page-{:03}", index + 1)));
+            }
+            page
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "version": 1,
+        "title": title,
+        "generatedAt": now_i64(),
+        "source": source,
+        "pageCount": pages.len(),
+        "pages": pages
+    })
+}
+
+fn richpost_page_plan_outline(blocks: &[PackageContentBlock]) -> String {
+    if blocks.is_empty() {
+        return "无正文块".to_string();
+    }
+    blocks
+        .iter()
+        .map(|block| {
+            if package_block_is_page_break(&block.kind) {
+                return format!(
+                    "- id={} | type=page-break | 由连续三个空行触发，表示这里必须换页",
+                    block.id
+                );
+            }
+            let preview = normalize_package_block_text(&block.text)
+                .chars()
+                .take(36)
+                .collect::<String>();
+            format!(
+                "- id={} | type={}{} | chars={} | preview={}",
+                block.id,
+                block.kind,
+                block
+                    .level
+                    .map(|level| format!(" h{level}"))
+                    .unwrap_or_default(),
+                block.char_count,
+                preview
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn richpost_page_blocks_html(
+    page: &Value,
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+) -> String {
+    page.get("blockIds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|block_id| blocks_by_id.get(block_id))
+                .map(render_package_block_fragment)
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+fn richpost_page_asset_html(
+    page: &Value,
+    assets_by_id: &BTreeMap<String, PackageBoundAsset>,
+) -> String {
+    page.get("assetIds")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|asset_id| assets_by_id.get(asset_id))
+                .map(|asset| {
+                    format!(
+                        "<figure class=\"page-asset\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
+                        escape_html(&asset.url),
+                        escape_html(&asset.title)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+fn render_richpost_page_html(
+    title: &str,
+    page: &Value,
+    _page_index: usize,
+    _total_pages: usize,
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    assets_by_id: &BTreeMap<String, PackageBoundAsset>,
+    theme: &RichpostThemePreset,
+) -> String {
+    let template = normalize_richpost_template(
+        page.get("template")
+            .and_then(Value::as_str)
+            .unwrap_or("text-stack"),
+    );
+    let blocks_html = richpost_page_blocks_html(page, blocks_by_id);
+    let asset_html = richpost_page_asset_html(page, assets_by_id);
+    let template_class = match template {
+        "cover" => "tpl-cover",
+        "text-image" => "tpl-text-image",
+        "image-focus" => "tpl-image-focus",
+        "quote" => "tpl-quote",
+        "ending" => "tpl-ending",
+        _ => "tpl-text-stack",
     };
-    let has_tail_slot = rendered.contains("{{slot:content_tail}}");
-    rendered = rendered.replace("{{slot:content_tail}}", &tail_html);
+    let content_html = match template {
+        "cover" => format!("<div class=\"hero\">{}{}</div>", asset_html, blocks_html),
+        "text-image" => format!(
+            "{}<main class=\"page-body\">{}</main>",
+            asset_html,
+            blocks_html
+        ),
+        "image-focus" => format!(
+            "<div class=\"focus-media\">{}</div><div class=\"focus-copy\"><div class=\"focus-card\">{}</div></div>",
+            asset_html,
+            blocks_html
+        ),
+        "quote" => format!(
+            "<main class=\"page-body\">{}{}</main>",
+            asset_html,
+            blocks_html
+        ),
+        "ending" => format!(
+            "<main class=\"page-body\">{}{}</main>",
+            asset_html,
+            blocks_html
+        ),
+        _ => format!(
+            "<main class=\"page-body\">{}{}</main>",
+            asset_html,
+            blocks_html
+        ),
+    };
 
-    for (slot, value) in asset_slots {
-        rendered = rendered.replace(&format!("{{{{asset:{slot}}}}}"), value);
-    }
+    format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{}</title>
+  <style>
+    :root {{
+      --rb-font-scale: 1;
+      --rb-page-bg: {};
+      --rb-surface-bg: {};
+      --rb-surface-border: {};
+      --rb-surface-shadow: {};
+      --rb-surface-radius: {};
+      --rb-image-radius: {};
+      --rb-text: {};
+      --rb-muted: {};
+      --rb-accent: {};
+      --rb-heading-font: {};
+      --rb-body-font: {};
+    }}
+    * {{ box-sizing: border-box; }}
+    html, body {{ margin: 0; width: 100%; min-height: 100%; overflow: hidden; }}
+    body {{
+      min-height: 100vh;
+      background: var(--rb-page-bg);
+      color: var(--rb-text);
+      font-family: var(--rb-body-font);
+    }}
+    .page {{
+      position: relative;
+      width: 100%;
+      min-height: 100vh;
+      aspect-ratio: 3 / 4;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }}
+    .surface {{
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: var(--rb-surface-bg);
+      border: 1px solid var(--rb-surface-border);
+      border-radius: var(--rb-surface-radius);
+      box-shadow: var(--rb-surface-shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }}
+    .surface-inner {{
+      padding: clamp(22px, 5.2vw, 56px);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }}
+    .hero {{
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }}
+    .page-body, .focus-copy, .focus-card {{
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }}
+    .focus-media {{
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }}
+    .page-asset {{
+      margin: 0;
+    }}
+    .page-asset img {{
+      width: 100%;
+      display: block;
+      object-fit: cover;
+      border-radius: var(--rb-image-radius);
+    }}
+    .rb-block + .rb-block {{
+      margin-top: 16px;
+    }}
+    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 {{
+      margin: 0;
+      line-height: 1.38;
+      color: var(--rb-text);
+      font-family: var(--rb-heading-font);
+    }}
+    .rb-heading h1 {{ font-size: calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale)); }}
+    .rb-heading h2 {{ font-size: calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale)); }}
+    .rb-heading h3 {{ font-size: calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale)); }}
+    .rb-heading h4 {{ font-size: calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale)); }}
+    .rb-heading h5 {{ font-size: calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale)); }}
+    .rb-heading h6 {{ font-size: calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale)); }}
+    .rb-paragraph p {{
+      margin: 0;
+      font-size: calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale));
+      line-height: 1.92;
+      color: var(--rb-text);
+      font-family: var(--rb-body-font);
+    }}
+  </style>
+  <script>
+    (() => {{
+      const raw = Number(new URLSearchParams(window.location.search).get('fontScale') || '1');
+      const scale = Number.isFinite(raw) ? Math.min(1.6, Math.max(0.8, raw)) : 1;
+      document.documentElement.style.setProperty('--rb-font-scale', String(scale));
+    }})();
+  </script>
+</head>
+<body class="{template_class}">
+  <section class="page">
+    <article class="surface">
+      <div class="surface-inner">
+        {content_html}
+      </div>
+    </article>
+  </section>
+</body>
+</html>"#,
+        escape_html(title),
+        theme.page_bg,
+        theme.surface_bg,
+        theme.surface_border,
+        theme.surface_shadow,
+        theme.surface_radius,
+        theme.image_radius,
+        theme.text,
+        theme.muted,
+        theme.accent,
+        theme.heading_font,
+        theme.body_font,
+    )
+}
 
-    if !has_tail_slot && !tail_html.trim().is_empty() {
-        rendered = inject_package_html_tail(&rendered, &tail_html);
+fn render_richpost_preview_shell(
+    title: &str,
+    plan: &Value,
+    _package_path: &std::path::Path,
+    theme: &RichpostThemePreset,
+) -> String {
+    let pages = plan
+        .get("pages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let cards = pages
+        .iter()
+        .filter_map(|page| {
+            let page_id = page.get("id").and_then(Value::as_str)?;
+            let label = page.get("label").and_then(Value::as_str).unwrap_or(page_id);
+            Some(format!(
+                "<section class=\"preview-card\"><iframe title=\"{}\" src=\"./pages/{}.html?v={}\" loading=\"lazy\"></iframe></section>",
+                escape_html(label),
+                escape_html(page_id),
+                now_i64()
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg:{};
+      --card:{};
+      --text:{};
+      --muted:{};
+      --line:{};
+      --shadow:{};
+      --heading-font:{};
+      --body-font:{};
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin:0; background:var(--bg); color:var(--text); font-family:var(--body-font); }}
+    .shell {{ max-width: 780px; margin: 0 auto; padding: 28px 18px 48px; }}
+    .pages {{ display:flex; flex-direction:column; gap:20px; }}
+    .preview-card {{ padding:16px; background:var(--card); border:1px solid var(--line); box-shadow:var(--shadow); backdrop-filter: blur(10px); border-radius:0; }}
+    iframe {{ display:block; width:100%; aspect-ratio:3/4; border:0; background:#fff; }}
+  </style>
+  <script>
+    (() => {{
+      const raw = new URLSearchParams(window.location.search).get('fontScale');
+      if (!raw) return;
+      const scale = Number(raw);
+      if (!Number.isFinite(scale)) return;
+      document.addEventListener('DOMContentLoaded', () => {{
+        document.querySelectorAll('iframe').forEach((frame) => {{
+          const src = frame.getAttribute('src');
+          if (!src) return;
+          const separator = src.includes('?') ? '&' : '?';
+          frame.setAttribute('src', `${{src}}${{separator}}fontScale=${{encodeURIComponent(String(scale))}}`);
+        }});
+      }});
+    }})();
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <main class="pages">{}</main>
+  </div>
+</body>
+</html>"#,
+        escape_html(title),
+        theme.shell_bg,
+        theme.preview_card_bg,
+        theme.text,
+        theme.muted,
+        theme.preview_card_border,
+        theme.preview_card_shadow,
+        theme.heading_font,
+        theme.body_font,
+        cards
+    )
+}
+
+fn persist_richpost_pages_from_plan(
+    package_path: &std::path::Path,
+    title: &str,
+    blocks: &[PackageContentBlock],
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+    plan: &Value,
+) -> Result<(), String> {
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    let theme = richpost_theme_from_manifest(&manifest);
+    let pages_dir = package_richpost_pages_dir(package_path);
+    fs::create_dir_all(&pages_dir).map_err(|error| error.to_string())?;
+    let blocks_by_id = blocks
+        .iter()
+        .map(|block| (block.id.clone(), block.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let assets_by_id = richpost_asset_records(cover_asset, image_assets)
+        .into_iter()
+        .map(|asset| (asset.id.clone(), asset))
+        .collect::<BTreeMap<_, _>>();
+    let pages = plan
+        .get("pages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut keep_file_names = BTreeSet::<String>::new();
+    for (index, page) in pages.iter().enumerate() {
+        let Some(page_id) = page.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let html = render_richpost_page_html(
+            title,
+            page,
+            index,
+            pages.len(),
+            &blocks_by_id,
+            &assets_by_id,
+            theme,
+        );
+        let path = package_richpost_page_html_path(package_path, page_id);
+        write_text_file(&path, &html)?;
+        keep_file_names.insert(format!("{page_id}.html"));
     }
-    rendered
+    if let Ok(entries) = fs::read_dir(&pages_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if !keep_file_names.contains(&file_name) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    write_text_file(
+        &package_layout_html_path(package_path),
+        &render_richpost_preview_shell(title, plan, package_path, theme),
+    )?;
+    Ok(())
+}
+
+fn persist_richpost_page_plan(
+    package_path: &std::path::Path,
+    title: &str,
+    blocks: &[PackageContentBlock],
+    cover_asset: Option<&PackageBoundAsset>,
+    image_assets: &[PackageBoundAsset],
+    raw_plan: &Value,
+    source: &str,
+) -> Result<Value, String> {
+    let normalized =
+        normalize_richpost_page_plan(raw_plan, title, blocks, cover_asset, image_assets, source);
+    write_json_value(&package_richpost_page_plan_path(package_path), &normalized)?;
+    persist_richpost_pages_from_plan(
+        package_path,
+        title,
+        blocks,
+        cover_asset,
+        image_assets,
+        &normalized,
+    )?;
+    let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+    }
+    write_json_value(&package_manifest_path(package_path), &manifest)?;
+    get_manuscript_package_state(package_path)
 }
 
 fn package_content_outline_prompt(blocks: &[PackageContentBlock]) -> String {
@@ -1279,26 +2268,34 @@ pub(crate) fn sync_manuscript_package_html_assets(
         &content_map_path,
         &package_content_map_value(package_kind, &title, entry, &blocks),
     )?;
-    let asset_slots = build_package_asset_slot_map(state, package_path)?;
-    let targets = if let Some(target) = target_override {
-        vec![normalize_package_html_target(package_kind, target)?]
-    } else {
-        supported_package_html_targets(package_kind)
-    };
-    for target in targets {
-        ensure_package_html_template_file(package_path, package_kind, target)?;
-        let template_path = package_html_template_path(package_path, target);
-        let template = fs::read_to_string(&template_path)
-            .unwrap_or_else(|_| default_package_html_template(package_kind, target));
-        let html = render_package_html_template(&template, &title, &blocks, &asset_slots);
-        write_text_file(&package_html_file_path(package_path, target), &html)?;
-    }
-    let mut next_manifest = manifest;
-    if let Some(object) = next_manifest.as_object_mut() {
-        object.insert("updatedAt".to_string(), json!(now_i64()));
-    }
-    write_json_value(&package_manifest_path(package_path), &next_manifest)?;
-    get_manuscript_package_state(package_path)
+    let (cover_asset, image_assets) = collect_package_bound_assets(state, package_path)?;
+    let has_manual_page_breaks = blocks
+        .iter()
+        .any(|block| package_block_is_page_break(&block.kind));
+    let raw_plan = default_richpost_page_plan(
+        &title,
+        &blocks,
+        cover_asset.as_ref(),
+        &image_assets,
+        if has_manual_page_breaks {
+            "markdown-page-break"
+        } else {
+            "markdown-auto-reflow"
+        },
+    );
+    let _ = target_override;
+    persist_richpost_page_plan(
+        package_path,
+        &title,
+        &blocks,
+        cover_asset.as_ref(),
+        &image_assets,
+        &raw_plan,
+        raw_plan
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("system-sync"),
+    )
 }
 
 fn persist_package_script_body(
@@ -1329,6 +2326,16 @@ fn persist_package_script_body(
         object
             .entry("packageKind".to_string())
             .or_insert(json!(get_package_kind_from_file_name(file_name)));
+        if matches!(get_package_kind_from_file_name(file_name), Some("post")) {
+            object
+                .entry("richpostThemeId".to_string())
+                .or_insert(json!(richpost_theme_catalog()[0].id));
+        }
+        if matches!(get_package_kind_from_file_name(file_name), Some("article")) {
+            object
+                .entry("longformLayoutPresetId".to_string())
+                .or_insert(json!(longform_layout_preset_catalog()[0].id));
+        }
     }
     write_json_value(&package_manifest_path(package_path), &manifest)?;
     write_text_file(
@@ -1382,7 +2389,68 @@ pub(crate) fn save_manuscript_content(
     metadata: Option<&serde_json::Map<String, Value>>,
     source: &str,
 ) -> Result<Value, String> {
-    let path = resolve_manuscript_path(state, target)?;
+    let current_relative = normalize_relative_path(target);
+    let mut path = resolve_manuscript_path(state, target)?;
+    let mut active_relative = current_relative.clone();
+    let mut active_title = metadata
+        .and_then(|items| items.get("title"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    let current_file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    let current_stem = title_from_relative_path(&current_relative);
+    let should_auto_name = active_title
+        .as_deref()
+        .map(is_untitled_manuscript_label)
+        .unwrap_or(false)
+        || is_auto_generated_manuscript_stem(&current_stem);
+    if should_auto_name {
+        if let Some(next_title) = first_markdown_heading_text(content) {
+            let next_relative = choose_auto_named_manuscript_relative(
+                state,
+                &current_relative,
+                &current_file_name,
+                &next_title,
+            )?;
+            if next_relative != current_relative {
+                let next_path = resolve_manuscript_path(state, &next_relative)?;
+                if let Some(parent) = next_path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                if path.exists() {
+                    fs::rename(&path, &next_path).map_err(|error| error.to_string())?;
+                }
+                path = next_path;
+                active_relative = next_relative;
+            }
+            active_title = Some(next_title);
+        }
+    }
+
+    let merged_metadata = {
+        let mut items = metadata.cloned().unwrap_or_default();
+        if let Some(title) = active_title.as_ref() {
+            items.insert("title".to_string(), json!(title));
+        }
+        items
+    };
+    let path_file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    if !path.exists() && is_manuscript_package_name(&path_file_name) {
+        let package_title = active_title
+            .clone()
+            .unwrap_or_else(|| title_from_relative_path(&active_relative));
+        create_manuscript_package(&path, content, &active_relative, &package_title)?;
+    }
     if path.is_dir()
         && is_manuscript_package_name(
             path.file_name()
@@ -1394,10 +2462,18 @@ pub(crate) fn save_manuscript_content(
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("");
-        let (next_state, script_state) =
-            persist_package_script_body(state, &path, file_name, content, metadata, source)?;
+        let (next_state, script_state) = persist_package_script_body(
+            state,
+            &path,
+            file_name,
+            content,
+            Some(&merged_metadata),
+            source,
+        )?;
         return Ok(json!({
             "success": true,
+            "newPath": active_relative,
+            "title": active_title,
             "state": next_state,
             "script": script_state,
             "content": content,
@@ -1409,6 +2485,8 @@ pub(crate) fn save_manuscript_content(
     fs::write(&path, content).map_err(|error| error.to_string())?;
     Ok(json!({
         "success": true,
+        "newPath": active_relative,
+        "title": active_title,
         "content": content,
     }))
 }
@@ -1441,7 +2519,7 @@ fn package_html_target_label(package_kind: &str, target: &str) -> &'static str {
     }
 }
 
-fn package_html_style_instructions(package_kind: &str, target: &str) -> &'static str {
+fn package_html_base_style_instructions(package_kind: &str, target: &str) -> &'static str {
     match (package_kind, target) {
         ("article", PACKAGE_HTML_WECHAT_TARGET) => {
             "输出适合公众号正文的单栏长文排版。文字区域偏窄、留白稳定、标题层级清晰、引用和强调块克制，整体像真实公众号文章预览。"
@@ -1454,6 +2532,29 @@ fn package_html_style_instructions(package_kind: &str, target: &str) -> &'static
         }
         _ => "输出可读、克制、适合发布预览的 HTML 页面。",
     }
+}
+
+fn package_html_style_instructions(
+    package_kind: &str,
+    target: &str,
+    manifest: Option<&Value>,
+) -> String {
+    let mut instructions = package_html_base_style_instructions(package_kind, target).to_string();
+    if package_kind == "article" {
+        let preset = manifest
+            .map(longform_layout_preset_from_manifest)
+            .unwrap_or(&longform_layout_preset_catalog()[0]);
+        let preset_instructions = if target == PACKAGE_HTML_WECHAT_TARGET {
+            preset.wechat_instructions
+        } else {
+            preset.layout_instructions
+        };
+        instructions.push_str("\n当前长文母版：");
+        instructions.push_str(preset.label);
+        instructions.push_str("。");
+        instructions.push_str(preset_instructions);
+    }
+    instructions
 }
 
 fn asset_prompt_url(asset: &MediaAssetRecord) -> Option<String> {
@@ -1567,6 +2668,7 @@ fn generate_package_html_template(
 ) -> Result<String, String> {
     let package_kind =
         get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
     let content_map_path = package_content_map_path(package_path);
     let blocks = build_package_content_blocks(&content_map_path, body);
     let (cover_asset_block, image_asset_block, asset_slot_block) =
@@ -1593,7 +2695,7 @@ fn generate_package_html_template(
             ("title", title.to_string()),
             (
                 "style_instructions",
-                package_html_style_instructions(package_kind, target).to_string(),
+                package_html_style_instructions(package_kind, target, Some(&manifest)),
             ),
             (
                 "available_text_slots",
@@ -1628,6 +2730,78 @@ fn generate_package_html_template(
         .ok_or_else(|| "生成结果不是有效的 HTML 模板文档".to_string())
 }
 
+fn generate_richpost_page_plan(
+    state: &State<'_, AppState>,
+    package_path: &std::path::Path,
+    file_name: &str,
+    title: &str,
+    body: &str,
+    model_config: Option<&Value>,
+) -> Result<Value, String> {
+    let package_kind =
+        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    if package_kind != "post" {
+        return Err("只有图文工程支持分页方案".to_string());
+    }
+    let content_map_path = package_content_map_path(package_path);
+    let blocks = build_package_content_blocks(&content_map_path, body);
+    let (cover_asset, image_assets) = collect_package_bound_assets(Some(state), package_path)?;
+    let default_plan = default_richpost_page_plan(
+        title,
+        &blocks,
+        cover_asset.as_ref(),
+        &image_assets,
+        "system-default",
+    );
+    let prompt = render_redbox_prompt(
+        &load_redbox_prompt_or_embedded(
+            "templates/richpost_page_planner.txt",
+            include_str!("../../../prompts/library/templates/richpost_page_planner.txt"),
+        ),
+        &[
+            ("title", title.to_string()),
+            ("body_outline", markdown_summary(body, 260)),
+            ("content_block_outline", richpost_page_plan_outline(&blocks)),
+            (
+                "asset_outline",
+                richpost_asset_outline_prompt(cover_asset.as_ref(), &image_assets),
+            ),
+            (
+                "template_catalog",
+                richpost_template_catalog()
+                    .iter()
+                    .map(|item| format!("- {item}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            (
+                "default_plan_json",
+                serde_json::to_string_pretty(&default_plan).map_err(|error| error.to_string())?,
+            ),
+        ],
+    );
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        model_config,
+        "你是 RedBox 的小红书图文分页规划器。只输出严格 JSON。不要解释。",
+        &prompt,
+        true,
+    )?;
+    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
+    if !parsed.is_object() {
+        return Ok(default_plan);
+    }
+    Ok(normalize_richpost_page_plan(
+        &parsed,
+        title,
+        &blocks,
+        cover_asset.as_ref(),
+        &image_assets,
+        "ai",
+    ))
+}
+
 fn persist_package_html_document(
     package_path: &std::path::Path,
     target: &str,
@@ -1653,6 +2827,7 @@ fn generate_package_html_document(
 ) -> Result<String, String> {
     let package_kind =
         get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
     let (cover_asset_block, image_asset_block, _) =
         collect_package_prompt_assets(state, package_path)?;
     let prompt = render_redbox_prompt(
@@ -1669,7 +2844,7 @@ fn generate_package_html_document(
             ("title", title.to_string()),
             (
                 "style_instructions",
-                package_html_style_instructions(package_kind, target).to_string(),
+                package_html_style_instructions(package_kind, target, Some(&manifest)),
             ),
             ("cover_asset_block", cover_asset_block),
             ("image_asset_block", image_asset_block),
@@ -4702,6 +5877,181 @@ pub fn handle_manuscripts_channel(
                     },
                 }))
             }
+            "manuscripts:generate-richpost-page-plan" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only richpost packages support page plans" }),
+                    );
+                }
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let title = manifest
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| title_from_relative_path(file_name));
+                let content =
+                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
+                        .unwrap_or_default();
+                let blocks =
+                    build_package_content_blocks(&package_content_map_path(&full_path), &content);
+                let (cover_asset, image_assets) =
+                    collect_package_bound_assets(Some(state), &full_path)?;
+                let plan = generate_richpost_page_plan(
+                    state,
+                    &full_path,
+                    file_name,
+                    &title,
+                    &content,
+                    payload_field(&payload, "modelConfig"),
+                )?;
+                Ok(json!({
+                    "success": true,
+                    "plan": plan,
+                    "state": persist_richpost_page_plan(
+                        &full_path,
+                        &title,
+                        &blocks,
+                        cover_asset.as_ref(),
+                        &image_assets,
+                        &plan,
+                        "ai",
+                    )?,
+                }))
+            }
+            "manuscripts:set-richpost-theme" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let theme_id = payload_string(&payload, "themeId").unwrap_or_default();
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only richpost packages support themes" }),
+                    );
+                }
+                let theme = richpost_theme_preset(&theme_id);
+                let mut manifest =
+                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                if let Some(object) = manifest.as_object_mut() {
+                    object.insert("richpostThemeId".to_string(), json!(theme.id));
+                    object.insert("updatedAt".to_string(), json!(now_i64()));
+                }
+                write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                Ok(json!({
+                    "success": true,
+                    "themeId": theme.id,
+                    "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
+                }))
+            }
+            "manuscripts:set-longform-layout-preset" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let preset_id = payload_string(&payload, "presetId").unwrap_or_default();
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("article") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only longform packages support layout presets" }),
+                    );
+                }
+                let preset = longform_layout_preset(&preset_id);
+                let target = normalize_package_html_target(
+                    "article",
+                    &payload_string(&payload, "target")
+                        .unwrap_or_else(|| PACKAGE_HTML_LAYOUT_TARGET.to_string()),
+                )?;
+                let mut manifest =
+                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                if let Some(object) = manifest.as_object_mut() {
+                    object.insert("longformLayoutPresetId".to_string(), json!(preset.id));
+                    object.insert("updatedAt".to_string(), json!(now_i64()));
+                }
+                write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                let title = manifest
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| title_from_relative_path(file_name));
+                let content =
+                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
+                        .unwrap_or_default();
+                let html = generate_package_html_document(
+                    state,
+                    &full_path,
+                    file_name,
+                    target,
+                    &title,
+                    &content,
+                    payload_field(&payload, "modelConfig"),
+                )?;
+                Ok(json!({
+                    "success": true,
+                    "presetId": preset.id,
+                    "target": target,
+                    "state": persist_package_html_document(&full_path, target, &html)?,
+                }))
+            }
+            "manuscripts:render-richpost-pages" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only richpost packages support page plans" }),
+                    );
+                }
+                Ok(json!({
+                    "success": true,
+                    "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
+                }))
+            }
             "manuscripts:render-package-html" => {
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))
@@ -6983,6 +8333,124 @@ Remotion 读取结果 JSON：{}\n\
                     "success": true,
                     "canceled": false,
                     "path": normalized_path.display().to_string(),
+                }))
+            }
+            "manuscripts:pick-richpost-export-path" => {
+                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only richpost packages support image export" }),
+                    );
+                }
+                let export_dir = full_path.join("exports").join("xiaohongshu");
+                fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
+                let file_stem = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(slug_from_relative_path)
+                    .unwrap_or_else(|| "redbox-richpost".to_string());
+                let picked = pick_save_file_native(
+                    "选择导出压缩包位置",
+                    &format!("{file_stem}.zip"),
+                    Some(&export_dir),
+                )?;
+                let Some(path) = picked else {
+                    return Ok(json!({ "success": true, "canceled": true }));
+                };
+                let normalized_path = ensure_export_extension(path, "zip");
+                Ok(json!({
+                    "success": true,
+                    "canceled": false,
+                    "path": normalized_path.display().to_string(),
+                }))
+            }
+            "manuscripts:save-richpost-export-archive" => {
+                let output_path = payload_string(&payload, "outputPath").unwrap_or_default();
+                let entries = payload
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if output_path.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "outputPath is required" }));
+                }
+                if entries.is_empty() {
+                    return Ok(json!({ "success": false, "error": "entries is required" }));
+                }
+                let path = ensure_export_extension(std::path::PathBuf::from(output_path), "zip");
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                let file = fs::File::create(&path).map_err(|error| error.to_string())?;
+                let mut archive = zip::ZipWriter::new(file);
+                let options = zip::write::FileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated);
+
+                for (index, entry) in entries.iter().enumerate() {
+                    let name = entry
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| format!("第 {} 个导出文件缺少 name", index + 1))?;
+                    let data_base64 = entry
+                        .get("dataBase64")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| format!("第 {} 个导出文件缺少 dataBase64", index + 1))?;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data_base64.as_bytes())
+                        .or_else(|_| {
+                            base64::engine::general_purpose::STANDARD_NO_PAD
+                                .decode(data_base64.as_bytes())
+                        })
+                        .map_err(|error| error.to_string())?;
+                    archive
+                        .start_file(name, options)
+                        .map_err(|error| error.to_string())?;
+                    archive.write_all(&bytes).map_err(|error| error.to_string())?;
+                }
+
+                archive.finish().map_err(|error| error.to_string())?;
+                Ok(json!({
+                    "success": true,
+                    "path": path.display().to_string(),
+                    "entryCount": entries.len(),
+                }))
+            }
+            "manuscripts:save-richpost-export-image" => {
+                let output_path = payload_string(&payload, "outputPath").unwrap_or_default();
+                let data_base64 = payload_string(&payload, "dataBase64").unwrap_or_default();
+                if output_path.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "outputPath is required" }));
+                }
+                if data_base64.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "dataBase64 is required" }));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64.as_bytes())
+                    .or_else(|_| {
+                        base64::engine::general_purpose::STANDARD_NO_PAD
+                            .decode(data_base64.as_bytes())
+                    })
+                    .map_err(|error| error.to_string())?;
+                let path = std::path::PathBuf::from(output_path);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                fs::write(&path, bytes).map_err(|error| error.to_string())?;
+                Ok(json!({
+                    "success": true,
+                    "path": path.display().to_string(),
                 }))
             }
             "manuscripts:render-remotion-video" => {

@@ -47,6 +47,7 @@
     "clsx": "^2.1.0",
     "diff": "^9.0.0",
     "gifuct-js": "^2.1.2",
+    "html-to-image": "^1.11.13",
     "idb": "^8.0.3",
     "lottie-react": "^2.4.1",
     "lucide-react": "^0.300.0",

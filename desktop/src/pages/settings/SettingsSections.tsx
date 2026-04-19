@@ -23,9 +23,6 @@ import type {
 type SettingsFormData = {
     workspace_dir: string;
     debug_log_enabled: boolean;
-    search_provider: string;
-    search_endpoint: string;
-    search_api_key: string;
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
@@ -221,6 +218,8 @@ interface GeneralSettingsSectionProps {
     appVersion: string;
     formData: SettingsFormData;
     setFormData: Dispatch<SetStateAction<any>>;
+    handlePickWorkspaceDir: () => Promise<void>;
+    handleResetWorkspaceDir: () => void;
     recentDebugLogs: string[];
     isDebugLogsLoading: boolean;
     handleRefreshDebugLogs: () => Promise<void>;
@@ -249,6 +248,8 @@ function GeneralSettingsSectionInner({
     appVersion,
     formData,
     setFormData,
+    handlePickWorkspaceDir,
+    handleResetWorkspaceDir,
     recentDebugLogs,
     isDebugLogsLoading,
     handleRefreshDebugLogs,
@@ -310,66 +311,24 @@ function GeneralSettingsSectionInner({
                             className="w-full bg-surface-secondary/30 rounded border border-border pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                         />
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => void handlePickWorkspaceDir()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-surface-secondary transition-colors"
+                    >
+                        选择文件夹
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleResetWorkspaceDir}
+                        disabled={!String(formData.workspace_dir || '').trim()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        恢复默认
+                    </button>
                 </div>
                 <p className="text-[10px] text-text-tertiary mt-2">
                     不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
-                </p>
-            </div>
-
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div>
-                    <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                        <Search className="w-4 h-4" />
-                        联网搜索
-                    </h3>
-                    <p className="text-xs text-text-tertiary mt-1">
-                        `web_search` 和顾问画像外部检索会读取这里的供应商设置。未配置时默认使用 DuckDuckGo。
-                    </p>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            搜索供应商
-                        </label>
-                        <select
-                            value={formData.search_provider}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, search_provider: e.target.value }))}
-                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                        >
-                            <option value="duckduckgo">DuckDuckGo（免 Key）</option>
-                            <option value="tavily">Tavily API</option>
-                            <option value="searxng">SearXNG / 自建搜索</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            搜索服务地址
-                        </label>
-                        <input
-                            type="text"
-                            value={formData.search_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, search_endpoint: e.target.value }))}
-                            placeholder={formData.search_provider === 'tavily' ? 'https://api.tavily.com' : formData.search_provider === 'searxng' ? 'https://your-searxng.example.com' : 'DuckDuckGo 默认无需填写'}
-                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                        />
-                    </div>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                        搜索 API Key
-                    </label>
-                    <PasswordInput
-                        value={formData.search_api_key}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, search_api_key: e.target.value }))}
-                        placeholder={formData.search_provider === 'duckduckgo' ? 'DuckDuckGo 默认无需填写' : '按供应商要求填写'}
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                    />
-                </div>
-
-                <p className="text-[10px] text-text-tertiary">
-                    `Tavily` 需要 API Key。`SearXNG` 至少需要服务地址，如你的实例启用了鉴权，也可以在上方填写 Key。
                 </p>
             </div>
 

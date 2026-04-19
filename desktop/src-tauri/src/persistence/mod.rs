@@ -279,6 +279,32 @@ fn builtin_skill_records() -> Vec<SkillRecord> {
             disabled: Some(false),
         },
         SkillRecord {
+            name: "richpost-layout-designer".to_string(),
+            description: "图文排版专用技能，用于 richpost 的主题、字体、分页和页面样式调整，并强制保持正文内容不变。".to_string(),
+            location: "redbox://skills/richpost-layout-designer".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/richpost-layout-designer/SKILL.md"
+            ))
+            .to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
+            name: "longform-layout-designer".to_string(),
+            description: "长文排版专用技能，用于 longform 的母版、分栏、字体和 layout/wechat HTML 样式调整，并强制保持正文内容不变。".to_string(),
+            location: "redbox://skills/longform-layout-designer".to_string(),
+            body: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../builtin-skills/longform-layout-designer/SKILL.md"
+            ))
+            .to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        },
+        SkillRecord {
             name: "image-prompt-optimizer".to_string(),
             description: "当任务准备调用 app_cli(image generate) 做文生图、参考图引导或图生图时，先用它整理最终提示词，避免主体跑偏、风格失控和把说明文字画进图里。".to_string(),
             location: "redbox://skills/image-prompt-optimizer".to_string(),

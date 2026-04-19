@@ -55,6 +55,11 @@ const AudioDraftWorkbench = lazy(async () => ({
 type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
 type DraftLayout = 'gallery' | 'list';
 type CreateKind = 'folder' | 'longform' | 'richpost' | 'video' | 'audio';
+type EditorAiWorkspaceMode = {
+    id: string;
+    label: string;
+    activeSkills: string[];
+};
 
 type FileNode = {
     name: string;
@@ -237,6 +242,57 @@ type PackageState = {
     contentMapExists?: boolean;
     contentMapFile?: string | null;
     contentMapUpdatedAt?: number | null;
+    richpostPagePlanExists?: boolean;
+    richpostPagePlanFile?: string | null;
+    richpostPagePlanUpdatedAt?: number | null;
+    richpostTheme?: {
+        id?: string | null;
+        label?: string | null;
+        description?: string | null;
+    } | null;
+    richpostThemeId?: string | null;
+    richpostThemeLabel?: string | null;
+    richpostThemeDescription?: string | null;
+    richpostThemeCatalog?: Array<{
+        id?: string;
+        label?: string;
+        description?: string | null;
+        surfaceColor?: string | null;
+        textColor?: string | null;
+        accentColor?: string | null;
+        headingFont?: string | null;
+        bodyFont?: string | null;
+    }>;
+    longformLayoutPreset?: {
+        id?: string | null;
+        label?: string | null;
+        description?: string | null;
+    } | null;
+    longformLayoutPresetId?: string | null;
+    longformLayoutPresetLabel?: string | null;
+    longformLayoutPresetDescription?: string | null;
+    longformLayoutPresetCatalog?: Array<{
+        id?: string;
+        label?: string;
+        description?: string | null;
+        surfaceColor?: string | null;
+        textColor?: string | null;
+        accentColor?: string | null;
+    }>;
+    richpostPagesDir?: string | null;
+    richpostPageCount?: number;
+    richpostPages?: Array<{
+        id?: string;
+        label?: string;
+        template?: string;
+        title?: string | null;
+        summary?: string | null;
+        blockIds?: string[];
+        file?: string | null;
+        fileUrl?: string | null;
+        exists?: boolean;
+        updatedAt?: number | null;
+    }>;
     layoutTemplateExists?: boolean;
     wechatTemplateExists?: boolean;
     layoutTemplateFile?: string | null;
@@ -319,11 +375,11 @@ interface ManuscriptsProps {
     onImmersiveModeChange?: (mode: ImmersiveMode) => void;
 }
 
-const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; description: string; icon: typeof FileText }> = [
-    { id: 'longform', label: '长文', description: '适合长篇文章、公众号正文、深度稿。', icon: FileText },
-    { id: 'richpost', label: '图文', description: '适合小红书、图文笔记、卡片式内容。', icon: FileImage },
-    { id: 'video', label: '视频', description: '用于脚本、分镜、镜头资产和成片整理。', icon: Clapperboard },
-    { id: 'audio', label: '音频', description: '用于播客、口播、配音和音频剪辑。', icon: AudioLines },
+const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; icon: typeof FileText; accentClass: string; available: boolean; unavailableHint?: string }> = [
+    { id: 'longform', label: '长文', icon: FileText, accentClass: 'from-[#E8D9FF] via-[#F6EEFF] to-white text-[#7C57C8]', available: true },
+    { id: 'richpost', label: '图文', icon: FileImage, accentClass: 'from-[#FFD9C7] via-[#FFF1E9] to-white text-[#C56B3D]', available: true },
+    { id: 'video', label: '视频', icon: Clapperboard, accentClass: 'from-[#D6E7FF] via-[#EEF5FF] to-white text-[#4C76D8]', available: false, unavailableHint: '正在开发中' },
+    { id: 'audio', label: '音频', icon: AudioLines, accentClass: 'from-[#D8F6E8] via-[#EFFCF5] to-white text-[#2E8B65]', available: false, unavailableHint: '正在开发中' },
 ];
 
 const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
@@ -491,6 +547,10 @@ function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'folder'>):
 
     if (kind === 'video' || kind === 'audio') {
         return `# ${safeTitle}\n\n## ${sectionTitle}\n\n## 剪辑目标\n\n\n## 时间线规划\n\n\n## 素材备注\n\n`;
+    }
+
+    if (kind === 'richpost') {
+        return '';
     }
 
     const quotedTitle = JSON.stringify(safeTitle);
@@ -775,6 +835,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
     const [isApplyingWriteProposal, setIsApplyingWriteProposal] = useState(false);
     const [isRejectingWriteProposal, setIsRejectingWriteProposal] = useState(false);
+    const [editorAiWorkspaceMode, setEditorAiWorkspaceMode] = useState<EditorAiWorkspaceMode>({
+        id: 'manuscript-editing',
+        label: '稿件编辑',
+        activeSkills: [],
+    });
     const [immersiveMaterialsCollapsed, setImmersiveMaterialsCollapsed] = useState(false);
     const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
     const treeRequestIdRef = useRef(0);
@@ -1168,24 +1233,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return current === target || current.startsWith(`${target}/`);
     }, []);
 
-    const handleCreateDraft = useCallback(async () => {
-        if (createKind === 'folder') return;
+    const handleCreateDraft = useCallback(async (kind: CreateKind = createKind) => {
+        if (kind === 'folder') return;
+        setCreateKind(kind);
         setIsCreating(true);
         try {
             const storageName = buildDraftStorageName();
             const draftTitle = DEFAULT_UNTITLED_DRAFT_TITLE;
             const result = await window.ipcRenderer.invoke('manuscripts:create-file', {
                 parentPath: activeFolder,
-                name: ensureDraftFileName(storageName, createKind),
+                name: ensureDraftFileName(storageName, kind),
                 title: draftTitle,
-                content: buildDraftTemplate(draftTitle, createKind),
+                content: buildDraftTemplate(draftTitle, kind),
             }) as { success?: boolean; error?: string; path?: string };
             if (!result?.success || !result.path) throw new Error(result?.error || '创建草稿失败');
             await loadData();
             setEditorFile(result.path);
             setEditorDescriptor({
                 title: draftTitle,
-                draftType: createKind,
+                draftType: kind,
             });
             setMode('editor');
             setCreateOpen(false);
@@ -1445,12 +1511,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 path: editorFile,
                 content: nextContent,
                 metadata: editorMetadata,
-            }) as { success?: boolean; error?: string; state?: PackageState };
+            }) as { success?: boolean; error?: string; state?: PackageState; newPath?: string; title?: string | null };
             if (!result?.success) {
                 throw new Error(result?.error || '保存失败');
             }
             if (result.state) {
                 setPackageState(result.state);
+            }
+            if (typeof result.title === 'string' && result.title.trim()) {
+                const nextTitle = result.title.trim();
+                setEditorDescriptor((current) => current ? { ...current, title: nextTitle } : current);
+                setEditorMetadata((current) => ({ ...current, title: nextTitle }));
+            }
+            if (typeof result.newPath === 'string' && result.newPath.trim() && result.newPath !== editorFile) {
+                setEditorFile(result.newPath);
+                await loadData();
             }
             setEditorBodyDirty(false);
             return true;
@@ -1460,29 +1535,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         } finally {
             setIsSavingEditorBody(false);
         }
-    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, isSavingEditorBody]);
-
-    const handleGeneratePackageTemplate = useCallback(async (target: 'layout' | 'wechat') => {
-        if (!editorFile) return;
-        const workingKey = `package-html:${target}`;
-        setWorkingId(workingKey);
-        try {
-            const saved = await ensureLatestEditorContentSaved();
-            if (!saved) return;
-            const result = await window.ipcRenderer.invoke('manuscripts:generate-package-template', {
-                filePath: editorFile,
-                target,
-            }) as { success?: boolean; error?: string; state?: PackageState };
-            if (!result?.success || !result.state) {
-                throw new Error(result?.error || '生成模板失败');
-            }
-            setPackageState(result.state);
-        } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '生成模板失败');
-        } finally {
-            setWorkingId((current) => current === workingKey ? null : current);
-        }
-    }, [editorFile, ensureLatestEditorContentSaved]);
+    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, isSavingEditorBody, loadData]);
 
     const handleGeneratePackageHtml = useCallback(async (target: 'layout' | 'wechat') => {
         if (!editorFile) return;
@@ -1501,6 +1554,73 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setPackageState(result.state);
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '生成 HTML 失败');
+        } finally {
+            setWorkingId((current) => current === workingKey ? null : current);
+        }
+    }, [editorFile, ensureLatestEditorContentSaved]);
+
+    const handleGenerateRichpostPagePlan = useCallback(async () => {
+        if (!editorFile) return;
+        const workingKey = 'richpost-page-plan';
+        setWorkingId(workingKey);
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:generate-richpost-page-plan', {
+                filePath: editorFile,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '生成分页方案失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '生成分页方案失败');
+        } finally {
+            setWorkingId((current) => current === workingKey ? null : current);
+        }
+    }, [editorFile, ensureLatestEditorContentSaved]);
+
+    const handleSelectRichpostTheme = useCallback(async (themeId: string) => {
+        if (!editorFile || !themeId.trim()) return;
+        if (packageState?.richpostThemeId === themeId) return;
+        const workingKey = `richpost-theme:${themeId}`;
+        setWorkingId(workingKey);
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:set-richpost-theme', {
+                filePath: editorFile,
+                themeId,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '切换图文主题失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '切换图文主题失败');
+        } finally {
+            setWorkingId((current) => current === workingKey ? null : current);
+        }
+    }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId]);
+
+    const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
+        if (!editorFile || !presetId.trim()) return;
+        const workingKey = `longform-layout-preset:${presetId}:${target}`;
+        setWorkingId(workingKey);
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:set-longform-layout-preset', {
+                filePath: editorFile,
+                presetId,
+                target,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '切换长文母版失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '切换长文母版失败');
         } finally {
             setWorkingId((current) => current === workingKey ? null : current);
         }
@@ -1816,12 +1936,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     path: editorFile,
                     content: nextContent,
                     metadata: editorMetadata,
-                }) as { success?: boolean; error?: string; state?: PackageState };
+                }) as { success?: boolean; error?: string; state?: PackageState; newPath?: string; title?: string | null };
                 if (!result?.success) {
                     throw new Error(result?.error || '保存失败');
                 }
                 if (result.state) {
                     setPackageState(result.state);
+                }
+                if (typeof result.title === 'string' && result.title.trim()) {
+                    const nextTitle = result.title.trim();
+                    setEditorDescriptor((current) => current ? { ...current, title: nextTitle } : current);
+                    setEditorMetadata((current) => ({ ...current, title: nextTitle }));
+                }
+                if (typeof result.newPath === 'string' && result.newPath.trim() && result.newPath !== editorFile) {
+                    setEditorFile(result.newPath);
+                    await loadData();
                 }
                 setEditorBodyDirty(false);
             } catch (error) {
@@ -1831,7 +1960,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
         }, 700);
         return () => window.clearTimeout(timer);
-    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata]);
+    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, loadData]);
 
     useEffect(() => {
         if (!editorFile) {
@@ -1875,6 +2004,56 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 associatedPackageKind: draftType,
                 agentProfile: draftType === 'video' ? 'video-editor' : draftType === 'audio' ? 'audio-editor' : 'default',
                 associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
+                associatedPackageWorkspaceMode: editorAiWorkspaceMode.id,
+                associatedPackageWorkspaceModeLabel: editorAiWorkspaceMode.label,
+                associatedPackageRequiredSkills: editorAiWorkspaceMode.activeSkills,
+                activeSkills: editorAiWorkspaceMode.activeSkills,
+                associatedPackageThemeId:
+                    draftType === 'richpost'
+                        ? packageState?.richpostThemeId || null
+                        : draftType === 'longform'
+                            ? packageState?.longformLayoutPresetId || null
+                            : null,
+                associatedPackageThemeLabel:
+                    draftType === 'richpost'
+                        ? packageState?.richpostThemeLabel || null
+                        : draftType === 'longform'
+                            ? packageState?.longformLayoutPresetLabel || null
+                            : null,
+                associatedPackageContentSource:
+                    (draftType === 'richpost' || draftType === 'longform')
+                        ? String(packageState?.manifest?.entry || 'content.md')
+                        : editorFile,
+                associatedPackageStyleTargets:
+                    draftType === 'richpost'
+                        ? ['manifest.richpostThemeId', 'layout.html', 'pages/page-xxx.html']
+                        : draftType === 'longform'
+                            ? ['manifest.longformLayoutPresetId', 'layout.html', 'wechat.html']
+                            : [],
+                associatedPackageStyleEditRule:
+                    draftType === 'richpost'
+                        ? '修改图文主题或排版时，只能改 richpostThemeId 或图文页面 HTML，不能改 content.md 的正文内容。'
+                        : draftType === 'longform'
+                            ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
+                            : null,
+                associatedPackageStructure:
+                    draftType === 'richpost'
+                        ? {
+                            contentSource: String(packageState?.manifest?.entry || 'content.md'),
+                            contentMap: 'content-map.json',
+                            pagePlan: 'richpost-page-plan.json',
+                            previewShell: 'layout.html',
+                            pagesDir: 'pages/page-xxx.html',
+                            themeSource: 'manifest.richpostThemeId',
+                        }
+                        : draftType === 'longform'
+                            ? {
+                                contentSource: String(packageState?.manifest?.entry || 'content.md'),
+                                masterSource: 'manifest.longformLayoutPresetId',
+                                layoutTarget: 'layout.html',
+                                wechatTarget: 'wechat.html',
+                            }
+                            : null,
                 associatedPackageAssetCount: packageAssets.length,
                 associatedPackageClipCount: isMediaDraft ? Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
                 associatedPackageScriptApprovalStatus:
@@ -1902,7 +2081,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }).catch((error) => {
             console.error('Failed to sync editor chat metadata:', error);
         });
-    }, [editorBodyDirty, editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
+    }, [editorAiWorkspaceMode.activeSkills, editorAiWorkspaceMode.id, editorAiWorkspaceMode.label, editorBodyDirty, editorChatSessionId, editorDescriptor?.draftType, editorDescriptor?.title, editorFile, fileMetaMap, packageState]);
 
     const handleAcceptEditorWriteProposal = useCallback(async () => {
         if (!editorFile || !editorWriteProposal) return;
@@ -2353,8 +2532,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             hasContent: Boolean(packageState?.hasWechatHtml),
             updatedAt: Number(packageState?.wechatHtmlUpdatedAt || 0) || null,
         };
+        const richpostPagePreviews = Array.isArray(packageState?.richpostPages)
+            ? packageState.richpostPages.map((page, index) => ({
+                id: String(page?.id || `page-${index + 1}`),
+                label: String(page?.label || `第 ${index + 1} 页`),
+                template: String(page?.template || 'text-stack'),
+                title: page?.title ? String(page.title) : null,
+                summary: page?.summary ? String(page.summary) : null,
+                filePath: page?.file ? String(page.file) : null,
+                fileUrl: page?.fileUrl ? String(page.fileUrl) : null,
+                exists: Boolean(page?.exists || page?.file || page?.fileUrl),
+                updatedAt: Number(page?.updatedAt || 0) || null,
+            }))
+            : [];
         const isGeneratingLayoutHtml = workingId === 'package-html:layout';
         const isGeneratingWechatHtml = workingId === 'package-html:wechat';
+        const isGeneratingRichpostPagePlan = workingId === 'richpost-page-plan';
         const packageCoverAsset = packagePreviewAssets.find((asset) => asset.id === packageCoverId) || null;
         const packageImageAssets = packagePreviewAssets.filter((asset) => (
             inferAssetKind(asset) === 'image' && asset.id !== packageCoverId
@@ -2500,17 +2693,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         {isPostPackage && (
                             <button
                                 type="button"
-                                onClick={() => void handleGeneratePackageTemplate('layout')}
-                                disabled={isGeneratingLayoutHtml}
+                                onClick={() => void handleGenerateRichpostPagePlan()}
+                                disabled={isGeneratingRichpostPagePlan}
                                 className={clsx(
                                     'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
                                     isImmersiveWorkbench
                                         ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
                                         : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                 )}
-                                >
-                                    {isGeneratingLayoutHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                {packageState?.layoutTemplateExists ? '重做图文模板' : '生成图文模板'}
+                            >
+                                {isGeneratingRichpostPagePlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                {packageState?.richpostPagePlanExists ? '重做分页方案' : '生成分页方案'}
                             </button>
                         )}
 
@@ -2669,6 +2862,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         layoutPreview={articleLayoutPreview}
                         wechatPreview={articleWechatPreview}
                         hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
+                        richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
+                        richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
+                        isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
+                        longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
+                        longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
+                        isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
+                        richpostPages={richpostPagePreviews}
                         coverAsset={packageCoverAsset}
                         imageAssets={packageImageAssets}
                             onEditorBodyChange={(value) => {
@@ -2678,6 +2878,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         onAcceptWriteProposal={() => {
                             void handleAcceptEditorWriteProposal();
                         }}
+                        onSelectRichpostTheme={(themeId) => {
+                            void handleSelectRichpostTheme(themeId);
+                        }}
+                        onSelectLongformLayoutPreset={(presetId, target) => {
+                            void handleSelectLongformLayoutPreset(presetId, target);
+                        }}
+                        onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
                         onRejectWriteProposal={() => {
                             void handleRejectEditorWriteProposal();
                         }}
@@ -3631,57 +3838,59 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
             {createOpen && (
                 <div className="fixed inset-0 z-[1000] bg-black/40 backdrop-blur-[4px] flex items-center justify-center p-4 animate-in fade-in duration-300" onMouseDown={() => !isCreating && setCreateOpen(false)}>
-                    <div className="w-full max-w-[920px] rounded-[28px] border border-white/20 bg-white shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] flex flex-col overflow-hidden" onMouseDown={(event) => event.stopPropagation()}>
-                        <div className="flex items-center justify-between px-8 py-7 border-b border-black/[0.04] bg-white">
-                            <div>
-                                <h2 className="text-xl font-extrabold tracking-tight text-text-primary">新建内容</h2>
-                                <p className="mt-1 text-[12px] font-bold uppercase tracking-widest text-text-tertiary">Select Draft Strategy</p>
-                            </div>
-                            <button type="button" onClick={() => !isCreating && setCreateOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
+                    <div className="w-full max-w-[680px] rounded-[24px] border border-white/30 bg-white shadow-[0_40px_100px_-24px_rgba(0,0,0,0.28)] flex flex-col overflow-hidden" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="flex items-center justify-between px-6 py-5 border-b border-black/[0.04] bg-white">
+                            <h2 className="text-[18px] font-extrabold tracking-tight text-text-primary">新建内容</h2>
+                            <button type="button" onClick={() => !isCreating && setCreateOpen(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90 disabled:opacity-40" disabled={isCreating}>
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="px-8 py-8 space-y-8 bg-white/50 backdrop-blur-xl">
-                            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="px-5 py-5 bg-white/50">
+                            <div className="grid grid-cols-2 gap-3">
                                 {CREATE_KIND_OPTIONS.map((option) => {
                                     const Icon = option.icon;
-                                    const isActiveOption = createKind === option.id;
+                                    const isCreatingOption = isCreating && createKind === option.id;
+                                    const isUnavailable = !option.available;
                                     return (
                                         <button
                                             key={option.id}
                                             type="button"
-                                            onClick={() => setCreateKind(option.id)}
+                                            onClick={() => {
+                                                if (isCreating || isUnavailable) return;
+                                                void handleCreateDraft(option.id);
+                                            }}
+                                            aria-disabled={isCreating || isUnavailable}
                                             className={clsx(
-                                                'group rounded-[20px] border p-5 text-left transition-all duration-300 min-h-[160px] flex flex-col',
-                                                isActiveOption
-                                                    ? 'border-accent-primary bg-white shadow-lg ring-1 ring-accent-primary/10'
-                                                    : 'border-black/[0.05] bg-white hover:bg-white hover:border-black/[0.1] hover:shadow-md'
+                                                'group relative rounded-[18px] border border-black/[0.05] bg-white p-4 text-left transition-all duration-200 min-h-[124px] flex flex-col justify-between',
+                                                !isUnavailable && 'hover:border-black/[0.1] hover:shadow-md',
+                                                isCreating && 'cursor-wait opacity-70',
+                                                isUnavailable && 'cursor-not-allowed opacity-60',
+                                                isCreatingOption && 'border-accent-primary shadow-lg ring-1 ring-accent-primary/10'
                                             )}
                                         >
-                                            <div className={clsx('w-10 h-10 rounded-[14px] flex items-center justify-center transition-all duration-300', isActiveOption ? 'bg-accent-primary text-white' : 'bg-black/[0.05] text-text-tertiary group-hover:scale-110')}>
-                                                <Icon className="w-5 h-5" />
+                                            <div className={clsx('relative overflow-hidden rounded-[16px] border border-black/[0.05] bg-gradient-to-br p-3 transition-transform duration-200', option.accentClass, !isUnavailable && 'group-hover:scale-[1.02]')}>
+                                                <div className="absolute inset-x-3 bottom-2 h-5 rounded-full bg-white/60 blur-md" />
+                                                <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] bg-white/75 shadow-sm">
+                                                    {isCreatingOption ? <Loader2 className="h-5 w-5 animate-spin" /> : <Icon className="h-5 w-5" />}
+                                                </div>
                                             </div>
-                                            <div className="mt-5 font-extrabold text-[15px] text-text-primary">{option.label}</div>
-                                            <div className="mt-2 text-[11px] leading-[1.6] text-text-tertiary font-bold line-clamp-2">{option.description}</div>
+                                            <div className="mt-3 flex items-center justify-between gap-3">
+                                                <div className="font-extrabold text-[14px] text-text-primary">{option.label}</div>
+                                                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-text-tertiary">
+                                                    {isCreatingOption ? '创建中' : isUnavailable ? '开发中' : '点击创建'}
+                                                </div>
+                                            </div>
+                                            {isUnavailable && option.unavailableHint ? (
+                                                <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 -translate-y-1 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                                                    <div className="rounded-full bg-text-primary px-3 py-1 text-[11px] font-bold text-white shadow-[0_10px_24px_-12px_rgba(0,0,0,0.45)]">
+                                                        {option.unavailableHint}
+                                                    </div>
+                                                </div>
+                                            ) : null}
                                         </button>
                                     );
                                 })}
                             </div>
-                            <div className="rounded-[18px] border border-black/[0.04] bg-black/[0.02] px-5 py-5 flex items-start gap-4">
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white border border-black/[0.05] shadow-sm">
-                                    <Folder className="w-5 h-5 text-accent-primary/60" />
-                                </div>
-                                <div>
-                                    <div className="text-[13px] font-extrabold text-text-primary">创建位置</div>
-                                    <div className="mt-1 text-[11px] font-bold text-text-tertiary tracking-wide">{activeFolder || '全部草稿 / 根目录'}</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex items-center justify-end gap-3 px-8 py-6 border-t border-black/[0.04] bg-black/[0.02]">
-                            <button type="button" onClick={() => setCreateOpen(false)} disabled={isCreating} className="px-5 py-2.5 rounded-xl text-[13px] font-bold text-text-secondary hover:bg-black/[0.04] transition-all disabled:opacity-40">取消</button>
-                            <button type="button" onClick={() => void handleCreateDraft()} disabled={isCreating} className="px-6 py-2.5 rounded-xl bg-text-primary text-[13px] font-bold text-white shadow-lg shadow-text-primary/10 hover:bg-text-primary/90 transition-all active:scale-[0.98] disabled:opacity-40">
-                                {isCreating ? 'CREATING...' : '创建新草稿'}
-                            </button>
                         </div>
                     </div>
                 </div>

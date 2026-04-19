@@ -9,16 +9,21 @@ use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    commands::manuscripts::{sync_manuscript_package_html_assets, timeline_clip_duration_ms},
+    commands::manuscripts::{
+        longform_layout_preset_catalog_value, longform_layout_preset_state_value,
+        richpost_theme_catalog_value, richpost_theme_state_value,
+        sync_manuscript_package_html_assets, timeline_clip_duration_ms,
+    },
     file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
     get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
     now_iso, now_ms, package_assets_path, package_content_map_path, package_cover_path,
     package_editor_project_path, package_entry_path, package_images_path, package_layout_html_path,
     package_layout_template_path, package_manifest_path, package_remotion_input_props_path,
-    package_remotion_path, package_scene_ui_path, package_timeline_path, package_track_ui_path,
-    package_wechat_html_path, package_wechat_template_path, parse_json_value_from_text,
-    read_json_value_or, redbox_project_root, resolve_manuscript_path, title_from_relative_path,
-    write_json_value, write_text_file, AppState,
+    package_remotion_path, package_richpost_page_html_path, package_richpost_page_plan_path,
+    package_richpost_pages_dir, package_scene_ui_path, package_timeline_path,
+    package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
+    parse_json_value_from_text, read_json_value_or, redbox_project_root, resolve_manuscript_path,
+    title_from_relative_path, write_json_value, write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -2825,12 +2830,76 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .unwrap_or(fallback_title.as_str())
         .to_string();
     let package_kind = get_package_kind_from_file_name(file_name);
+    let richpost_theme = if package_kind == Some("post") {
+        Some(richpost_theme_state_value(&manifest))
+    } else {
+        None
+    };
+    let longform_layout_preset = if package_kind == Some("article") {
+        Some(longform_layout_preset_state_value(&manifest))
+    } else {
+        None
+    };
     let content_map_path = package_content_map_path(package_path);
     let content_map_exists = content_map_path.exists();
     let layout_template_path = package_layout_template_path(package_path);
     let layout_template_exists = layout_template_path.exists();
     let wechat_template_path = package_wechat_template_path(package_path);
     let wechat_template_exists = wechat_template_path.exists();
+    let richpost_page_plan_path = package_richpost_page_plan_path(package_path);
+    let richpost_page_plan_exists = richpost_page_plan_path.exists();
+    let richpost_pages_dir = package_richpost_pages_dir(package_path);
+    let richpost_page_plan = if package_kind == Some("post") {
+        Some(read_json_value_or(
+            richpost_page_plan_path.as_path(),
+            json!({ "pages": [] }),
+        ))
+    } else {
+        None
+    };
+    let richpost_pages = if package_kind == Some("post") {
+        richpost_page_plan
+            .as_ref()
+            .and_then(|plan| plan.get("pages"))
+            .and_then(Value::as_array)
+            .map(|pages| {
+                pages
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, page)| {
+                        let page_id = page.get("id").and_then(Value::as_str)?.trim().to_string();
+                        if page_id.is_empty() {
+                            return None;
+                        }
+                        let page_path = package_richpost_page_html_path(package_path, &page_id);
+                        let page_exists = page_path.exists();
+                        Some(json!({
+                            "id": page_id,
+                            "label": page.get("label").cloned().unwrap_or_else(|| json!(format!("第 {} 页", index + 1))),
+                            "template": page.get("template").cloned().unwrap_or_else(|| json!("text-stack")),
+                            "title": page.get("title").cloned().unwrap_or(Value::Null),
+                            "summary": page.get("summary").cloned().unwrap_or(Value::Null),
+                            "blockIds": page.get("blockIds").cloned().unwrap_or_else(|| json!([])),
+                            "file": if page_exists {
+                                json!(page_path.display().to_string())
+                            } else {
+                                Value::Null
+                            },
+                            "fileUrl": if page_exists {
+                                json!(file_url_for_path(&page_path))
+                            } else {
+                                Value::Null
+                            },
+                            "exists": page_exists,
+                            "updatedAt": file_modified_at_ms(&page_path)
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let layout_html_path = package_layout_html_path(package_path);
     let layout_html_exists = layout_html_path.exists();
     let layout_html_has_content = fs::metadata(&layout_html_path)
@@ -2954,6 +3023,62 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             Value::Null
         },
         "contentMapUpdatedAt": file_modified_at_ms(&content_map_path),
+        "richpostPagePlanExists": richpost_page_plan_exists,
+        "richpostPagePlanFile": if richpost_page_plan_exists {
+            json!(richpost_page_plan_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostPagePlanUpdatedAt": file_modified_at_ms(&richpost_page_plan_path),
+        "richpostTheme": richpost_theme.clone().unwrap_or(Value::Null),
+        "richpostThemeId": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostThemeLabel": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("label"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostThemeDescription": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("description"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostThemeCatalog": if package_kind == Some("post") {
+            richpost_theme_catalog_value()
+        } else {
+            Value::Null
+        },
+        "longformLayoutPreset": longform_layout_preset.clone().unwrap_or(Value::Null),
+        "longformLayoutPresetId": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetLabel": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("label"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetDescription": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("description"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetCatalog": if package_kind == Some("article") {
+            longform_layout_preset_catalog_value()
+        } else {
+            Value::Null
+        },
+        "richpostPagesDir": if richpost_pages_dir.exists() {
+            json!(richpost_pages_dir.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostPageCount": richpost_pages.len(),
+        "richpostPages": richpost_pages,
         "layoutTemplateExists": layout_template_exists,
         "wechatTemplateExists": wechat_template_exists,
         "layoutTemplateFile": if layout_template_exists {

@@ -1,17 +1,23 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Square, Film, ImageIcon, Music2, FileText, File as FileIcon } from 'lucide-react';
+import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
-import { ChatComposerFrame, getChatComposerPalette } from '../components/ChatComposerFrame';
+import {
+  blobToBase64,
+  buildChatModelOptions,
+  ChatComposer,
+  type ChatComposerHandle,
+  type ChatModelOption,
+  type ChatSettingsSnapshot,
+  type UploadedFileAttachment,
+} from '../components/ChatComposer';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
-import { resolveAssetUrl } from '../utils/pathManager';
 import { uiDebug, uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 
 interface Session {
@@ -68,23 +74,6 @@ interface ChatProps {
   emptyStateVerticalAlign?: 'center' | 'lower';
 }
 
-export interface UploadedFileAttachment {
-  type: 'uploaded-file';
-  name: string;
-  ext?: string;
-  size?: number;
-  absolutePath?: string;
-  originalAbsolutePath?: string;
-  localUrl?: string;
-  kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
-  mimeType?: string;
-  storageMode?: 'staged' | string;
-  directUploadEligible?: boolean;
-  processingStrategy?: string;
-  summary?: string;
-  requiresMultimodal?: boolean;
-}
-
 interface ChatContextUsage {
   success: boolean;
   contextType?: string;
@@ -113,25 +102,6 @@ interface ChatErrorEventPayload {
   errorCode?: string;
   category?: string;
 }
-
-export interface ChatModelOption {
-  key: string;
-  modelName: string;
-  sourceName: string;
-  baseURL: string;
-  apiKey: string;
-  isDefault?: boolean;
-}
-
-export interface ChatSettingsSnapshot {
-  api_endpoint?: string;
-  api_key?: string;
-  model_name?: string;
-  ai_sources_json?: string;
-  default_ai_source_id?: string;
-}
-
-type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 
 type FixedSessionWarmSnapshot = {
   messages: Message[];
@@ -169,213 +139,6 @@ function writeFixedSessionWarmSnapshot(
   });
 }
 
-const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
-const VIDEO_ATTACHMENT_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i;
-const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i;
-const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
-
-function getAttachmentSource(attachment: UploadedFileAttachment): string {
-  const candidate = String(
-    attachment.localUrl
-      || attachment.absolutePath
-      || attachment.originalAbsolutePath
-      || '',
-  ).trim();
-  return candidate ? resolveAssetUrl(candidate) : '';
-}
-
-function getAttachmentExtLabel(attachment: UploadedFileAttachment): string {
-  const explicit = String(attachment.ext || '').trim().replace(/^\./, '');
-  if (explicit) return explicit.toUpperCase();
-  const matched = String(attachment.name || '').trim().match(/\.([a-zA-Z0-9]+)$/);
-  return matched?.[1]?.toUpperCase() || '';
-}
-
-function getAttachmentVisualKind(attachment: UploadedFileAttachment): ComposerAttachmentVisualKind {
-  const kind = String(attachment.kind || '').trim().toLowerCase();
-  const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
-  const source = String(
-    attachment.localUrl
-      || attachment.absolutePath
-      || attachment.originalAbsolutePath
-      || attachment.name
-      || '',
-  ).trim().toLowerCase();
-
-  if (kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source)) return 'image';
-  if (kind === 'video' || mimeType.startsWith('video/') || VIDEO_ATTACHMENT_EXT_RE.test(source)) return 'video';
-  if (kind === 'audio' || mimeType.startsWith('audio/') || AUDIO_ATTACHMENT_EXT_RE.test(source)) return 'audio';
-  if (kind === 'text' || mimeType.startsWith('text/') || TEXT_ATTACHMENT_EXT_RE.test(source)) return 'text';
-  return 'file';
-}
-
-function formatAttachmentSize(size?: number): string {
-  if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) return '';
-  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
-  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
-  return `${Math.round(size)} B`;
-}
-
-function getAttachmentKindLabel(kind: ComposerAttachmentVisualKind): string {
-  switch (kind) {
-    case 'image':
-      return '图片';
-    case 'video':
-      return '视频';
-    case 'audio':
-      return '音频';
-    case 'text':
-      return '文档';
-    default:
-      return '文件';
-  }
-}
-
-function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: string) {
-  switch (kind) {
-    case 'image':
-      return <ImageIcon className={className} />;
-    case 'video':
-      return <Film className={className} />;
-    case 'audio':
-      return <Music2 className={className} />;
-    case 'text':
-      return <FileText className={className} />;
-    default:
-      return <FileIcon className={className} />;
-  }
-}
-
-interface ComposerAttachmentPreviewProps {
-  attachment: UploadedFileAttachment;
-  darkEmbedded: boolean;
-  variant: 'empty' | 'main';
-  onRemove: () => void;
-  children: React.ReactNode;
-}
-
-export function ComposerAttachmentPreview({
-  attachment,
-  darkEmbedded,
-  variant,
-  onRemove,
-  children,
-}: ComposerAttachmentPreviewProps) {
-  const visualKind = getAttachmentVisualKind(attachment);
-  const previewSrc = visualKind === 'image' ? getAttachmentSource(attachment) : '';
-  const extLabel = getAttachmentExtLabel(attachment);
-  const sizeLabel = formatAttachmentSize(attachment.size);
-  const typeLabel = getAttachmentKindLabel(visualKind);
-  const frameClass = variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
-  const metaClass = darkEmbedded ? 'text-white/46' : 'text-text-tertiary';
-  const titleClass = darkEmbedded ? 'text-white/88' : 'text-text-primary';
-  const badgeClass = darkEmbedded
-    ? 'border-white/10 bg-white/[0.05] text-white/58'
-    : 'border-black/[0.06] bg-[#f7f2e7] text-[#7f715f]';
-  const previewShellClass = darkEmbedded
-    ? 'border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] shadow-[0_12px_34px_rgba(0,0,0,0.35)]'
-    : 'border-black/[0.07] bg-[linear-gradient(180deg,#fbf6ec,#f2eadb)] shadow-[0_12px_28px_rgba(110,84,44,0.12)]';
-  const removeButtonClass = darkEmbedded
-    ? 'border-white/12 bg-[#1b2026] text-white/62 hover:text-white hover:bg-[#222831]'
-    : 'border-white bg-white text-[#786d5f] hover:text-[#2d2822] hover:bg-[#f8f4ea]';
-  const infoTokens = [typeLabel, extLabel, sizeLabel].filter(Boolean);
-
-  return (
-    <div className="flex items-start gap-3">
-      <div className="relative shrink-0">
-        {previewSrc ? (
-          <div className={clsx(
-            'overflow-hidden rounded-[22px] border',
-            frameClass,
-            variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]',
-            previewShellClass,
-          )}>
-            <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />
-          </div>
-        ) : (
-          <div className={clsx(
-            'flex items-center justify-center rounded-[22px] border',
-            frameClass,
-            previewShellClass,
-          )}>
-            <div className="flex flex-col items-center gap-1.5 px-2 text-center">
-              {getAttachmentKindIcon(visualKind, clsx(
-                variant === 'empty' ? 'h-5 w-5' : 'h-[18px] w-[18px]',
-                darkEmbedded ? 'text-white/68' : 'text-[#7f715f]',
-              ))}
-              <span className={clsx(
-                'max-w-full truncate text-[10px] font-semibold tracking-[0.18em]',
-                darkEmbedded ? 'text-white/42' : 'text-[#9d8f7b]',
-              )}>
-                {extLabel || typeLabel}
-              </span>
-            </div>
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={onRemove}
-          className={clsx(
-            'absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border transition-colors',
-            removeButtonClass,
-          )}
-          title="移除文件"
-          aria-label={`移除 ${attachment.name}`}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <div className="min-w-0 flex-1 pt-1">
-        <div className={clsx('text-[11px] font-medium tracking-[0.08em]', metaClass)}>已添加文件</div>
-        <div className={clsx(
-          'mt-1 truncate font-medium',
-          variant === 'empty' ? 'text-[15px]' : 'text-[13px]',
-          titleClass,
-        )} title={attachment.name}>
-          {attachment.name}
-        </div>
-        {infoTokens.length > 0 ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {infoTokens.map((token) => (
-              <span
-                key={token}
-                className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
-              >
-                {token}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
-  if (typeof model === 'string') {
-    const forced = getForcedModelCapabilities(model);
-    const resolved = forced.length ? forced : inferModelCapabilities(model);
-    return resolved.includes('chat');
-  }
-  const id = String(model?.id || '').trim();
-  if (!id) return false;
-  const forced = getForcedModelCapabilities(id);
-  const explicitCapabilities = [
-    ...(
-      Array.isArray((model as { capabilities?: unknown[] }).capabilities)
-        ? ((model as { capabilities?: Array<ModelCapability | string | null | undefined> }).capabilities || [])
-        : []
-    ),
-    (model as { capability?: ModelCapability | string | null | undefined }).capability,
-  ];
-  const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
-    ? normalizeModelCapabilities(explicitCapabilities)
-    : [];
-  const resolved = forced.length ? forced : (capabilities.length ? capabilities : inferModelCapabilities(id));
-  return resolved.includes('chat');
-}
-
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
 const STREAM_UPDATE_INTERVAL_MS = 48;
@@ -383,12 +146,6 @@ const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,
 });
-
-function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
-  const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
-  const native = event.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
-  return Boolean(native?.isComposing) || Boolean(synthetic.isComposing) || native?.keyCode === 229;
-}
 
 function consumeBufferedChunk(buffer: string, chunk: string): string {
   if (!buffer || !chunk) return buffer;
@@ -537,94 +294,6 @@ function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | n
   };
 }
 
-function decodeBase64DataUrl(dataUrl: string): string {
-  const raw = String(dataUrl || '');
-  const parts = raw.split(',');
-  return parts.length > 1 ? parts[1] : raw;
-}
-
-export function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(decodeBase64DataUrl(String(reader.result || '')));
-    reader.onerror = () => reject(reader.error || new Error('音频读取失败'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatModelOption[] {
-  if (!settings) return [];
-
-  const options: ChatModelOption[] = [];
-  const defaultSourceId = String(settings.default_ai_source_id || '').trim();
-  const prefersOfficialDefault = defaultSourceId.toLowerCase() === 'redbox_official_auto';
-
-  try {
-    const parsed = JSON.parse(String(settings.ai_sources_json || '[]')) as Array<Record<string, unknown>>;
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) {
-        if (!item || typeof item !== 'object') continue;
-        const sourceId = String(item.id || '').trim();
-        const sourceName = String(item.name || sourceId || 'AI 源').trim();
-        const baseURL = String(item.baseURL || item.baseUrl || '').trim();
-        const apiKey = String(item.apiKey || item.key || '').trim();
-        const explicitModelsMeta = Array.isArray(item.modelsMeta)
-          ? item.modelsMeta.filter((value): value is { id?: unknown; capability?: unknown; capabilities?: unknown } => Boolean(value && typeof value === 'object'))
-          : [];
-        const chatModelIdsFromMeta = explicitModelsMeta
-          .filter((value) => modelSupportsChat(value))
-          .map((value) => String(value.id || '').trim())
-          .filter(Boolean);
-        const fallbackCandidates = [
-          ...((Array.isArray(item.models) ? item.models : []).map((value) => String(value || '').trim())),
-          String(item.model || item.modelName || '').trim(),
-        ]
-          .filter(Boolean)
-          .filter((value) => modelSupportsChat(value));
-        const candidates = Array.from(new Set([
-          ...chatModelIdsFromMeta,
-          ...fallbackCandidates,
-        ]));
-        for (const modelName of candidates) {
-          options.push({
-            key: `${sourceId || baseURL || sourceName}::${modelName}`,
-            modelName,
-            sourceName,
-            baseURL,
-            apiKey,
-            isDefault: Boolean(sourceId && sourceId === defaultSourceId && modelName === String(item.model || item.modelName || '').trim()),
-          });
-        }
-      }
-    }
-  } catch {
-    // ignore malformed ai_sources_json
-  }
-
-  const fallbackModel = String(settings.model_name || '').trim();
-  if (!prefersOfficialDefault && fallbackModel && modelSupportsChat(fallbackModel)) {
-    options.push({
-      key: `fallback::${fallbackModel}`,
-      modelName: fallbackModel,
-      sourceName: '当前默认源',
-      baseURL: String(settings.api_endpoint || '').trim(),
-      apiKey: String(settings.api_key || '').trim(),
-      isDefault: true,
-    });
-  }
-
-  const deduped = new Map<string, ChatModelOption>();
-  for (const option of options) {
-    const uniqueKey = `${option.baseURL}::${option.modelName}`;
-    const existing = deduped.get(uniqueKey);
-    if (!existing || option.isDefault) {
-      deduped.set(uniqueKey, option);
-    }
-  }
-
-  return Array.from(deduped.values());
-}
-
 export function Chat({
   isActive = true,
   onExecutionStateChange,
@@ -705,7 +374,6 @@ export function Chat({
     };
   }, [onExecutionStateChange]);
   const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
-  const [showModelPicker, setShowModelPicker] = useState(false);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -714,8 +382,7 @@ export function Chat({
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<ChatComposerHandle>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -806,7 +473,7 @@ export function Chat({
     });
   }, [confirmRequest, debugUi, isProcessing, messages]);
   const blurComposer = useCallback((reason: string) => {
-    const element = inputRef.current;
+    const element = composerRef.current?.getTextarea();
     if (!element) return;
     if (document.activeElement === element) {
       debugUi('input_blur', { reason });
@@ -823,10 +490,8 @@ export function Chat({
     setComposerSuppressed(false);
     debugUi('resume_composer_focus', { source });
     requestAnimationFrame(() => {
-      if (!inputRef.current) return;
-      inputRef.current.focus();
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
+      composerRef.current?.focus();
+      composerRef.current?.syncHeight();
     });
   }, [debugUi]);
   const handleComposerFocus = useCallback((source: 'empty' | 'composer') => {
@@ -861,7 +526,6 @@ export function Chat({
     pendingUpdateRef.current = null;
     setShowRoomPicker(false);
     setSelectionMenu((prev) => ({ ...prev, visible: false }));
-    setShowModelPicker(false);
     setComposerSuppressed(false);
   }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
   const selectSessionRequestRef = useRef(0);
@@ -928,23 +592,13 @@ export function Chat({
     },
   ]), []);
 
-  const closeModelPicker = useCallback(() => {
-    setShowModelPicker(false);
-  }, []);
-
-  const syncInputHeight = useCallback(() => {
-    if (!inputRef.current) return;
-    inputRef.current.style.height = 'auto';
-    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
-  }, []);
-
   const clearPendingAttachment = useCallback(() => {
     setPendingAttachment(null);
     requestAnimationFrame(() => {
-      syncInputHeight();
-      inputRef.current?.focus();
+      composerRef.current?.syncHeight();
+      composerRef.current?.focus();
     });
-  }, [syncInputHeight]);
+  }, []);
 
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
@@ -1020,18 +674,6 @@ export function Chat({
     if (!isActive) return;
     void loadChatModelOptions();
   }, [isActive, loadChatModelOptions]);
-
-  useEffect(() => {
-    if (!isActive || !showModelPicker) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!modelPickerRef.current) return;
-      if (!modelPickerRef.current.contains(event.target as Node)) {
-        setShowModelPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [showModelPicker]);
 
   useEffect(() => {
     return () => {
@@ -2225,13 +1867,6 @@ export function Chat({
     };
   }, [debugUi, flushPendingAssistantChunk, isActive]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!input.trim() && !pendingAttachment) || isProcessing) return;
-
-    sendMessage(input, pendingAttachment || undefined);
-  };
-
   const pickAttachment = useCallback(async () => {
     if (isProcessing) return;
     try {
@@ -2247,14 +1882,14 @@ export function Chat({
         setErrorNotice(null);
         setPendingAttachment(result.attachment);
         requestAnimationFrame(() => {
-          syncInputHeight();
-          inputRef.current?.focus();
+          composerRef.current?.syncHeight();
+          composerRef.current?.focus();
         });
       }
     } catch (error) {
       setErrorNotice(String(error || '上传文件失败'));
     }
-  }, [currentSessionId, isProcessing, syncInputHeight]);
+  }, [currentSessionId, isProcessing]);
 
   const getChatModelConfig = useCallback(() => {
     if (!selectedChatModel) return undefined;
@@ -2284,15 +1919,15 @@ export function Chat({
         return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
       });
       requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        syncInputHeight();
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
       });
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setIsTranscribingAudio(false);
     }
-  }, [syncInputHeight]);
+  }, []);
 
   const stopAudioRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
@@ -2451,15 +2086,6 @@ export function Chat({
   const contextUsageRingOffset = contextRingCircumference * (1 - Math.max(0, Math.min(1, compactRatio)));
   const darkEmbedded = embeddedTheme === 'dark';
   const composerTheme = darkEmbedded ? 'dark' : 'default';
-  const composerPalette = getChatComposerPalette(composerTheme);
-  const composerTextClass = composerPalette.text;
-  const composerSubtleButtonClass = composerPalette.subtleButton;
-  const composerModelPickerClass = darkEmbedded
-    ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
-    : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
-  const composerSendButtonClass = input.trim() || pendingAttachment
-    ? composerPalette.sendButtonActive
-    : composerPalette.sendButtonIdle;
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
     : 'bg-surface-primary pb-4 pt-2 md:pb-5';
@@ -2532,82 +2158,45 @@ export function Chat({
     </div>
   ) : null;
 
-  const renderComposerInput = (
+  const renderComposer = (
     source: 'empty' | 'composer',
     variant: 'empty' | 'main',
     placeholder: string,
-  ) => {
-    const attached = Boolean(pendingAttachment);
-    const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
-    const textareaClass = attached
-      ? variant === 'empty'
-        ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
-        : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none resize-none min-h-[52px] max-h-[180px] overflow-y-auto'
-      : variant === 'empty'
-        ? 'w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto'
-        : 'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto';
-
-    if (composerSuppressed) {
-      return (
-        <button
-          type="button"
-          onClick={() => resumeComposerFocus(source)}
-          className={clsx(
-            'w-full rounded-2xl py-6 text-left',
-            variant === 'empty' ? 'px-4 text-[16px]' : 'px-3.5 text-[14px]',
-            darkEmbedded ? 'text-white/45' : 'text-text-tertiary',
-          )}
-        >
-          对话已完成，点击后继续输入...
-        </button>
-      );
-    }
-
-    const textarea = (
-      <textarea
-        ref={inputRef}
+    options?: {
+      className?: string;
+      showContextUsage?: boolean;
+      showCancelWhenBusy?: boolean;
+    },
+  ) => (
+    <>
+      <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
+      <ChatComposer
+        ref={composerRef}
+        theme={composerTheme}
+        variant={variant}
+        className={options?.className}
         value={input}
-        onChange={(e) => {
-          setInput(e.target.value);
-          syncInputHeight();
-        }}
-        onFocus={() => handleComposerFocus(source)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-            e.preventDefault();
-            handleSubmit(e as any);
-            if (inputRef.current) inputRef.current.style.height = 'auto';
-          }
-        }}
+        onValueChange={setInput}
+        onSubmit={() => sendMessage(input, pendingAttachment || undefined)}
         placeholder={placeholder}
-        className={clsx(textareaClass, composerTextClass)}
-        data-ime={source === 'empty' ? 'chat-composer-empty' : 'chat-composer-main'}
-        spellCheck={false}
-        autoCorrect="off"
-        autoCapitalize="off"
-        readOnly={isProcessing}
-        aria-disabled={isProcessing}
-        rows={1}
+        attachment={pendingAttachment}
+        onPickAttachment={allowFileUpload ? pickAttachment : undefined}
+        onClearAttachment={clearPendingAttachment}
+        modelOptions={chatModelOptions}
+        selectedModelKey={selectedChatModelKey}
+        onSelectedModelKeyChange={setSelectedChatModelKey}
+        isBusy={isProcessing}
+        audioState={isTranscribingAudio ? 'transcribing' : isRecordingAudio ? 'recording' : 'idle'}
+        onAudioAction={handleAudioInput}
+        onCancel={handleCancel}
+        showCancelWhenBusy={options?.showCancelWhenBusy}
+        trailingContent={options?.showContextUsage ? composerContextUsageIndicator : null}
+        onFocus={() => handleComposerFocus(source)}
+        suppressed={composerSuppressed}
+        onResumeFromSuppressed={() => resumeComposerFocus(source)}
       />
-    );
-
-    if (!pendingAttachment) {
-      return textarea;
-    }
-
-    return (
-      <div className={wrapperClass}>
-        <ComposerAttachmentPreview
-          attachment={pendingAttachment}
-          darkEmbedded={darkEmbedded}
-          variant={variant}
-          onRemove={clearPendingAttachment}
-        >
-          {textarea}
-        </ComposerAttachmentPreview>
-      </div>
-    );
-  };
+    </>
+  );
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
@@ -2712,81 +2301,11 @@ export function Chat({
     </div>
   ) : null;
 
-  const emptyComposerForm = (
-    <form onSubmit={handleSubmit} className="relative w-full">
-      <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-      <ChatComposerFrame theme={composerTheme} variant="empty">
-        {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
-        <div className="flex items-center justify-between px-2 pb-1">
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-              <Plus className="w-[18px] h-[18px]" />
-            </button>
-            <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-              <button
-                type="button"
-                onClick={() => setShowModelPicker((prev) => !prev)}
-                className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-              >
-                <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-              </button>
-              {showModelPicker && (
-                <div className={composerModelPickerClass}>
-                  {chatModelOptions.length ? chatModelOptions.map((option) => {
-                    const active = option.key === selectedChatModelKey;
-                    return (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => {
-                          setSelectedChatModelKey(option.key);
-                          closeModelPicker();
-                        }}
-                        className={clsx(
-                          'w-full px-3 py-2.5 text-left transition-colors',
-                          active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                        )}
-                      >
-                        <div className="text-sm font-medium truncate">{option.modelName}</div>
-                        <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                      </button>
-                    );
-                  }) : (
-                    <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleAudioInput}
-              disabled={isTranscribingAudio}
-              className={clsx(
-                'p-2 transition-colors',
-                isRecordingAudio ? 'text-red-500 hover:text-red-600' : composerSubtleButtonClass,
-                isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-              )}
-              title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-            >
-              {isTranscribingAudio ? (
-                <Loader2 className="w-[18px] h-[18px] animate-spin" />
-              ) : isRecordingAudio ? (
-                <Square className="w-[18px] h-[18px] fill-current" />
-              ) : (
-                <Mic className="w-[18px] h-[18px]" />
-              )}
-            </button>
-            {composerContextUsageIndicator}
-            <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-            </button>
-          </div>
-        </div>
-      </ChatComposerFrame>
-    </form>
+  const emptyComposerForm = renderComposer(
+    'empty',
+    'empty',
+    '问我任何问题，使用 @ 引用文件，/ 执行指令...',
+    { showContextUsage: true, showCancelWhenBusy: false },
   );
 
   return (
@@ -2922,79 +2441,10 @@ export function Chat({
               )}
 
               {/* 居中的输入框 (Codex Style) */}
-              <form onSubmit={handleSubmit} className="relative w-full mt-10">
-                <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                <ChatComposerFrame theme={composerTheme} variant="empty">
-                  {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
-                  <div className="flex items-center justify-between px-2 pb-1">
-                    <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-                        <Plus className="w-[18px] h-[18px]" />
-                      </button>
-                      <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowModelPicker((prev) => !prev)}
-                          className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-                        >
-                          <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                          <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-                        </button>
-                        {showModelPicker && (
-                          <div className={composerModelPickerClass}>
-                            {chatModelOptions.length ? chatModelOptions.map((option) => {
-                              const active = option.key === selectedChatModelKey;
-                              return (
-                                <button
-                                  key={option.key}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedChatModelKey(option.key);
-                                    closeModelPicker();
-                                  }}
-                                  className={clsx(
-                                    'w-full px-3 py-2.5 text-left transition-colors',
-                                    active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                                  )}
-                                >
-                                  <div className="text-sm font-medium truncate">{option.modelName}</div>
-                                  <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                                </button>
-                              );
-                            }) : (
-                              <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleAudioInput}
-                        disabled={isTranscribingAudio}
-                        className={clsx(
-                          'p-2 transition-colors',
-                          isRecordingAudio ? 'text-red-500 hover:text-red-600' : 'text-text-tertiary hover:text-text-secondary',
-                          isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-                        )}
-                        title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-                      >
-                        {isTranscribingAudio ? (
-                          <Loader2 className="w-[18px] h-[18px] animate-spin" />
-                        ) : isRecordingAudio ? (
-                          <Square className="w-[18px] h-[18px] fill-current" />
-                        ) : (
-                          <Mic className="w-[18px] h-[18px]" />
-                        )}
-                      </button>
-                      <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-                        {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-                </ChatComposerFrame>
-              </form>
+              {renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                className: 'mt-10',
+                showCancelWhenBusy: false,
+              })}
             </div>
             {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
             <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
@@ -3054,84 +2504,10 @@ export function Chat({
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="relative w-full">
-                  <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                  <ChatComposerFrame theme={composerTheme} variant="main">
-                    {renderComposerInput('composer', 'main', '发送消息...')}
-                    <div className="flex items-center justify-between px-1.5 pb-0.5">
-                      <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-                          <Plus className="w-[18px] h-[18px]" />
-                        </button>
-                        <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowModelPicker((prev) => !prev)}
-                            className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-                          >
-                            <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                            <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-                          </button>
-                          {showModelPicker && (
-                            <div className={composerModelPickerClass}>
-                              {chatModelOptions.length ? chatModelOptions.map((option) => {
-                                const active = option.key === selectedChatModelKey;
-                                return (
-                                  <button
-                                    key={option.key}
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedChatModelKey(option.key);
-                                      closeModelPicker();
-                                    }}
-                                    className={clsx(
-                                      'w-full px-3 py-2.5 text-left transition-colors',
-                                      active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                                    )}
-                                  >
-                                    <div className="text-sm font-medium truncate">{option.modelName}</div>
-                                    <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                                  </button>
-                                );
-                              }) : (
-                                <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isProcessing ? (
-                          <button type="button" onClick={handleCancel} className={clsx('p-2 rounded-lg transition-colors', darkEmbedded ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50')} title="停止生成"><StopCircle className="w-5 h-5" /></button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleAudioInput}
-                            disabled={isTranscribingAudio}
-                            className={clsx(
-                              'p-2 transition-colors',
-                              isRecordingAudio ? 'text-red-500 hover:text-red-600' : 'text-text-tertiary hover:text-text-secondary',
-                              isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-                            )}
-                            title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-                          >
-                            {isTranscribingAudio ? (
-                              <Loader2 className="w-[18px] h-[18px] animate-spin" />
-                            ) : isRecordingAudio ? (
-                              <Square className="w-[18px] h-[18px] fill-current" />
-                            ) : (
-                              <Mic className="w-[18px] h-[18px]" />
-                            )}
-                          </button>
-                        )}
-                        {composerContextUsageIndicator}
-                        <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-                          {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-                        </button>
-                      </div>
-                    </div>
-                  </ChatComposerFrame>
-                </form>
+                {renderComposer('composer', 'main', '发送消息...', {
+                  showContextUsage: true,
+                  showCancelWhenBusy: true,
+                })}
                   </>
                 )}
               </div>

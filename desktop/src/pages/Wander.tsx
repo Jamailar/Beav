@@ -383,7 +383,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 80) || 'wander-draft';
-    return `wander/${safeName}.md`;
+    return `wander/${safeName}.redpost`;
   };
 
   const startCreateInRedClaw = () => {
@@ -450,9 +450,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '2. 给出一篇完整正文（可直接发布，结构清晰）。',
       '3. 给出标签建议（8-12个）。',
       '4. 给出封面文案建议（2-3个）。',
-      `5. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：app_cli(command="manuscripts write --path \\"${suggestedManuscriptPath}\\"", payload={ content: "...完整 markdown..." })。`,
-      '6. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
-      `7. 最终回复里只有在工具成功后才能回显保存路径，并且必须使用工具返回的真实路径；不要只复述建议路径 ${suggestedManuscriptPath}。`,
+      '5. 这是小红书图文任务，必须保存成 `.redpost` 工程，不要保存成单个 `.md` 文件。',
+      `6. 如目标工程不存在，先调用 app_cli 创建 \`.redpost\` 工程，再写入正文；也可以直接写入该工程路径，让宿主自动建包。推荐路径：${suggestedManuscriptPath}。`,
+      `7. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：app_cli(command="manuscripts write --path \\"${suggestedManuscriptPath}\\"", payload={ content: "...完整 markdown..." })。`,
+      '8. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
+      `9. 最终回复里只有在工具成功后才能回显保存路径，并且必须使用工具返回的真实路径；不要只复述建议路径 ${suggestedManuscriptPath}。`,
     ].join('\n');
 
     onNavigateToRedClaw({

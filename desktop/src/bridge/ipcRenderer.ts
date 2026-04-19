@@ -18,6 +18,7 @@ const channelListeners = new Map<string, Map<Listener, ListenerRecord>>();
 const explicitCommandRoutes: Record<string, string> = {
   'spaces:list': 'spaces_list',
   'advisors:list': 'advisors_list',
+  'advisors:list-templates': 'advisors_list_templates',
   'knowledge:list': 'knowledge_list',
   'knowledge:list-youtube': 'knowledge_list_youtube',
   'knowledge:docs:list': 'knowledge_docs_list',
@@ -379,6 +380,15 @@ function createIpcRenderer() {
           normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
         },
       ),
+      listTemplates: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'advisors_list_templates',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'advisors:list-templates',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
       create: (payload: Record<string, unknown>) => invokeChannel('advisors:create', payload),
       update: (payload: Record<string, unknown>) => invokeChannel('advisors:update', payload),
       delete: (advisorId: string) => invokeChannel('advisors:delete', advisorId),
@@ -502,6 +512,7 @@ function createIpcRenderer() {
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
+    pickWorkspaceDir: () => invokeChannel('settings:pick-workspace-dir'),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),

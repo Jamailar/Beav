@@ -11,7 +11,7 @@
 请输出一个严格的JSON对象，包含 "steps" 数组。每个 step 包含：
 - id: 步骤ID (字符串)
 - description: 步骤详细描述
-- tool: 推荐使用的工具名称 (可选，如 "duckduckgo_search")
+- tool: 推荐使用的工具名称 (可选，如 "bash")
 
 请确保步骤逻辑严密，顺序合理。
 
@@ -36,8 +36,9 @@
    - Step 5: (可选) 验证修改 (`run_command`)。
 
 3. **信息检索**：
-   - Step 1: 使用 `duckduckgo_search` 搜索关键词。
-   - Step 2: 综合搜索结果。
+   - Step 1: 优先使用当前运行时真实暴露的工具进行检索。
+   - Step 2: 如果没有外部检索工具，就先用 `bash(command="rg ...")`、`bash(command="find ...")`、`bash(command="cat ...")` 在当前工作区内收集证据。
+   - Step 3: 综合检索结果。
 
 4. **批量数据提取 (Batch Extraction)**：
    - **场景**：需要从大量文件中提取特定字段（如“所有 meta.json 中的标题”）。

@@ -312,9 +312,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     model_name_chatroom: '',
     model_name_knowledge: '',
     model_name_redclaw: '',
-    search_provider: 'duckduckgo',
-    search_endpoint: '',
-    search_api_key: '',
     proxy_enabled: false,
     proxy_url: '',
     proxy_bypass: 'localhost,127.0.0.1,::1',
@@ -2064,9 +2061,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           model_name_chatroom: settings.model_name_chatroom || '',
           model_name_knowledge: settings.model_name_knowledge || '',
           model_name_redclaw: settings.model_name_redclaw || '',
-          search_provider: settings.search_provider || 'duckduckgo',
-          search_endpoint: settings.search_endpoint || '',
-          search_api_key: settings.search_api_key || '',
           proxy_enabled: Boolean(settings.proxy_enabled),
           proxy_url: settings.proxy_url || '',
           proxy_bypass: settings.proxy_bypass || 'localhost,127.0.0.1,::1',
@@ -2636,6 +2630,32 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
+  const handlePickWorkspaceDir = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.pickWorkspaceDir();
+      if (!result?.success || !String(result.path || '').trim()) {
+        if (!result?.canceled && result?.error) {
+          void appAlert(`选择工作区目录失败：${String(result.error)}`);
+        }
+        return;
+      }
+      setFormData((prev) => ({
+        ...prev,
+        workspace_dir: String(result.path || '').trim(),
+      }));
+    } catch (error) {
+      console.error('Failed to pick workspace dir', error);
+      void appAlert(`选择工作区目录失败：${String(error)}`);
+    }
+  }, []);
+
+  const handleResetWorkspaceDir = useCallback(() => {
+    setFormData((prev) => ({
+      ...prev,
+      workspace_dir: '',
+    }));
+  }, []);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatus('saving');
@@ -2799,6 +2819,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 appVersion={appVersion}
                 formData={formData}
                 setFormData={setFormData}
+                handlePickWorkspaceDir={handlePickWorkspaceDir}
+                handleResetWorkspaceDir={handleResetWorkspaceDir}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}

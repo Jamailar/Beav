@@ -55,3 +55,9 @@
 当前调试产物：
 
 - `RedBox/src-tauri/target/debug/redbox`
+
+## Documentation
+
+- 开发文档总入口见 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/README.md)
+- 协作规则见 [CONTRIBUTING.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/CONTRIBUTING.md)
+- 模块级说明优先查看对应目录旁边的 `README.md` 或 `*.README.md`

@@ -413,11 +413,12 @@ function App() {
   const shouldShowStartupMigration = Boolean(
     startupMigration
       && startupMigration.shouldShowModal
+      && !startupMigrationDismissed
       && (
         startupMigration.status === 'running'
         || startupMigration.status === 'completed'
         || startupMigration.status === 'failed'
-        || (!startupMigrationDismissed && startupMigration.status === 'pending')
+        || startupMigration.status === 'pending'
       ),
   );
 
@@ -436,6 +437,13 @@ function App() {
 
   const handleCloseStartupMigration = useCallback(() => {
     if (startupMigration?.status === 'running') return;
+    setStartupMigration((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        shouldShowModal: false,
+      };
+    });
     setStartupMigrationDismissed(true);
   }, [startupMigration?.status]);
 

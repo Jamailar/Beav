@@ -40,6 +40,11 @@ const TASK_LABEL: Record<AuthoringTaskType, string> = {
     expand_from_xhs: '小红书扩写公众号',
 };
 
+const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
+    xiaohongshu: '保存时默认创建 `.redpost` 图文工程，不要落成单个 `.md` 文件。',
+    wechat_official_account: '保存时默认创建 `.redarticle` 长文工程，不要落成单个 `.md` 文件。',
+};
+
 export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) {
     const brief = String(input.brief || '').trim();
     const sourceTitle = String(input.sourceTitle || '').trim();
@@ -62,6 +67,7 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
 
     const content = [
         brief || `请为${PLATFORM_LABEL[input.platform]}启动一个新的创作任务。`,
+        `保存规则：${PLATFORM_SAVE_RULE[input.platform]}`,
         sourceBlocks.length > 0 ? ['\n参考素材：', ...sourceBlocks].join('\n') : '',
     ].filter(Boolean).join('\n\n').trim();
 

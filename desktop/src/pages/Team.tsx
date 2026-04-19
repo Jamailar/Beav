@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, MessageSquarePlus, Plus, Users } from 'lucide-react';
+import { BookCopy, ChevronDown, MessageSquarePlus, Plus, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import { CreativeChat, type CreativeChatRoom } from './CreativeChat';
-import { Advisors, type AdvisorProfile } from './Advisors';
+import { Advisors, type AdvisorCreateMode, type AdvisorProfile } from './Advisors';
 import type { TeamSection } from '../App';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 
@@ -62,6 +62,7 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
   const [roomCreateRequestKey, setRoomCreateRequestKey] = useState(0);
   const [advisorCreateRequestKey, setAdvisorCreateRequestKey] = useState(0);
+  const [advisorCreateMode, setAdvisorCreateMode] = useState<AdvisorCreateMode>('manual');
   const [isCreativeChatExecuting, setIsCreativeChatExecuting] = useState(false);
   const [isCreatePickerOpen, setIsCreatePickerOpen] = useState(false);
   const [isRoomsSectionOpen, setIsRoomsSectionOpen] = useState(true);
@@ -170,8 +171,9 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
     setIsCreatePickerOpen(false);
   };
 
-  const openAdvisorCreate = () => {
+  const openAdvisorCreate = (mode: AdvisorCreateMode = 'manual') => {
     setActiveSection('members');
+    setAdvisorCreateMode(mode);
     setAdvisorCreateRequestKey((value) => value + 1);
     setIsCreatePickerOpen(false);
   };
@@ -214,13 +216,26 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
 
                     <button
                       type="button"
-                      onClick={openAdvisorCreate}
+                      onClick={() => openAdvisorCreate('manual')}
                       className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-surface-secondary/70"
                     >
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
                         <Users className="w-4 h-4" />
                       </div>
                       <div className="text-sm font-medium text-text-primary">添加成员</div>
+                    </button>
+
+                    <div className="mx-4 h-px bg-border" />
+
+                    <button
+                      type="button"
+                      onClick={() => openAdvisorCreate('template')}
+                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-surface-secondary/70"
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
+                        <BookCopy className="w-4 h-4" />
+                      </div>
+                      <div className="text-sm font-medium text-text-primary">从模板添加成员</div>
                     </button>
                   </div>
                 </div>
@@ -400,6 +415,7 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
               onSelectedAdvisorIdChange={setSelectedAdvisorId}
               onAdvisorsChange={setAdvisors}
               createRequestKey={advisorCreateRequestKey}
+              createRequestMode={advisorCreateMode}
             />
           </div>
         )}
