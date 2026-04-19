@@ -1,3 +1,4 @@
+use crate::commands::manuscripts::sync_manuscript_package_html_assets;
 use crate::knowledge;
 use crate::knowledge_index;
 use crate::knowledge_index::catalog::KnowledgeCatalogSummary;
@@ -7,7 +8,9 @@ use crate::persistence::{
 };
 use crate::*;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -108,6 +111,320 @@ pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Re
             "assets": assets,
         }),
     )
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoverTemplateRecord {
+    id: String,
+    name: String,
+    template_image_path: Option<String>,
+    style_hint: String,
+    title_guide: String,
+    prompt_switches: Option<Value>,
+    model: String,
+    quality: String,
+    count: i64,
+    updated_at: String,
+    prompt: Option<String>,
+    reference_image_paths: Vec<String>,
+    aspect_ratio: Option<String>,
+    size: Option<String>,
+    project_id: Option<String>,
+    title_prefix: Option<String>,
+}
+
+fn cover_templates_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = cover_root(state)?.join("templates");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn cover_template_assets_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = cover_templates_root(state)?.join("assets");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn cover_template_catalog_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(cover_templates_root(state)?.join("catalog.json"))
+}
+
+fn read_cover_template_catalog(
+    state: &State<'_, AppState>,
+) -> Result<Vec<CoverTemplateRecord>, String> {
+    let path = cover_template_catalog_path(state)?;
+    let records = read_json_value_or(&path, json!({ "templates": [] }))
+        .get("templates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<CoverTemplateRecord>(item).ok())
+        .collect::<Vec<_>>();
+    Ok(records)
+}
+
+fn persist_cover_template_catalog(
+    state: &State<'_, AppState>,
+    templates: &[CoverTemplateRecord],
+) -> Result<(), String> {
+    write_json_value(
+        &cover_template_catalog_path(state)?,
+        &json!({
+            "version": 1,
+            "templates": templates,
+        }),
+    )
+}
+
+fn relative_cover_path_from_absolute(cover_root: &Path, absolute_path: &Path) -> Option<String> {
+    let normalized = normalize_legacy_workspace_path(absolute_path);
+    normalized
+        .strip_prefix(cover_root)
+        .ok()
+        .map(|value| normalize_relative_path(value.to_string_lossy().as_ref()))
+}
+
+fn cover_template_public_value(cover_root: &Path, template: &CoverTemplateRecord) -> Value {
+    let reference_images = template
+        .reference_image_paths
+        .iter()
+        .map(|rel| file_url_for_path(&cover_root.join(rel)))
+        .collect::<Vec<_>>();
+    let template_image = template
+        .template_image_path
+        .as_ref()
+        .map(|rel| file_url_for_path(&cover_root.join(rel)));
+    json!({
+        "id": template.id,
+        "name": template.name,
+        "templateImage": template_image.or_else(|| reference_images.first().cloned()),
+        "styleHint": template.style_hint,
+        "titleGuide": template.title_guide,
+        "promptSwitches": template.prompt_switches,
+        "model": template.model,
+        "quality": template.quality,
+        "count": template.count,
+        "updatedAt": template.updated_at,
+        "prompt": template.prompt,
+        "referenceImages": reference_images,
+        "aspectRatio": template.aspect_ratio,
+        "size": template.size,
+        "projectId": template.project_id,
+        "titlePrefix": template.title_prefix,
+    })
+}
+
+fn sanitize_template_asset_label(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let fallback = format!("template-{}", now_ms());
+    if trimmed.is_empty() {
+        return fallback;
+    }
+    let file_name = Path::new(trimmed)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(trimmed);
+    let normalized = normalize_relative_path(file_name);
+    let stem = Path::new(&normalized)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("template");
+    let cleaned = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if cleaned.is_empty() {
+        fallback
+    } else {
+        cleaned
+    }
+}
+
+fn build_cover_template_asset_path(
+    asset_root: &Path,
+    source_path: Option<&Path>,
+    hint: &str,
+) -> PathBuf {
+    let extension = source_path
+        .and_then(|path| path.extension().and_then(|value| value.to_str()))
+        .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "png".to_string());
+    let label = sanitize_template_asset_label(hint);
+    asset_root.join(format!("{}-{}.{}", label, now_ms(), extension))
+}
+
+fn persist_cover_template_image_source(
+    state: &State<'_, AppState>,
+    image_source: &str,
+    file_hint: &str,
+) -> Result<(String, String), String> {
+    let cover_root = cover_root(state)?;
+    let asset_root = cover_template_assets_root(state)?;
+    let trimmed = image_source.trim();
+    if trimmed.is_empty() {
+        return Err("缺少模板图".to_string());
+    }
+
+    if let Some(source_path) = resolve_local_path(trimmed).filter(|path| path.exists()) {
+        let normalized = normalize_legacy_workspace_path(&source_path);
+        if let Some(relative) = relative_cover_path_from_absolute(&cover_root, &normalized) {
+            return Ok((relative, file_url_for_path(&normalized)));
+        }
+        let target = build_cover_template_asset_path(&asset_root, Some(&normalized), file_hint);
+        fs::copy(&normalized, &target).map_err(|error| error.to_string())?;
+        let relative = relative_cover_path_from_absolute(&cover_root, &target)
+            .ok_or_else(|| "模板图路径无效".to_string())?;
+        return Ok((relative, file_url_for_path(&target)));
+    }
+
+    let materialized = materialize_image_source(trimmed, &asset_root)?;
+    let normalized = normalize_legacy_workspace_path(&materialized);
+    let relative = relative_cover_path_from_absolute(&cover_root, &normalized)
+        .ok_or_else(|| "模板图路径无效".to_string())?;
+    Ok((relative, file_url_for_path(&normalized)))
+}
+
+fn collect_cover_template_paths(templates: &[CoverTemplateRecord]) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    for template in templates {
+        if let Some(path) = template.template_image_path.as_ref() {
+            paths.insert(normalize_relative_path(path));
+        }
+        for path in &template.reference_image_paths {
+            paths.insert(normalize_relative_path(path));
+        }
+    }
+    paths
+}
+
+fn prune_cover_template_assets(
+    state: &State<'_, AppState>,
+    templates: &[CoverTemplateRecord],
+) -> Result<(), String> {
+    let cover_root = cover_root(state)?;
+    let templates_root = cover_templates_root(state)?;
+    let keep = collect_cover_template_paths(templates);
+
+    fn walk(dir: &Path, cover_root: &Path, keep: &HashSet<String>) -> Result<(), String> {
+        if !dir.exists() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, cover_root, keep)?;
+                continue;
+            }
+            if path.file_name().and_then(|value| value.to_str()) == Some("catalog.json") {
+                continue;
+            }
+            let Some(relative) = relative_cover_path_from_absolute(cover_root, &path) else {
+                continue;
+            };
+            if !keep.contains(&relative) {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    walk(&templates_root, &cover_root, &keep)
+}
+
+fn cover_template_record_from_payload(
+    state: &State<'_, AppState>,
+    payload: &Value,
+    existing: Option<&CoverTemplateRecord>,
+) -> Result<CoverTemplateRecord, String> {
+    let id = payload_string(payload, "id")
+        .or_else(|| existing.map(|item| item.id.clone()))
+        .unwrap_or_else(|| make_id("cover-template"));
+    let name = payload_string(payload, "name")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "模板名称不能为空".to_string())?;
+    let template_image_path = payload_string(payload, "templateImage")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| persist_cover_template_image_source(state, &value, &name))
+        .transpose()?
+        .map(|(relative, _)| relative)
+        .or_else(|| existing.and_then(|item| item.template_image_path.clone()));
+    let reference_image_paths = payload_field(payload, "referenceImages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| persist_cover_template_image_source(state, value, &name))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .map(|items| {
+            items
+                .into_iter()
+                .map(|(relative, _)| relative)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            existing
+                .map(|item| item.reference_image_paths.clone())
+                .unwrap_or_default()
+        });
+    let count = payload_field(payload, "count")
+        .and_then(Value::as_i64)
+        .or_else(|| existing.map(|item| item.count))
+        .unwrap_or(1)
+        .clamp(1, 4);
+    Ok(CoverTemplateRecord {
+        id,
+        name,
+        template_image_path,
+        style_hint: payload_string(payload, "styleHint")
+            .or_else(|| existing.map(|item| item.style_hint.clone()))
+            .unwrap_or_default(),
+        title_guide: payload_string(payload, "titleGuide")
+            .or_else(|| existing.map(|item| item.title_guide.clone()))
+            .unwrap_or_default(),
+        prompt_switches: payload_field(payload, "promptSwitches")
+            .cloned()
+            .or_else(|| existing.and_then(|item| item.prompt_switches.clone())),
+        model: payload_string(payload, "model")
+            .or_else(|| existing.map(|item| item.model.clone()))
+            .unwrap_or_else(|| "gpt-image-1".to_string()),
+        quality: payload_string(payload, "quality")
+            .or_else(|| existing.map(|item| item.quality.clone()))
+            .unwrap_or_else(|| "standard".to_string()),
+        count,
+        updated_at: payload_string(payload, "updatedAt")
+            .or_else(|| existing.map(|item| item.updated_at.clone()))
+            .unwrap_or_else(now_iso),
+        prompt: payload_string(payload, "prompt")
+            .or_else(|| existing.and_then(|item| item.prompt.clone())),
+        reference_image_paths,
+        aspect_ratio: payload_string(payload, "aspectRatio")
+            .or_else(|| existing.and_then(|item| item.aspect_ratio.clone())),
+        size: payload_string(payload, "size")
+            .or_else(|| existing.and_then(|item| item.size.clone())),
+        project_id: payload_string(payload, "projectId")
+            .or_else(|| existing.and_then(|item| item.project_id.clone())),
+        title_prefix: payload_string(payload, "titlePrefix")
+            .or_else(|| existing.and_then(|item| item.title_prefix.clone())),
+    })
 }
 
 fn summary_to_legacy_note(summary: &KnowledgeCatalogSummary) -> Value {
@@ -391,6 +708,10 @@ pub fn handle_library_channel(
             | "cover:list"
             | "cover:open-root"
             | "cover:open"
+            | "cover:templates:list"
+            | "cover:templates:save"
+            | "cover:templates:delete"
+            | "cover:templates:import-legacy"
             | "cover:save-template-image"
             | "cover:generate"
     ) {
@@ -708,10 +1029,13 @@ pub fn handle_library_channel(
                 Ok(result)
             }
             "media:bind" => {
+                let manuscript_path =
+                    normalize_optional_string(payload_string(payload, "manuscriptPath"));
+                let role = payload_string(payload, "role")
+                    .map(|value| value.trim().to_ascii_lowercase())
+                    .filter(|value| !value.is_empty());
                 let result = with_store_mut(state, |store| {
                     let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                    let manuscript_path =
-                        normalize_optional_string(payload_string(payload, "manuscriptPath"));
                     let Some(asset) = store
                         .media_assets
                         .iter_mut()
@@ -719,11 +1043,74 @@ pub fn handle_library_channel(
                     else {
                         return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
                     };
-                    asset.bound_manuscript_path = manuscript_path;
+                    asset.bound_manuscript_path = manuscript_path.clone();
                     asset.updated_at = now_iso();
                     Ok(json!({ "success": true, "asset": asset.clone() }))
                 })?;
                 persist_media_workspace_catalog(state)?;
+                if result.get("success").and_then(Value::as_bool) == Some(true) {
+                    if let (Some(file_path), Some(role)) =
+                        (manuscript_path.as_deref(), role.as_deref())
+                    {
+                        let full_path = resolve_manuscript_path(state, file_path)?;
+                        if full_path.is_dir()
+                            && is_manuscript_package_name(
+                                full_path
+                                    .file_name()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or(""),
+                            )
+                            && matches!(role, "cover" | "image")
+                        {
+                            let asset_id = payload_string(payload, "assetId").unwrap_or_default();
+                            if role == "cover" {
+                                write_json_value(
+                                    &package_cover_path(&full_path),
+                                    &json!({ "assetId": asset_id }),
+                                )?;
+                            } else {
+                                let mut images = read_json_value_or(
+                                    &package_images_path(&full_path),
+                                    json!({ "items": [] }),
+                                );
+                                let items = images
+                                    .as_object_mut()
+                                    .and_then(|object| object.get_mut("items"))
+                                    .and_then(Value::as_array_mut)
+                                    .ok_or_else(|| "工程配图列表损坏".to_string())?;
+                                let exists = items.iter().any(|item| {
+                                    item.get("assetId").and_then(Value::as_str)
+                                        == Some(asset_id.as_str())
+                                });
+                                if !exists {
+                                    items.push(json!({ "assetId": asset_id }));
+                                }
+                                write_json_value(&package_images_path(&full_path), &images)?;
+                            }
+                            let file_name = full_path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .unwrap_or("Untitled");
+                            let rendered_state =
+                                if get_package_kind_from_file_name(file_name) == Some("post") {
+                                    sync_manuscript_package_html_assets(
+                                        Some(state),
+                                        &full_path,
+                                        file_name,
+                                        None,
+                                        None,
+                                    )?
+                                } else {
+                                    get_manuscript_package_state(&full_path)?
+                                };
+                            return Ok(json!({
+                                "success": true,
+                                "asset": result.get("asset").cloned().unwrap_or(Value::Null),
+                                "state": rendered_state
+                            }));
+                        }
+                    }
+                }
                 Ok(result)
             }
             "media:delete" => {
@@ -900,32 +1287,123 @@ pub fn handle_library_channel(
                 }
                 Ok(json!({ "success": false, "error": "封面资产没有可打开的路径" }))
             }
+            "cover:templates:list" => {
+                let cover_root = cover_root(state)?;
+                let mut templates = read_cover_template_catalog(state)?
+                    .into_iter()
+                    .map(|item| cover_template_public_value(&cover_root, &item))
+                    .collect::<Vec<_>>();
+                templates.sort_by(|a, b| {
+                    let left = b
+                        .get("updatedAt")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let right = a
+                        .get("updatedAt")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    left.cmp(right)
+                });
+                Ok(json!({ "success": true, "templates": templates }))
+            }
+            "cover:templates:save" => {
+                let template_payload = payload_field(payload, "template").unwrap_or(payload);
+                let mut templates = read_cover_template_catalog(state)?;
+                let existing_index = payload_string(template_payload, "id")
+                    .and_then(|id| templates.iter().position(|item| item.id == id));
+                let existing = existing_index.and_then(|index| templates.get(index));
+                let saved = cover_template_record_from_payload(state, template_payload, existing)?;
+                if let Some(index) = existing_index {
+                    templates[index] = saved.clone();
+                } else {
+                    templates.push(saved.clone());
+                }
+                templates.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                persist_cover_template_catalog(state, &templates)?;
+                prune_cover_template_assets(state, &templates)?;
+                let cover_root = cover_root(state)?;
+                Ok(json!({
+                    "success": true,
+                    "template": cover_template_public_value(&cover_root, &saved),
+                    "templates": templates
+                        .iter()
+                        .map(|item| cover_template_public_value(&cover_root, item))
+                        .collect::<Vec<_>>(),
+                }))
+            }
+            "cover:templates:delete" => {
+                let template_id = payload_string(payload, "templateId").unwrap_or_default();
+                if template_id.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "缺少模板 id" }));
+                }
+                let mut templates = read_cover_template_catalog(state)?;
+                let before = templates.len();
+                templates.retain(|item| item.id != template_id);
+                if templates.len() == before {
+                    return Ok(json!({ "success": false, "error": "模板不存在" }));
+                }
+                persist_cover_template_catalog(state, &templates)?;
+                prune_cover_template_assets(state, &templates)?;
+                let cover_root = cover_root(state)?;
+                Ok(json!({
+                    "success": true,
+                    "templates": templates
+                        .iter()
+                        .map(|item| cover_template_public_value(&cover_root, item))
+                        .collect::<Vec<_>>(),
+                }))
+            }
+            "cover:templates:import-legacy" => {
+                let incoming = payload_field(payload, "templates")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if incoming.is_empty() {
+                    return Ok(json!({ "success": true, "imported": 0, "templates": [] }));
+                }
+                let mut templates = read_cover_template_catalog(state)?;
+                let mut imported = 0usize;
+                for item in incoming {
+                    let template_id = payload_string(&item, "id");
+                    let existing_index = template_id
+                        .as_deref()
+                        .and_then(|id| templates.iter().position(|record| record.id == id));
+                    let existing = existing_index.and_then(|index| templates.get(index));
+                    let saved = cover_template_record_from_payload(state, &item, existing)?;
+                    if let Some(index) = existing_index {
+                        templates[index] = saved;
+                    } else {
+                        templates.push(saved);
+                    }
+                    imported += 1;
+                }
+                templates.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                persist_cover_template_catalog(state, &templates)?;
+                prune_cover_template_assets(state, &templates)?;
+                let cover_root = cover_root(state)?;
+                Ok(json!({
+                    "success": true,
+                    "imported": imported,
+                    "templates": templates
+                        .iter()
+                        .map(|item| cover_template_public_value(&cover_root, item))
+                        .collect::<Vec<_>>(),
+                }))
+            }
             "cover:save-template-image" => {
                 let image_source = payload_string(payload, "imageSource").unwrap_or_default();
                 if image_source.is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少模板图" }));
                 }
-                if let Some(source_path) =
-                    resolve_local_path(&image_source).filter(|path| path.exists())
-                {
-                    let file_name = source_path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| format!("cover-template-{}.png", now_ms()));
-                    let relative = format!("templates/{}", normalize_relative_path(&file_name));
-                    let target = cover_root(state)?.join(&relative);
-                    if let Some(parent) = target.parent() {
-                        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                    }
-                    fs::copy(&source_path, &target).map_err(|error| error.to_string())?;
-                    return Ok(json!({
-                        "success": true,
-                        "previewUrl": file_url_for_path(&target),
-                        "relativePath": relative,
-                    }));
-                }
-                Ok(json!({ "success": true, "previewUrl": image_source }))
+                let file_hint =
+                    payload_string(payload, "fileHint").unwrap_or_else(|| "template".to_string());
+                let (relative, preview_url) =
+                    persist_cover_template_image_source(state, &image_source, &file_hint)?;
+                Ok(json!({
+                    "success": true,
+                    "previewUrl": preview_url,
+                    "relativePath": relative,
+                }))
             }
             "cover:generate" => {
                 let count = payload_field(payload, "count")

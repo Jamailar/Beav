@@ -410,6 +410,34 @@ declare global {
         }>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
       };
+      startupMigration: {
+        getStatus: () => Promise<{
+          status?: string;
+          needsDbImport?: boolean;
+          shouldShowModal?: boolean;
+          legacyDbPath?: string | null;
+          legacyWorkspacePath?: string | null;
+          workspacePath?: string | null;
+          currentStep?: string | null;
+          message?: string | null;
+          error?: string | null;
+          progress?: number;
+          importedCounts?: Record<string, number> | null;
+        }>;
+        start: () => Promise<{
+          status?: string;
+          needsDbImport?: boolean;
+          shouldShowModal?: boolean;
+          legacyDbPath?: string | null;
+          legacyWorkspacePath?: string | null;
+          workspacePath?: string | null;
+          currentStep?: string | null;
+          message?: string | null;
+          error?: string | null;
+          progress?: number;
+          importedCounts?: Record<string, number> | null;
+        }>;
+      };
       officialAuth: {
         bootstrap: (payload?: { reason?: string }) => Promise<{
           success: boolean;
@@ -825,6 +853,12 @@ declare global {
       };
       cover: {
         saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;
+        templates: {
+          list: () => Promise<unknown>;
+          save: (payload: { template: Record<string, unknown> }) => Promise<unknown>;
+          delete: (payload: { templateId: string }) => Promise<unknown>;
+          importLegacy: (payload: { templates: Record<string, unknown>[] }) => Promise<unknown>;
+        };
       };
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;

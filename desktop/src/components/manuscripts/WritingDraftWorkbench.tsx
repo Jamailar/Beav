@@ -17,7 +17,15 @@ const ChatWorkspace = lazy(async () => ({
 }));
 
 type WritingDraftType = 'longform' | 'richpost' | 'unknown';
-type WritingWorkbenchTab = 'manuscript' | 'layout' | 'richpost' | 'article-card';
+type WritingWorkbenchTab = 'manuscript' | 'layout' | 'wechat' | 'richpost' | 'article-card';
+
+type HtmlPreviewSource = {
+  filePath?: string | null;
+  fileUrl?: string | null;
+  exists?: boolean;
+  hasContent?: boolean;
+  updatedAt?: number | null;
+};
 
 type MediaAssetLike = {
   id: string;
@@ -46,6 +54,8 @@ export interface WritingDraftWorkbenchProps {
   editorChatSessionId: string | null;
   isActive?: boolean;
   previewHtml?: string | null;
+  layoutPreview?: HtmlPreviewSource | null;
+  wechatPreview?: HtmlPreviewSource | null;
   hasGeneratedHtml?: boolean;
   coverAsset?: MediaAssetLike | null;
   imageAssets?: MediaAssetLike[];
@@ -72,6 +82,13 @@ function assetUrl(asset?: MediaAssetLike | null): string {
   return resolveAssetUrl(asset?.previewUrl || asset?.relativePath || asset?.absolutePath || '');
 }
 
+function buildPreviewFrameUrl(source?: string | null, updatedAt?: number | null): string {
+  const resolved = resolveAssetUrl(source || '');
+  if (!resolved) return '';
+  if (!updatedAt) return resolved;
+  return `${resolved}${resolved.includes('?') ? '&' : '?'}v=${updatedAt}`;
+}
+
 function MarkdownPreview({ content }: { content: string }) {
   return (
     <div className="mx-auto w-full max-w-[880px]">
@@ -84,6 +101,7 @@ function RichPostPreview({
   title,
   editorBody,
   previewHtml,
+  previewSource,
   coverAsset,
   imageAssets,
   hasGeneratedHtml,
@@ -91,6 +109,7 @@ function RichPostPreview({
   title: string;
   editorBody: string;
   previewHtml?: string | null;
+  previewSource?: HtmlPreviewSource | null;
   coverAsset?: MediaAssetLike | null;
   imageAssets: MediaAssetLike[];
   hasGeneratedHtml?: boolean;
@@ -98,14 +117,34 @@ function RichPostPreview({
   const galleryAssets = imageAssets.slice(0, 4);
   const coverSrc = assetUrl(coverAsset);
   const iframeHeight = 'min(960px, calc(100vh - 144px))';
+  const previewFrameUrl = buildPreviewFrameUrl(previewSource?.fileUrl || previewSource?.filePath, previewSource?.updatedAt);
+  const previewFileName = String(previewSource?.filePath || '').trim().split(/[\\/]/).filter(Boolean).pop() || '';
+  const hasHtmlFile = Boolean(previewSource?.exists);
+  const hasPreviewContent = Boolean(previewSource?.hasContent || previewHtml?.trim());
 
   return (
     <div className="h-full overflow-auto px-8 py-8">
       <div className="mx-auto w-full max-w-[520px] space-y-5">
-        {previewHtml?.trim() ? (
+        {hasHtmlFile && !hasPreviewContent ? (
+          <div className="rounded-2xl border border-dashed border-border bg-surface-primary px-6 py-10 text-center">
+            <div className="text-sm font-medium text-text-primary">图文预览尚未渲染</div>
+            <div className="mt-2 text-sm leading-6 text-text-tertiary">
+              {previewFileName || 'layout.html'} 会在模板创建后自动渲染，正文或素材更新后也会直接刷新这里的预览。
+            </div>
+          </div>
+        ) : previewFrameUrl ? (
+          <iframe
+            title="图文预览"
+            src={previewFrameUrl}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            className="w-full rounded-2xl border border-border bg-white"
+            style={{ height: iframeHeight }}
+          />
+        ) : previewHtml?.trim() ? (
           <iframe
             title="图文预览"
             srcDoc={previewHtml}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
             className="w-full rounded-2xl border border-border bg-white"
             style={{ height: iframeHeight }}
           />
@@ -139,25 +178,49 @@ function LongformPreview({
   title,
   editorBody,
   previewHtml,
+  previewSource,
   coverAsset,
   hasGeneratedHtml,
+  previewLabel,
 }: {
   title: string;
   editorBody: string;
   previewHtml?: string | null;
+  previewSource?: HtmlPreviewSource | null;
   coverAsset?: MediaAssetLike | null;
   hasGeneratedHtml?: boolean;
+  previewLabel?: string;
 }) {
   const coverSrc = assetUrl(coverAsset);
   const iframeHeight = 'min(980px, calc(100vh - 144px))';
+  const previewFrameUrl = buildPreviewFrameUrl(previewSource?.fileUrl || previewSource?.filePath, previewSource?.updatedAt);
+  const previewFileName = String(previewSource?.filePath || '').trim().split(/[\\/]/).filter(Boolean).pop() || '';
+  const hasHtmlFile = Boolean(previewSource?.exists);
+  const hasPreviewContent = Boolean(previewSource?.hasContent || previewHtml?.trim());
 
   return (
     <div className="h-full overflow-auto px-8 py-8">
       <div className="mx-auto w-full max-w-[1040px]">
-        {previewHtml?.trim() ? (
+        {hasHtmlFile && !hasPreviewContent ? (
+          <div className="mx-auto max-w-[860px] rounded-2xl border border-dashed border-border bg-surface-primary px-8 py-12 text-center">
+            <div className="text-sm font-medium text-text-primary">{previewLabel || 'HTML 预览'}尚未渲染</div>
+            <div className="mt-2 text-sm leading-6 text-text-tertiary">
+              {previewFileName || 'HTML 文件'} 已就位，生成后会直接刷新这里的预览。
+            </div>
+          </div>
+        ) : previewFrameUrl ? (
           <iframe
-            title="长文排版预览"
+            title={`${previewLabel || '长文'}预览`}
+            src={previewFrameUrl}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            className="w-full rounded-2xl border border-border bg-white"
+            style={{ height: iframeHeight }}
+          />
+        ) : previewHtml?.trim() ? (
+          <iframe
+            title={`${previewLabel || '长文'}预览`}
             srcDoc={previewHtml}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
             className="w-full rounded-2xl border border-border bg-white"
             style={{ height: iframeHeight }}
           />
@@ -233,6 +296,8 @@ export function WritingDraftWorkbench({
   editorChatSessionId,
   isActive = false,
   previewHtml,
+  layoutPreview = null,
+  wechatPreview = null,
   hasGeneratedHtml = false,
   coverAsset = null,
   imageAssets = [],
@@ -244,7 +309,7 @@ export function WritingDraftWorkbench({
 
   useEffect(() => {
     setActiveTab('manuscript');
-  }, [draftType, filePath, previewHtml]);
+  }, [draftType, filePath]);
 
   const isRichPost = draftType === 'richpost';
   const shortcuts = useMemo(
@@ -253,16 +318,32 @@ export function WritingDraftWorkbench({
   );
   const chatTitle = isRichPost ? '图文创作助手' : '长文写作助手';
   const draftLabel = isRichPost ? '图文稿' : '长文稿';
-  const tabs = isRichPost
-    ? [
-      { id: 'manuscript' as const, label: '稿件' },
-      { id: 'richpost' as const, label: '图文' },
-      { id: 'article-card' as const, label: '长文卡片' },
-    ]
-    : [
-      { id: 'manuscript' as const, label: '稿件' },
-      { id: 'layout' as const, label: '排版' },
+  const tabs = useMemo(() => {
+    if (isRichPost) {
+      return [
+        { id: 'manuscript' as const, label: '稿件' },
+        { id: 'richpost' as const, label: '图文' },
+        { id: 'article-card' as const, label: '长文卡片' },
+      ];
+    }
+
+    const nextTabs: Array<{ id: WritingWorkbenchTab; label: string }> = [
+      { id: 'manuscript', label: '稿件' },
+      { id: 'layout', label: '排版' },
     ];
+
+    if (wechatPreview?.exists || wechatPreview?.hasContent || wechatPreview?.fileUrl) {
+      nextTabs.push({ id: 'wechat', label: '公众号' });
+    }
+
+    return nextTabs;
+  }, [isRichPost, wechatPreview?.exists, wechatPreview?.fileUrl, wechatPreview?.hasContent]);
+
+  useEffect(() => {
+    if (tabs.some((tab) => tab.id === activeTab)) return;
+    setActiveTab('manuscript');
+  }, [activeTab, tabs]);
+
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || '稿件';
 
   return (
@@ -303,14 +384,26 @@ export function WritingDraftWorkbench({
                 title={title}
                 editorBody={editorBody}
                 previewHtml={previewHtml}
+                previewSource={layoutPreview}
                 coverAsset={coverAsset}
                 hasGeneratedHtml={hasGeneratedHtml}
+                previewLabel="排版"
+              />
+            ) : activeTab === 'wechat' ? (
+              <LongformPreview
+                title={title}
+                editorBody={editorBody}
+                previewSource={wechatPreview}
+                coverAsset={coverAsset}
+                hasGeneratedHtml={hasGeneratedHtml}
+                previewLabel="公众号"
               />
             ) : activeTab === 'richpost' ? (
               <RichPostPreview
                 title={title}
                 editorBody={editorBody}
                 previewHtml={previewHtml}
+                previewSource={layoutPreview}
                 coverAsset={coverAsset}
                 imageAssets={imageAssets}
                 hasGeneratedHtml={hasGeneratedHtml}

@@ -5,17 +5,20 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::Stdio;
 use std::thread;
+use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    commands::manuscripts::timeline_clip_duration_ms, get_default_package_entry,
-    get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative, make_id,
-    normalize_relative_path, now_i64, now_iso, now_ms, package_assets_path, package_cover_path,
-    package_editor_project_path, package_entry_path, package_images_path, package_manifest_path,
-    package_remotion_input_props_path, package_remotion_path, package_scene_ui_path,
-    package_timeline_path, package_track_ui_path, parse_json_value_from_text, read_json_value_or,
-    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
-    write_text_file, AppState,
+    commands::manuscripts::{sync_manuscript_package_html_assets, timeline_clip_duration_ms},
+    file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
+    get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
+    now_iso, now_ms, package_assets_path, package_content_map_path, package_cover_path,
+    package_editor_project_path, package_entry_path, package_images_path, package_layout_html_path,
+    package_layout_template_path, package_manifest_path, package_remotion_input_props_path,
+    package_remotion_path, package_scene_ui_path, package_timeline_path, package_track_ui_path,
+    package_wechat_html_path, package_wechat_template_path, parse_json_value_from_text,
+    read_json_value_or, redbox_project_root, resolve_manuscript_path, title_from_relative_path,
+    write_json_value, write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -93,6 +96,14 @@ fn sanitized_remotion_out_name(title: &str) -> String {
     } else {
         normalized
     }
+}
+
+fn file_modified_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
 }
 
 pub(crate) fn default_remotion_render_config(title: &str, render_mode: &str) -> Value {
@@ -2814,6 +2825,22 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .unwrap_or(fallback_title.as_str())
         .to_string();
     let package_kind = get_package_kind_from_file_name(file_name);
+    let content_map_path = package_content_map_path(package_path);
+    let content_map_exists = content_map_path.exists();
+    let layout_template_path = package_layout_template_path(package_path);
+    let layout_template_exists = layout_template_path.exists();
+    let wechat_template_path = package_wechat_template_path(package_path);
+    let wechat_template_exists = wechat_template_path.exists();
+    let layout_html_path = package_layout_html_path(package_path);
+    let layout_html_exists = layout_html_path.exists();
+    let layout_html_has_content = fs::metadata(&layout_html_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+    let wechat_html_path = package_wechat_html_path(package_path);
+    let wechat_html_exists = wechat_html_path.exists();
+    let wechat_html_has_content = fs::metadata(&wechat_html_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
     let editor_project = if package_kind == Some("video") {
         read_existing_editor_project(package_path)
     } else if package_kind == Some("audio") {
@@ -2920,8 +2947,53 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         "editorProject": editor_project.unwrap_or(Value::Null),
         "videoProject": video_project,
         "sceneUi": scene_ui,
-        "hasLayoutHtml": false,
-        "hasWechatHtml": false,
+        "contentMapExists": content_map_exists,
+        "contentMapFile": if content_map_exists {
+            json!(content_map_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "contentMapUpdatedAt": file_modified_at_ms(&content_map_path),
+        "layoutTemplateExists": layout_template_exists,
+        "wechatTemplateExists": wechat_template_exists,
+        "layoutTemplateFile": if layout_template_exists {
+            json!(layout_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "wechatTemplateFile": if wechat_template_exists {
+            json!(wechat_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutTemplateUpdatedAt": file_modified_at_ms(&layout_template_path),
+        "wechatTemplateUpdatedAt": file_modified_at_ms(&wechat_template_path),
+        "hasLayoutHtml": layout_html_has_content,
+        "hasWechatHtml": wechat_html_has_content,
+        "layoutHtmlExists": layout_html_exists,
+        "wechatHtmlExists": wechat_html_exists,
+        "layoutHtmlFile": if layout_html_exists {
+            json!(layout_html_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "wechatHtmlFile": if wechat_html_exists {
+            json!(wechat_html_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutHtmlFileUrl": if layout_html_exists {
+            json!(file_url_for_path(&layout_html_path))
+        } else {
+            Value::Null
+        },
+        "wechatHtmlFileUrl": if wechat_html_exists {
+            json!(file_url_for_path(&wechat_html_path))
+        } else {
+            Value::Null
+        },
+        "layoutHtmlUpdatedAt": file_modified_at_ms(&layout_html_path),
+        "wechatHtmlUpdatedAt": file_modified_at_ms(&wechat_html_path),
         "layoutHtml": "",
         "wechatHtml": ""
     }))
@@ -3001,9 +3073,14 @@ pub(crate) fn create_manuscript_package(
             &build_default_editor_project(title, content, 1080, 1080, 30),
         )?;
     } else if package_kind == "article" {
-        write_text_file(&package_path.join("layout.html"), "")?;
-        write_text_file(&package_path.join("wechat.html"), "")?;
+        write_json_value(
+            &package_cover_path(package_path),
+            &json!({ "assetId": Value::Null }),
+        )?;
+        write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
+        write_text_file(&package_layout_html_path(package_path), "")?;
+        write_text_file(&package_wechat_html_path(package_path), "")?;
     } else if package_kind == "post" {
         write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(
@@ -3011,6 +3088,13 @@ pub(crate) fn create_manuscript_package(
             &json!({ "assetId": Value::Null }),
         )?;
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
+        let _ = sync_manuscript_package_html_assets(
+            None,
+            package_path,
+            file_name,
+            Some(content),
+            None,
+        )?;
     }
     Ok(())
 }

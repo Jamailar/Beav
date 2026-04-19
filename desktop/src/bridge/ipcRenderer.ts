@@ -508,6 +508,35 @@ function createIpcRenderer() {
       getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
     },
+    startupMigration: {
+      getStatus: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(
+        'app:startup-migration-status',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallback: {
+            status: 'not-needed',
+            needsDbImport: false,
+            shouldShowModal: false,
+            progress: 0,
+          } as T,
+        },
+      ),
+      start: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(
+        'app:startup-migration-start',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallback: {
+            status: 'failed',
+            needsDbImport: true,
+            shouldShowModal: true,
+            progress: 0,
+            error: '启动迁移失败',
+          } as T,
+        },
+      ),
+    },
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh')
@@ -720,6 +749,12 @@ function createIpcRenderer() {
     ,
     cover: {
       saveTemplateImage: (payload: { imageSource: string }) => invokeChannel('cover:save-template-image', payload),
+      templates: {
+        list: () => invokeChannel('cover:templates:list'),
+        save: (payload: { template: Record<string, unknown> }) => invokeChannel('cover:templates:save', payload),
+        delete: (payload: { templateId: string }) => invokeChannel('cover:templates:delete', payload),
+        importLegacy: (payload: { templates: Record<string, unknown>[] }) => invokeChannel('cover:templates:import-legacy', payload),
+      }
     }
   };
 }

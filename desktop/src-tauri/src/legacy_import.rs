@@ -1,14 +1,14 @@
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    configured_workspace_dir, copy_dir_recursive, ensure_workspace_dirs, file_url_for_path,
-    hydrate_store_from_workspace_files, is_same_path, legacy_workspace_dir,
-    managed_workspace_dir_candidates, now_iso, preferred_workspace_dir,
-    should_force_preferred_workspace_dir, slug_from_relative_path, AppStore, ArchiveProfileRecord,
-    ArchiveSampleRecord, ChatMessageRecord, ChatSessionRecord, SessionTranscriptRecord,
-    SpaceRecord,
+    compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
+    hydrate_store_from_workspace_files, is_same_path, legacy_workspace_dir, now_iso, AppStore,
+    ArchiveProfileRecord, ArchiveSampleRecord, ChatMessageRecord, ChatSessionRecord,
+    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SpaceRecord,
+    UserMemoryRecord, WanderHistoryRecord,
 };
 
 pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
@@ -32,27 +32,19 @@ pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
 }
 
 pub(crate) fn run_sqlite_json_lines(db_path: &Path, sql: &str) -> Result<Vec<Value>, String> {
-    let output = std::process::Command::new("sqlite3")
-        .arg(db_path)
-        .arg(sql)
-        .output()
+    let connection = Connection::open(db_path).map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare(sql).map_err(|error| error.to_string())?;
+    let rows_iter = statement
+        .query_map([], |row| row.get::<_, String>(0))
         .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("sqlite3 failed with status {}", output.status)
-        } else {
-            stderr
-        });
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut rows = Vec::new();
-    for line in stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
+    for line in rows_iter {
+        let line = line.map_err(|error| error.to_string())?;
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
             rows.push(value);
         }
     }
@@ -90,6 +82,7 @@ pub(crate) fn detect_best_legacy_db() -> Option<PathBuf> {
     best.map(|(path, _)| path)
 }
 
+#[allow(dead_code)]
 pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) -> Option<PathBuf> {
     let direct = configured_workspace_dir(&store.settings);
     if direct.as_ref().is_some_and(|path| path.exists()) {
@@ -106,6 +99,7 @@ pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) 
         .filter(|path| path.exists())
 }
 
+#[allow(dead_code)]
 pub(crate) fn legacy_workspace_root_candidates(
     store: &AppStore,
     db_path: Option<&Path>,
@@ -133,6 +127,7 @@ pub(crate) fn legacy_workspace_root_candidates(
     deduped
 }
 
+#[allow(dead_code)]
 pub(crate) fn directory_has_entries(path: &Path) -> bool {
     fs::read_dir(path)
         .ok()
@@ -142,8 +137,14 @@ pub(crate) fn directory_has_entries(path: &Path) -> bool {
 
 pub(crate) fn normalize_legacy_workspace_path(path: &Path) -> PathBuf {
     let raw = path.display().to_string();
-    if raw.contains("/.redconvert/") || raw.ends_with("/.redconvert") {
-        return PathBuf::from(raw.replace("/.redconvert", "/.redbox"));
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    if raw.contains("/.redbox/") || raw.ends_with("/.redbox") {
+        let legacy = PathBuf::from(raw.replace("/.redbox", "/.redconvert"));
+        if legacy.exists() {
+            return legacy;
+        }
     }
     path.to_path_buf()
 }
@@ -201,6 +202,7 @@ pub(crate) fn extract_tags_from_text(text: &str) -> Vec<String> {
     tags
 }
 
+#[allow(dead_code)]
 pub(crate) fn migrate_legacy_workspace_dirs(
     target_root: &Path,
     legacy_root: &Path,
@@ -241,34 +243,21 @@ pub(crate) fn migrate_legacy_workspace_dirs(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn ensure_preferred_workspace_dir(
     store: &mut AppStore,
-    store_path: &Path,
+    _store_path: &Path,
 ) -> Result<PathBuf, String> {
-    let preferred = preferred_workspace_dir();
-    if let Some(parent) = preferred.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-
-    if !preferred.exists() {
-        if let Some(legacy) = legacy_workspace_dir().filter(|path| path.exists()) {
-            if fs::rename(&legacy, &preferred).is_err() {
-                copy_dir_recursive(&legacy, &preferred)?;
-            }
+    let chosen = compatible_workspace_base_dir(&store.settings);
+    if !is_same_path(
+        &chosen,
+        &legacy_workspace_dir().unwrap_or_else(|| PathBuf::from("__redbox_missing_legacy__")),
+    ) {
+        if let Some(parent) = chosen.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
+        fs::create_dir_all(&chosen).map_err(|error| error.to_string())?;
     }
-
-    let configured = configured_workspace_dir(&store.settings);
-    let chosen = if should_force_preferred_workspace_dir(configured.as_deref(), store_path) {
-        preferred
-    } else {
-        configured.unwrap_or_else(preferred_workspace_dir)
-    };
-
-    if let Some(parent) = chosen.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::create_dir_all(&chosen).map_err(|error| error.to_string())?;
 
     let settings_obj = store
         .settings
@@ -285,286 +274,495 @@ pub(crate) fn maybe_import_legacy_store(
     store: &mut AppStore,
     store_path: &Path,
 ) -> Result<(), String> {
-    let db_path = detect_best_legacy_db();
+    let db_path = detect_best_legacy_db().ok_or_else(|| "legacy database not found".to_string())?;
 
-    if let Some(db_path) = db_path.as_ref() {
-        if store.settings == json!({}) {
-            let rows = run_sqlite_json_lines(
-                db_path,
-                "select json_object('api_endpoint', api_endpoint, 'api_key', api_key, 'model_name', model_name, 'role_mapping', role_mapping, 'workspace_dir', workspace_dir, 'transcription_model', transcription_model, 'transcription_endpoint', transcription_endpoint, 'transcription_key', transcription_key, 'embedding_endpoint', embedding_endpoint, 'embedding_key', embedding_key, 'embedding_model', embedding_model) from settings limit 1;",
-            )?;
-            if let Some(first) = rows.into_iter().next() {
-                store.settings = first;
+    if !store.settings.is_object() {
+        store.settings = json!({});
+    }
+
+    let settings_rows = run_sqlite_json_lines(
+        &db_path,
+        "select json_object('api_endpoint', api_endpoint, 'api_key', api_key, 'model_name', model_name, 'role_mapping', role_mapping, 'workspace_dir', workspace_dir, 'transcription_model', transcription_model, 'transcription_endpoint', transcription_endpoint, 'transcription_key', transcription_key, 'embedding_endpoint', embedding_endpoint, 'embedding_key', embedding_key, 'embedding_model', embedding_model, 'active_space_id', active_space_id, 'image_provider', image_provider, 'image_endpoint', image_endpoint, 'image_api_key', image_api_key, 'image_model', image_model, 'image_size', image_size, 'image_quality', image_quality, 'ai_sources_json', ai_sources_json, 'default_ai_source_id', default_ai_source_id, 'mcp_servers_json', mcp_servers_json, 'redclaw_compact_target_tokens', redclaw_compact_target_tokens, 'image_provider_template', image_provider_template, 'image_aspect_ratio', image_aspect_ratio, 'wander_deep_think_enabled', wander_deep_think_enabled, 'chat_max_tokens_default', chat_max_tokens_default, 'chat_max_tokens_deepseek', chat_max_tokens_deepseek, 'model_name_wander', model_name_wander, 'model_name_chatroom', model_name_chatroom, 'model_name_knowledge', model_name_knowledge, 'model_name_redclaw', model_name_redclaw, 'debug_log_enabled', debug_log_enabled, 'developer_mode_enabled', developer_mode_enabled, 'developer_mode_unlocked_at', developer_mode_unlocked_at, 'search_provider', search_provider, 'search_endpoint', search_endpoint, 'search_api_key', search_api_key, 'video_endpoint', video_endpoint, 'video_api_key', video_api_key, 'video_model', video_model, 'proxy_enabled', proxy_enabled, 'proxy_url', proxy_url, 'proxy_bypass', proxy_bypass) from settings limit 1;",
+    )?;
+    if let Some(first) = settings_rows.into_iter().next() {
+        if let (Some(current), Some(next)) = (store.settings.as_object_mut(), first.as_object()) {
+            for (key, value) in next {
+                current.insert(key.to_string(), value.clone());
+            }
+        } else {
+            store.settings = first.clone();
+        }
+        if let Some(active_space_id) = first
+            .get("active_space_id")
+            .and_then(|value| value.as_str())
+        {
+            let trimmed = active_space_id.trim();
+            if !trimmed.is_empty() {
+                store.active_space_id = trimmed.to_string();
             }
         }
+    }
 
-        if store.chat_sessions.is_empty() {
-            let rows = run_sqlite_json_lines(
-                db_path,
-                "select json_object('id', id, 'title', coalesce(title, 'New Chat'), 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text), 'metadata', json(metadata)) from chat_sessions order by updated_at desc;",
-            )?;
-            for value in rows {
-                let metadata = value.get("metadata").cloned().filter(|v| !v.is_null());
-                store.chat_sessions.push(ChatSessionRecord {
-                    id: value
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    title: value
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("New Chat")
-                        .to_string(),
-                    created_at: value
-                        .get("created_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("0")
-                        .to_string(),
-                    updated_at: value
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("0")
-                        .to_string(),
-                    metadata,
-                });
+    if store.spaces.len() <= 1 {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'name', name, 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text)) from spaces order by updated_at desc;",
+        )?;
+        let mut imported_spaces = Vec::new();
+        for value in rows {
+            let id = value
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if id.is_empty() {
+                continue;
             }
+            imported_spaces.push(SpaceRecord {
+                id,
+                name: value
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名空间")
+                    .to_string(),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: value
+                    .get("updated_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+            });
         }
+        if !imported_spaces.is_empty() {
+            store.spaces = imported_spaces;
+        }
+    }
 
-        if store.chat_messages.is_empty() {
-            let rows = run_sqlite_json_lines(
-                db_path,
-                "select json_object('id', id, 'session_id', session_id, 'role', role, 'content', content, 'timestamp', timestamp) from chat_messages order by timestamp asc;",
-            )?;
-            for value in rows {
-                let session_id = value
-                    .get("session_id")
+    if store.chat_sessions.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'title', coalesce(title, 'New Chat'), 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text), 'metadata', json(metadata)) from chat_sessions order by updated_at desc;",
+        )?;
+        for value in rows {
+            let metadata = value.get("metadata").cloned().filter(|v| !v.is_null());
+            store.chat_sessions.push(ChatSessionRecord {
+                id: value
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
-                    .to_string();
-                let role = value
-                    .get("role")
+                    .to_string(),
+                title: value
+                    .get("title")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("assistant")
-                    .to_string();
-                let content = value
-                    .get("content")
+                    .unwrap_or("New Chat")
+                    .to_string(),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: value
+                    .get("updated_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                metadata,
+            });
+        }
+    }
+
+    if store.chat_messages.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'session_id', session_id, 'role', role, 'content', content, 'timestamp', timestamp) from chat_messages order by timestamp asc;",
+        )?;
+        for value in rows {
+            let session_id = value
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let role = value
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("assistant")
+                .to_string();
+            let content = value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let ts = value.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+            store.chat_messages.push(ChatMessageRecord {
+                id: value
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
-                    .to_string();
-                let ts = value.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-                store.chat_messages.push(ChatMessageRecord {
-                    id: value
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    session_id: session_id.clone(),
-                    role: role.clone(),
-                    content: content.clone(),
-                    display_content: None,
-                    attachment: None,
-                    created_at: ts.to_string(),
-                });
-                store
-                    .session_transcript_records
-                    .push(SessionTranscriptRecord {
-                        id: format!(
-                            "legacy-transcript-{}",
-                            value.get("id").and_then(|v| v.as_str()).unwrap_or_default()
-                        ),
-                        session_id,
-                        record_type: "message".to_string(),
-                        role,
-                        content,
-                        payload: None,
-                        created_at: ts,
-                    });
-            }
+                    .to_string(),
+                session_id,
+                role,
+                content,
+                display_content: None,
+                attachment: None,
+                created_at: ts.to_string(),
+            });
         }
+    }
 
-        if store.archive_profiles.is_empty() {
-            let rows = run_sqlite_json_lines(
-                db_path,
-                "select json_object('id', id, 'name', name, 'platform', platform, 'goal', goal, 'domain', domain, 'audience', audience, 'tone_tags', coalesce(tone_tags, '[]'), 'created_at', created_at, 'updated_at', updated_at) from archive_profiles order by updated_at desc;",
-            )?;
-            for value in rows {
-                let tags = value
-                    .get("tone_tags")
-                    .and_then(|v| v.as_str())
-                    .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
-                    .unwrap_or_default();
-                store.archive_profiles.push(ArchiveProfileRecord {
+    if store.session_transcript_records.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'session_id', session_id, 'record_type', record_type, 'role', role, 'content', content, 'payload', json(payload_json), 'created_at', created_at) from session_transcript_records order by created_at asc;",
+        )?;
+        for value in rows {
+            store
+                .session_transcript_records
+                .push(SessionTranscriptRecord {
                     id: value
                         .get("id")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    name: value
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("未命名档案")
-                        .to_string(),
-                    platform: value
-                        .get("platform")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    goal: value
-                        .get("goal")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    domain: value
-                        .get("domain")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    audience: value
-                        .get("audience")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    tone_tags: tags,
-                    created_at: value
-                        .get("created_at")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                    updated_at: value
-                        .get("updated_at")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
-                });
-            }
-        }
-
-        if store.archive_samples.is_empty() {
-            let rows = run_sqlite_json_lines(
-                db_path,
-                "select json_object('id', id, 'profile_id', profile_id, 'title', title, 'content', content, 'excerpt', excerpt, 'tags', coalesce(tags, '[]'), 'images', coalesce(images, '[]'), 'platform', platform, 'source_url', source_url, 'sample_date', sample_date, 'is_featured', is_featured, 'created_at', created_at) from archive_samples order by created_at desc;",
-            )?;
-            for value in rows {
-                let tags = value
-                    .get("tags")
-                    .and_then(|v| v.as_str())
-                    .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
-                    .unwrap_or_default();
-                let images = value
-                    .get("images")
-                    .and_then(|v| v.as_str())
-                    .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
-                    .unwrap_or_default();
-                store.archive_samples.push(ArchiveSampleRecord {
-                    id: value
-                        .get("id")
+                    session_id: value
+                        .get("session_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    profile_id: value
-                        .get("profile_id")
+                    record_type: value
+                        .get("record_type")
                         .and_then(|v| v.as_str())
-                        .unwrap_or_default()
+                        .unwrap_or("message")
                         .to_string(),
-                    title: value
-                        .get("title")
+                    role: value
+                        .get("role")
                         .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
+                        .unwrap_or("assistant")
+                        .to_string(),
                     content: value
                         .get("content")
                         .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    excerpt: value
-                        .get("excerpt")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    tags,
-                    images,
-                    platform: value
-                        .get("platform")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    source_url: value
-                        .get("source_url")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    sample_date: value
-                        .get("sample_date")
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string),
-                    is_featured: value
-                        .get("is_featured")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0),
+                        .unwrap_or_default()
+                        .to_string(),
+                    payload: value.get("payload").cloned().filter(|v| !v.is_null()),
                     created_at: value
                         .get("created_at")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0),
                 });
-            }
         }
     }
 
-    let workspace_base = ensure_preferred_workspace_dir(store, store_path)?;
-    let store_root = store_path
-        .parent()
-        .ok_or_else(|| "RedBox store root is unavailable".to_string())?;
-    let default_space_root = workspace_base.clone();
-    ensure_workspace_dirs(&default_space_root)?;
-
-    for managed_root in managed_workspace_dir_candidates(store_path) {
-        if managed_root.exists() {
-            let _ = migrate_legacy_workspace_dirs(&default_space_root, &managed_root);
+    if store.session_checkpoints.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'session_id', session_id, 'checkpoint_type', checkpoint_type, 'summary', summary, 'payload', json(payload_json), 'created_at', created_at) from session_checkpoints order by created_at asc;",
+        )?;
+        for value in rows {
+            store.session_checkpoints.push(SessionCheckpointRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                session_id: value
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                runtime_id: None,
+                parent_runtime_id: None,
+                source_task_id: None,
+                checkpoint_type: value
+                    .get("checkpoint_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("checkpoint")
+                    .to_string(),
+                summary: value
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                payload: value.get("payload").cloned().filter(|v| !v.is_null()),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            });
         }
     }
 
-    for legacy_workspace_root in legacy_workspace_root_candidates(store, db_path.as_deref()) {
-        if is_same_path(&legacy_workspace_root, &workspace_base) {
-            continue;
-        }
-        let _ = migrate_legacy_workspace_dirs(&default_space_root, &legacy_workspace_root);
-
-        let legacy_spaces_root = legacy_workspace_root.join("spaces");
-        if !legacy_spaces_root.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&legacy_spaces_root).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.trim().is_empty() {
-                continue;
-            }
-            let id = format!("legacy-{}", slug_from_relative_path(&name));
-            if !store.spaces.iter().any(|space| space.id == id) {
-                let timestamp = now_iso();
-                store.spaces.push(SpaceRecord {
-                    id: id.clone(),
-                    name: name.clone(),
-                    created_at: timestamp.clone(),
-                    updated_at: timestamp,
-                });
-            }
-            let target_root = workspace_base.join("spaces").join(&id);
-            ensure_workspace_dirs(&target_root)?;
-            let _ = migrate_legacy_workspace_dirs(&target_root, &path);
+    if store.session_tool_results.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'session_id', session_id, 'call_id', call_id, 'tool_name', tool_name, 'command', command, 'success', success, 'result_text', result_text, 'summary_text', summary_text, 'prompt_text', prompt_text, 'original_chars', original_chars, 'prompt_chars', prompt_chars, 'truncated', truncated, 'payload', json(payload_json), 'created_at', created_at, 'updated_at', updated_at) from session_tool_results order by created_at asc;",
+        )?;
+        for value in rows {
+            store.session_tool_results.push(SessionToolResultRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                session_id: value
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                runtime_id: None,
+                parent_runtime_id: None,
+                source_task_id: None,
+                call_id: value
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                tool_name: value
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                command: value
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                success: value.get("success").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
+                result_text: value
+                    .get("result_text")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                summary_text: value
+                    .get("summary_text")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                prompt_text: value
+                    .get("prompt_text")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                original_chars: value.get("original_chars").and_then(|v| v.as_i64()),
+                prompt_chars: value.get("prompt_chars").and_then(|v| v.as_i64()),
+                truncated: value.get("truncated").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
+                payload: value.get("payload").cloned().filter(|v| !v.is_null()),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+                updated_at: value
+                    .get("updated_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            });
         }
     }
 
-    for space in store.spaces.clone() {
-        if space.id == "default" {
-            continue;
+    if store.wander_history.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'items', items, 'result', result, 'created_at', created_at) from wander_history order by created_at desc;",
+        )?;
+        for value in rows {
+            store.wander_history.push(WanderHistoryRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                items: value
+                    .get("items")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                result: value
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            });
         }
-        let source = store_root.join("spaces").join(&space.id);
-        let target = workspace_base.join("spaces").join(&space.id);
-        if source.exists() {
-            ensure_workspace_dirs(&target)?;
-            let _ = migrate_legacy_workspace_dirs(&target, &source);
+    }
+
+    if store.memories.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'content', content, 'type', type, 'tags', coalesce(tags, '[]'), 'created_at', created_at, 'updated_at', updated_at, 'last_accessed', last_accessed) from user_memories order by updated_at desc;",
+        )?;
+        for value in rows {
+            let tags = value
+                .get("tags")
+                .and_then(|v| v.as_str())
+                .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+                .unwrap_or_default();
+            store.memories.push(UserMemoryRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                content: value
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                r#type: value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("general")
+                    .to_string(),
+                tags,
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+                updated_at: value.get("updated_at").and_then(|v| v.as_i64()),
+                last_accessed: value.get("last_accessed").and_then(|v| v.as_i64()),
+                status: None,
+                archived_at: None,
+                archive_reason: None,
+                origin_id: None,
+                canonical_key: None,
+                revision: None,
+                last_conflict_at: None,
+            });
         }
+    }
+
+    if store.archive_profiles.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'name', name, 'platform', platform, 'goal', goal, 'domain', domain, 'audience', audience, 'tone_tags', coalesce(tone_tags, '[]'), 'created_at', created_at, 'updated_at', updated_at) from archive_profiles order by updated_at desc;",
+        )?;
+        for value in rows {
+            let tags = value
+                .get("tone_tags")
+                .and_then(|v| v.as_str())
+                .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+                .unwrap_or_default();
+            store.archive_profiles.push(ArchiveProfileRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                name: value
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未命名档案")
+                    .to_string(),
+                platform: value
+                    .get("platform")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                goal: value
+                    .get("goal")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                domain: value
+                    .get("domain")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                audience: value
+                    .get("audience")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                tone_tags: tags,
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+                updated_at: value
+                    .get("updated_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            });
+        }
+    }
+
+    if store.archive_samples.is_empty() {
+        let rows = run_sqlite_json_lines(
+            &db_path,
+            "select json_object('id', id, 'profile_id', profile_id, 'title', title, 'content', content, 'excerpt', excerpt, 'tags', coalesce(tags, '[]'), 'images', coalesce(images, '[]'), 'platform', platform, 'source_url', source_url, 'sample_date', sample_date, 'is_featured', is_featured, 'created_at', created_at) from archive_samples order by created_at desc;",
+        )?;
+        for value in rows {
+            let tags = value
+                .get("tags")
+                .and_then(|v| v.as_str())
+                .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+                .unwrap_or_default();
+            let images = value
+                .get("images")
+                .and_then(|v| v.as_str())
+                .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+                .unwrap_or_default();
+            store.archive_samples.push(ArchiveSampleRecord {
+                id: value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                profile_id: value
+                    .get("profile_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                title: value
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                content: value
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                excerpt: value
+                    .get("excerpt")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                tags,
+                images,
+                platform: value
+                    .get("platform")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                source_url: value
+                    .get("source_url")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                sample_date: value
+                    .get("sample_date")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                is_featured: value
+                    .get("is_featured")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+                created_at: value
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            });
+        }
+    }
+
+    if !store
+        .spaces
+        .iter()
+        .any(|space| space.id == store.active_space_id)
+    {
+        store.active_space_id = "default".to_string();
+    }
+    if store.active_space_id.trim().is_empty() {
+        store.active_space_id = "default".to_string();
     }
 
     store.legacy_imported_at = Some(now_iso());
-    if let Some(db_path) = db_path {
-        store.legacy_import_source = Some(db_path.display().to_string());
-    }
+    store.legacy_import_source = Some(db_path.display().to_string());
     let _ = hydrate_store_from_workspace_files(store, store_path);
     Ok(())
 }

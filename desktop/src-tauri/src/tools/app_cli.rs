@@ -315,6 +315,48 @@ impl<'a> AppCliExecutor<'a> {
                 }
                 self.call_channel("manuscripts:save", merged)
             }
+            "write-html" | "save-html" => {
+                let path = args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts save-html requires --path".to_string())?;
+                let target = args
+                    .string(&["target"])
+                    .or_else(|| payload_string(payload, "target"))
+                    .unwrap_or_else(|| "layout".to_string());
+                let html = payload_string(payload, "html")
+                    .or_else(|| args.string(&["html", "content"]))
+                    .ok_or_else(|| "manuscripts save-html requires --html".to_string())?;
+                self.call_channel(
+                    "manuscripts:save-package-html",
+                    json!({
+                        "filePath": path,
+                        "target": target,
+                        "html": html
+                    }),
+                )
+            }
+            "write-template" | "save-template" => {
+                let path = args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts save-template requires --path".to_string())?;
+                let target = args
+                    .string(&["target"])
+                    .or_else(|| payload_string(payload, "target"))
+                    .unwrap_or_else(|| "layout".to_string());
+                let html = payload_string(payload, "html")
+                    .or_else(|| args.string(&["html", "content"]))
+                    .ok_or_else(|| "manuscripts save-template requires --html".to_string())?;
+                self.call_channel(
+                    "manuscripts:save-package-template",
+                    json!({
+                        "filePath": path,
+                        "target": target,
+                        "html": html
+                    }),
+                )
+            }
             "create" => {
                 let relative = args
                     .string(&["path"])

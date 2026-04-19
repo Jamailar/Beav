@@ -234,8 +234,25 @@ type PackageState = {
     };
     editorProject?: EditorProjectFile | null;
     videoProject?: VideoProjectState | null;
+    contentMapExists?: boolean;
+    contentMapFile?: string | null;
+    contentMapUpdatedAt?: number | null;
+    layoutTemplateExists?: boolean;
+    wechatTemplateExists?: boolean;
+    layoutTemplateFile?: string | null;
+    wechatTemplateFile?: string | null;
+    layoutTemplateUpdatedAt?: number | null;
+    wechatTemplateUpdatedAt?: number | null;
     hasLayoutHtml?: boolean;
     hasWechatHtml?: boolean;
+    layoutHtmlExists?: boolean;
+    wechatHtmlExists?: boolean;
+    layoutHtmlFile?: string | null;
+    wechatHtmlFile?: string | null;
+    layoutHtmlFileUrl?: string | null;
+    wechatHtmlFileUrl?: string | null;
+    layoutHtmlUpdatedAt?: number | null;
+    wechatHtmlUpdatedAt?: number | null;
     layoutHtml?: string;
     wechatHtml?: string;
 };
@@ -245,6 +262,8 @@ type ExportVideoResolution = 'source' | '1080p' | '720p';
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
+    if (kind === 'longform') return ARTICLE_DRAFT_EXTENSION;
+    if (kind === 'richpost') return POST_DRAFT_EXTENSION;
     if (kind === 'video') return VIDEO_DRAFT_EXTENSION;
     if (kind === 'audio') return AUDIO_DRAFT_EXTENSION;
     return '.md';
@@ -286,7 +305,10 @@ function exportResolutionDimensions(
 
 function ensureDraftFileName(baseName: string, kind: CreateKind | 'unknown'): string {
     const extension = resolveDraftExtension(kind);
-    return ensureManuscriptFileName(baseName, extension as typeof VIDEO_DRAFT_EXTENSION | typeof AUDIO_DRAFT_EXTENSION | '.md');
+    return ensureManuscriptFileName(
+        baseName,
+        extension as typeof ARTICLE_DRAFT_EXTENSION | typeof POST_DRAFT_EXTENSION | typeof VIDEO_DRAFT_EXTENSION | typeof AUDIO_DRAFT_EXTENSION | '.md',
+    );
 }
 
 interface ManuscriptsProps {
@@ -1413,6 +1435,77 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, []);
 
+    const ensureLatestEditorContentSaved = useCallback(async () => {
+        if (!editorFile) return true;
+        if (!editorBodyDirty && !isSavingEditorBody) return true;
+        try {
+            setIsSavingEditorBody(true);
+            const nextContent = composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock);
+            const result = await window.ipcRenderer.invoke('manuscripts:save', {
+                path: editorFile,
+                content: nextContent,
+                metadata: editorMetadata,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success) {
+                throw new Error(result?.error || '保存失败');
+            }
+            if (result.state) {
+                setPackageState(result.state);
+            }
+            setEditorBodyDirty(false);
+            return true;
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '保存失败');
+            return false;
+        } finally {
+            setIsSavingEditorBody(false);
+        }
+    }, [editorBody, editorBodyDirty, editorFile, editorFrontmatterBlock, editorMetadata, isSavingEditorBody]);
+
+    const handleGeneratePackageTemplate = useCallback(async (target: 'layout' | 'wechat') => {
+        if (!editorFile) return;
+        const workingKey = `package-html:${target}`;
+        setWorkingId(workingKey);
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:generate-package-template', {
+                filePath: editorFile,
+                target,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '生成模板失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '生成模板失败');
+        } finally {
+            setWorkingId((current) => current === workingKey ? null : current);
+        }
+    }, [editorFile, ensureLatestEditorContentSaved]);
+
+    const handleGeneratePackageHtml = useCallback(async (target: 'layout' | 'wechat') => {
+        if (!editorFile) return;
+        const workingKey = `package-html:${target}`;
+        setWorkingId(workingKey);
+        try {
+            const saved = await ensureLatestEditorContentSaved();
+            if (!saved) return;
+            const result = await window.ipcRenderer.invoke('manuscripts:generate-package-html', {
+                filePath: editorFile,
+                target,
+            }) as { success?: boolean; error?: string; state?: PackageState };
+            if (!result?.success || !result.state) {
+                throw new Error(result?.error || '生成 HTML 失败');
+            }
+            setPackageState(result.state);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '生成 HTML 失败');
+        } finally {
+            setWorkingId((current) => current === workingKey ? null : current);
+        }
+    }, [editorFile, ensureLatestEditorContentSaved]);
+
     const handleImportAndBindAssetsToPackage = useCallback(async () => {
         if (!editorFile) return;
         setWorkingId('media-import-bind');
@@ -1904,12 +1997,16 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 assetId,
                 manuscriptPath: editorFile,
                 role: bindAssetRole,
-            }) as { success?: boolean; error?: string };
+            }) as { success?: boolean; error?: string; state?: PackageState };
             if (!result?.success) {
                 throw new Error(result?.error || '绑定素材失败');
             }
             await loadData();
-            await refreshPackageState(editorFile);
+            if (result.state) {
+                setPackageState(result.state);
+            } else {
+                await refreshPackageState(editorFile);
+            }
             setIsBindAssetModalOpen(false);
         } catch (bindError) {
             void appAlert(bindError instanceof Error ? bindError.message : '绑定素材失败');
@@ -2242,7 +2339,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 ...packageAssetFallbacks,
             ].map((asset) => [asset.id, asset])
         ).values());
-        const articlePreviewHtml = String(packageState?.wechatHtml || packageState?.layoutHtml || '').trim();
+        const articleLayoutPreview = {
+            filePath: packageState?.layoutHtmlFile || null,
+            fileUrl: packageState?.layoutHtmlFileUrl || null,
+            exists: Boolean(packageState?.layoutHtmlExists || packageState?.layoutHtmlFile || packageState?.layoutHtmlFileUrl),
+            hasContent: Boolean(packageState?.hasLayoutHtml),
+            updatedAt: Number(packageState?.layoutHtmlUpdatedAt || 0) || null,
+        };
+        const articleWechatPreview = {
+            filePath: packageState?.wechatHtmlFile || null,
+            fileUrl: packageState?.wechatHtmlFileUrl || null,
+            exists: Boolean(packageState?.wechatHtmlExists || packageState?.wechatHtmlFile || packageState?.wechatHtmlFileUrl),
+            hasContent: Boolean(packageState?.hasWechatHtml),
+            updatedAt: Number(packageState?.wechatHtmlUpdatedAt || 0) || null,
+        };
+        const isGeneratingLayoutHtml = workingId === 'package-html:layout';
+        const isGeneratingWechatHtml = workingId === 'package-html:wechat';
         const packageCoverAsset = packagePreviewAssets.find((asset) => asset.id === packageCoverId) || null;
         const packageImageAssets = packagePreviewAssets.filter((asset) => (
             inferAssetKind(asset) === 'image' && asset.id !== packageCoverId
@@ -2352,6 +2464,56 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             </button>
                         )}
                         
+                        {isArticlePackage && (
+                            <div className="flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleGeneratePackageHtml('layout')}
+                                    disabled={isGeneratingLayoutHtml}
+                                    className={clsx(
+                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
+                                        isImmersiveWorkbench
+                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
+                                    )}
+                                >
+                                    {isGeneratingLayoutHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                    {articleLayoutPreview.hasContent ? '重做排版' : '生成排版'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleGeneratePackageHtml('wechat')}
+                                    disabled={isGeneratingWechatHtml}
+                                    className={clsx(
+                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
+                                        isImmersiveWorkbench
+                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
+                                    )}
+                                >
+                                    {isGeneratingWechatHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                    {articleWechatPreview.hasContent ? '重做公众号' : '生成公众号'}
+                                </button>
+                            </div>
+                        )}
+
+                        {isPostPackage && (
+                            <button
+                                type="button"
+                                onClick={() => void handleGeneratePackageTemplate('layout')}
+                                disabled={isGeneratingLayoutHtml}
+                                className={clsx(
+                                    'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
+                                    isImmersiveWorkbench
+                                        ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                        : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
+                                )}
+                                >
+                                    {isGeneratingLayoutHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                {packageState?.layoutTemplateExists ? '重做图文模板' : '生成图文模板'}
+                            </button>
+                        )}
+
                         {(isArticlePackage || isPostPackage) && (
                             <div className="flex items-center gap-1">
                                 <button
@@ -2504,7 +2666,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         isApplyingWriteProposal={isApplyingWriteProposal}
                         isRejectingWriteProposal={isRejectingWriteProposal}
                         editorChatSessionId={editorChatSessionId}
-                        previewHtml={articlePreviewHtml}
+                        layoutPreview={articleLayoutPreview}
+                        wechatPreview={articleWechatPreview}
                         hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
                         coverAsset={packageCoverAsset}
                         imageAssets={packageImageAssets}

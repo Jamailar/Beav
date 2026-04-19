@@ -136,6 +136,26 @@ pub(crate) fn package_scene_ui_path(package_path: &Path) -> PathBuf {
     package_path.join("scene-ui.json")
 }
 
+pub(crate) fn package_layout_html_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.html")
+}
+
+pub(crate) fn package_wechat_html_path(package_path: &Path) -> PathBuf {
+    package_path.join("wechat.html")
+}
+
+pub(crate) fn package_content_map_path(package_path: &Path) -> PathBuf {
+    package_path.join("content-map.json")
+}
+
+pub(crate) fn package_layout_template_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.template.html")
+}
+
+pub(crate) fn package_wechat_template_path(package_path: &Path) -> PathBuf {
+    package_path.join("wechat.template.html")
+}
+
 pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
     fs::read_to_string(path)
         .ok()
@@ -250,7 +270,7 @@ fn parse_optional_i64_from_value(value: Option<&Value>) -> Option<i64> {
     })
 }
 
-fn markdown_summary(content: &str, max_chars: usize) -> String {
+pub(crate) fn markdown_summary(content: &str, max_chars: usize) -> String {
     let plain = String::from(content)
         .replace("\r\n", "\n")
         .replace('\r', "\n")

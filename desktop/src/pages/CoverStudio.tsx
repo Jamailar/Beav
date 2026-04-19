@@ -81,6 +81,14 @@ interface CoverListResponse {
     assets?: CoverAsset[];
 }
 
+interface CoverTemplateListResponse {
+    success?: boolean;
+    error?: string;
+    templates?: unknown[];
+    template?: unknown;
+    imported?: number;
+}
+
 interface CoverStudioProps {
     isActive?: boolean;
 }
@@ -336,8 +344,6 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
 
-    const [templatesReady, setTemplatesReady] = useState(false);
-    const [loadedTemplatesStorageKey, setLoadedTemplatesStorageKey] = useState('');
     const [templates, setTemplates] = useState<CoverTemplate[]>([]);
     const [activeTemplateId, setActiveTemplateId] = useState('');
 
@@ -361,6 +367,11 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [recentAssets, setRecentAssets] = useState<CoverAsset[]>([]);
 
     const storageKey = useMemo(() => getTemplateStorageKey(spaceId), [spaceId]);
+    const normalizeTemplateList = useCallback((items: unknown[] | undefined): CoverTemplate[] => (
+        Array.isArray(items)
+            ? items.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            : []
+    ), []);
     const imageTemplate = useMemo(
         () => inferImageTemplateByProvider(settings.image_provider || 'openai-compatible', settings.image_provider_template || ''),
         [settings.image_provider, settings.image_provider_template]
@@ -412,43 +423,77 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const loadTemplates = useCallback(() => {
         if (!storageKey) {
             setTemplates([]);
-            setLoadedTemplatesStorageKey(storageKey);
-            setTemplatesReady(true);
-            return;
+            return Promise.resolve();
         }
+        return (async () => {
+            try {
+                const result = await window.ipcRenderer.cover.templates.list() as CoverTemplateListResponse;
+                if (!result?.success) {
+                    console.error('Failed to load cover templates:', result?.error || 'unknown error');
+                    return;
+                }
+                setTemplates(normalizeTemplateList(result.templates));
+            } catch (error) {
+                console.error('Failed to load cover templates:', error);
+            }
+        })();
+    }, [normalizeTemplateList, storageKey]);
+
+    const migrateLegacyTemplates = useCallback(async () => {
+        if (!storageKey) return false;
+        let legacyTemplates: CoverTemplate[] = [];
         try {
             const raw = window.localStorage.getItem(storageKey);
-            if (!raw) {
-                setTemplates([]);
-                setLoadedTemplatesStorageKey(storageKey);
-                setTemplatesReady(true);
-                return;
-            }
+            if (!raw) return false;
             const parsed = JSON.parse(raw);
-            const list = Array.isArray(parsed)
+            legacyTemplates = Array.isArray(parsed)
                 ? parsed.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item))
                 : [];
-            setTemplates(list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-            setLoadedTemplatesStorageKey(storageKey);
         } catch (error) {
-            console.error('Failed to parse cover templates:', error);
-            setTemplates([]);
-            setLoadedTemplatesStorageKey(storageKey);
-        } finally {
-            setTemplatesReady(true);
+            console.error('Failed to parse legacy cover templates:', error);
+            return false;
         }
-    }, [storageKey]);
+        if (legacyTemplates.length === 0) {
+            return false;
+        }
+        try {
+            const result = await window.ipcRenderer.cover.templates.importLegacy({
+                templates: legacyTemplates as unknown as Record<string, unknown>[],
+            }) as CoverTemplateListResponse;
+            if (!result?.success) {
+                console.error('Failed to migrate legacy cover templates:', result?.error || 'unknown error');
+                return false;
+            }
+            window.localStorage.removeItem(storageKey);
+            setTemplates(normalizeTemplateList(result.templates));
+            return (result.imported || 0) > 0;
+        } catch (error) {
+            console.error('Failed to migrate legacy cover templates:', error);
+            return false;
+        }
+    }, [normalizeTemplateList, storageKey]);
 
     useEffect(() => {
         if (!isActive) return;
         void loadSettings();
         void loadRecentAssets();
-        loadTemplates();
-    }, [isActive, loadRecentAssets, loadSettings, loadTemplates]);
+    }, [isActive, loadRecentAssets, loadSettings]);
 
     useEffect(() => {
-        setTemplatesReady(false);
-    }, [storageKey]);
+        if (!isActive) return;
+        let cancelled = false;
+        void (async () => {
+            await loadTemplates();
+            if (cancelled) return;
+            const migrated = await migrateLegacyTemplates();
+            if (!cancelled && migrated) {
+                await loadTemplates();
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [isActive, loadTemplates, migrateLegacyTemplates]);
 
     useEffect(() => {
         const handleTemplatesUpdated = (event: Event) => {
@@ -456,23 +501,13 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             if (detail?.spaceId && String(detail.spaceId) !== String(spaceId)) {
                 return;
             }
-            loadTemplates();
+            void loadTemplates();
         };
         window.addEventListener('cover:templates-updated', handleTemplatesUpdated as EventListener);
         return () => {
             window.removeEventListener('cover:templates-updated', handleTemplatesUpdated as EventListener);
         };
     }, [loadTemplates, spaceId]);
-
-    useEffect(() => {
-        if (!templatesReady) return;
-        if (loadedTemplatesStorageKey !== storageKey) return;
-        try {
-            window.localStorage.setItem(storageKey, JSON.stringify(templates));
-        } catch (error) {
-            console.error('Failed to persist cover templates:', error);
-        }
-    }, [loadedTemplatesStorageKey, storageKey, templates, templatesReady]);
 
     const applyTemplate = useCallback((template: CoverTemplate) => {
         setActiveTemplateId(template.id);
@@ -486,7 +521,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         );
     }, []);
 
-    const saveTemplate = useCallback(() => {
+    const saveTemplate = useCallback(async () => {
         if (!templateImage?.dataUrl) {
             void appAlert('请先上传模板图');
             return;
@@ -497,49 +532,54 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             ? templates.find((item) => item.id === activeTemplateId)
             : null;
         const name = (existing?.name || '').trim() || createTemplateName();
-        setTemplates((prev) => {
-            if (activeTemplateId) {
-                return prev.map((item) => item.id === activeTemplateId
-                    ? {
-                        ...item,
-                        name,
-                        templateImage: templateImage.dataUrl,
-                        promptSwitches: { ...promptSwitches },
-                        model: model.trim() || 'gpt-image-1',
-                        quality,
-                        count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
-                        updatedAt: now,
-                    }
-                    : item
-                ).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-            }
-            const created: CoverTemplate = {
-                id: createTemplateId(),
+        const result = await window.ipcRenderer.cover.templates.save({
+            template: {
+                ...(existing || {}),
+                id: existing?.id || activeTemplateId || createTemplateId(),
                 name,
                 templateImage: templateImage.dataUrl,
-                styleHint: '',
-                titleGuide: '',
                 promptSwitches: { ...promptSwitches },
                 model: model.trim() || 'gpt-image-1',
                 quality,
                 count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
                 updatedAt: now,
-                referenceImages: [templateImage.dataUrl],
-            };
-            setActiveTemplateId(created.id);
-            return [created, ...prev].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        });
-    }, [activeTemplateId, count, model, promptSwitches, quality, templateImage, templates]);
+            }
+        }) as CoverTemplateListResponse;
+        if (!result?.success) {
+            void appAlert(result?.error || '保存模板失败');
+            return;
+        }
+
+        const nextTemplates = normalizeTemplateList(result.templates);
+        setTemplates(nextTemplates);
+        const savedTemplate = normalizeTemplate(result.template);
+        if (savedTemplate?.id) {
+            setActiveTemplateId(savedTemplate.id);
+        }
+        window.dispatchEvent(new CustomEvent('cover:templates-updated', {
+            detail: { spaceId },
+        }));
+    }, [activeTemplateId, count, model, normalizeTemplateList, promptSwitches, quality, spaceId, templateImage, templates]);
 
     const deleteTemplate = useCallback(async (templateId: string) => {
         const target = templates.find((item) => item.id === templateId);
         if (!target) return;
         if (!(await appConfirm(`确认删除模板「${target.name}」吗？`, { title: '删除模板', confirmLabel: '删除', tone: 'danger' }))) return;
-        setTemplates((prev) => prev.filter((item) => item.id !== templateId));
+        const result = await window.ipcRenderer.cover.templates.delete({
+            templateId,
+        }) as CoverTemplateListResponse;
+        if (!result?.success) {
+            void appAlert(result?.error || '删除模板失败');
+            return;
+        }
+        setTemplates(normalizeTemplateList(result.templates));
         if (activeTemplateId === templateId) {
             resetEditor();
         }
-    }, [activeTemplateId, resetEditor, templates]);
+        window.dispatchEvent(new CustomEvent('cover:templates-updated', {
+            detail: { spaceId },
+        }));
+    }, [activeTemplateId, normalizeTemplateList, resetEditor, spaceId, templates]);
 
     const handleTemplateImageFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];

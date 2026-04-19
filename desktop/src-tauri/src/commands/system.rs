@@ -37,6 +37,8 @@ pub fn handle_system_channel(
         "app:get-version"
         | "app:check-update"
         | "app:open-release-page"
+        | "app:startup-migration-start"
+        | "app:startup-migration-status"
         | "app:open-knowledge-api-guide"
         | "app:open-path"
         | "db:get-settings"
@@ -63,6 +65,8 @@ pub fn handle_system_channel(
                     open::that(&url).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "url": url }))
                 }
+                "app:startup-migration-status" => crate::startup_migration_status_value(state),
+                "app:startup-migration-start" => crate::start_startup_migration(app, state),
                 "app:open-knowledge-api-guide" => {
                     let path = knowledge_api_guide_path(app)?;
                     open::that(&path).map_err(|error| error.to_string())?;

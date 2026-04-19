@@ -19,6 +19,32 @@ const IMAGE_TIMELINE_CLIP_MS: i64 = 500;
 const DEFAULT_MIN_CLIP_MS: i64 = 1000;
 const DEFAULT_EDITOR_MOTION_PROMPT: &str =
     "请根据当前时间线和脚本，生成适合短视频的对象动画与节奏设计。默认不要额外标题、说明或字幕。";
+const PACKAGE_HTML_LAYOUT_TARGET: &str = "layout";
+const PACKAGE_HTML_WECHAT_TARGET: &str = "wechat";
+
+#[derive(Debug, Clone)]
+struct ParsedPackageBlock {
+    kind: String,
+    level: Option<u8>,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct PackageContentBlock {
+    id: String,
+    slot: String,
+    kind: String,
+    level: Option<u8>,
+    text: String,
+    order: usize,
+    char_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PackageBoundAsset {
+    title: String,
+    url: String,
+}
 
 fn ensure_export_extension(path: std::path::PathBuf, extension: &str) -> std::path::PathBuf {
     if path
@@ -488,7 +514,795 @@ fn build_remotion_best_practices_prompt_patch(
     sections.join("\n\n")
 }
 
+fn supported_package_html_targets(package_kind: &str) -> Vec<&'static str> {
+    match package_kind {
+        "article" => vec![PACKAGE_HTML_LAYOUT_TARGET, PACKAGE_HTML_WECHAT_TARGET],
+        "post" => vec![PACKAGE_HTML_LAYOUT_TARGET],
+        _ => Vec::new(),
+    }
+}
+
+fn package_html_file_path(package_path: &std::path::Path, target: &str) -> std::path::PathBuf {
+    if target == PACKAGE_HTML_WECHAT_TARGET {
+        package_wechat_html_path(package_path)
+    } else {
+        package_layout_html_path(package_path)
+    }
+}
+
+fn package_html_template_path(package_path: &std::path::Path, target: &str) -> std::path::PathBuf {
+    if target == PACKAGE_HTML_WECHAT_TARGET {
+        package_wechat_template_path(package_path)
+    } else {
+        package_layout_template_path(package_path)
+    }
+}
+
+fn normalize_package_block_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn package_block_match_key(kind: &str, level: Option<u8>, text: &str) -> String {
+    format!(
+        "{kind}|{}|{}",
+        level.unwrap_or(0),
+        normalize_package_block_text(text)
+    )
+}
+
+fn parse_markdown_heading(line: &str) -> Option<(u8, String)> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('#') {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|char| *char == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let body = trimmed[level..].trim();
+    if body.is_empty() {
+        return None;
+    }
+    Some((level as u8, body.to_string()))
+}
+
+fn push_package_paragraph_block(target: &mut Vec<ParsedPackageBlock>, lines: &mut Vec<String>) {
+    if lines.is_empty() {
+        return;
+    }
+    let text = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    lines.clear();
+    if text.trim().is_empty() {
+        return;
+    }
+    target.push(ParsedPackageBlock {
+        kind: "paragraph".to_string(),
+        level: None,
+        text,
+    });
+}
+
+fn parse_package_markdown_blocks(content: &str) -> Vec<ParsedPackageBlock> {
+    let normalized = strip_markdown_frontmatter(content).replace("\r\n", "\n");
+    let mut blocks = Vec::<ParsedPackageBlock>::new();
+    let mut paragraph_lines = Vec::<String>::new();
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || matches!(trimmed, "---" | "***" | "___") {
+            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
+            continue;
+        }
+        if let Some((level, text)) = parse_markdown_heading(trimmed) {
+            push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
+            blocks.push(ParsedPackageBlock {
+                kind: "heading".to_string(),
+                level: Some(level),
+                text,
+            });
+            continue;
+        }
+        paragraph_lines.push(line.to_string());
+    }
+    push_package_paragraph_block(&mut blocks, &mut paragraph_lines);
+    blocks
+}
+
+fn read_previous_package_content_blocks(path: &std::path::Path) -> Vec<PackageContentBlock> {
+    read_json_value_or(path, json!({ "blocks": [] }))
+        .get("blocks")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| {
+                    let id = block.get("id").and_then(Value::as_str)?.trim().to_string();
+                    let slot = block
+                        .get("slot")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| id.clone());
+                    let kind = block
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("paragraph")
+                        .to_string();
+                    let text = block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let level = block
+                        .get("level")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as u8);
+                    let order = block
+                        .get("order")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as usize)
+                        .unwrap_or(index);
+                    Some(PackageContentBlock {
+                        id,
+                        slot,
+                        kind,
+                        level,
+                        text: text.clone(),
+                        order,
+                        char_count: text.chars().count(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn compute_exact_package_block_matches(
+    previous: &[PackageContentBlock],
+    next: &[ParsedPackageBlock],
+) -> Vec<(usize, usize)> {
+    let previous_len = previous.len();
+    let next_len = next.len();
+    if previous_len == 0 || next_len == 0 {
+        return Vec::new();
+    }
+    let mut matrix = vec![vec![0usize; next_len + 1]; previous_len + 1];
+    for previous_index in (0..previous_len).rev() {
+        let previous_key = package_block_match_key(
+            &previous[previous_index].kind,
+            previous[previous_index].level,
+            &previous[previous_index].text,
+        );
+        for next_index in (0..next_len).rev() {
+            let next_key = package_block_match_key(
+                &next[next_index].kind,
+                next[next_index].level,
+                &next[next_index].text,
+            );
+            matrix[previous_index][next_index] = if previous_key == next_key {
+                matrix[previous_index + 1][next_index + 1] + 1
+            } else {
+                matrix[previous_index + 1][next_index].max(matrix[previous_index][next_index + 1])
+            };
+        }
+    }
+    let mut matches = Vec::<(usize, usize)>::new();
+    let mut previous_index = 0usize;
+    let mut next_index = 0usize;
+    while previous_index < previous_len && next_index < next_len {
+        let previous_key = package_block_match_key(
+            &previous[previous_index].kind,
+            previous[previous_index].level,
+            &previous[previous_index].text,
+        );
+        let next_key = package_block_match_key(
+            &next[next_index].kind,
+            next[next_index].level,
+            &next[next_index].text,
+        );
+        if previous_key == next_key {
+            matches.push((previous_index, next_index));
+            previous_index += 1;
+            next_index += 1;
+        } else if matrix[previous_index + 1][next_index] >= matrix[previous_index][next_index + 1] {
+            previous_index += 1;
+        } else {
+            next_index += 1;
+        }
+    }
+    matches
+}
+
+fn package_block_id_prefix(kind: &str, level: Option<u8>) -> String {
+    if kind == "heading" {
+        format!("h{}", level.unwrap_or(2))
+    } else {
+        "p".to_string()
+    }
+}
+
+fn package_block_counter_seed(id: &str) -> usize {
+    id.rsplit_once('_')
+        .and_then(|(_, raw)| raw.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn next_package_block_id(
+    prefix: &str,
+    counters: &mut BTreeMap<String, usize>,
+    used_ids: &mut BTreeSet<String>,
+) -> String {
+    let counter = counters.entry(prefix.to_string()).or_insert(0);
+    loop {
+        *counter += 1;
+        let candidate = format!("{prefix}_{:03}", *counter);
+        if used_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+}
+
+fn build_package_content_blocks(
+    content_map_path: &std::path::Path,
+    content: &str,
+) -> Vec<PackageContentBlock> {
+    let parsed_blocks = parse_package_markdown_blocks(content);
+    let previous_blocks = read_previous_package_content_blocks(content_map_path);
+    let exact_matches = compute_exact_package_block_matches(&previous_blocks, &parsed_blocks);
+    let mut assigned_ids = vec![None::<String>; parsed_blocks.len()];
+    let mut used_previous = BTreeSet::<usize>::new();
+    let mut used_ids = previous_blocks
+        .iter()
+        .map(|block| block.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut counters = BTreeMap::<String, usize>::new();
+
+    for block in &previous_blocks {
+        let prefix = package_block_id_prefix(&block.kind, block.level);
+        let counter = counters.entry(prefix).or_insert(0);
+        *counter = (*counter).max(package_block_counter_seed(&block.id));
+    }
+
+    for (previous_index, next_index) in exact_matches {
+        assigned_ids[next_index] = Some(previous_blocks[previous_index].id.clone());
+        used_previous.insert(previous_index);
+    }
+
+    for (next_index, parsed_block) in parsed_blocks.iter().enumerate() {
+        if assigned_ids[next_index].is_some() {
+            continue;
+        }
+        let best_previous = previous_blocks
+            .iter()
+            .enumerate()
+            .filter(|(previous_index, previous_block)| {
+                !used_previous.contains(previous_index)
+                    && previous_block.kind == parsed_block.kind
+                    && previous_block.level == parsed_block.level
+            })
+            .min_by_key(|(previous_index, _)| previous_index.abs_diff(next_index))
+            .map(|(previous_index, _)| previous_index);
+        if let Some(previous_index) = best_previous {
+            assigned_ids[next_index] = Some(previous_blocks[previous_index].id.clone());
+            used_previous.insert(previous_index);
+        }
+    }
+
+    parsed_blocks
+        .into_iter()
+        .enumerate()
+        .map(|(index, block)| {
+            let prefix = package_block_id_prefix(&block.kind, block.level);
+            let id = assigned_ids[index]
+                .clone()
+                .unwrap_or_else(|| next_package_block_id(&prefix, &mut counters, &mut used_ids));
+            PackageContentBlock {
+                slot: id.clone(),
+                id,
+                kind: block.kind,
+                level: block.level,
+                char_count: block.text.chars().count(),
+                text: block.text,
+                order: index,
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn package_content_map_value(
+    package_kind: &str,
+    title: &str,
+    entry: &str,
+    blocks: &[PackageContentBlock],
+) -> Value {
+    json!({
+        "version": 1,
+        "packageKind": package_kind,
+        "title": title,
+        "entry": entry,
+        "generatedAt": now_i64(),
+        "blocks": blocks.iter().map(|block| {
+            json!({
+                "id": block.id,
+                "slot": block.slot,
+                "type": block.kind,
+                "level": block.level,
+                "text": block.text,
+                "order": block.order,
+                "charCount": block.char_count
+            })
+        }).collect::<Vec<_>>()
+    })
+}
+
+fn render_package_slot_text(value: &str) -> String {
+    escape_html(value).replace('\n', "<br />")
+}
+
+fn render_package_block_fragment(block: &PackageContentBlock) -> String {
+    let content = render_package_slot_text(&block.text);
+    if block.kind == "heading" {
+        let level = block.level.unwrap_or(2).clamp(1, 6);
+        format!(
+            "<section class=\"rb-block rb-heading rb-heading-level-{level}\"><h{level}>{content}</h{level}></section>"
+        )
+    } else {
+        format!("<section class=\"rb-block rb-paragraph\"><p>{content}</p></section>")
+    }
+}
+
+fn inject_package_html_tail(template: &str, tail_html: &str) -> String {
+    if tail_html.trim().is_empty() {
+        return template.to_string();
+    }
+    let lower = template.to_ascii_lowercase();
+    for marker in ["</main>", "</article>", "</body>"] {
+        if let Some(index) = lower.rfind(marker) {
+            let mut next = String::with_capacity(template.len() + tail_html.len());
+            next.push_str(&template[..index]);
+            next.push_str(tail_html);
+            next.push_str(&template[index..]);
+            return next;
+        }
+    }
+    format!("{template}{tail_html}")
+}
+
+fn asset_slot_url(asset: Option<&PackageBoundAsset>) -> String {
+    asset.map(|item| escape_html(&item.url)).unwrap_or_default()
+}
+
+fn render_package_asset_figure_html(asset: &PackageBoundAsset, class_name: &str) -> String {
+    format!(
+        "<figure class=\"{class_name}\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
+        escape_html(&asset.url),
+        escape_html(&asset.title)
+    )
+}
+
+fn render_package_asset_gallery_html(images: &[PackageBoundAsset]) -> String {
+    if images.is_empty() {
+        return String::new();
+    }
+    let items = images
+        .iter()
+        .map(|asset| {
+            format!(
+                "<figure class=\"rb-gallery-item\"><img src=\"{}\" alt=\"{}\" loading=\"lazy\" /></figure>",
+                escape_html(&asset.url),
+                escape_html(&asset.title)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<section class=\"rb-gallery\">{items}</section>")
+}
+
+fn collect_package_bound_assets(
+    state: Option<&State<'_, AppState>>,
+    package_path: &std::path::Path,
+) -> Result<(Option<PackageBoundAsset>, Vec<PackageBoundAsset>), String> {
+    let Some(state) = state else {
+        return Ok((None, Vec::new()));
+    };
+    let cover_asset_id = read_json_value_or(&package_cover_path(package_path), json!({}))
+        .get("assetId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let image_asset_ids =
+        read_json_value_or(&package_images_path(package_path), json!({ "items": [] }))
+            .get("items")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("assetId")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    with_store(state, |store| {
+        let resolve_asset = |asset_id: &str| -> Option<PackageBoundAsset> {
+            let asset = store.media_assets.iter().find(|item| item.id == asset_id)?;
+            let url = asset_prompt_url(asset)?;
+            Some(PackageBoundAsset {
+                title: asset
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(asset.id.as_str())
+                    .to_string(),
+                url,
+            })
+        };
+        let cover = cover_asset_id.as_deref().and_then(resolve_asset);
+        let images = image_asset_ids
+            .iter()
+            .filter_map(|asset_id| resolve_asset(asset_id))
+            .collect::<Vec<_>>();
+        Ok((cover, images))
+    })
+}
+
+fn build_package_asset_slot_map(
+    state: Option<&State<'_, AppState>>,
+    package_path: &std::path::Path,
+) -> Result<BTreeMap<String, String>, String> {
+    let (cover_asset, image_assets) = collect_package_bound_assets(state, package_path)?;
+    let mut slots = BTreeMap::<String, String>::new();
+    slots.insert(
+        "cover_url".to_string(),
+        asset_slot_url(cover_asset.as_ref()),
+    );
+    slots.insert(
+        "cover_figure".to_string(),
+        cover_asset
+            .as_ref()
+            .map(|asset| render_package_asset_figure_html(asset, "rb-cover"))
+            .unwrap_or_default(),
+    );
+    slots.insert(
+        "image_gallery".to_string(),
+        render_package_asset_gallery_html(&image_assets),
+    );
+    slots.insert("image_count".to_string(), image_assets.len().to_string());
+    for (index, asset) in image_assets.iter().enumerate() {
+        let slot_index = index + 1;
+        slots.insert(format!("image_{}_url", slot_index), escape_html(&asset.url));
+        slots.insert(
+            format!("image_{}_alt", slot_index),
+            escape_html(&asset.title),
+        );
+    }
+    Ok(slots)
+}
+
+fn default_package_html_template(package_kind: &str, target: &str) -> String {
+    match (package_kind, target) {
+        ("article", PACKAGE_HTML_WECHAT_TARGET) => r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{slot:document_title}}</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f4ef; --paper:#fffdf8; --text:#1f1a16; --muted:#7b6f63; --line:#e6ddd2; --accent:#8b5e3c; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:linear-gradient(180deg,#f7f4ed 0%,#efe8dc 100%); color:var(--text); font-family:"PingFang SC","Noto Serif SC","Source Han Serif SC",serif; }
+    .page { max-width:760px; margin:0 auto; padding:32px 18px 48px; }
+    .card { background:var(--paper); border:1px solid rgba(139,94,60,.12); border-radius:28px; overflow:hidden; box-shadow:0 20px 60px rgba(79,50,28,.08); }
+    .hero { padding:28px 28px 16px; }
+    .hero h1 { margin:0; font-size:30px; line-height:1.28; letter-spacing:.02em; }
+    .hero p { margin:12px 0 0; color:var(--muted); font-size:14px; }
+    .rb-cover img, .rb-gallery img { display:block; width:100%; height:auto; }
+    .rb-cover { margin:0; border-bottom:1px solid var(--line); }
+    .content { padding:28px; }
+    .rb-block + .rb-block { margin-top:18px; }
+    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 { margin:0; line-height:1.45; }
+    .rb-heading h2 { font-size:24px; margin-top:8px; }
+    .rb-heading h3 { font-size:20px; }
+    .rb-paragraph p { margin:0; font-size:17px; line-height:1.9; color:#2a241f; }
+    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:24px 0; }
+    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
+    @media (max-width: 640px) {
+      .hero, .content { padding:22px; }
+      .hero h1 { font-size:26px; }
+      .rb-paragraph p { font-size:16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <article class="card">
+      {{asset:cover_figure}}
+      <header class="hero">
+        <h1>{{slot:document_title}}</h1>
+        <p>自动从 Markdown 正文渲染</p>
+      </header>
+      <main class="content">
+        {{slot:content_all}}
+        {{asset:image_gallery}}
+      </main>
+    </article>
+  </div>
+</body>
+</html>"#.to_string(),
+        ("post", _) => r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{slot:document_title}}</title>
+  <style>
+    :root { color-scheme: light; --bg:#fbf8f2; --card:#ffffff; --text:#231c17; --muted:#857160; --line:#efe4d5; --accent:#d87f4d; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#fff4ea 0%,#fbf8f2 48%,#f5efe6 100%); color:var(--text); font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
+    .shell { max-width:560px; margin:0 auto; padding:24px 16px 40px; }
+    .note { background:rgba(255,255,255,.92); border:1px solid rgba(216,127,77,.14); border-radius:28px; overflow:hidden; box-shadow:0 18px 48px rgba(111,68,40,.12); backdrop-filter:blur(12px); }
+    .cover img, .rb-gallery img { display:block; width:100%; height:auto; }
+    .cover { margin:0; }
+    .header { padding:22px 22px 10px; }
+    .header h1 { margin:0; font-size:28px; line-height:1.26; }
+    .content { padding:8px 22px 26px; }
+    .rb-block + .rb-block { margin-top:14px; }
+    .rb-heading h1, .rb-heading h2, .rb-heading h3, .rb-heading h4, .rb-heading h5, .rb-heading h6 { margin:0; line-height:1.4; }
+    .rb-heading h2 { font-size:21px; }
+    .rb-heading h3 { font-size:18px; }
+    .rb-paragraph p { margin:0; font-size:16px; line-height:1.86; color:#342a22; }
+    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:18px 0 20px; }
+    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <article class="note">
+      <figure class="cover">{{asset:cover_figure}}</figure>
+      <header class="header">
+        <h1>{{slot:document_title}}</h1>
+      </header>
+      <main class="content">
+        {{asset:image_gallery}}
+        {{slot:content_all}}
+      </main>
+    </article>
+  </div>
+</body>
+</html>"#.to_string(),
+        _ => r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{slot:document_title}}</title>
+  <style>
+    :root { color-scheme: light; --bg:#f4f1ec; --paper:#fffdfa; --text:#221d18; --muted:#75685a; --line:#eadfd2; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"PingFang SC","Noto Serif SC","Source Han Serif SC",serif; }
+    .page { max-width:1024px; margin:0 auto; padding:40px 20px 56px; }
+    .paper { background:var(--paper); border:1px solid rgba(34,29,24,.08); border-radius:28px; padding:36px; box-shadow:0 20px 60px rgba(64,47,36,.08); }
+    .paper h1 { margin:0 0 28px; font-size:40px; line-height:1.18; }
+    .rb-block + .rb-block { margin-top:20px; }
+    .rb-heading h2 { margin:0; font-size:28px; line-height:1.4; }
+    .rb-heading h3 { margin:0; font-size:22px; line-height:1.45; }
+    .rb-paragraph p { margin:0; font-size:18px; line-height:1.95; color:#2f2822; }
+    .rb-cover img, .rb-gallery img { display:block; width:100%; height:auto; }
+    .rb-cover { margin:0 0 28px; overflow:hidden; border-radius:20px; }
+    .rb-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:28px 0; }
+    .rb-gallery-item { margin:0; overflow:hidden; border-radius:18px; }
+    @media (max-width: 760px) {
+      .page { padding:20px 14px 32px; }
+      .paper { padding:22px; }
+      .paper h1 { font-size:30px; margin-bottom:22px; }
+      .rb-paragraph p { font-size:16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <article class="paper">
+      {{asset:cover_figure}}
+      <h1>{{slot:document_title}}</h1>
+      {{slot:content_all}}
+      {{asset:image_gallery}}
+    </article>
+  </div>
+</body>
+</html>"#.to_string(),
+    }
+}
+
+fn ensure_package_html_template_file(
+    package_path: &std::path::Path,
+    package_kind: &str,
+    target: &str,
+) -> Result<(), String> {
+    let path = package_html_template_path(package_path, target);
+    let should_seed = fs::metadata(&path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(true);
+    if should_seed {
+        write_text_file(&path, &default_package_html_template(package_kind, target))?;
+    }
+    Ok(())
+}
+
+fn render_package_html_template(
+    template: &str,
+    title: &str,
+    blocks: &[PackageContentBlock],
+    asset_slots: &BTreeMap<String, String>,
+) -> String {
+    let mut rendered = template.to_string();
+    let uses_content_all = rendered.contains("{{slot:content_all}}");
+    let all_content = blocks
+        .iter()
+        .map(render_package_block_fragment)
+        .collect::<Vec<_>>()
+        .join("");
+    rendered = rendered.replace("{{slot:document_title}}", &render_package_slot_text(title));
+    rendered = rendered.replace("{{slot:content_all}}", &all_content);
+
+    let mut consumed_slots = BTreeSet::<String>::new();
+    for block in blocks {
+        let token = format!("{{{{slot:{}}}}}", block.slot);
+        if rendered.contains(&token) {
+            consumed_slots.insert(block.slot.clone());
+            rendered = rendered.replace(&token, &render_package_slot_text(&block.text));
+        }
+    }
+
+    let tail_html = if uses_content_all {
+        String::new()
+    } else {
+        blocks
+            .iter()
+            .filter(|block| !consumed_slots.contains(&block.slot))
+            .map(render_package_block_fragment)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let has_tail_slot = rendered.contains("{{slot:content_tail}}");
+    rendered = rendered.replace("{{slot:content_tail}}", &tail_html);
+
+    for (slot, value) in asset_slots {
+        rendered = rendered.replace(&format!("{{{{asset:{slot}}}}}"), value);
+    }
+
+    if !has_tail_slot && !tail_html.trim().is_empty() {
+        rendered = inject_package_html_tail(&rendered, &tail_html);
+    }
+    rendered
+}
+
+fn package_content_outline_prompt(blocks: &[PackageContentBlock]) -> String {
+    if blocks.is_empty() {
+        return "无正文块".to_string();
+    }
+    blocks
+        .iter()
+        .map(|block| {
+            let preview = normalize_package_block_text(&block.text)
+                .chars()
+                .take(24)
+                .collect::<String>();
+            if block.kind == "heading" {
+                format!(
+                    "- {} | heading h{} | {} chars | preview={}",
+                    block.slot,
+                    block.level.unwrap_or(2),
+                    block.char_count,
+                    preview
+                )
+            } else {
+                format!(
+                    "- {} | paragraph | {} chars | preview={}",
+                    block.slot, block.char_count, preview
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn available_package_asset_slot_lines(image_assets: &[PackageBoundAsset]) -> Vec<String> {
+    let mut lines = vec![
+        "- {{asset:cover_url}} | 封面图片 URL，没有封面时为空".to_string(),
+        "- {{asset:cover_figure}} | 已包好 <figure><img/></figure> 的封面块，没有封面时为空"
+            .to_string(),
+        "- {{asset:image_gallery}} | 已包好图库 HTML，没有配图时为空".to_string(),
+        "- {{asset:image_count}} | 已绑定配图数量".to_string(),
+    ];
+    for (index, _) in image_assets.iter().enumerate() {
+        let slot_index = index + 1;
+        lines.push(format!(
+            "- {{asset:image_{}_url}} | 第 {} 张配图 URL",
+            slot_index, slot_index
+        ));
+        lines.push(format!(
+            "- {{asset:image_{}_alt}} | 第 {} 张配图 alt 文本",
+            slot_index, slot_index
+        ));
+    }
+    lines
+}
+
+pub(crate) fn sync_manuscript_package_html_assets(
+    state: Option<&State<'_, AppState>>,
+    package_path: &std::path::Path,
+    file_name: &str,
+    content_override: Option<&str>,
+    target_override: Option<&str>,
+) -> Result<Value, String> {
+    let package_kind =
+        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    if package_kind != "post" {
+        return get_manuscript_package_state(package_path);
+    }
+    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    let entry = manifest
+        .get("entry")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| get_default_package_entry(file_name));
+    let title = manifest
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| title_from_relative_path(file_name));
+    let content = content_override
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            fs::read_to_string(package_entry_path(package_path, file_name, Some(&manifest)))
+                .unwrap_or_default()
+        });
+    let content_map_path = package_content_map_path(package_path);
+    let blocks = build_package_content_blocks(&content_map_path, &content);
+    write_json_value(
+        &content_map_path,
+        &package_content_map_value(package_kind, &title, entry, &blocks),
+    )?;
+    let asset_slots = build_package_asset_slot_map(state, package_path)?;
+    let targets = if let Some(target) = target_override {
+        vec![normalize_package_html_target(package_kind, target)?]
+    } else {
+        supported_package_html_targets(package_kind)
+    };
+    for target in targets {
+        ensure_package_html_template_file(package_path, package_kind, target)?;
+        let template_path = package_html_template_path(package_path, target);
+        let template = fs::read_to_string(&template_path)
+            .unwrap_or_else(|_| default_package_html_template(package_kind, target));
+        let html = render_package_html_template(&template, &title, &blocks, &asset_slots);
+        write_text_file(&package_html_file_path(package_path, target), &html)?;
+    }
+    let mut next_manifest = manifest;
+    if let Some(object) = next_manifest.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+    }
+    write_json_value(&package_manifest_path(package_path), &next_manifest)?;
+    get_manuscript_package_state(package_path)
+}
+
 fn persist_package_script_body(
+    state: &State<'_, AppState>,
     package_path: &std::path::Path,
     file_name: &str,
     content: &str,
@@ -542,7 +1356,13 @@ fn persist_package_script_body(
     }
 
     Ok((
-        get_manuscript_package_state(package_path)?,
+        sync_manuscript_package_html_assets(
+            Some(state),
+            package_path,
+            file_name,
+            Some(content),
+            None,
+        )?,
         json!({
             "body": content,
             "approval": {
@@ -575,7 +1395,7 @@ pub(crate) fn save_manuscript_content(
             .and_then(|value| value.to_str())
             .unwrap_or("");
         let (next_state, script_state) =
-            persist_package_script_body(&path, file_name, content, metadata, source)?;
+            persist_package_script_body(state, &path, file_name, content, metadata, source)?;
         return Ok(json!({
             "success": true,
             "state": next_state,
@@ -591,6 +1411,288 @@ pub(crate) fn save_manuscript_content(
         "success": true,
         "content": content,
     }))
+}
+
+fn normalize_package_html_target(
+    package_kind: &str,
+    raw_target: &str,
+) -> Result<&'static str, String> {
+    let normalized = raw_target.trim().to_ascii_lowercase();
+    match package_kind {
+        "article" => match normalized.as_str() {
+            "" | "layout" => Ok(PACKAGE_HTML_LAYOUT_TARGET),
+            "wechat" => Ok(PACKAGE_HTML_WECHAT_TARGET),
+            _ => Err("长文工程只支持 layout 或 wechat HTML".to_string()),
+        },
+        "post" => match normalized.as_str() {
+            "" | "layout" | "richpost" => Ok(PACKAGE_HTML_LAYOUT_TARGET),
+            _ => Err("图文工程只支持 layout HTML".to_string()),
+        },
+        _ => Err("只有长文和图文工程支持 HTML 资产".to_string()),
+    }
+}
+
+fn package_html_target_label(package_kind: &str, target: &str) -> &'static str {
+    match (package_kind, target) {
+        ("article", PACKAGE_HTML_WECHAT_TARGET) => "公众号正文",
+        ("article", _) => "长文排版",
+        ("post", _) => "图文排版",
+        _ => "HTML 排版",
+    }
+}
+
+fn package_html_style_instructions(package_kind: &str, target: &str) -> &'static str {
+    match (package_kind, target) {
+        ("article", PACKAGE_HTML_WECHAT_TARGET) => {
+            "输出适合公众号正文的单栏长文排版。文字区域偏窄、留白稳定、标题层级清晰、引用和强调块克制，整体像真实公众号文章预览。"
+        }
+        ("article", _) => {
+            "输出适合长文阅读的排版页。重点是标题、导语、小标题、正文、总结的层级清晰，可包含封面图和分隔区块，阅读体验比默认 Markdown 明显更强。"
+        }
+        ("post", _) => {
+            "输出适合图文笔记预览的页面。整体偏移动端卡片感，段落更短，视觉节奏更快，封面和配图应自然穿插，但不要做成网页导航站。"
+        }
+        _ => "输出可读、克制、适合发布预览的 HTML 页面。",
+    }
+}
+
+fn asset_prompt_url(asset: &MediaAssetRecord) -> Option<String> {
+    asset
+        .preview_url
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            asset
+                .absolute_path
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| file_url_for_path(std::path::Path::new(value)))
+        })
+}
+
+fn collect_package_prompt_assets(
+    state: &State<'_, AppState>,
+    package_path: &std::path::Path,
+) -> Result<(String, String, String), String> {
+    let (cover_asset, image_assets) = collect_package_bound_assets(Some(state), package_path)?;
+    let cover_block = cover_asset
+        .as_ref()
+        .map(|asset| format!("- {} | url={}", asset.title, asset.url))
+        .unwrap_or_else(|| "无".to_string());
+    let image_block = if image_assets.is_empty() {
+        "无".to_string()
+    } else {
+        image_assets
+            .iter()
+            .enumerate()
+            .map(|(index, asset)| {
+                format!(
+                    "- {} | imageIndex={} | url={}",
+                    asset.title,
+                    index + 1,
+                    asset.url
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok((
+        cover_block,
+        image_block,
+        available_package_asset_slot_lines(&image_assets).join("\n"),
+    ))
+}
+
+fn extract_html_document_from_text(raw: &str, title: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(start) = trimmed.find("```") {
+        let fenced = &trimmed[start + 3..];
+        let fenced = fenced
+            .strip_prefix("html")
+            .or_else(|| fenced.strip_prefix("HTML"))
+            .unwrap_or(fenced)
+            .trim_start_matches('\n');
+        if let Some(end) = fenced.find("```") {
+            return extract_html_document_from_text(fenced[..end].trim(), title);
+        }
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
+        return Some(trimmed.to_string());
+    }
+    if trimmed.contains("<body")
+        || trimmed.contains("<section")
+        || trimmed.contains("<article")
+        || trimmed.contains("<div")
+    {
+        return Some(format!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{}</title></head>{}</html>",
+            escape_html(title),
+            trimmed
+        ));
+    }
+    None
+}
+
+fn persist_package_html_template(
+    state: &State<'_, AppState>,
+    package_path: &std::path::Path,
+    file_name: &str,
+    target: &str,
+    html_template: &str,
+) -> Result<Value, String> {
+    write_text_file(
+        &package_html_template_path(package_path, target),
+        html_template,
+    )?;
+    sync_manuscript_package_html_assets(Some(state), package_path, file_name, None, Some(target))
+}
+
+fn generate_package_html_template(
+    state: &State<'_, AppState>,
+    package_path: &std::path::Path,
+    file_name: &str,
+    target: &str,
+    title: &str,
+    body: &str,
+    model_config: Option<&Value>,
+) -> Result<String, String> {
+    let package_kind =
+        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    let content_map_path = package_content_map_path(package_path);
+    let blocks = build_package_content_blocks(&content_map_path, body);
+    let (cover_asset_block, image_asset_block, asset_slot_block) =
+        collect_package_prompt_assets(state, package_path)?;
+    let prompt = render_redbox_prompt(
+        &load_redbox_prompt_or_embedded(
+            "templates/package_html_renderer.txt",
+            include_str!("../../../prompts/library/templates/package_html_renderer.txt"),
+        ),
+        &[
+            (
+                "package_kind",
+                if package_kind == "article" {
+                    "longform"
+                } else {
+                    "richpost"
+                }
+                .to_string(),
+            ),
+            (
+                "target_label",
+                package_html_target_label(package_kind, target).to_string(),
+            ),
+            ("title", title.to_string()),
+            (
+                "style_instructions",
+                package_html_style_instructions(package_kind, target).to_string(),
+            ),
+            (
+                "available_text_slots",
+                if blocks.is_empty() {
+                    "无正文槽位，可只输出基础骨架和 {{slot:content_tail}}".to_string()
+                } else {
+                    package_content_outline_prompt(&blocks)
+                },
+            ),
+            ("available_asset_slots", asset_slot_block),
+            ("cover_asset_block", cover_asset_block),
+            ("image_asset_block", image_asset_block),
+            ("body_outline", markdown_summary(body, 240)),
+        ],
+    );
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        model_config,
+        "你是 RedBox 的工程排版模板生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 模板文档，不要附加解释。",
+        &prompt,
+        true,
+    )?;
+    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
+    let html = parsed
+        .get("html")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| extract_html_document_from_text(&raw, title))
+        .ok_or_else(|| "AI 没有返回可保存的 HTML 模板".to_string())?;
+    extract_html_document_from_text(&html, title)
+        .ok_or_else(|| "生成结果不是有效的 HTML 模板文档".to_string())
+}
+
+fn persist_package_html_document(
+    package_path: &std::path::Path,
+    target: &str,
+    html: &str,
+) -> Result<Value, String> {
+    write_text_file(&package_html_file_path(package_path, target), html)?;
+    let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+    }
+    write_json_value(&package_manifest_path(package_path), &manifest)?;
+    get_manuscript_package_state(package_path)
+}
+
+fn generate_package_html_document(
+    state: &State<'_, AppState>,
+    package_path: &std::path::Path,
+    file_name: &str,
+    target: &str,
+    title: &str,
+    body: &str,
+    model_config: Option<&Value>,
+) -> Result<String, String> {
+    let package_kind =
+        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    let (cover_asset_block, image_asset_block, _) =
+        collect_package_prompt_assets(state, package_path)?;
+    let prompt = render_redbox_prompt(
+        &load_redbox_prompt_or_embedded(
+            "templates/package_html_document_renderer.txt",
+            include_str!("../../../prompts/library/templates/package_html_document_renderer.txt"),
+        ),
+        &[
+            ("package_kind", "longform".to_string()),
+            (
+                "target_label",
+                package_html_target_label(package_kind, target).to_string(),
+            ),
+            ("title", title.to_string()),
+            (
+                "style_instructions",
+                package_html_style_instructions(package_kind, target).to_string(),
+            ),
+            ("cover_asset_block", cover_asset_block),
+            ("image_asset_block", image_asset_block),
+            ("body", body.to_string()),
+        ],
+    );
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let raw = generate_structured_response_with_settings(
+        &settings_snapshot,
+        model_config,
+        "你是 RedBox 的 HTML 排版生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 文档，不要附加解释。",
+        &prompt,
+        true,
+    )?;
+    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
+    let html = parsed
+        .get("html")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| extract_html_document_from_text(&raw, title))
+        .ok_or_else(|| "AI 没有返回可保存的 HTML 文档".to_string())?;
+    extract_html_document_from_text(&html, title)
+        .ok_or_else(|| "生成结果不是有效的 HTML 文档".to_string())
 }
 
 fn manuscript_write_proposal_by_file_path(
@@ -3496,6 +4598,142 @@ pub fn handle_manuscripts_channel(
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
             }
+            "manuscripts:save-package-template"
+            | "manuscripts:save-package-template-html"
+            | "manuscripts:save-package-html" => {
+                let channel = channel;
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
+                let target = normalize_package_html_target(
+                    package_kind,
+                    &payload_string(&payload, "target").unwrap_or_default(),
+                )?;
+                let html = payload_string(&payload, "html").unwrap_or_default();
+                if html.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "html is required" }));
+                }
+                let template_mode = channel != "manuscripts:save-package-html";
+                Ok(json!({
+                    "success": true,
+                    "target": target,
+                    "state": if package_kind == "post" || template_mode {
+                        persist_package_html_template(state, &full_path, file_name, target, &html)?
+                    } else {
+                        persist_package_html_document(&full_path, target, &html)?
+                    },
+                }))
+            }
+            "manuscripts:generate-package-template"
+            | "manuscripts:generate-package-template-html"
+            | "manuscripts:generate-package-html" => {
+                let channel = channel;
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
+                let target = normalize_package_html_target(
+                    package_kind,
+                    &payload_string(&payload, "target").unwrap_or_default(),
+                )?;
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let title = manifest
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| title_from_relative_path(file_name));
+                let content =
+                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
+                        .unwrap_or_default();
+                let template_mode = channel != "manuscripts:generate-package-html";
+                let html = if package_kind == "post" || template_mode {
+                    generate_package_html_template(
+                        state,
+                        &full_path,
+                        file_name,
+                        target,
+                        &title,
+                        &content,
+                        payload_field(&payload, "modelConfig"),
+                    )?
+                } else {
+                    generate_package_html_document(
+                        state,
+                        &full_path,
+                        file_name,
+                        target,
+                        &title,
+                        &content,
+                        payload_field(&payload, "modelConfig"),
+                    )?
+                };
+                Ok(json!({
+                    "success": true,
+                    "target": target,
+                    "html": html,
+                    "state": if package_kind == "post" || template_mode {
+                        persist_package_html_template(state, &full_path, file_name, target, &html)?
+                    } else {
+                        persist_package_html_document(&full_path, target, &html)?
+                    },
+                }))
+            }
+            "manuscripts:render-package-html" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
+                let target = payload_string(&payload, "target")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| normalize_package_html_target(package_kind, &value))
+                    .transpose()?;
+                Ok(json!({
+                    "success": true,
+                    "target": target,
+                    "state": sync_manuscript_package_html_assets(
+                        Some(state),
+                        &full_path,
+                        file_name,
+                        None,
+                        target,
+                    )?,
+                }))
+            }
             "manuscripts:get-video-project-state" => {
                 let file_path = payload_value_as_string(&payload)
                     .or_else(|| payload_string(&payload, "filePath"))
@@ -4114,8 +5352,9 @@ pub fn handle_manuscripts_channel(
                 let source = payload_string(&payload, "source")
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| "ai".to_string());
-                let (next_state, script_state) =
-                    persist_package_script_body(&full_path, file_name, &content, None, &source)?;
+                let (next_state, script_state) = persist_package_script_body(
+                    state, &full_path, file_name, &content, None, &source,
+                )?;
                 Ok(json!({
                     "success": true,
                     "state": next_state,

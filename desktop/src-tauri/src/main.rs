@@ -912,6 +912,7 @@ fn has_legacy_workspace_layout() -> bool {
     legacy_default_workspace_dir().is_some_and(|path| path.exists())
 }
 
+#[allow(dead_code)]
 fn managed_workspace_dir_candidates(store_path: &Path) -> Vec<PathBuf> {
     let mut items = Vec::new();
     if let Some(root) = store_path.parent() {
@@ -6371,12 +6372,13 @@ fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
 fn main() {
     let store_path = build_store_path();
     let mut store = load_store(&store_path);
-    if let Err(error) = maybe_import_legacy_store(&mut store, &store_path) {
-        eprintln!("[RedBox legacy import] {error}");
+    if let Err(error) = normalize_workspace_dir_setting(&mut store) {
+        eprintln!("[RedBox workspace compatibility] {error}");
     }
     if let Err(error) = auth::migrate_legacy_auth_store(&store_path, &mut store) {
         eprintln!("[RedBox auth migrate] {error}");
     }
+    let startup_migration_status = probe_startup_migration(&store, &store_path);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
         eprintln!("[RedBox store persist] {error}");
@@ -6390,6 +6392,7 @@ fn main() {
             store_path,
             store: Mutex::new(store),
             workspace_root_cache: Mutex::new(initial_workspace_root),
+            startup_migration: Mutex::new(startup_migration_status),
             store_persist_version: Arc::new(AtomicU64::new(0)),
             auth_runtime: Mutex::new(AuthRuntimeState::default()),
             official_auth_refresh_lock: Mutex::new(()),

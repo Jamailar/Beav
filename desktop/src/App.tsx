@@ -3,6 +3,7 @@ import { Link2, Loader2 } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
+import { StartupMigrationModal } from './components/StartupMigrationModal';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -74,6 +75,20 @@ interface YouTubeClipboardCandidate {
   videoUrl: string;
   rawUrl: string;
 }
+
+type StartupMigrationState = {
+  status?: string;
+  needsDbImport?: boolean;
+  shouldShowModal?: boolean;
+  legacyDbPath?: string | null;
+  legacyWorkspacePath?: string | null;
+  workspacePath?: string | null;
+  currentStep?: string | null;
+  message?: string | null;
+  error?: string | null;
+  progress?: number;
+  importedCounts?: Record<string, number> | null;
+};
 
 function parseYouTubeCandidateFromUrl(rawInput: string): YouTubeClipboardCandidate | null {
   const trimmed = String(rawInput || '').trim();
@@ -186,6 +201,9 @@ function App() {
   const [isCapturePromptOpen, setIsCapturePromptOpen] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [captureMessage, setCaptureMessage] = useState('');
+  const [startupMigration, setStartupMigration] = useState<StartupMigrationState | null>(null);
+  const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
+  const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -367,6 +385,60 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+
+    const applyStatus = (value: unknown) => {
+      if (disposed || !value || typeof value !== 'object') return;
+      const next = value as StartupMigrationState;
+      setStartupMigration(next);
+      if (next.status === 'running') {
+        setStartupMigrationBusy(true);
+        setStartupMigrationDismissed(false);
+      } else {
+        setStartupMigrationBusy(false);
+      }
+    };
+
+    void window.ipcRenderer.startupMigration.getStatus<StartupMigrationState>().then(applyStatus);
+    const handleStatus = (_event: unknown, payload: unknown) => applyStatus(payload);
+    window.ipcRenderer.on('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+
+    return () => {
+      disposed = true;
+      window.ipcRenderer.off('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+    };
+  }, []);
+
+  const shouldShowStartupMigration = Boolean(
+    startupMigration
+      && startupMigration.shouldShowModal
+      && (
+        startupMigration.status === 'running'
+        || startupMigration.status === 'completed'
+        || startupMigration.status === 'failed'
+        || (!startupMigrationDismissed && startupMigration.status === 'pending')
+      ),
+  );
+
+  const handleStartStartupMigration = useCallback(async () => {
+    setStartupMigrationBusy(true);
+    setStartupMigrationDismissed(false);
+    try {
+      const next = await window.ipcRenderer.startupMigration.start<StartupMigrationState>();
+      if (next && typeof next === 'object') {
+        setStartupMigration(next);
+      }
+    } finally {
+      setStartupMigrationBusy(false);
+    }
+  }, []);
+
+  const handleCloseStartupMigration = useCallback(() => {
+    if (startupMigration?.status === 'running') return;
+    setStartupMigrationDismissed(true);
+  }, [startupMigration?.status]);
+
   return (
     <>
       <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={immersiveMode}>
@@ -537,6 +609,13 @@ function App() {
           </div>
         </div>
       )}
+      <StartupMigrationModal
+        open={shouldShowStartupMigration}
+        state={startupMigration}
+        busy={startupMigrationBusy}
+        onStart={() => void handleStartStartupMigration()}
+        onClose={handleCloseStartupMigration}
+      />
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
       <AppDialogsHost />
     </>

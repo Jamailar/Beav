@@ -131,22 +131,6 @@ interface KnowledgeProps {
     referenceContent?: string; // 用于相似度排序的参考内容
 }
 
-interface CoverTemplate {
-    id: string;
-    name: string;
-    prompt: string;
-    styleHint: string;
-    model: string;
-    aspectRatio: string;
-    size: string;
-    quality: string;
-    count: number;
-    projectId: string;
-    titlePrefix: string;
-    referenceImages?: string[];
-    updatedAt: string;
-}
-
 interface SettingsShape {
     image_model?: string;
     image_aspect_ratio?: string;
@@ -156,35 +140,6 @@ interface SettingsShape {
 }
 
 const SHOW_WECHAT_KNOWLEDGE_ACTIONS = false;
-const COVER_TEMPLATE_STORAGE_PREFIX = 'redbox:cover-templates:v1';
-const getCoverTemplateStorageKey = (spaceId: string) => `${COVER_TEMPLATE_STORAGE_PREFIX}:${spaceId || 'default'}`;
-const createCoverTemplateId = () => `cover_tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-const normalizeCoverTemplate = (raw: unknown): CoverTemplate | null => {
-    if (!raw || typeof raw !== 'object') return null;
-    const item = raw as Record<string, unknown>;
-    const name = String(item.name || '').trim();
-    const prompt = String(item.prompt || '').trim();
-    if (!name || !prompt) return null;
-    const count = Number(item.count || 1);
-    return {
-        id: String(item.id || createCoverTemplateId()),
-        name,
-        prompt,
-        styleHint: String(item.styleHint || ''),
-        model: String(item.model || 'gpt-image-1'),
-        aspectRatio: String(item.aspectRatio || '3:4'),
-        size: String(item.size || '1024x1024'),
-        quality: String(item.quality || 'standard'),
-        count: Math.max(1, Math.min(4, Number.isFinite(count) ? Math.floor(count) : 1)),
-        projectId: String(item.projectId || ''),
-        titlePrefix: String(item.titlePrefix || ''),
-        referenceImages: Array.isArray(item.referenceImages)
-            ? item.referenceImages.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 4)
-            : [],
-        updatedAt: String(item.updatedAt || new Date().toISOString()),
-    };
-};
 
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
@@ -1061,7 +1016,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
             const settings = await window.ipcRenderer.getSettings() as SettingsShape | undefined;
             const spaceId = String(settings?.active_space_id || 'default').trim() || 'default';
-            const storageKey = getCoverTemplateStorageKey(spaceId);
 
             const now = new Date().toISOString();
             const title = String(note.title || '未命名笔记').trim();
@@ -1080,54 +1034,26 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 note.sourceUrl ? `原文：${note.sourceUrl}` : '',
                 `已绑定封面参考图，可在生成时直接复用。`,
             ].filter(Boolean).join('\n');
-
-            let persistedCoverImage = coverImage;
-            try {
-                const saved = await window.ipcRenderer.cover.saveTemplateImage({
-                    imageSource: coverImage,
-                }) as { success?: boolean; previewUrl?: string; error?: string };
-                if (saved?.success && saved.previewUrl) {
-                    persistedCoverImage = saved.previewUrl;
-                } else if (saved?.error) {
-                    console.warn('cover:save-template-image returned fallback:', saved.error);
-                }
-            } catch (error) {
-                console.warn('Failed to persist cover template image to cover folder, fallback to original url:', error);
+            const result = await window.ipcRenderer.cover.templates.save({
+                template: {
+                    name: templateName,
+                    prompt,
+                    styleHint,
+                    model: String(settings?.image_model || 'gpt-image-1'),
+                    aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
+                    size: String(settings?.image_size || ''),
+                    quality: String(settings?.image_quality || 'standard'),
+                    count: 1,
+                    projectId: '',
+                    titlePrefix: title.slice(0, 32),
+                    templateImage: coverImage,
+                    updatedAt: now,
+                },
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '保存封面模板失败');
+                return;
             }
-
-            let existing: CoverTemplate[] = [];
-            try {
-                const raw = window.localStorage.getItem(storageKey);
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    existing = Array.isArray(parsed)
-                        ? parsed.map(normalizeCoverTemplate).filter((item): item is CoverTemplate => Boolean(item))
-                        : [];
-                }
-            } catch (error) {
-                console.error('Failed to parse existing cover templates:', error);
-            }
-
-            const created: CoverTemplate = {
-                id: createCoverTemplateId(),
-                name: templateName,
-                prompt,
-                styleHint,
-                model: String(settings?.image_model || 'gpt-image-1'),
-                aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
-                size: String(settings?.image_size || ''),
-                quality: String(settings?.image_quality || 'standard'),
-                count: 1,
-                projectId: '',
-                titlePrefix: title.slice(0, 32),
-                referenceImages: [persistedCoverImage],
-                updatedAt: now,
-            };
-
-            const nextTemplates = [created, ...existing]
-                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                .slice(0, 300);
-            window.localStorage.setItem(storageKey, JSON.stringify(nextTemplates));
             window.dispatchEvent(new CustomEvent('cover:templates-updated', {
                 detail: { spaceId },
             }));

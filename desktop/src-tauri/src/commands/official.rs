@@ -582,7 +582,8 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
     let mut last_error = None;
 
     for (path, body) in request_candidates {
-        match crate::run_official_json_request_response(settings, "POST", path, Some(body.clone())) {
+        match crate::run_official_json_request_response(settings, "POST", path, Some(body.clone()))
+        {
             Ok(response) => {
                 if !(200..300).contains(&response.status) {
                     last_error = Some(response_error_message(&response.body));
