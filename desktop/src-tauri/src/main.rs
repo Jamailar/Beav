@@ -676,6 +676,7 @@ struct AppState {
     store_persist_version: Arc<AtomicU64>,
     auth_runtime: Mutex<AuthRuntimeState>,
     official_auth_refresh_lock: Mutex<()>,
+    official_wechat_status_lock: Mutex<()>,
     official_cache_refresh_inflight: AtomicBool,
     mcp_manager: mcp::McpManager,
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
@@ -6258,12 +6259,14 @@ async fn ipc_invoke(
     payload: Option<Value>,
 ) -> Result<Value, String> {
     let payload_value = payload.unwrap_or(Value::Null);
+    let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let managed_state = app.state::<AppState>();
-        handle_channel(&app, &channel, payload_value, &managed_state)
+        let managed_state = app_for_blocking.state::<AppState>();
+        handle_channel(&app_for_blocking, &channel, payload_value, &managed_state)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+    .and_then(|result| result)
 }
 
 #[tauri::command]
@@ -6412,6 +6415,7 @@ fn main() {
             store_persist_version: Arc::new(AtomicU64::new(0)),
             auth_runtime: Mutex::new(AuthRuntimeState::default()),
             official_auth_refresh_lock: Mutex::new(()),
+            official_wechat_status_lock: Mutex::new(()),
             official_cache_refresh_inflight: AtomicBool::new(false),
             mcp_manager: mcp::McpManager::default(),
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),

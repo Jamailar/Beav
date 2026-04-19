@@ -7,17 +7,14 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    now_iso, now_ms, payload_field, payload_string, AppState, AppStore, REDBOX_OFFICIAL_BASE_URL,
+    append_debug_trace_state, now_iso, now_ms, payload_field, payload_string, AppState, AppStore,
+    REDBOX_OFFICIAL_BASE_URL,
 };
 
 pub(crate) const AUTH_STATE_CHANGED_EVENT: &str = "auth:state-changed";
 pub(crate) const AUTH_DATA_CHANGED_EVENT: &str = "auth:data-changed";
 
 const AUTH_CACHE_FILE_NAME: &str = "auth-state.json";
-const AUTH_VAULT_SERVICE: &str = "RedBox";
-const AUTH_VAULT_REFRESH_TOKEN: &str = "official-refresh-token";
-const AUTH_VAULT_TOKEN_FAMILY_ID: &str = "official-token-family-id";
-const AUTH_VAULT_DEVICE_SECRET: &str = "official-device-secret";
 const OFFICIAL_SOURCE_ID: &str = "redbox_official_auto";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -53,6 +50,7 @@ pub(crate) struct AuthSecretBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AuthRuntimeState {
+    pub generation: u64,
     pub status: AuthStatus,
     pub session: Option<Value>,
     pub points: Option<Value>,
@@ -71,6 +69,7 @@ pub(crate) struct AuthRuntimeState {
 impl Default for AuthRuntimeState {
     fn default() -> Self {
         Self {
+            generation: 0,
             status: AuthStatus::Anonymous,
             session: None,
             points: None,
@@ -88,7 +87,7 @@ impl Default for AuthRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AuthCacheRecord {
     pub session: Option<Value>,
@@ -99,7 +98,7 @@ pub(crate) struct AuthCacheRecord {
     pub updated_at_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct AuthStateSnapshot {
     pub status: AuthStatus,
@@ -135,7 +134,7 @@ impl Default for AuthStateSnapshot {
 
 fn cache_record_from_settings(settings: &Value) -> AuthCacheRecord {
     AuthCacheRecord {
-        session: sanitize_session_for_cache(session_from_settings(settings).as_ref()),
+        session: session_from_settings(settings),
         points: settings_json_value(settings, "redbox_auth_points_json"),
         models: settings_json_array(settings, "redbox_official_models_json"),
         call_records: settings_json_array(settings, "redbox_auth_call_records_json"),
@@ -289,46 +288,6 @@ pub(crate) fn jwt_expiration_ms(token: &str) -> Option<i64> {
         .map(|value| value.saturating_mul(1000))
 }
 
-fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(AUTH_VAULT_SERVICE, account).map_err(|error| error.to_string())
-}
-
-fn vault_read_entry(account: &str) -> Result<Option<String>, String> {
-    let entry = keyring_entry(account)?;
-    match entry.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(error) => {
-            let text = error.to_string().to_lowercase();
-            if text.contains("no entry")
-                || text.contains("platform secure storage")
-                || text.contains("not found")
-            {
-                Ok(None)
-            } else {
-                Err(error.to_string())
-            }
-        }
-    }
-}
-
-fn vault_write_entry(account: &str, value: Option<&str>) -> Result<(), String> {
-    let entry = keyring_entry(account)?;
-    match value.map(str::trim).filter(|item| !item.is_empty()) {
-        Some(secret) => entry.set_password(secret).map_err(|error| error.to_string()),
-        None => match entry.delete_password() {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let text = error.to_string().to_lowercase();
-                if text.contains("no entry") || text.contains("not found") {
-                    Ok(())
-                } else {
-                    Err(error.to_string())
-                }
-            }
-        },
-    }
-}
-
 pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
     let normalized = error.trim().to_lowercase();
     if normalized.contains("invalid_grant")
@@ -375,6 +334,14 @@ fn with_auth_runtime_mut<T>(
     Ok(mutator(&mut runtime))
 }
 
+fn log_auth_runtime(
+    state: &State<'_, AppState>,
+    stage: &str,
+    detail: impl Into<String>,
+) {
+    append_debug_trace_state(state, format!("[auth] {stage} {}", detail.into()));
+}
+
 fn auth_state_snapshot_from_runtime(runtime: &AuthRuntimeState) -> AuthStateSnapshot {
     AuthStateSnapshot {
         status: runtime.status,
@@ -410,6 +377,14 @@ fn persist_auth_cache(store_path: &Path, cache: &AuthCacheRecord) -> Result<(), 
     fs::write(path, serialized).map_err(|error| error.to_string())
 }
 
+fn schedule_auth_cache_persist(store_path: PathBuf, cache: AuthCacheRecord) {
+    std::thread::spawn(move || {
+        if let Err(error) = persist_auth_cache(&store_path, &cache) {
+            eprintln!("[RedBox auth cache persist] {error}");
+        }
+    });
+}
+
 fn load_auth_cache(store_path: &Path) -> Result<AuthCacheRecord, String> {
     let path = auth_cache_path_from_store_path(store_path)?;
     let content = match fs::read_to_string(path) {
@@ -419,22 +394,8 @@ fn load_auth_cache(store_path: &Path) -> Result<AuthCacheRecord, String> {
     serde_json::from_str(&content).map_err(|error| error.to_string())
 }
 
-fn write_secrets(bundle: &AuthSecretBundle) -> Result<(), String> {
-    vault_write_entry(AUTH_VAULT_REFRESH_TOKEN, bundle.refresh_token.as_deref())?;
-    vault_write_entry(
-        AUTH_VAULT_TOKEN_FAMILY_ID,
-        bundle.token_family_id.as_deref(),
-    )?;
-    vault_write_entry(AUTH_VAULT_DEVICE_SECRET, bundle.device_secret.as_deref())?;
+fn write_secrets(_bundle: &AuthSecretBundle) -> Result<(), String> {
     Ok(())
-}
-
-fn load_secrets() -> Result<AuthSecretBundle, String> {
-    Ok(AuthSecretBundle {
-        refresh_token: vault_read_entry(AUTH_VAULT_REFRESH_TOKEN)?,
-        token_family_id: vault_read_entry(AUTH_VAULT_TOKEN_FAMILY_ID)?,
-        device_secret: vault_read_entry(AUTH_VAULT_DEVICE_SECRET)?,
-    })
 }
 
 fn projected_session(
@@ -454,6 +415,7 @@ fn projected_session(
         Some(refresh_token) => {
             object.insert("refreshToken".to_string(), json!(refresh_token));
         }
+        None if allow_access_token => {}
         None => {
             object.remove("refreshToken");
             object.remove("refresh_token");
@@ -606,6 +568,29 @@ pub(crate) fn auth_state_snapshot(state: &State<'_, AppState>) -> Result<AuthSta
     with_auth_runtime_mut(state, |runtime| auth_state_snapshot_from_runtime(runtime))
 }
 
+pub(crate) fn auth_generation(state: &State<'_, AppState>) -> Result<u64, String> {
+    with_auth_runtime_mut(state, |runtime| runtime.generation)
+}
+
+pub(crate) fn auth_generation_matches(
+    state: &State<'_, AppState>,
+    expected_generation: u64,
+) -> Result<bool, String> {
+    with_auth_runtime_mut(state, |runtime| runtime.generation == expected_generation)
+}
+
+pub(crate) fn bump_auth_generation(
+    state: &State<'_, AppState>,
+    reason: &str,
+) -> Result<u64, String> {
+    let generation = with_auth_runtime_mut(state, |runtime| {
+        runtime.generation = runtime.generation.saturating_add(1);
+        runtime.generation
+    })?;
+    log_auth_runtime(state, "generation", format!("reason={reason} generation={generation}"));
+    Ok(generation)
+}
+
 pub(crate) fn sync_auth_runtime_from_settings(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
@@ -619,9 +604,8 @@ pub(crate) fn sync_auth_runtime_from_settings(
         device_secret: None,
     };
     let runtime_session = projected_session(session.as_ref(), &secrets, true);
-    write_secrets(&secrets)?;
-    persist_auth_cache(&state.store_path, &cache)?;
-    let snapshot = with_auth_runtime_mut(state, |runtime| {
+    let (snapshot, changed) = with_auth_runtime_mut(state, |runtime| {
+        let previous_snapshot = auth_state_snapshot_from_runtime(runtime);
         runtime.session = runtime_session.clone();
         runtime.points = cache.points.clone();
         runtime.models = cache.models.clone();
@@ -646,11 +630,28 @@ pub(crate) fn sync_auth_runtime_from_settings(
         } else {
             AuthStatus::Anonymous
         };
-        auth_state_snapshot_from_runtime(runtime)
+        let next_snapshot = auth_state_snapshot_from_runtime(runtime);
+        let changed = next_snapshot != previous_snapshot;
+        (next_snapshot, changed)
     })?;
-    if let Some(app_handle) = app {
-        emit_auth_snapshot(app_handle, &snapshot);
+    if changed {
+        log_auth_runtime(
+            state,
+            "sync",
+            format!(
+                "status={:?} session={} refreshToken={} models={} records={}",
+                snapshot.status,
+                snapshot.session.is_some(),
+                secrets.refresh_token.is_some(),
+                snapshot.models.len(),
+                snapshot.call_records.len()
+            ),
+        );
+        if let Some(app_handle) = app {
+            emit_auth_snapshot(app_handle, &snapshot);
+        }
     }
+    schedule_auth_cache_persist(state.store_path.clone(), cache);
     Ok(snapshot)
 }
 
@@ -672,6 +673,11 @@ pub(crate) fn mark_auth_degraded(
         runtime.last_error_kind = Some(kind);
         auth_state_snapshot_from_runtime(runtime)
     })?;
+    log_auth_runtime(
+        state,
+        "degraded",
+        format!("kind={kind:?} message={message}"),
+    );
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -684,6 +690,7 @@ pub(crate) fn mark_auth_refreshing(
         runtime.status = AuthStatus::Refreshing;
         auth_state_snapshot_from_runtime(runtime)
     })?;
+    log_auth_runtime(state, "refreshing", "entered refreshing state");
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -696,6 +703,7 @@ pub(crate) fn mark_auth_reauth_required(
     let message = message.into();
     write_secrets(&AuthSecretBundle::default())?;
     let snapshot = with_auth_runtime_mut(state, |runtime| {
+        runtime.generation = runtime.generation.saturating_add(1);
         runtime.status = AuthStatus::ReauthRequired;
         runtime.session = None;
         runtime.secrets = AuthSecretBundle::default();
@@ -704,6 +712,7 @@ pub(crate) fn mark_auth_reauth_required(
         runtime.last_error_kind = Some(AuthErrorKind::ReauthRequired);
         auth_state_snapshot_from_runtime(runtime)
     })?;
+    log_auth_runtime(state, "reauth-required", message.clone());
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -714,9 +723,12 @@ pub(crate) fn mark_auth_logged_out(
 ) -> Result<AuthStateSnapshot, String> {
     write_secrets(&AuthSecretBundle::default())?;
     let snapshot = with_auth_runtime_mut(state, |runtime| {
+        let next_generation = runtime.generation;
         *runtime = AuthRuntimeState::default();
+        runtime.generation = next_generation;
         auth_state_snapshot_from_runtime(runtime)
     })?;
+    log_auth_runtime(state, "logout", "cleared runtime and file-backed auth state");
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -743,8 +755,12 @@ pub(crate) fn initialize_auth_runtime(
     state: &State<'_, AppState>,
 ) -> Result<AuthStateSnapshot, String> {
     let cache = load_auth_cache(&state.store_path)?;
-    let secrets = load_secrets().unwrap_or_default();
-    let cache_session = projected_session(cache.session.as_ref(), &secrets, false);
+    let secrets = AuthSecretBundle {
+        refresh_token: session_refresh_token(cache.session.as_ref()),
+        token_family_id: None,
+        device_secret: None,
+    };
+    let cache_session = projected_session(cache.session.as_ref(), &secrets, true);
     crate::persistence::with_store_mut(state, |store| {
         write_cache_data_to_settings(&mut store.settings, &cache);
         write_session_to_settings(&mut store.settings, cache_session.as_ref());
@@ -779,6 +795,18 @@ pub(crate) fn initialize_auth_runtime(
         };
         auth_state_snapshot_from_runtime(runtime)
     })?;
+    log_auth_runtime(
+        state,
+        "init",
+        format!(
+            "status={:?} cacheSession={} refreshToken={} models={} records={}",
+            snapshot.status,
+            cache.session.is_some(),
+            secrets.refresh_token.is_some(),
+            cache.models.len(),
+            cache.call_records.len()
+        ),
+    );
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -797,9 +825,15 @@ pub(crate) fn migrate_legacy_auth_store(
         token_family_id: None,
         device_secret: None,
     };
-    write_secrets(&secrets)?;
     persist_auth_cache(store_path, &cache)?;
     clear_persisted_auth_fields(&mut store.settings, legacy_session.as_ref());
+    eprintln!(
+        "{} | [auth] migrate legacySession=true persistedToFile=true refreshToken={} cacheModels={} cacheRecords={}",
+        now_iso(),
+        secrets.refresh_token.is_some(),
+        cache.models.len(),
+        cache.call_records.len()
+    );
     Ok(())
 }
 

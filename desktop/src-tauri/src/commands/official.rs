@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     auth,
+    append_debug_trace_state,
     create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_official_auth_session, now_iso, now_ms,
     official_account_summary_local, official_auth_token_from_settings, official_fallback_products,
@@ -41,6 +42,14 @@ const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 19] = [
     "video_api_key",
     "video_model",
 ];
+
+fn log_official_auth(
+    state: &State<'_, AppState>,
+    stage: &str,
+    detail: impl Into<String>,
+) {
+    append_debug_trace_state(state, format!("[official-auth] {stage} {}", detail.into()));
+}
 
 fn cached_official_user(settings: &Value) -> Value {
     official_settings_session(settings)
@@ -519,6 +528,25 @@ fn clear_official_auth_state(settings: &mut Value) {
     }
 }
 
+fn update_wechat_login_snapshot(
+    settings: &mut Value,
+    session_id: &str,
+    status: &str,
+    raw: &Value,
+) {
+    let mut snapshot = official_settings_wechat_login(settings).unwrap_or_else(|| json!({}));
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("sessionId".to_string(), json!(session_id));
+        object.insert("status".to_string(), json!(status));
+        object.insert("updatedAt".to_string(), json!(now_ms()));
+        object.insert("raw".to_string(), raw.clone());
+        if status == "CONFIRMED" {
+            object.insert("confirmedAt".to_string(), json!(now_ms()));
+        }
+    }
+    write_settings_json_value(settings, "redbox_auth_wechat_login_json", &snapshot);
+}
+
 fn merge_official_settings(settings: &mut Value, source: &Value) {
     let Some(target) = settings.as_object_mut() else {
         *settings = source.clone();
@@ -592,7 +620,19 @@ fn apply_official_settings_update(
     settings: &Value,
     source: &str,
     data_payload: Option<Value>,
+    expected_generation: Option<u64>,
 ) -> Result<(), String> {
+    if let Some(expected_generation) = expected_generation {
+        let matches = auth::auth_generation_matches(state, expected_generation)?;
+        if !matches {
+            log_official_auth(
+                state,
+                "stale-update-dropped",
+                format!("source={source} expectedGeneration={expected_generation}"),
+            );
+            return Err("auth generation changed; stale update dropped".to_string());
+        }
+    }
     with_store_mut(state, |store| {
         merge_official_settings(&mut store.settings, settings);
         Ok(())
@@ -618,7 +658,20 @@ fn refresh_official_auth_session_with_lock(
     settings: &mut Value,
     force: bool,
     reason: &str,
+    expected_generation: Option<u64>,
 ) -> Result<Option<Value>, String> {
+    if let Some(expected_generation) = expected_generation {
+        let matches = auth::auth_generation_matches(state, expected_generation)?;
+        if !matches {
+            log_official_auth(
+                state,
+                "stale-refresh-skipped",
+                format!("reason={reason} expectedGeneration={expected_generation}"),
+            );
+            return Err("auth generation changed; stale refresh skipped".to_string());
+        }
+    }
+    log_official_auth(state, "refresh-request", format!("force={force} reason={reason}"));
     let _guard = state
         .official_auth_refresh_lock
         .lock()
@@ -628,25 +681,43 @@ fn refresh_official_auth_session_with_lock(
     merge_official_settings(settings, &latest_settings);
 
     if official_settings_session(settings).is_none() {
+        log_official_auth(state, "refresh-abort", "no session in settings");
         return Err("官方账号未登录".to_string());
     }
     if !force && !official_session_needs_refresh(settings) {
+        log_official_auth(state, "refresh-skip", "session does not need refresh");
         return Ok(official_settings_session(settings));
     }
 
     match refresh_official_auth_session_in_settings(settings) {
         Ok(session) => {
+            log_official_auth(
+                state,
+                "refresh-success",
+                format!(
+                    "accessToken={} refreshToken={} expiresAt={}",
+                    payload_string(&session, "accessToken").is_some(),
+                    payload_string(&session, "refreshToken").is_some(),
+                    payload_i64(&session, "expiresAt").unwrap_or_default()
+                ),
+            );
             apply_official_settings_update(
                 app,
                 state,
                 settings,
                 &format!("official-auth-refresh:{reason}"),
                 None,
+                expected_generation,
             )?;
             Ok(Some(session))
         }
         Err(error) => {
             let kind = auth::classify_auth_error(&error);
+            log_official_auth(
+                state,
+                "refresh-failed",
+                format!("kind={kind:?} error={error}"),
+            );
             if kind == auth::AuthErrorKind::ReauthRequired {
                 clear_official_auth_state(settings);
                 let _ = apply_official_settings_update(
@@ -655,6 +726,7 @@ fn refresh_official_auth_session_with_lock(
                     settings,
                     "official-auth-refresh-failed",
                     None,
+                    expected_generation,
                 );
                 let _ = auth::mark_auth_reauth_required(app, state, error.clone());
             } else {
@@ -673,9 +745,18 @@ fn run_authenticated_official_request_inner(
     path: &str,
     body: Option<Value>,
     preflight_refresh: bool,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
     if preflight_refresh && official_session_needs_refresh(settings) {
-        refresh_official_auth_session_with_lock(app, state, settings, false, "preflight")?;
+        log_official_auth(state, "request-preflight-refresh", format!("path={path}"));
+        refresh_official_auth_session_with_lock(
+            app,
+            state,
+            settings,
+            false,
+            "preflight",
+            expected_generation,
+        )?;
     }
 
     let response = crate::run_official_json_request_response(settings, method, path, body.clone())?;
@@ -683,7 +764,19 @@ fn run_authenticated_official_request_inner(
         return Ok(response.body);
     }
 
-    refresh_official_auth_session_with_lock(app, state, settings, true, "retry")?;
+    log_official_auth(
+        state,
+        "request-unauthorized",
+        format!("path={path} status={} retrying refresh", response.status),
+    );
+    refresh_official_auth_session_with_lock(
+        app,
+        state,
+        settings,
+        true,
+        "retry",
+        expected_generation,
+    )?;
     let retry = crate::run_official_json_request_response(settings, method, path, body)?;
     if !official_response_is_unauthorized(retry.status, &retry.body) {
         return Ok(retry.body);
@@ -691,6 +784,11 @@ fn run_authenticated_official_request_inner(
 
     let error = response_error_message(&retry.body);
     let kind = auth::classify_auth_error(&error);
+    log_official_auth(
+        state,
+        "request-retry-failed",
+        format!("path={path} kind={kind:?} error={error}"),
+    );
     if kind == auth::AuthErrorKind::ReauthRequired {
         clear_official_auth_state(settings);
         let _ = apply_official_settings_update(
@@ -699,6 +797,7 @@ fn run_authenticated_official_request_inner(
             settings,
             "official-auth-unauthorized",
             None,
+            expected_generation,
         );
         let _ = auth::mark_auth_reauth_required(app, state, error.clone());
     } else {
@@ -714,8 +813,18 @@ fn run_authenticated_official_request(
     method: &str,
     path: &str,
     body: Option<Value>,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
-    run_authenticated_official_request_inner(app, state, settings, method, path, body, true)
+    run_authenticated_official_request_inner(
+        app,
+        state,
+        settings,
+        method,
+        path,
+        body,
+        true,
+        expected_generation,
+    )
 }
 
 fn run_authenticated_official_request_skip_preflight_refresh(
@@ -725,16 +834,35 @@ fn run_authenticated_official_request_skip_preflight_refresh(
     method: &str,
     path: &str,
     body: Option<Value>,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
-    run_authenticated_official_request_inner(app, state, settings, method, path, body, false)
+    run_authenticated_official_request_inner(
+        app,
+        state,
+        settings,
+        method,
+        path,
+        body,
+        false,
+        expected_generation,
+    )
 }
 
 fn fetch_official_models_with_recovery(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
+    expected_generation: Option<u64>,
 ) -> Vec<Value> {
-    match run_authenticated_official_request(app, state, settings, "GET", "/models", None) {
+    match run_authenticated_official_request(
+        app,
+        state,
+        settings,
+        "GET",
+        "/models",
+        None,
+        expected_generation,
+    ) {
         Ok(remote) => {
             let items = official_response_items(&remote);
             if items.is_empty() {
@@ -751,9 +879,17 @@ fn fetch_remote_official_points(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
-    let response =
-        run_authenticated_official_request(app, state, settings, "GET", "/users/me/points", None)?;
+    let response = run_authenticated_official_request(
+        app,
+        state,
+        settings,
+        "GET",
+        "/users/me/points",
+        None,
+        expected_generation,
+    )?;
     let payload = official_unwrap_response_payload(&response);
     normalize_official_points_payload(&payload)
         .ok_or_else(|| "官方积分接口返回了无法识别的数据结构".to_string())
@@ -784,11 +920,20 @@ fn sync_remote_orders_into_settings(settings: &mut Value, order: &Value) {
     write_settings_json_array(settings, "redbox_auth_orders_json", &orders);
 }
 
+fn seed_official_models_from_cache(settings: &mut Value) {
+    let models = official_settings_models(settings);
+    write_settings_json_array(settings, "redbox_official_models_json", &models);
+    if !models.is_empty() {
+        official_sync_source_into_settings(settings, &models);
+    }
+}
+
 fn query_remote_order_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
     out_trade_no: &str,
+    expected_generation: Option<u64>,
 ) -> Option<Value> {
     let normalized = out_trade_no.trim();
     if normalized.is_empty() {
@@ -802,6 +947,7 @@ fn query_remote_order_status(
         "GET",
         &format!("/payments/orders/status?out_trade_no={encoded}"),
         None,
+        expected_generation,
     )
     .or_else(|_| {
         run_authenticated_official_request(
@@ -811,6 +957,7 @@ fn query_remote_order_status(
             "GET",
             &format!("/payments/orders/{encoded}"),
             None,
+            expected_generation,
         )
     })
     .or_else(|_| {
@@ -821,6 +968,7 @@ fn query_remote_order_status(
             "GET",
             &format!("/billing/orders/status?out_trade_no={encoded}"),
             None,
+            expected_generation,
         )
     })
     .or_else(|_| {
@@ -831,6 +979,7 @@ fn query_remote_order_status(
             "GET",
             &format!("/billing/orders/{encoded}"),
             None,
+            expected_generation,
         )
     })
     .or_else(|_| {
@@ -841,6 +990,7 @@ fn query_remote_order_status(
             "GET",
             &format!("/orders/{encoded}"),
             None,
+            expected_generation,
         )
     })
     .ok()?;
@@ -851,6 +1001,7 @@ fn fetch_remote_official_call_records(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
+    expected_generation: Option<u64>,
 ) -> Result<Vec<Value>, String> {
     let response = run_authenticated_official_request(
         app,
@@ -859,6 +1010,7 @@ fn fetch_remote_official_call_records(
         "GET",
         "/users/me/ai-usage-logs",
         None,
+        expected_generation,
     )?;
     let items = normalize_official_call_records_value(&response);
     if items.is_empty() {
@@ -885,6 +1037,7 @@ fn refresh_official_cached_data_into_settings(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &mut Value,
+    expected_generation: Option<u64>,
 ) -> Result<Value, String> {
     if !official_session_logged_in(settings) {
         return Err("官方账号未登录".to_string());
@@ -893,30 +1046,45 @@ fn refresh_official_cached_data_into_settings(
     let mut refreshed = false;
 
     if official_session_needs_refresh(settings) {
-        refresh_official_auth_session_with_lock(app, state, settings, false, "cache-refresh")?;
+        refresh_official_auth_session_with_lock(
+            app,
+            state,
+            settings,
+            false,
+            "cache-refresh",
+            expected_generation,
+        )?;
     }
 
-    if let Ok(response) =
-        run_authenticated_official_request(app, state, settings, "GET", "/users/me", None)
-    {
+    if let Ok(response) = run_authenticated_official_request(
+        app,
+        state,
+        settings,
+        "GET",
+        "/users/me",
+        None,
+        expected_generation,
+    ) {
         let user = official_unwrap_response_payload(&response);
         update_official_session_user(settings, &user);
         refreshed = true;
     }
 
-    if let Ok(points) = fetch_remote_official_points(app, state, settings) {
+    if let Ok(points) = fetch_remote_official_points(app, state, settings, expected_generation) {
         write_settings_json_value(settings, "redbox_auth_points_json", &points);
         refreshed = true;
     }
 
-    let models = fetch_official_models_with_recovery(app, state, settings);
+    let models = fetch_official_models_with_recovery(app, state, settings, expected_generation);
     if !models.is_empty() {
         write_settings_json_array(settings, "redbox_official_models_json", &models);
         official_sync_source_into_settings(settings, &models);
         refreshed = true;
     }
 
-    if let Ok(records) = fetch_remote_official_call_records(app, state, settings) {
+    if let Ok(records) =
+        fetch_remote_official_call_records(app, state, settings, expected_generation)
+    {
         write_settings_json_array(settings, "redbox_auth_call_records_json", &records);
         refreshed = true;
     }
@@ -935,19 +1103,27 @@ pub(crate) fn refresh_official_cached_data(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
+    log_official_auth(state, "background-refresh", "refresh_official_cached_data invoked");
+    let generation = auth::auth_generation(state)?;
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     if !official_session_logged_in(&settings_snapshot) {
         return Err("官方账号未登录".to_string());
     }
 
     let mut updated_settings = settings_snapshot.clone();
-    let refreshed = refresh_official_cached_data_into_settings(app, state, &mut updated_settings)?;
+    let refreshed = refresh_official_cached_data_into_settings(
+        app,
+        state,
+        &mut updated_settings,
+        Some(generation),
+    )?;
     apply_official_settings_update(
         app,
         state,
         &updated_settings,
         "official-background-refresh",
         Some(refreshed.clone()),
+        Some(generation),
     )?;
     Ok(refreshed)
 }
@@ -957,6 +1133,8 @@ pub(crate) fn bootstrap_official_auth_session(
     state: &State<'_, AppState>,
     reason: &str,
 ) -> Result<Value, String> {
+    log_official_auth(state, "bootstrap", format!("reason={reason}"));
+    let generation = auth::auth_generation(state)?;
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     if !official_session_logged_in(&settings_snapshot) {
         let mut cleaned_settings = settings_snapshot.clone();
@@ -967,6 +1145,7 @@ pub(crate) fn bootstrap_official_auth_session(
             &cleaned_settings,
             "official-bootstrap-cleared",
             None,
+            Some(generation),
         );
         return Ok(json!({
             "success": true,
@@ -1059,6 +1238,7 @@ pub fn handle_official_channel(
         "auth:refresh-now" => "redbox-auth:refresh",
         _ => channel,
     };
+    let request_generation = auth::auth_generation(state).ok();
     let result = match channel {
         "redbox-auth:get-config"
         | "redbox-auth:bootstrap"
@@ -1115,10 +1295,19 @@ pub fn handle_official_channel(
                     bootstrap_official_auth_session(app, state, "get-session")
                 }
                 "redbox-auth:logout" => {
+                    log_official_auth(state, "logout-request", "manual logout");
+                    let logout_generation = auth::bump_auth_generation(state, "logout")?;
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let mut settings = settings_snapshot.clone();
                     clear_official_auth_state(&mut settings);
-                    apply_official_settings_update(app, state, &settings, "official-logout", None)?;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-logout",
+                        None,
+                        Some(logout_generation),
+                    )?;
                     let _ = auth::mark_auth_logged_out(app, state);
                     Ok(json!({ "success": true, "routing": { "cleared": true } }))
                 }
@@ -1149,37 +1338,59 @@ pub fn handle_official_channel(
                     if phone.trim().is_empty() || code.trim().is_empty() {
                         return Ok(json!({ "success": false, "error": "请输入手机号和验证码" }));
                     }
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
-                        let response = run_official_public_json_request(
-                            &settings,
-                            "POST",
-                            if channel == "redbox-auth:login-sms" {
-                                "/auth/login/sms"
-                            } else {
-                                "/auth/register/sms"
-                            },
-                            Some(json!({
-                                "phone": phone,
-                                "code": code,
-                                "invite_code": invite_code.clone().filter(|value| !value.trim().is_empty()),
-                            })),
-                        )?;
-                        let session = normalize_official_auth_session(&response)?;
-                        upsert_official_settings_session(&mut settings, Some(&session));
-                        sync_official_route_credentials(&mut settings);
-                        let models = official_settings_models(&settings);
-                        write_settings_json_array(
-                            &mut settings,
-                            "redbox_official_models_json",
-                            &models,
-                        );
-                        if !models.is_empty() {
-                            official_sync_source_into_settings(&mut settings, &models);
-                        }
-                        store.settings = settings;
-                        Ok(json!({ "success": true, "session": session, "routeSynced": true }))
-                    })?;
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let response = run_official_public_json_request(
+                        &settings,
+                        "POST",
+                        if channel == "redbox-auth:login-sms" {
+                            "/auth/login/sms"
+                        } else {
+                            "/auth/register/sms"
+                        },
+                        Some(json!({
+                            "phone": phone,
+                            "code": code,
+                            "invite_code": invite_code.clone().filter(|value| !value.trim().is_empty()),
+                        })),
+                    )?;
+                    let session = normalize_official_auth_session(&response)?;
+                    upsert_official_settings_session(&mut settings, Some(&session));
+                    sync_official_route_credentials(&mut settings);
+                    seed_official_models_from_cache(&mut settings);
+                    let login_generation = auth::bump_auth_generation(
+                        state,
+                        if channel == "redbox-auth:login-sms" {
+                            "login-sms"
+                        } else {
+                            "register-sms"
+                        },
+                    )?;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        if channel == "redbox-auth:login-sms" {
+                            "official-login-sms"
+                        } else {
+                            "official-register-sms"
+                        },
+                        None,
+                        Some(login_generation),
+                    )?;
+                    log_official_auth(
+                        state,
+                        "login-success",
+                        format!(
+                            "mode={} sessionAccess={} refreshToken={} expiresAt={}",
+                            if channel == "redbox-auth:login-sms" { "sms-login" } else { "sms-register" },
+                            payload_string(&session, "accessToken").is_some(),
+                            payload_string(&session, "refreshToken").is_some(),
+                            payload_i64(&session, "expiresAt").unwrap_or_default()
+                        ),
+                    );
+                    let response =
+                        json!({ "success": true, "session": session, "routeSynced": true });
                     emit_redbox_auth_session_updated(app, response.get("session").cloned());
                     trigger_official_cached_data_refresh(app.clone());
                     Ok(response)
@@ -1216,57 +1427,81 @@ pub fn handle_official_channel(
                     Ok(json!({ "success": true, "data": data }))
                 }),
                 "redbox-auth:wechat-status" => {
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
-                        let pending =
-                            official_settings_wechat_login(&settings).unwrap_or_else(|| json!({}));
-                        let requested_session_id =
-                            payload_string(payload, "sessionId").unwrap_or_default();
-                        let pending_session_id =
-                            payload_string(&pending, "sessionId").unwrap_or_default();
-                        let session_id = if requested_session_id.is_empty() {
-                            pending_session_id
-                        } else {
-                            requested_session_id
-                        };
-                        if session_id.is_empty() {
-                            return Ok(json!({ "success": false, "error": "sessionId 不能为空" }));
-                        }
-                        let response = run_official_public_json_request(
-                            &settings,
-                            "GET",
-                            &format!(
-                                "/auth/login/wechat/status?session_id={}",
-                                session_id.replace(' ', "%20")
-                            ),
-                            None,
-                        )?;
-                        let payload = official_unwrap_response_payload(&response);
-                        let status = payload_string(&payload, "status")
-                            .unwrap_or_else(|| "PENDING".to_string())
-                            .to_uppercase();
-                        let session = if status == "CONFIRMED" {
-                            payload
-                                .get("auth_payload")
-                                .map(normalize_official_auth_session)
-                                .transpose()?
-                        } else {
-                            None
-                        };
-                        if let Some(ref session_value) = session {
-                            upsert_official_settings_session(&mut settings, Some(session_value));
-                            sync_official_route_credentials(&mut settings);
-                            let models = fetch_official_models_for_settings(&settings);
-                            write_settings_json_array(
-                                &mut settings,
-                                "redbox_official_models_json",
-                                &models,
-                            );
-                            if !models.is_empty() {
-                                official_sync_source_into_settings(&mut settings, &models);
+                    let _guard = state
+                        .official_wechat_status_lock
+                        .lock()
+                        .map_err(|_| "微信登录状态锁已损坏".to_string())?;
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let pending =
+                        official_settings_wechat_login(&settings).unwrap_or_else(|| json!({}));
+                    let requested_session_id =
+                        payload_string(payload, "sessionId").unwrap_or_default();
+                    let pending_session_id =
+                        payload_string(&pending, "sessionId").unwrap_or_default();
+                    let session_id = if requested_session_id.is_empty() {
+                        pending_session_id
+                    } else {
+                        requested_session_id
+                    };
+                    if session_id.is_empty() {
+                        return Ok(json!({ "success": false, "error": "sessionId 不能为空" }));
+                    }
+                    let existing_status = payload_string(&pending, "status")
+                        .unwrap_or_default()
+                        .to_uppercase();
+                    let existing_session_id =
+                        payload_string(&pending, "sessionId").unwrap_or_default();
+                    if existing_status == "CONFIRMED"
+                        && existing_session_id == session_id
+                        && official_settings_session(&settings).is_some()
+                    {
+                        return Ok(json!({
+                            "success": true,
+                            "data": {
+                                "status": "CONFIRMED",
+                                "sessionId": session_id,
+                                "session": official_settings_session(&settings),
+                                "raw": pending.get("raw").cloned().unwrap_or_else(|| json!({})),
                             }
-                        }
-                        let result = json!({
+                        }));
+                    }
+                    let response = run_official_public_json_request(
+                        &settings,
+                        "GET",
+                        &format!(
+                            "/auth/login/wechat/status?session_id={}",
+                            session_id.replace(' ', "%20")
+                        ),
+                        None,
+                    )?;
+                    let payload = official_unwrap_response_payload(&response);
+                    let status = payload_string(&payload, "status")
+                        .unwrap_or_else(|| "PENDING".to_string())
+                        .to_uppercase();
+                    if existing_status != status || status == "CONFIRMED" || status == "SCANNED" {
+                        log_official_auth(
+                            state,
+                            "wechat-status",
+                            format!("sessionId={} previous={} next={}", session_id, existing_status, status),
+                        );
+                    }
+                    update_wechat_login_snapshot(&mut settings, &session_id, &status, &payload);
+                    let session = if status == "CONFIRMED" {
+                        payload
+                            .get("auth_payload")
+                            .map(normalize_official_auth_session)
+                            .transpose()?
+                    } else {
+                        None
+                    };
+                    if let Some(ref session_value) = session {
+                        upsert_official_settings_session(&mut settings, Some(session_value));
+                        sync_official_route_credentials(&mut settings);
+                        seed_official_models_from_cache(&mut settings);
+                    }
+                    let response = json!({
+                        "result": {
                             "success": true,
                             "data": {
                                 "status": status,
@@ -1274,54 +1509,89 @@ pub fn handle_official_channel(
                                 "session": session,
                                 "raw": payload,
                             }
-                        });
-                        store.settings = settings;
-                        Ok(result)
-                    })?;
+                        },
+                        "settings": settings,
+                        "session": session,
+                        "status": status,
+                    });
                     if response
-                        .pointer("/data/status")
+                        .pointer("/status")
                         .and_then(|value| value.as_str())
                         == Some("CONFIRMED")
                     {
+                        if let Some(settings) = response.get("settings") {
+                            let login_generation =
+                                auth::bump_auth_generation(state, "login-wechat-poll")?;
+                            apply_official_settings_update(
+                                app,
+                                state,
+                                settings,
+                                "official-wechat-confirmed",
+                                None,
+                                Some(login_generation),
+                            )?;
+                        }
+                        if let Some(session) = response.get("session") {
+                            log_official_auth(
+                                state,
+                                "login-success",
+                                format!(
+                                    "mode=wechat-poll sessionAccess={} refreshToken={} expiresAt={}",
+                                    payload_string(session, "accessToken").is_some(),
+                                    payload_string(session, "refreshToken").is_some(),
+                                    payload_i64(session, "expiresAt").unwrap_or_default()
+                                ),
+                            );
+                        }
                         emit_redbox_auth_session_updated(
                             app,
                             response
-                                .pointer("/data/session")
+                                .pointer("/session")
                                 .cloned()
                                 .filter(|value| !value.is_null()),
                         );
                         trigger_official_cached_data_refresh(app.clone());
                     }
-                    Ok(response)
+                    Ok(response.get("result").cloned().unwrap_or_else(|| json!({ "success": false })))
                 }
                 "redbox-auth:login-wechat-code" => {
                     let code = payload_string(payload, "code").unwrap_or_default();
                     if code.trim().is_empty() {
                         return Ok(json!({ "success": false, "error": "缺少微信授权 code" }));
                     }
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
-                        let response = run_official_public_json_request(
-                            &settings,
-                            "POST",
-                            "/auth/login/wechat",
-                            Some(json!({ "code": code })),
-                        )?;
-                        let session = normalize_official_auth_session(&response)?;
-                        upsert_official_settings_session(&mut settings, Some(&session));
-                        sync_official_route_credentials(&mut settings);
-                        let models = fetch_official_models_for_settings(&settings);
-                        write_settings_json_array(
-                            &mut settings,
-                            "redbox_official_models_json",
-                            &models,
-                        );
-                        if !models.is_empty() {
-                            official_sync_source_into_settings(&mut settings, &models);
-                        }
-                        store.settings = settings;
-                        Ok(json!({ "success": true, "session": session, "routeSynced": true }))
-                    })?;
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let response = run_official_public_json_request(
+                        &settings,
+                        "POST",
+                        "/auth/login/wechat",
+                        Some(json!({ "code": code })),
+                    )?;
+                    let session = normalize_official_auth_session(&response)?;
+                    upsert_official_settings_session(&mut settings, Some(&session));
+                    sync_official_route_credentials(&mut settings);
+                    seed_official_models_from_cache(&mut settings);
+                    let login_generation =
+                        auth::bump_auth_generation(state, "login-wechat-code")?;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-login-wechat-code",
+                        None,
+                        Some(login_generation),
+                    )?;
+                    log_official_auth(
+                        state,
+                        "login-success",
+                        format!(
+                            "mode=wechat-code sessionAccess={} refreshToken={} expiresAt={}",
+                            payload_string(&session, "accessToken").is_some(),
+                            payload_string(&session, "refreshToken").is_some(),
+                            payload_i64(&session, "expiresAt").unwrap_or_default()
+                        ),
+                    );
+                    let response = json!({ "success": true, "session": session, "routeSynced": true });
                     emit_redbox_auth_session_updated(app, response.get("session").cloned());
                     trigger_official_cached_data_refresh(app.clone());
                     Ok(response)
@@ -1354,7 +1624,12 @@ pub fn handle_official_channel(
                     let cached_points = cached_official_points(&settings);
                     let stale = official_points_need_silent_refresh(&settings);
                     let mut error = None;
-                    let points = match fetch_remote_official_points(app, state, &mut settings) {
+                    let points = match fetch_remote_official_points(
+                        app,
+                        state,
+                        &mut settings,
+                        request_generation,
+                    ) {
                         Ok(points) => {
                             write_settings_json_value(
                                 &mut settings,
@@ -1374,6 +1649,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-points-query",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({
                         "success": error.is_none() || points.is_object(),
@@ -1421,7 +1697,17 @@ pub fn handle_official_channel(
                     }
                     keys.insert(0, item.clone());
                     write_settings_json_array(&mut settings, "redbox_auth_api_keys_json", &keys);
-                    store.settings = settings;
+                    Ok((settings, item))
+                })
+                .and_then(|(settings, item)| {
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-api-key-create",
+                        None,
+                        request_generation,
+                    )?;
                     Ok(json!({ "success": true, "data": item }))
                 }),
                 "redbox-auth:api-keys:set-current" => {
@@ -1429,8 +1715,9 @@ pub fn handle_official_channel(
                     if api_key.trim().is_empty() {
                         return Ok(json!({ "success": false, "error": "缺少 API Key" }));
                     }
-                    let response = with_store_mut(state, |store| {
-                        let mut settings = store.settings.clone();
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let response = {
+                        let mut settings = settings_snapshot.clone();
                         let mut keys = official_settings_api_keys(&settings);
                         for item in &mut keys {
                             let is_match = payload_string(item, "apiKey")
@@ -1465,11 +1752,16 @@ pub fn handle_official_channel(
                                 official_sync_source_into_settings(&mut settings, &models);
                             }
                         }
-                        store.settings = settings;
-                        Ok(
-                            json!({ "success": true, "session": session, "routeSynced": session.is_some() }),
-                        )
-                    })?;
+                        apply_official_settings_update(
+                            app,
+                            state,
+                            &settings,
+                            "official-api-key-set-current",
+                            None,
+                            request_generation,
+                        )?;
+                        json!({ "success": true, "session": session, "routeSynced": session.is_some() })
+                    };
                     emit_redbox_auth_session_updated(
                         app,
                         response
@@ -1490,6 +1782,7 @@ pub fn handle_official_channel(
                         "GET",
                         "/payments/products",
                         None,
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1499,6 +1792,7 @@ pub fn handle_official_channel(
                             "GET",
                             "/billing/products",
                             None,
+                            request_generation,
                         )
                     })
                     .or_else(|_| {
@@ -1509,6 +1803,7 @@ pub fn handle_official_channel(
                             "GET",
                             "/products",
                             None,
+                            request_generation,
                         )
                     })
                     .ok();
@@ -1523,6 +1818,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-products",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "products": products }))
                 }
@@ -1532,7 +1828,12 @@ pub fn handle_official_channel(
                     let cached_records = normalize_official_call_record_items(
                         &official_settings_call_records_list(&settings),
                     );
-                    let remote = fetch_remote_official_call_records(app, state, &mut settings);
+                    let remote = fetch_remote_official_call_records(
+                        app,
+                        state,
+                        &mut settings,
+                        request_generation,
+                    );
                     let mut error = None;
                     let records = match remote {
                         Ok(records) => {
@@ -1554,6 +1855,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-call-records",
                         None,
+                        request_generation,
                     )?;
                     if let Some(message) = error {
                         let has_records = !records.is_empty();
@@ -1587,6 +1889,7 @@ pub fn handle_official_channel(
                             "points_to_deduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
                             "pointsToDeduct": payload_i64(payload, "pointsToDeduct").unwrap_or(0),
                         })),
+                        request_generation,
                     )
                     .map(|response| official_unwrap_response_payload(&response))
                     .unwrap_or_else(|_| {
@@ -1613,6 +1916,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-order-create",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "order": order }))
                 }
@@ -1634,6 +1938,7 @@ pub fn handle_official_channel(
                             "amount_yuan": amount,
                             "subject": payload_string(payload, "subject").unwrap_or_else(|| format!("积分充值 ¥{amount:.2}")),
                         })),
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1646,6 +1951,7 @@ pub fn handle_official_channel(
                                 "amount": amount,
                                 "out_trade_no": out_trade_no,
                             })),
+                            request_generation,
                         )
                     })
                     .map(|response| official_unwrap_response_payload(&response))
@@ -1670,6 +1976,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-wechat-order-create",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "order": order }))
                 }
@@ -1677,7 +1984,13 @@ pub fn handle_official_channel(
                     let out_trade_no = payload_string(payload, "outTradeNo").unwrap_or_default();
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let mut settings = settings_snapshot.clone();
-                    let order = query_remote_order_status(app, state, &mut settings, &out_trade_no)
+                    let order = query_remote_order_status(
+                        app,
+                        state,
+                        &mut settings,
+                        &out_trade_no,
+                        request_generation,
+                    )
                         .unwrap_or_else(|| {
                             official_settings_orders(&settings)
                                 .into_iter()
@@ -1703,6 +2016,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-order-status",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "order": order }))
                 }
@@ -1729,12 +2043,14 @@ pub fn handle_official_channel(
                     if !models.is_empty() {
                         official_sync_source_into_settings(&mut settings, &models);
                     }
+                    let generation = auth::bump_auth_generation(state, "official-auth-set-session")?;
                     apply_official_settings_update(
                         app,
                         state,
                         &settings,
                         "official-auth-set-session",
                         None,
+                        Some(generation),
                     )?;
                     Ok(json!({ "success": true, "session": session }))
                 }
@@ -1742,12 +2058,15 @@ pub fn handle_official_channel(
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let mut settings = settings_snapshot.clone();
                     clear_official_auth_state(&mut settings);
+                    let generation =
+                        auth::bump_auth_generation(state, "official-auth-clear-session")?;
                     apply_official_settings_update(
                         app,
                         state,
                         &settings,
                         "official-auth-clear-session",
                         None,
+                        Some(generation),
                     )?;
                     Ok(json!({ "success": true }))
                 }
@@ -1756,7 +2075,12 @@ pub fn handle_official_channel(
                     let mut settings = settings_snapshot.clone();
                     let mut models = official_settings_models(&settings);
                     if models.is_empty() {
-                        models = fetch_official_models_with_recovery(app, state, &mut settings);
+                        models = fetch_official_models_with_recovery(
+                            app,
+                            state,
+                            &mut settings,
+                            request_generation,
+                        );
                     }
                     if let Some(object) = settings.as_object_mut() {
                         object.insert(
@@ -1775,6 +2099,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-models-list",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "models": models }))
                 }
@@ -1789,6 +2114,7 @@ pub fn handle_official_channel(
                         "GET",
                         "/account",
                         None,
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1798,6 +2124,7 @@ pub fn handle_official_channel(
                             "GET",
                             "/me",
                             None,
+                            request_generation,
                         )
                     })
                     .ok();
@@ -1807,6 +2134,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-account-summary",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({
                         "success": true,
@@ -1823,6 +2151,7 @@ pub fn handle_official_channel(
                         "GET",
                         "/billing/products",
                         None,
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1832,6 +2161,7 @@ pub fn handle_official_channel(
                             "GET",
                             "/products",
                             None,
+                            request_generation,
                         )
                     })
                     .ok();
@@ -1846,6 +2176,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-billing-products",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "products": products }))
                 }
@@ -1859,6 +2190,7 @@ pub fn handle_official_channel(
                         "GET",
                         "/billing/orders",
                         None,
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1868,6 +2200,7 @@ pub fn handle_official_channel(
                             "GET",
                             "/orders",
                             None,
+                            request_generation,
                         )
                     })
                     .ok();
@@ -1881,6 +2214,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-billing-list-orders",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "orders": orders }))
                 }
@@ -1902,6 +2236,7 @@ pub fn handle_official_channel(
                         "POST",
                         "/billing/orders",
                         Some(body.clone()),
+                        request_generation,
                     )
                     .or_else(|_| {
                         run_authenticated_official_request(
@@ -1911,6 +2246,7 @@ pub fn handle_official_channel(
                             "POST",
                             "/orders",
                             Some(body),
+                            request_generation,
                         )
                     })
                     .unwrap_or_else(|_| {
@@ -1930,14 +2266,19 @@ pub fn handle_official_channel(
                         &settings,
                         "official-billing-create-order",
                         None,
+                        request_generation,
                     )?;
                     Ok(json!({ "success": true, "order": order }))
                 }
                 "official:billing:list-calls" => {
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let mut settings = settings_snapshot.clone();
-                    let result = match fetch_remote_official_call_records(app, state, &mut settings)
-                    {
+                    let result = match fetch_remote_official_call_records(
+                        app,
+                        state,
+                        &mut settings,
+                        request_generation,
+                    ) {
                         Ok(records) => json!({ "success": true, "records": records }),
                         Err(error) => json!({ "success": false, "records": [], "error": error }),
                     };
@@ -1947,6 +2288,7 @@ pub fn handle_official_channel(
                         &settings,
                         "official-billing-list-calls",
                         None,
+                        request_generation,
                     )?;
                     Ok(result)
                 }
