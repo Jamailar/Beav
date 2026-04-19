@@ -108,7 +108,10 @@ mod tests {
         let instruction = guard.observe_tool_round(&digest).unwrap();
         assert!(instruction.contains("不要继续调用工具"));
         assert!(guard.has_pending_toolless_turn());
-        assert_eq!(guard.take_toolless_turn_message().as_deref(), Some(instruction.as_str()));
+        assert_eq!(
+            guard.take_toolless_turn_message().as_deref(),
+            Some(instruction.as_str())
+        );
         assert!(!guard.has_pending_toolless_turn());
     }
 

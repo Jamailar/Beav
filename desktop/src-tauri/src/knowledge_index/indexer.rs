@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::hash::{DefaultHasher, Hasher};
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
@@ -26,8 +26,14 @@ fn detect_language(input: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let chinese = trimmed.chars().filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch)).count();
-    let ascii = trimmed.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+    let chinese = trimmed
+        .chars()
+        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .count();
+    let ascii = trimmed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphabetic())
+        .count();
     if chinese == 0 && ascii == 0 {
         return None;
     }
@@ -63,7 +69,10 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
         updated_at: item.created_at,
         language: detect_language(&format!("{} {}", preview, tags.join(" "))),
         has_video: item.video.is_some(),
-        has_transcript: item.transcript.as_deref().is_some_and(|value| !value.trim().is_empty()),
+        has_transcript: item
+            .transcript
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
         tags,
         status: item.transcription_status,
         sample_files: Vec::new(),
@@ -213,7 +222,9 @@ fn build_rows_for_video(item: &KnowledgeCatalogSummary) -> Result<Vec<IndexedFil
     Ok(rows)
 }
 
-fn build_rows_for_doc_source(item: &KnowledgeCatalogSummary) -> Result<Vec<IndexedFileRow>, String> {
+fn build_rows_for_doc_source(
+    item: &KnowledgeCatalogSummary,
+) -> Result<Vec<IndexedFileRow>, String> {
     let mut rows = Vec::new();
     if let Some(root_path) = item.root_path.as_ref() {
         let root = PathBuf::from(root_path);
@@ -243,7 +254,9 @@ fn build_rows_for_doc_source(item: &KnowledgeCatalogSummary) -> Result<Vec<Index
         );
         let pseudo_hash = format!("{:016x}", hasher.finish());
         rows.push((
-            item.root_path.clone().unwrap_or_else(|| item.item_id.clone()),
+            item.root_path
+                .clone()
+                .unwrap_or_else(|| item.item_id.clone()),
             item.item_id.clone(),
             item.file_count,
             0,
@@ -271,10 +284,7 @@ fn finalize_item_hash(items: &mut [KnowledgeCatalogSummary], rows: &[IndexedFile
     }
 }
 
-pub(crate) fn rebuild_catalog(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-) -> Result<(), String> {
+pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
     let knowledge_root = workspace_root(state)?.join("knowledge");
     let mut items = Vec::new();
     let mut files = Vec::new();

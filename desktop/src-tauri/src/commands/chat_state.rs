@@ -201,6 +201,12 @@ pub fn apply_context_binding_metadata(
         "contextId".to_string(),
         Value::String(context_id.to_string()),
     );
+    if context_type.trim() == "advisor-discussion" {
+        metadata.insert(
+            "advisorId".to_string(),
+            Value::String(context_id.to_string()),
+        );
+    }
     metadata.insert("isContextBound".to_string(), Value::Bool(true));
     if let Some(initial_context_value) = initial_context
         .map(str::trim)

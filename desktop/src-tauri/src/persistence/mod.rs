@@ -38,6 +38,39 @@ pub(crate) struct WorkspaceHydrationSnapshot {
     work_items: Vec<crate::WorkItemRecord>,
 }
 
+pub(crate) struct KnowledgeHydrationSnapshot {
+    knowledge_notes: Vec<crate::KnowledgeNoteRecord>,
+    youtube_videos: Vec<crate::YoutubeVideoRecord>,
+    document_sources: Vec<crate::DocumentKnowledgeSourceRecord>,
+}
+
+pub(crate) struct SubjectsHydrationSnapshot {
+    categories: Vec<crate::SubjectCategory>,
+    subjects: Vec<crate::SubjectRecord>,
+}
+
+pub(crate) struct ChatroomsHydrationSnapshot {
+    chat_rooms: Vec<crate::ChatRoomRecord>,
+    chatroom_messages: Vec<crate::ChatRoomMessageRecord>,
+}
+
+pub(crate) struct MediaHydrationSnapshot {
+    media_assets: Vec<crate::MediaAssetRecord>,
+}
+
+pub(crate) struct CoverHydrationSnapshot {
+    cover_assets: Vec<crate::CoverAssetRecord>,
+}
+
+pub(crate) struct AdvisorsHydrationSnapshot {
+    advisors: Vec<crate::AdvisorRecord>,
+}
+
+pub(crate) struct RedclawHydrationSnapshot {
+    redclaw_state: RedclawStateRecord,
+    work_items: Vec<crate::WorkItemRecord>,
+}
+
 pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrationSnapshot {
     WorkspaceHydrationSnapshot {
         categories: load_subject_categories_from_fs(&root.join("subjects")),
@@ -55,6 +88,112 @@ pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrati
         redclaw_state: load_redclaw_state_from_fs(&root.join("redclaw")),
         work_items: load_work_items_from_fs(&root.join("redclaw")),
     }
+}
+
+pub(crate) fn load_knowledge_hydration_snapshot(root: &Path) -> KnowledgeHydrationSnapshot {
+    let knowledge_root = root.join("knowledge");
+    KnowledgeHydrationSnapshot {
+        knowledge_notes: load_knowledge_notes_from_fs(&knowledge_root),
+        youtube_videos: load_youtube_videos_from_fs(&knowledge_root),
+        document_sources: load_document_sources_from_fs(&knowledge_root),
+    }
+}
+
+pub(crate) fn apply_knowledge_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: KnowledgeHydrationSnapshot,
+) {
+    store.knowledge_notes = snapshot.knowledge_notes;
+    store.youtube_videos = snapshot.youtube_videos;
+    store.document_sources = snapshot.document_sources;
+}
+
+pub(crate) fn load_subjects_hydration_snapshot(root: &Path) -> SubjectsHydrationSnapshot {
+    let subjects_root = root.join("subjects");
+    SubjectsHydrationSnapshot {
+        categories: load_subject_categories_from_fs(&subjects_root),
+        subjects: load_subjects_from_fs(&subjects_root),
+    }
+}
+
+pub(crate) fn apply_subjects_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: SubjectsHydrationSnapshot,
+) {
+    store.categories = snapshot.categories;
+    store.subjects = snapshot.subjects;
+}
+
+pub(crate) fn load_chatrooms_hydration_snapshot(root: &Path) -> ChatroomsHydrationSnapshot {
+    let chatrooms_root = root.join("chatrooms");
+    ChatroomsHydrationSnapshot {
+        chat_rooms: load_chat_rooms_from_fs(&chatrooms_root),
+        chatroom_messages: load_chatroom_messages_from_fs(&chatrooms_root),
+    }
+}
+
+pub(crate) fn apply_chatrooms_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: ChatroomsHydrationSnapshot,
+) {
+    store.chat_rooms = snapshot.chat_rooms;
+    store.chatroom_messages = snapshot.chatroom_messages;
+}
+
+pub(crate) fn load_media_hydration_snapshot(root: &Path) -> MediaHydrationSnapshot {
+    MediaHydrationSnapshot {
+        media_assets: load_media_assets_from_fs(&root.join("media")),
+    }
+}
+
+pub(crate) fn apply_media_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: MediaHydrationSnapshot,
+) {
+    store.media_assets = snapshot.media_assets;
+}
+
+pub(crate) fn load_cover_hydration_snapshot(root: &Path) -> CoverHydrationSnapshot {
+    CoverHydrationSnapshot {
+        cover_assets: load_cover_assets_from_fs(&root.join("cover")),
+    }
+}
+
+pub(crate) fn apply_cover_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: CoverHydrationSnapshot,
+) {
+    store.cover_assets = snapshot.cover_assets;
+}
+
+pub(crate) fn load_advisors_hydration_snapshot(root: &Path) -> AdvisorsHydrationSnapshot {
+    AdvisorsHydrationSnapshot {
+        advisors: load_advisors_from_fs(&root.join("advisors")),
+    }
+}
+
+pub(crate) fn apply_advisors_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: AdvisorsHydrationSnapshot,
+) {
+    store.advisors = snapshot.advisors;
+}
+
+pub(crate) fn load_redclaw_hydration_snapshot(root: &Path) -> RedclawHydrationSnapshot {
+    let redclaw_root = root.join("redclaw");
+    RedclawHydrationSnapshot {
+        redclaw_state: load_redclaw_state_from_fs(&redclaw_root),
+        work_items: load_work_items_from_fs(&redclaw_root),
+    }
+}
+
+pub(crate) fn apply_redclaw_hydration_snapshot(
+    store: &mut AppStore,
+    snapshot: RedclawHydrationSnapshot,
+) {
+    store.redclaw_state = snapshot.redclaw_state;
+    sync_redclaw_job_definitions(store);
+    store.work_items = snapshot.work_items;
 }
 
 pub(crate) fn apply_workspace_hydration_snapshot(
@@ -422,9 +561,9 @@ pub fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Resul
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_knowledge_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_knowledge_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }
@@ -444,9 +583,9 @@ pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_subjects_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_subjects_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }
@@ -465,9 +604,9 @@ pub fn ensure_store_hydrated_for_media(state: &State<'_, AppState>) -> Result<()
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_media_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_media_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }
@@ -486,9 +625,9 @@ pub fn ensure_store_hydrated_for_cover(state: &State<'_, AppState>) -> Result<()
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_cover_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_cover_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }
@@ -507,9 +646,9 @@ pub fn ensure_store_hydrated_for_work(state: &State<'_, AppState>) -> Result<(),
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_redclaw_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_redclaw_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }
@@ -528,9 +667,9 @@ pub fn ensure_store_hydrated_for_advisors(state: &State<'_, AppState>) -> Result
         )?))
     })?;
     if let Some(root) = root {
-        let snapshot = load_workspace_hydration_snapshot(&root);
+        let snapshot = load_advisors_hydration_snapshot(&root);
         with_store_mut(state, |store| {
-            apply_workspace_hydration_snapshot(store, snapshot);
+            apply_advisors_hydration_snapshot(store, snapshot);
             Ok(())
         })?;
     }

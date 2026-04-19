@@ -63,6 +63,33 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
+        "knowledge_glob" => Some(ToolDescriptor {
+            name: "knowledge_glob",
+            description:
+                "List files inside the current advisor/member knowledge directory. Use this before reading or grepping advisor-specific knowledge files.",
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 16_000,
+        }),
+        "knowledge_grep" => Some(ToolDescriptor {
+            name: "knowledge_grep",
+            description:
+                "Search text content inside the current advisor/member knowledge directory. Returns matching files, line numbers, and snippets.",
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 18_000,
+        }),
+        "knowledge_read" => Some(ToolDescriptor {
+            name: "knowledge_read",
+            description:
+                "Read one advisor/member knowledge file by relative path with optional line offset and limit.",
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 20_000,
+        }),
         "redbox_profile_doc" => Some(ToolDescriptor {
             name: "redbox_profile_doc",
             description:
@@ -189,6 +216,60 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                         "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
                     },
                     "required": ["action", "path"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "knowledge_glob" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "knowledge_glob",
+                "description": "List files inside the current advisor/member knowledge directory. Prefer this before reading or grepping member knowledge.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "advisorId": { "type": "string" },
+                        "pattern": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "knowledge_grep" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "knowledge_grep",
+                "description": "Search text content inside the current advisor/member knowledge directory and return matching files, line numbers, and snippets.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "advisorId": { "type": "string" },
+                        "query": { "type": "string" },
+                        "pattern": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                        "snippetChars": { "type": "integer", "minimum": 80, "maximum": 800 }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "knowledge_read" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "knowledge_read",
+                "description": "Read a single advisor/member knowledge file by relative path with optional line offset and limit.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "advisorId": { "type": "string" },
+                        "path": { "type": "string" },
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 400 },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+                    },
+                    "required": ["path"],
                     "additionalProperties": false
                 }
             }

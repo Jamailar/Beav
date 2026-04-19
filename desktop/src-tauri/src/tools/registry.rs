@@ -192,6 +192,9 @@ pub fn diagnostics_tool_items() -> Vec<Value> {
     [
         "bash",
         "app_cli",
+        "knowledge_glob",
+        "knowledge_grep",
+        "knowledge_read",
         "redbox_app_query",
         "redbox_fs",
         "redbox_profile_doc",

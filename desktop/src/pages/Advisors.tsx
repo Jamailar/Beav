@@ -107,6 +107,7 @@ export function Advisors({
     const advisorSessionRequestRef = useRef(0);
     const hasAdvisorSessionSnapshotRef = useRef(false);
     const advisorSessionIdRef = useRef<string | null>(null);
+    const activeAdvisorIdRef = useRef<string | null>(null);
 
     const loadAdvisors = useCallback(async (): Promise<Advisor[]> => {
         const requestId = loadAdvisorsRequestRef.current + 1;
@@ -311,7 +312,9 @@ export function Advisors({
     }, []);
 
     useEffect(() => {
-        if (!isActive || !selectedAdvisor) {
+        const nextAdvisorId = selectedAdvisor?.id || null;
+        if (!isActive || !selectedAdvisor || !nextAdvisorId) {
+            activeAdvisorIdRef.current = null;
             setAdvisorSessionId(null);
             setAdvisorSessions([]);
             setIsAdvisorSessionLoading(false);
@@ -323,11 +326,16 @@ export function Advisors({
             return;
         }
 
+        if (activeAdvisorIdRef.current === nextAdvisorId) {
+            return;
+        }
+
+        activeAdvisorIdRef.current = nextAdvisorId;
         hasAdvisorSessionSnapshotRef.current = false;
         setAdvisorSessions([]);
         setAdvisorSessionId(null);
         void loadAdvisorSessions(selectedAdvisor);
-    }, [isActive, selectedAdvisor, loadAdvisorSessions]);
+    }, [isActive, selectedAdvisor?.id, loadAdvisorSessions, selectedAdvisor]);
 
     const handleCreate = () => {
         setEditingAdvisor(null);

@@ -2,7 +2,8 @@ use crate::knowledge;
 use crate::knowledge_index;
 use crate::knowledge_index::catalog::KnowledgeCatalogSummary;
 use crate::persistence::{
-    ensure_store_hydrated_for_cover, ensure_store_hydrated_for_media, with_store, with_store_mut,
+    ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
+    ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -189,7 +190,10 @@ fn load_youtube_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Val
     serde_json::to_value(item).map_err(|error| error.to_string())
 }
 
-fn load_document_source_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value, String> {
+fn load_document_source_detail(
+    state: &State<'_, AppState>,
+    item_id: &str,
+) -> Result<Value, String> {
     let root = knowledge_root(state)?;
     let items = load_document_sources_from_fs(&root);
     let item = items
@@ -200,7 +204,8 @@ fn load_document_source_detail(state: &State<'_, AppState>, item_id: &str) -> Re
 }
 
 pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let page = knowledge_index::catalog::list_page(state, None, 200, Some("redbook-note"), None, None)?;
+    let page =
+        knowledge_index::catalog::list_page(state, None, 200, Some("redbook-note"), None, None)?;
     Ok(Value::Array(
         page.items
             .iter()
@@ -210,7 +215,8 @@ pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value,
 }
 
 pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let page = knowledge_index::catalog::list_page(state, None, 200, Some("youtube-video"), None, None)?;
+    let page =
+        knowledge_index::catalog::list_page(state, None, 200, Some("youtube-video"), None, None)?;
     Ok(Value::Array(
         page.items
             .iter()
@@ -257,8 +263,31 @@ pub(crate) fn knowledge_get_item_detail_value(
     }
 }
 
-pub(crate) fn knowledge_get_index_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
+pub(crate) fn knowledge_get_index_status_value(
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
     serde_json::to_value(knowledge_index::index_status(state)?).map_err(|error| error.to_string())
+}
+
+pub(crate) fn knowledge_glob_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    crate::tools::knowledge_search::execute_glob(state, None, payload)
+}
+
+pub(crate) fn knowledge_grep_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    crate::tools::knowledge_search::execute_grep(state, None, payload)
+}
+
+pub(crate) fn knowledge_read_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    crate::tools::knowledge_search::execute_read(state, None, payload)
 }
 
 #[tauri::command]
@@ -326,6 +355,9 @@ pub fn handle_library_channel(
         "knowledge:list"
             | "knowledge:list-youtube"
             | "knowledge:docs:list"
+            | "knowledge:glob"
+            | "knowledge:grep"
+            | "knowledge:read"
             | "knowledge:list-page"
             | "knowledge:get-item-detail"
             | "knowledge:get-index-status"
@@ -369,19 +401,24 @@ pub fn handle_library_channel(
             "knowledge:list" => knowledge_list_value(state),
             "knowledge:list-youtube" => knowledge_list_youtube_value(state),
             "knowledge:docs:list" => knowledge_docs_list_value(state),
+            "knowledge:glob" => knowledge_glob_value(state, payload),
+            "knowledge:grep" => knowledge_grep_value(state, payload),
+            "knowledge:read" => knowledge_read_value(state, payload),
             "knowledge:list-page" => {
                 let request: KnowledgeListPageRequest = serde_json::from_value(payload.clone())
                     .map_err(|error| format!("knowledge list page payload 无效: {error}"))?;
                 knowledge_list_page_value(state, &request)
             }
             "knowledge:get-item-detail" => {
-                let request: KnowledgeItemDetailRequest = serde_json::from_value(payload.clone())
-                    .map_err(|error| format!("knowledge detail payload 无效: {error}"))?;
+                let request: KnowledgeItemDetailRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("knowledge detail payload 无效: {error}"))?;
                 knowledge_get_item_detail_value(state, &request)
             }
             "knowledge:get-index-status" => knowledge_get_index_status_value(state),
             "knowledge:rebuild-catalog" => {
-                let _ = knowledge_index::jobs::ensure_catalog_ready_async(app, state, "manual-rebuild");
+                let _ =
+                    knowledge_index::jobs::ensure_catalog_ready_async(app, state, "manual-rebuild");
                 knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
                 Ok(json!({ "success": true }))
             }
@@ -424,6 +461,7 @@ pub fn handle_library_channel(
                 knowledge::retry_youtube_subtitle(app, state, &video_id)
             }
             "knowledge:youtube-regenerate-summaries" => {
+                let _ = ensure_store_hydrated_for_knowledge(state);
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let candidates = with_store(state, |store| {
                     Ok(store
@@ -461,6 +499,7 @@ pub fn handle_library_channel(
             }
             "knowledge:read-youtube-subtitle" => {
                 let id = payload_value_as_string(payload).unwrap_or_default();
+                let _ = ensure_store_hydrated_for_knowledge(state);
                 with_store(state, |store| {
                     let content = store
                         .youtube_videos
@@ -477,6 +516,7 @@ pub fn handle_library_channel(
             }
             "knowledge:transcribe" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();
+                let _ = ensure_store_hydrated_for_knowledge(state);
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let note_snapshot = with_store(state, |store| {
                     Ok(store

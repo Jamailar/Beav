@@ -85,7 +85,11 @@ fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<
         .take(recent_limit)
         .filter_map(|record| serde_json::from_str::<Vec<Value>>(&record.items).ok())
         .flat_map(|items| items.into_iter())
-        .filter_map(|item| item.get("id").and_then(Value::as_str).map(|id| id.trim().to_string()))
+        .filter_map(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.trim().to_string())
+        })
         .filter(|id| !id.is_empty())
         .collect()
 }
@@ -807,7 +811,8 @@ pub fn handle_chat_sessions_wander_channel(
                         list_sessions(&store)
                             .into_iter()
                             .map(|session| {
-                                let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
                                 session_list_item_value(&store, &session, transcript_meta)
                             })
                             .collect()
@@ -823,7 +828,8 @@ pub fn handle_chat_sessions_wander_channel(
                             .iter()
                             .filter(|session| !known_ids.contains(&session.id))
                             .map(|session| {
-                                let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
                                 session_list_item_value(&store, session, transcript_meta)
                             })
                             .collect::<Vec<_>>();

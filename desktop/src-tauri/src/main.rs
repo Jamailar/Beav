@@ -2,9 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
-mod auth;
 mod app_shared;
 mod assistant_core;
+mod auth;
 mod chat_helpers;
 mod commands;
 mod desktop_io;
@@ -75,8 +75,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) use app_shared::*;
-pub(crate) use auth::*;
 pub(crate) use assistant_core::*;
+pub(crate) use auth::*;
 pub(crate) use diagnostics::*;
 pub(crate) use helpers::*;
 pub(crate) use http_utils::*;
@@ -2963,69 +2963,33 @@ fn execute_interactive_tool_call(
                     })
                 }
                 "knowledge.search" => {
-                    let _ = ensure_store_hydrated_for_knowledge(state);
-                    with_store(state, |store| {
-                        let mut hits = Vec::<Value>::new();
-                        for note in &store.knowledge_notes {
-                            let haystack = format!(
-                                "{}\n{}\n{}",
-                                note.title,
-                                note.content,
-                                note.transcript.clone().unwrap_or_default()
-                            )
-                            .to_lowercase();
-                            if haystack.contains(&query) {
-                                hits.push(json!({
-                                    "kind": "note",
-                                    "id": note.id,
-                                    "title": note.title,
-                                    "snippet": text_snippet(&note.content, 220),
-                                    "sourceUrl": note.source_url,
-                                }));
-                            }
-                        }
-                        for video in &store.youtube_videos {
-                            let haystack = format!(
-                                "{}\n{}\n{}\n{}",
-                                video.title,
-                                video.description,
-                                video.summary.clone().unwrap_or_default(),
-                                video.subtitle_content.clone().unwrap_or_default()
-                            )
-                            .to_lowercase();
-                            if haystack.contains(&query) {
-                                hits.push(json!({
-                                    "kind": "youtube",
-                                    "id": video.id,
-                                    "title": video.title,
-                                    "snippet": text_snippet(
-                                        &video.summary.clone().unwrap_or_else(|| video.description.clone()),
-                                        220
-                                    ),
-                                    "videoUrl": video.video_url,
-                                }));
-                            }
-                        }
-                        for source in &store.document_sources {
-                            let haystack = format!(
-                                "{}\n{}\n{}",
-                                source.name,
-                                source.root_path,
-                                source.sample_files.join("\n")
-                            )
-                            .to_lowercase();
-                            if haystack.contains(&query) {
-                                hits.push(json!({
-                                    "kind": "document-source",
-                                    "id": source.id,
-                                    "title": source.name,
-                                    "snippet": text_snippet(&source.sample_files.join(", "), 220),
-                                    "rootPath": source.root_path,
-                                }));
-                            }
-                        }
-                        Ok(json!({ "results": hits.into_iter().take(limit).collect::<Vec<_>>() }))
-                    })
+                    let page = crate::knowledge_index::catalog::list_page(
+                        state,
+                        None,
+                        limit.max(1),
+                        None,
+                        Some(&query),
+                        Some("updated-desc"),
+                    )?;
+                    Ok(json!({
+                        "results": page.items.into_iter().map(|item| {
+                            let kind = match item.kind.as_str() {
+                                "redbook-note" => "note",
+                                "youtube-video" => "youtube",
+                                "document-source" => "document-source",
+                                other => other,
+                            };
+                            json!({
+                                "kind": kind,
+                                "id": item.item_id,
+                                "title": item.title,
+                                "snippet": text_snippet(&item.preview_text, 220),
+                                "sourceUrl": item.source_url,
+                                "videoUrl": item.source_url,
+                                "rootPath": item.root_path,
+                            })
+                        }).collect::<Vec<_>>()
+                    }))
                 }
                 "work.list" => {
                     let _ = ensure_store_hydrated_for_work(state);
@@ -4234,8 +4198,7 @@ fn run_anthropic_interactive_chat_runtime(
             state,
             format!(
                 "[timing][anthropic-runtime][{}] turn-{}-request elapsed=0ms",
-                trace_id,
-                turn_index
+                trace_id, turn_index
             ),
         );
 
@@ -4808,8 +4771,7 @@ fn run_gemini_interactive_chat_runtime(
             state,
             format!(
                 "[timing][gemini-runtime][{}] turn-{}-request elapsed=0ms",
-                trace_id,
-                turn_index
+                trace_id, turn_index
             ),
         );
 
@@ -6435,7 +6397,9 @@ fn main() {
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
             diagnostics: Mutex::new(DiagnosticsState::default()),
-            knowledge_index_state: Mutex::new(knowledge_index::KnowledgeIndexRuntimeState::default()),
+            knowledge_index_state: Mutex::new(
+                knowledge_index::KnowledgeIndexRuntimeState::default(),
+            ),
         })
         .invoke_handler(tauri::generate_handler![
             ipc_invoke,

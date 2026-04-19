@@ -693,12 +693,7 @@ pub fn run_job_queue_once(
 
     let heartbeat =
         start_execution_heartbeat(app, prepared.execution_id.clone(), Duration::from_secs(5));
-    let result = execute_redclaw_run(
-        app,
-        state,
-        prepared.prompt.clone(),
-        &prepared.source_label,
-    );
+    let result = execute_redclaw_run(app, state, prepared.prompt.clone(), &prepared.source_label);
     heartbeat.stop();
 
     match result {

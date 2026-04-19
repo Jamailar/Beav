@@ -152,7 +152,13 @@ pub(crate) fn list_page(
         .map_err(|error| error.to_string())?;
     let items = stmt
         .query_map(
-            params![workspace_id, normalized_kind, normalized_query, limit, offset],
+            params![
+                workspace_id,
+                normalized_kind,
+                normalized_query,
+                limit,
+                offset
+            ],
             row_to_summary,
         )
         .map_err(|error| error.to_string())?

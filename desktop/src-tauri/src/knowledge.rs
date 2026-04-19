@@ -1,5 +1,5 @@
 use crate::persistence::{
-    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    apply_knowledge_hydration_snapshot, load_knowledge_hydration_snapshot, with_store,
     with_store_mut,
 };
 use crate::workspace_loaders::read_json_file;
@@ -243,9 +243,9 @@ fn refresh_knowledge_projection(state: &State<'_, AppState>) -> Result<(), Strin
     let root = with_store(state, |store| {
         active_space_workspace_root_from_store(&store, &store.active_space_id, &state.store_path)
     })?;
-    let snapshot = load_workspace_hydration_snapshot(&root);
+    let snapshot = load_knowledge_hydration_snapshot(&root);
     with_store_mut(state, |store| {
-        apply_workspace_hydration_snapshot(store, snapshot);
+        apply_knowledge_hydration_snapshot(store, snapshot);
         Ok(())
     })?;
     Ok(())
@@ -727,14 +727,14 @@ pub(crate) fn knowledge_http_health(
     body_limit_bytes: usize,
     batch_limit: usize,
 ) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_knowledge(state);
+    let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None)?;
     let snapshot = with_store(state, |store| {
         Ok(json!({
             "success": true,
             "counts": {
-                "entries": store.knowledge_notes.len(),
-                "youtubeVideos": store.youtube_videos.len(),
-                "documentSources": store.document_sources.len(),
+                "entries": page.kind_counts.get("redbook-note").and_then(|value| value.as_i64()).unwrap_or(0),
+                "youtubeVideos": page.kind_counts.get("youtube-video").and_then(|value| value.as_i64()).unwrap_or(0),
+                "documentSources": page.kind_counts.get("document-source").and_then(|value| value.as_i64()).unwrap_or(0),
             },
             "limits": {
                 "bodyBytes": body_limit_bytes,

@@ -7,9 +7,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
-use crate::runtime::{
-    RedclawLongCycleTaskRecord, RedclawRuntime, RedclawScheduledTaskRecord,
-};
+use crate::runtime::{RedclawLongCycleTaskRecord, RedclawRuntime, RedclawScheduledTaskRecord};
 use crate::scheduler::{
     emit_scheduler_snapshot, enqueue_manual_job_execution_for_source, run_job_queue_once,
     run_redclaw_job_runner, run_redclaw_scheduler, sync_redclaw_job_definitions,

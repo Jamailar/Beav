@@ -132,6 +132,42 @@ interface ChatSettingsSnapshot {
 
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 
+type FixedSessionWarmSnapshot = {
+  messages: Message[];
+  contextUsage: ChatContextUsage | null;
+  capturedAt: number;
+};
+
+const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
+const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
+const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+
+function readFixedSessionWarmSnapshot(sessionId: string | null | undefined): FixedSessionWarmSnapshot | null {
+  const key = String(sessionId || '').trim();
+  if (!key) return null;
+  const snapshot = fixedSessionWarmSnapshots.get(key);
+  if (!snapshot) return null;
+  if ((Date.now() - snapshot.capturedAt) > FIXED_SESSION_SNAPSHOT_TTL_MS) {
+    fixedSessionWarmSnapshots.delete(key);
+    return null;
+  }
+  return snapshot;
+}
+
+function writeFixedSessionWarmSnapshot(
+  sessionId: string | null | undefined,
+  next: Partial<FixedSessionWarmSnapshot>,
+): void {
+  const key = String(sessionId || '').trim();
+  if (!key) return;
+  const previous = fixedSessionWarmSnapshots.get(key);
+  fixedSessionWarmSnapshots.set(key, {
+    messages: next.messages ?? previous?.messages ?? [],
+    contextUsage: next.contextUsage ?? previous?.contextUsage ?? null,
+    capturedAt: Date.now(),
+  });
+}
+
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
 const VIDEO_ATTACHMENT_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i;
 const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i;
@@ -623,8 +659,10 @@ export function Chat({
     uiDebug('chat', event, extra);
   }, []);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
+  const [messages, setMessages] = useState<Message[]>(() => (
+    readFixedSessionWarmSnapshot(fixedSessionId)?.messages || []
+  ));
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
@@ -641,7 +679,9 @@ export function Chat({
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [showRoomPicker, setShowRoomPicker] = useState(false);
   const [isRoomPickerLoading, setIsRoomPickerLoading] = useState(false);
-  const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(null);
+  const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
+    readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
+  ));
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
@@ -669,7 +709,7 @@ export function Chat({
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const currentSessionIdRef = useRef<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
@@ -702,6 +742,14 @@ export function Chat({
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (!fixedSessionId) return;
+    if (currentSessionIdRef.current === fixedSessionId) return;
+    currentSessionIdRef.current = fixedSessionId;
+    setCurrentSessionId(fixedSessionId);
+    debugUi('fixed_session:sync', { sessionId: fixedSessionId });
+  }, [debugUi, fixedSessionId]);
 
   useEffect(() => {
     debugUi('instance_mount', {
@@ -857,11 +905,14 @@ export function Chat({
       ), { sessionId });
       if (usage?.success) {
         setContextUsage(usage as ChatContextUsage);
+        if (fixedSessionId && sessionId === fixedSessionId) {
+          writeFixedSessionWarmSnapshot(sessionId, { contextUsage: usage as ChatContextUsage });
+        }
       }
     } catch (error) {
       console.error('Failed to load context usage:', error);
     }
-  }, []);
+  }, [fixedSessionId]);
 
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
@@ -926,6 +977,7 @@ export function Chat({
   }, []);
 
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
+    if (fixedSessionId) return;
     const requestId = ++chatRoomsRequestIdRef.current;
     const silent = Boolean(options?.silent);
     if (!silent) {
@@ -948,7 +1000,7 @@ export function Chat({
         setIsRoomPickerLoading(false);
       }
     }
-  }, []);
+  }, [fixedSessionId]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = messages.length === 0;
@@ -1011,7 +1063,9 @@ export function Chat({
   // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
-    void loadChatRooms({ silent: true });
+    if (!fixedSessionId) {
+      void loadChatRooms({ silent: true });
+    }
 
     // Handle fixed session (File-Bound Mode)
     if (fixedSessionId) {
@@ -1183,20 +1237,51 @@ export function Chat({
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
     setCurrentSessionId(sessionId);
+    if (fixedSessionId && sessionId === fixedSessionId) {
+      const warm = readFixedSessionWarmSnapshot(sessionId);
+      if (warm) {
+        setMessages(warm.messages);
+        if (warm.contextUsage) {
+          setContextUsage(warm.contextUsage);
+        }
+        debugUi('fixed_session:warm_restore', {
+          sessionId,
+          messageCount: warm.messages.length,
+        });
+      }
+    }
     const requestId = ++selectSessionRequestRef.current;
     const mutationVersionAtStart = localMessageMutationRef.current;
     try {
       const shouldRecoverRuntime = coldRecoveryPendingRef.current;
       coldRecoveryPendingRef.current = false;
       debugUi('select_session:start', { sessionId, shouldRecoverRuntime });
-      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => (
-        Promise.all([
+      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => {
+        if (fixedSessionId && sessionId === fixedSessionId) {
+          let inflight = fixedSessionInflightLoads.get(sessionId);
+          if (!inflight) {
+            inflight = Promise.all([
+              window.ipcRenderer.chat.getMessages(sessionId),
+              shouldRecoverRuntime
+                ? window.ipcRenderer.chat.getRuntimeState(sessionId)
+                : Promise.resolve(null),
+            ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+            fixedSessionInflightLoads.set(sessionId, inflight);
+            void inflight.finally(() => {
+              if (fixedSessionInflightLoads.get(sessionId) === inflight) {
+                fixedSessionInflightLoads.delete(sessionId);
+              }
+            });
+          }
+          return inflight;
+        }
+        return Promise.all([
           window.ipcRenderer.chat.getMessages(sessionId),
           shouldRecoverRuntime
             ? window.ipcRenderer.chat.getRuntimeState(sessionId)
             : Promise.resolve(null),
-        ])
-      ), { sessionId, shouldRecoverRuntime });
+        ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+      }, { sessionId, shouldRecoverRuntime });
       if (requestId !== selectSessionRequestRef.current) {
         return;
       }
@@ -1277,6 +1362,9 @@ export function Chat({
       }
 
       setMessages(uiMessages);
+      if (fixedSessionId && sessionId === fixedSessionId) {
+        writeFixedSessionWarmSnapshot(sessionId, { messages: uiMessages });
+      }
       setIsProcessing(shouldSetProcessing);
       debugUi('select_session:done', {
         sessionId,
@@ -1393,7 +1481,7 @@ export function Chat({
   }, [appendAssistantChunk]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || fixedSessionId) return;
     const handleSpaceChanged = () => {
       setShowRoomPicker(false);
       setSelectionMenu(prev => ({ ...prev, visible: false }));
@@ -1403,7 +1491,7 @@ export function Chat({
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [isActive, loadChatRooms]);
+  }, [fixedSessionId, isActive, loadChatRooms]);
 
   const handleCancel = useCallback(() => {
     if (currentSessionId) {

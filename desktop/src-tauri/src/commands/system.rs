@@ -80,10 +80,8 @@ pub fn handle_system_channel(
                         .auth_runtime
                         .lock()
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                    let projected = crate::auth::project_settings_for_runtime(
-                        &store.settings,
-                        &runtime,
-                    );
+                    let projected =
+                        crate::auth::project_settings_for_runtime(&store.settings, &runtime);
                     Ok(projected)
                 }),
                 "db:save-settings" => {

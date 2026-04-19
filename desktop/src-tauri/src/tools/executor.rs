@@ -62,6 +62,9 @@ impl<'a> InteractiveToolExecutor<'a> {
         match prepared.name {
             "app_cli" => Some(self.execute_app_cli(&prepared.arguments)),
             "bash" => Some(self.execute_bash(&prepared.arguments)),
+            "knowledge_glob" => Some(self.execute_knowledge_glob(&prepared.arguments)),
+            "knowledge_grep" => Some(self.execute_knowledge_grep(&prepared.arguments)),
+            "knowledge_read" => Some(self.execute_knowledge_read(&prepared.arguments)),
             "redbox_mcp" => Some(self.execute_redbox_mcp(&prepared.arguments)),
             "redbox_skill" => Some(self.execute_redbox_skill(&prepared.arguments)),
             "redbox_runtime_control" => {
@@ -178,6 +181,18 @@ impl<'a> InteractiveToolExecutor<'a> {
 
     fn execute_bash(&self, arguments: &Value) -> Result<Value, String> {
         crate::tools::bash::execute_bash(arguments, self.state)
+    }
+
+    fn execute_knowledge_glob(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::knowledge_search::execute_glob(self.state, self.session_id, arguments)
+    }
+
+    fn execute_knowledge_grep(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::knowledge_search::execute_grep(self.state, self.session_id, arguments)
+    }
+
+    fn execute_knowledge_read(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::knowledge_search::execute_read(self.state, self.session_id, arguments)
     }
 
     fn execute_redbox_mcp(&self, arguments: &Value) -> Result<Value, String> {

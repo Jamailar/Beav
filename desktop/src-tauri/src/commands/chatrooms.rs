@@ -1,18 +1,27 @@
 use crate::persistence::{
-    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    apply_chatrooms_hydration_snapshot, load_chatrooms_hydration_snapshot, with_store,
     with_store_mut,
 };
+use crate::runtime::tool_results_for_session;
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
+use crate::commands::runtime_query::handle_runtime_query;
 use crate::events::emit_creative_chat_checkpoint;
+use crate::session_manager::ensure_context_session;
 use std::fs;
 use std::path::PathBuf;
 
 const SIX_HATS_ROOM_ID: &str = "system_six_thinking_hats";
 const SIX_HATS_ROOM_NAME: &str = "六顶思考帽";
 const SYSTEM_ROOMS_STATE_FILE: &str = ".system_rooms_state.json";
+const CHATROOM_ADVISOR_CONTEXT_TYPE: &str = "chatroom-advisor";
+const CHATROOM_HISTORY_LIMIT: usize = 10;
+const CHATROOM_MESSAGE_MAX_CHARS: usize = 1200;
+const CHATROOM_CONTEXT_MAX_CHARS: usize = 6000;
+const CHATROOM_TOOL_SUMMARY_CHARS: usize = 240;
+const CHATROOM_SOURCE_LIMIT: usize = 8;
 const SIX_THINKING_HAT_IDS: [&str; 6] = [
     "hat_white",
     "hat_red",
@@ -167,6 +176,266 @@ fn ensure_six_hats_room(state: &State<'_, AppState>) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+fn ensure_chatroom_advisor_runtime_session(
+    state: &State<'_, AppState>,
+    room: &ChatRoomRecord,
+    advisor_id: &str,
+    advisor_name: &str,
+) -> Result<ChatSessionRecord, String> {
+    let binding_id = format!("{}:{}", room.id, advisor_id);
+    let title = format!("{} · {}", room.name, advisor_name);
+    with_store_mut(state, |store| {
+        let session = ensure_context_session(
+            store,
+            CHATROOM_ADVISOR_CONTEXT_TYPE,
+            &binding_id,
+            title,
+            None,
+        );
+        let Some(existing) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session.id)
+        else {
+            return Ok(session);
+        };
+        let mut metadata = existing
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        metadata.insert(
+            "contextType".to_string(),
+            Value::String(CHATROOM_ADVISOR_CONTEXT_TYPE.to_string()),
+        );
+        metadata.insert("contextId".to_string(), Value::String(binding_id));
+        metadata.insert("isContextBound".to_string(), Value::Bool(true));
+        metadata.insert("roomId".to_string(), Value::String(room.id.clone()));
+        metadata.insert("roomName".to_string(), Value::String(room.name.clone()));
+        metadata.insert(
+            "advisorName".to_string(),
+            Value::String(advisor_name.to_string()),
+        );
+        metadata.insert("advisorIds".to_string(), json!([advisor_id]));
+        if advisor_id != "director-system" {
+            metadata.insert(
+                "advisorId".to_string(),
+                Value::String(advisor_id.to_string()),
+            );
+        } else {
+            metadata.remove("advisorId");
+        }
+        existing.metadata = Some(Value::Object(metadata));
+        existing.updated_at = now_iso();
+        Ok(existing.clone())
+    })
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        return value.to_string();
+    }
+    chars.into_iter().take(max_chars).collect::<String>()
+}
+
+fn chatroom_message_author_label(
+    message: &ChatRoomMessageRecord,
+    advisors: &[AdvisorRecord],
+) -> String {
+    if message.role == "user" {
+        return "用户".to_string();
+    }
+    if let Some(name) = message
+        .advisor_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return name.to_string();
+    }
+    if let Some(advisor_id) = message.advisor_id.as_deref() {
+        if advisor_id == "director-system" {
+            return "总监".to_string();
+        }
+        return find_advisor_name(advisors, advisor_id);
+    }
+    "成员".to_string()
+}
+
+fn build_chatroom_runtime_message(
+    room: &ChatRoomRecord,
+    advisor_name: &str,
+    room_history: &[ChatRoomMessageRecord],
+    user_message: &str,
+    context: Option<&Value>,
+    advisors: &[AdvisorRecord],
+) -> String {
+    let history_block = room_history
+        .iter()
+        .rev()
+        .take(CHATROOM_HISTORY_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|item| {
+            format!(
+                "- [{}] {}",
+                chatroom_message_author_label(&item, advisors),
+                truncate_chars(&item.content, CHATROOM_MESSAGE_MAX_CHARS)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let context_block = context
+        .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+        .map(|value| truncate_chars(&value, CHATROOM_CONTEXT_MAX_CHARS))
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("\n\n附加上下文：\n{value}"))
+        .unwrap_or_default();
+    format!(
+        "你正在群聊房间《{}》中以成员“{}”的身份参与讨论。\n\
+先结合最近群聊内容理解问题，再给出你的发言；如果需要确认该成员自己的资料、规则、案例或笔记，优先使用 knowledge_glob / knowledge_grep / knowledge_read 在该成员知识库中检索，不要假装已经知道。\n\n\
+最近群聊：\n{}\n\n\
+当前用户消息：\n{}{}",
+        room.name,
+        advisor_name,
+        if history_block.trim().is_empty() {
+            "- 暂无历史对话".to_string()
+        } else {
+            history_block
+        },
+        user_message,
+        context_block
+    )
+}
+
+fn collect_runtime_tool_results_after(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    previous_count: usize,
+) -> Result<Vec<crate::runtime::SessionToolResultRecord>, String> {
+    with_store(state, |store| {
+        let items = tool_results_for_session(&store, session_id)
+            .into_iter()
+            .skip(previous_count)
+            .collect::<Vec<_>>();
+        Ok(items)
+    })
+}
+
+fn summarize_tool_result(item: &crate::runtime::SessionToolResultRecord) -> String {
+    item.summary_text
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| item.result_text.clone())
+        .map(|value| truncate_chars(&value, CHATROOM_TOOL_SUMMARY_CHARS))
+        .unwrap_or_else(|| {
+            if item.success {
+                format!("{} succeeded", item.tool_name)
+            } else {
+                format!("{} failed", item.tool_name)
+            }
+        })
+}
+
+fn knowledge_sources_from_tool_payload(payload: Option<&Value>, sources: &mut Vec<String>) {
+    let Some(payload) = payload else {
+        return;
+    };
+    if let Some(path) = payload.get("path").and_then(Value::as_str) {
+        if !path.trim().is_empty() {
+            sources.push(path.to_string());
+        }
+    }
+    if let Some(files) = payload.get("files").and_then(Value::as_array) {
+        for file in files.iter().take(CHATROOM_SOURCE_LIMIT) {
+            if let Some(path) = file.get("path").and_then(Value::as_str) {
+                if !path.trim().is_empty() {
+                    sources.push(path.to_string());
+                }
+            }
+        }
+    }
+    if let Some(hits) = payload.get("hits").and_then(Value::as_array) {
+        for hit in hits.iter().take(CHATROOM_SOURCE_LIMIT) {
+            if let Some(path) = hit.get("path").and_then(Value::as_str) {
+                if !path.trim().is_empty() {
+                    sources.push(path.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn emit_chatroom_runtime_tool_summaries(
+    app: &AppHandle,
+    room_id: &str,
+    advisor_id: &str,
+    tool_results: &[crate::runtime::SessionToolResultRecord],
+) {
+    let mut knowledge_sources = Vec::<String>::new();
+    let mut used_knowledge_tools = false;
+    for item in tool_results {
+        emit_creative_chat_checkpoint(
+            app,
+            room_id,
+            "creative_chat.tool",
+            json!({
+                "roomId": room_id,
+                "advisorId": advisor_id,
+                "type": "tool_start",
+                "tool": {
+                    "name": item.tool_name,
+                }
+            }),
+        );
+        emit_creative_chat_checkpoint(
+            app,
+            room_id,
+            "creative_chat.tool",
+            json!({
+                "roomId": room_id,
+                "advisorId": advisor_id,
+                "type": "tool_end",
+                "tool": {
+                    "name": item.tool_name,
+                    "result": {
+                        "success": item.success,
+                        "content": summarize_tool_result(item)
+                    }
+                }
+            }),
+        );
+        if item.tool_name.starts_with("knowledge_") {
+            used_knowledge_tools = true;
+            knowledge_sources_from_tool_payload(item.payload.as_ref(), &mut knowledge_sources);
+        }
+    }
+    if !used_knowledge_tools {
+        return;
+    }
+    knowledge_sources.sort();
+    knowledge_sources.dedup();
+    knowledge_sources.truncate(CHATROOM_SOURCE_LIMIT);
+    emit_creative_chat_checkpoint(
+        app,
+        room_id,
+        "creative_chat.rag",
+        json!({
+            "roomId": room_id,
+            "advisorId": advisor_id,
+            "type": "rag_end",
+            "content": if knowledge_sources.is_empty() {
+                "已检索成员知识库".to_string()
+            } else {
+                format!("已检索成员知识库，命中 {} 个来源", knowledge_sources.len())
+            },
+            "sources": knowledge_sources
+        }),
+    );
+}
+
 pub fn handle_chatrooms_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -197,9 +466,9 @@ pub fn handle_chatrooms_channel(
                         &state.store_path,
                     )?))
                 })? {
-                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let snapshot = load_chatrooms_hydration_snapshot(&root);
                     let _ = with_store_mut(state, |store| {
-                        apply_workspace_hydration_snapshot(store, snapshot);
+                        apply_chatrooms_hydration_snapshot(store, snapshot);
                         Ok(())
                     });
                 }
@@ -223,9 +492,9 @@ pub fn handle_chatrooms_channel(
                         &state.store_path,
                     )?))
                 })? {
-                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let snapshot = load_chatrooms_hydration_snapshot(&root);
                     let _ = with_store_mut(state, |store| {
-                        apply_workspace_hydration_snapshot(store, snapshot);
+                        apply_chatrooms_hydration_snapshot(store, snapshot);
                         Ok(())
                     });
                 }
@@ -414,6 +683,14 @@ pub fn handle_chatrooms_channel(
                 let context_for_task = context.clone();
                 let advisors_for_task = advisors.clone();
                 let target_advisor_ids_for_task = target_advisor_ids.clone();
+                let room_history_for_task = with_store(state, |store| {
+                    Ok(store
+                        .chatroom_messages
+                        .iter()
+                        .filter(|item| item.room_id == room_id)
+                        .cloned()
+                        .collect::<Vec<_>>())
+                })?;
                 tauri::async_runtime::spawn(async move {
                     let managed_state = app_handle.state::<AppState>();
                     eprintln!(
@@ -421,6 +698,7 @@ pub fn handle_chatrooms_channel(
                         room_id_for_task,
                         target_advisor_ids_for_task.len()
                     );
+                    let mut rolling_history = room_history_for_task;
                     for (index, advisor_id) in target_advisor_ids_for_task.iter().enumerate() {
                         eprintln!(
                             "[creative-chat][advisor-start] roomId={} advisorId={} index={}",
@@ -459,16 +737,93 @@ pub fn handle_chatrooms_channel(
                                 "roomId": room_id_for_task.clone(),
                                 "advisorId": advisor_id,
                                 "type": "thinking_start",
-                                "content": "正在分析群聊上下文..."
+                                "content": "正在分析群聊上下文并准备检索成员知识..."
                             }),
                         );
-                        let prompt = build_advisor_prompt(
-                            advisor,
-                            &message_for_task,
-                            context_for_task.as_ref(),
-                        );
-                        let response =
-                            generate_response_with_settings(&settings_snapshot, None, &prompt);
+                        let response = if advisor_id == "director-system" {
+                            let prompt = build_advisor_prompt(
+                                advisor,
+                                &message_for_task,
+                                context_for_task.as_ref(),
+                            );
+                            generate_response_with_settings(&settings_snapshot, None, &prompt)
+                        } else {
+                            let runtime_message = build_chatroom_runtime_message(
+                                &room,
+                                &advisor_name,
+                                &rolling_history,
+                                &message_for_task,
+                                context_for_task.as_ref(),
+                                &advisors_for_task,
+                            );
+                            let session = match ensure_chatroom_advisor_runtime_session(
+                                &managed_state,
+                                &room,
+                                advisor_id,
+                                &advisor_name,
+                            ) {
+                                Ok(session) => session,
+                                Err(error) => {
+                                    emit_creative_chat_checkpoint(
+                                        &app_handle,
+                                        &room_id_for_task,
+                                        "creative_chat.error",
+                                        json!({
+                                            "roomId": room_id_for_task.clone(),
+                                            "advisorId": advisor_id,
+                                            "message": error
+                                        }),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let previous_tool_count = with_store(&managed_state, |store| {
+                                Ok(tool_results_for_session(&store, &session.id).len())
+                            })
+                            .unwrap_or_default();
+                            let runtime_payload = json!({
+                                "sessionId": session.id,
+                                "message": runtime_message
+                            });
+                            match handle_runtime_query(
+                                &app_handle,
+                                &managed_state,
+                                &runtime_payload,
+                            ) {
+                                Ok(value) => {
+                                    let response =
+                                        payload_string(&value, "response").unwrap_or_default();
+                                    let tool_results = collect_runtime_tool_results_after(
+                                        &managed_state,
+                                        payload_string(&value, "sessionId")
+                                            .as_deref()
+                                            .unwrap_or(&session.id),
+                                        previous_tool_count,
+                                    )
+                                    .unwrap_or_default();
+                                    emit_chatroom_runtime_tool_summaries(
+                                        &app_handle,
+                                        &room_id_for_task,
+                                        advisor_id,
+                                        &tool_results,
+                                    );
+                                    response
+                                }
+                                Err(error) => {
+                                    emit_creative_chat_checkpoint(
+                                        &app_handle,
+                                        &room_id_for_task,
+                                        "creative_chat.error",
+                                        json!({
+                                            "roomId": room_id_for_task.clone(),
+                                            "advisorId": advisor_id,
+                                            "message": error
+                                        }),
+                                    );
+                                    continue;
+                                }
+                            }
+                        };
                         eprintln!(
                             "[creative-chat][advisor-response] roomId={} advisorId={} chars={}",
                             room_id_for_task,
@@ -518,6 +873,7 @@ pub fn handle_chatrooms_channel(
                             phase: Some(phase.clone()),
                         };
                         let _ = append_chatroom_message_to_file(&managed_state, &room, &ai_message);
+                        rolling_history.push(ai_message.clone());
                         emit_creative_chat_checkpoint(
                             &app_handle,
                             &room_id_for_task,

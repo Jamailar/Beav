@@ -4,5 +4,6 @@ pub mod catalog;
 pub mod compat;
 pub mod executor;
 pub mod guards;
+pub mod knowledge_search;
 pub mod packs;
 pub mod registry;

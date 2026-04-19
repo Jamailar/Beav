@@ -13,8 +13,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::skills::active_skill_activation_items;
 use crate::{
-    log_timing_event, now_i64, now_ms, payload_field, payload_string,
-    record_runtime_query_metric, resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
+    log_timing_event, now_i64, now_ms, payload_field, payload_string, record_runtime_query_metric,
+    resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
 };
 
 pub fn handle_runtime_query(

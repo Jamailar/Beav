@@ -244,11 +244,19 @@ pub(crate) fn parse_time_candidate_ms(value: &Value) -> Option<i64> {
         });
     }
     if let Some(number) = value.as_u64() {
-        return i64::try_from(number)
-            .ok()
-            .map(|item| if item > 10_000_000_000 { item } else { item.saturating_mul(1000) });
+        return i64::try_from(number).ok().map(|item| {
+            if item > 10_000_000_000 {
+                item
+            } else {
+                item.saturating_mul(1000)
+            }
+        });
     }
-    if let Some(text) = value.as_str().map(str::trim).filter(|item| !item.is_empty()) {
+    if let Some(text) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
         if let Ok(number) = text.parse::<i64>() {
             return Some(if number > 10_000_000_000 {
                 number
@@ -271,8 +279,8 @@ fn parse_iso_like_ms(text: &str) -> Option<i64> {
 }
 
 fn chrono_like_parse(text: &str) -> Option<i64> {
-    let parsed = time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-        .ok()?;
+    let parsed =
+        time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).ok()?;
     i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
@@ -334,11 +342,7 @@ fn with_auth_runtime_mut<T>(
     Ok(mutator(&mut runtime))
 }
 
-fn log_auth_runtime(
-    state: &State<'_, AppState>,
-    stage: &str,
-    detail: impl Into<String>,
-) {
+fn log_auth_runtime(state: &State<'_, AppState>, stage: &str, detail: impl Into<String>) {
     append_debug_trace_state(state, format!("[auth] {stage} {}", detail.into()));
 }
 
@@ -411,7 +415,11 @@ fn projected_session(
         object.remove("apiKey");
         object.remove("api_key");
     }
-    match secrets.refresh_token.as_deref().filter(|value| !value.trim().is_empty()) {
+    match secrets
+        .refresh_token
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         Some(refresh_token) => {
             object.insert("refreshToken".to_string(), json!(refresh_token));
         }
@@ -457,7 +465,9 @@ fn write_cache_data_to_settings(settings: &mut Value, cache: &AuthCacheRecord) {
         if let Some(object) = settings.as_object_mut() {
             object.insert(
                 "redbox_auth_call_records_json".to_string(),
-                json!(serde_json::to_string(&cache.call_records).unwrap_or_else(|_| "[]".to_string())),
+                json!(
+                    serde_json::to_string(&cache.call_records).unwrap_or_else(|_| "[]".to_string())
+                ),
             );
         }
     }
@@ -468,9 +478,9 @@ fn official_token_candidates(session: Option<&Value>) -> Vec<String> {
     if let Some(value) = session_access_token(session) {
         tokens.push(value);
     }
-    if let Some(value) = session.and_then(|item| {
-        payload_string(item, "apiKey").or_else(|| payload_string(item, "api_key"))
-    }) {
+    if let Some(value) = session
+        .and_then(|item| payload_string(item, "apiKey").or_else(|| payload_string(item, "api_key")))
+    {
         if !tokens.iter().any(|existing| existing == &value) {
             tokens.push(value);
         }
@@ -525,12 +535,15 @@ fn clear_persisted_auth_fields(settings: &mut Value, session: Option<&Value>) {
     let current_video_api_key = payload_string(settings, "video_api_key").unwrap_or_default();
     if let Some(object) = settings.as_object_mut() {
         object.insert("redbox_auth_session_json".to_string(), json!(""));
-        if !current_api_key.is_empty() && official_tokens.iter().any(|item| item == &current_api_key)
+        if !current_api_key.is_empty()
+            && official_tokens.iter().any(|item| item == &current_api_key)
         {
             object.insert("api_key".to_string(), json!(""));
         }
         if !current_video_api_key.is_empty()
-            && official_tokens.iter().any(|item| item == &current_video_api_key)
+            && official_tokens
+                .iter()
+                .any(|item| item == &current_video_api_key)
         {
             object.insert("video_api_key".to_string(), json!(""));
         }
@@ -551,11 +564,10 @@ pub(crate) fn project_settings_for_runtime(settings: &Value, runtime: &AuthRunti
             points: runtime.points.clone(),
             models: runtime.models.clone(),
             call_records: runtime.call_records.clone(),
-            updated_at: runtime
-                .last_refresh_at
-                .clone()
-                .unwrap_or_else(now_iso),
-            updated_at_ms: runtime.last_refresh_at_ms.unwrap_or_else(|| now_ms() as i64),
+            updated_at: runtime.last_refresh_at.clone().unwrap_or_else(now_iso),
+            updated_at_ms: runtime
+                .last_refresh_at_ms
+                .unwrap_or_else(|| now_ms() as i64),
         },
     );
     if let Some(session) = projected_session(runtime.session.as_ref(), &runtime.secrets, true) {
@@ -564,7 +576,9 @@ pub(crate) fn project_settings_for_runtime(settings: &Value, runtime: &AuthRunti
     projected
 }
 
-pub(crate) fn auth_state_snapshot(state: &State<'_, AppState>) -> Result<AuthStateSnapshot, String> {
+pub(crate) fn auth_state_snapshot(
+    state: &State<'_, AppState>,
+) -> Result<AuthStateSnapshot, String> {
     with_auth_runtime_mut(state, |runtime| auth_state_snapshot_from_runtime(runtime))
 }
 
@@ -587,7 +601,11 @@ pub(crate) fn bump_auth_generation(
         runtime.generation = runtime.generation.saturating_add(1);
         runtime.generation
     })?;
-    log_auth_runtime(state, "generation", format!("reason={reason} generation={generation}"));
+    log_auth_runtime(
+        state,
+        "generation",
+        format!("reason={reason} generation={generation}"),
+    );
     Ok(generation)
 }
 
@@ -728,7 +746,11 @@ pub(crate) fn mark_auth_logged_out(
         runtime.generation = next_generation;
         auth_state_snapshot_from_runtime(runtime)
     })?;
-    log_auth_runtime(state, "logout", "cleared runtime and file-backed auth state");
+    log_auth_runtime(
+        state,
+        "logout",
+        "cleared runtime and file-backed auth state",
+    );
     emit_auth_snapshot(app, &snapshot);
     Ok(snapshot)
 }
@@ -860,7 +882,10 @@ mod tests {
 
     #[test]
     fn parse_time_candidate_ms_supports_numeric_and_rfc3339_values() {
-        assert_eq!(parse_time_candidate_ms(&json!(1_700_000_000)), Some(1_700_000_000_000));
+        assert_eq!(
+            parse_time_candidate_ms(&json!(1_700_000_000)),
+            Some(1_700_000_000_000)
+        );
         assert_eq!(
             parse_time_candidate_ms(&json!(1_700_000_000_123_i64)),
             Some(1_700_000_000_123)

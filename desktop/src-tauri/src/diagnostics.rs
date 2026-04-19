@@ -406,7 +406,10 @@ fn build_tool_call_summary(
     let mut by_tool_map: HashMap<String, Vec<&SessionToolResultRecord>> = HashMap::new();
     let mut by_advisor_map: HashMap<String, Vec<&SessionToolResultRecord>> = HashMap::new();
     for item in recent_results {
-        by_tool_map.entry(item.tool_name.clone()).or_default().push(item);
+        by_tool_map
+            .entry(item.tool_name.clone())
+            .or_default()
+            .push(item);
         if let Some(advisor_id) = session_advisors.get(&item.session_id) {
             by_advisor_map
                 .entry(advisor_id.clone())
@@ -487,9 +490,7 @@ fn build_tool_call_summary(
     })
 }
 
-pub fn build_runtime_diagnostics_summary(
-    state: &State<'_, AppState>,
-) -> Result<Value, String> {
+pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<Value, String> {
     let (advisor_names, session_advisors, recent_tool_results) = with_store(state, |store| {
         let advisor_names = store
             .advisors

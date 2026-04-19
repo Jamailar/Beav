@@ -26,6 +26,9 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "redbox_runtime_control" => passthrough("redbox_runtime_control", arguments),
         "redbox_app_query" => passthrough("redbox_app_query", arguments),
         "redbox_fs" => passthrough("redbox_fs", arguments),
+        "knowledge_glob" => passthrough("knowledge_glob", arguments),
+        "knowledge_grep" => passthrough("knowledge_grep", arguments),
+        "knowledge_read" => passthrough("knowledge_read", arguments),
         "redbox_profile_doc" => passthrough("redbox_profile_doc", arguments),
         "redbox_editor" => passthrough("redbox_editor", arguments),
         _ => NormalizedToolCall {

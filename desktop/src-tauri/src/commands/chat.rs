@@ -11,8 +11,8 @@ use crate::runtime::SessionToolResultRecord;
 use crate::session_lineage_fields;
 use crate::skills::active_skill_activation_items;
 use crate::{
-    append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64,
-    now_iso, now_ms, payload_field, payload_string, AppState,
+    append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
+    now_ms, payload_field, payload_string, AppState,
 };
 
 fn requested_skill_names_from_task_hints(task_hints: &Value) -> Vec<String> {
@@ -122,10 +122,9 @@ pub fn handle_send_channel(
         "debug:ui-log" => {
             let scope = payload_string(&payload, "scope").unwrap_or_else(|| "unknown".to_string());
             let event = payload_string(&payload, "event").unwrap_or_else(|| "unknown".to_string());
-            let payload_text = serde_json::to_string(
-                payload_field(&payload, "payload").unwrap_or(&Value::Null),
-            )
-            .unwrap_or_else(|_| "null".to_string());
+            let payload_text =
+                serde_json::to_string(payload_field(&payload, "payload").unwrap_or(&Value::Null))
+                    .unwrap_or_else(|_| "null".to_string());
             let truncated_payload = if payload_text.chars().count() > 240 {
                 let snippet = payload_text.chars().take(240).collect::<String>();
                 format!("{snippet}...")

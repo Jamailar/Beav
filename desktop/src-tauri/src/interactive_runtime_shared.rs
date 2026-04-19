@@ -14,7 +14,7 @@ use crate::tools::registry::{
 };
 use crate::{
     load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, redbox_project_root,
-    render_redbox_prompt, truncate_chars, workspace_root, AppState,
+    render_redbox_prompt, slug_from_relative_path, truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(
@@ -31,51 +31,59 @@ pub(crate) fn interactive_runtime_system_prompt(
             }
         }
     }
-    let (available_tools, project_context, skills_section, prompt_prefix, prompt_suffix) =
-        with_store(state, |store| {
-            let metadata = session_id.and_then(|id| {
-                store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| item.id == id)
-                    .and_then(|item| item.metadata.as_ref())
-            });
-            let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
-            let skill_state =
-                build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
-            let mut project_context = format!("runtime_mode={runtime_mode}");
-            if !skill_state.active_skills.is_empty() {
-                project_context.push_str("; active_skills=");
-                project_context.push_str(
-                    &skill_state
-                        .active_skills
-                        .iter()
-                        .map(|item| item.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                );
-            }
-            if !skill_state.context_note.trim().is_empty() {
-                project_context.push_str("; skill_context=");
-                project_context.push_str(skill_state.context_note.trim());
-            }
-            Ok((
-                prompt_tool_lines_for_session(&store, runtime_mode, session_id),
-                project_context,
-                skill_state.skills_section,
-                skill_state.prompt_prefix,
-                skill_state.prompt_suffix,
-            ))
-        })
-        .unwrap_or_else(|_| {
-            (
-                prompt_tool_lines_for_runtime_mode(runtime_mode),
-                format!("runtime_mode={runtime_mode}"),
-                String::new(),
-                String::new(),
-                String::new(),
-            )
+    let (
+        available_tools,
+        project_context,
+        skills_section,
+        prompt_prefix,
+        prompt_suffix,
+        advisor_context_section,
+    ) = with_store(state, |store| {
+        let metadata = session_id.and_then(|id| {
+            store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == id)
+                .and_then(|item| item.metadata.as_ref())
         });
+        let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
+        let skill_state =
+            build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
+        let mut project_context = format!("runtime_mode={runtime_mode}");
+        if !skill_state.active_skills.is_empty() {
+            project_context.push_str("; active_skills=");
+            project_context.push_str(
+                &skill_state
+                    .active_skills
+                    .iter()
+                    .map(|item| item.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        if !skill_state.context_note.trim().is_empty() {
+            project_context.push_str("; skill_context=");
+            project_context.push_str(skill_state.context_note.trim());
+        }
+        Ok((
+            prompt_tool_lines_for_session(&store, runtime_mode, session_id),
+            project_context,
+            skill_state.skills_section,
+            skill_state.prompt_prefix,
+            skill_state.prompt_suffix,
+            advisor_runtime_context_section(metadata, &store.advisors),
+        ))
+    })
+    .unwrap_or_else(|_| {
+        (
+            prompt_tool_lines_for_runtime_mode(runtime_mode),
+            format!("runtime_mode={runtime_mode}"),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
+    });
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
@@ -107,6 +115,9 @@ pub(crate) fn interactive_runtime_system_prompt(
         }
         if !skills_section.trim().is_empty() {
             sections.push(format!("Skill guidance:\n{}", skills_section.trim()));
+        }
+        if !advisor_context_section.trim().is_empty() {
+            sections.push(advisor_context_section.trim().to_string());
         }
         if !prompt_suffix.trim().is_empty() {
             sections.push(prompt_suffix.trim().to_string());
@@ -160,6 +171,10 @@ pub(crate) fn interactive_runtime_system_prompt(
         if !runtime_agent_overlay.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(runtime_agent_overlay.trim());
+        }
+        if !advisor_context_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(advisor_context_section.trim());
         }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
@@ -217,7 +232,7 @@ pub(crate) fn interactive_runtime_system_prompt(
             }
         }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` tools may still exist in diagnostics or compatibility flows, but they are no longer the default mental model.\n",
+            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.\n- When `knowledge_glob` / `knowledge_grep` / `knowledge_read` are available, use them for advisor/member-specific knowledge retrieval instead of broad `bash` scanning.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` tools may still exist in diagnostics or compatibility flows, but they are no longer the default mental model.\n",
         );
         if !prompt_suffix.trim().is_empty() {
             rendered.push_str("\n\n");
@@ -232,6 +247,38 @@ Do not invent workspace/app facts that you can fetch with tools. \
 If no tool is needed, answer directly and concisely. \
 When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise.",
         runtime_mode
+    )
+}
+
+fn advisor_runtime_context_section(
+    metadata: Option<&Value>,
+    advisors: &[crate::AdvisorRecord],
+) -> String {
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    let advisor_id = crate::payload_string(metadata, "advisorId").or_else(|| {
+        let context_type = crate::payload_string(metadata, "contextType");
+        if context_type.as_deref() == Some("advisor-discussion") {
+            return crate::payload_string(metadata, "contextId");
+        }
+        None
+    });
+    let Some(advisor_id) = advisor_id.filter(|value| !value.trim().is_empty()) else {
+        return String::new();
+    };
+    let advisor_name = advisors
+        .iter()
+        .find(|item| item.id == advisor_id)
+        .map(|item| item.name.clone())
+        .unwrap_or_else(|| "成员".to_string());
+    let advisor_knowledge_path = format!(
+        "advisors/{}/knowledge",
+        slug_from_relative_path(&advisor_id)
+    );
+    format!(
+        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `knowledge_glob`, `knowledge_grep`, and `knowledge_read` to inspect this advisor's files.\n- Suggested order: `knowledge_glob` -> `knowledge_grep` -> `knowledge_read`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
+        advisor_name, advisor_id, advisor_knowledge_path, advisor_id
     )
 }
 
