@@ -15,9 +15,21 @@ type ListenerRecord = {
 };
 
 const channelListeners = new Map<string, Map<Listener, ListenerRecord>>();
+const explicitCommandRoutes: Record<string, string> = {
+  'spaces:list': 'spaces_list',
+  'advisors:list': 'advisors_list',
+  'knowledge:list': 'knowledge_list',
+  'knowledge:list-youtube': 'knowledge_list_youtube',
+  'knowledge:docs:list': 'knowledge_docs_list',
+  'redclaw:runner-status': 'redclaw_runner_status',
+};
 
 async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
   try {
+    const explicitCommand = explicitCommandRoutes[channel];
+    if (explicitCommand) {
+      return await invokeCommand(explicitCommand, payload);
+    }
     return await invoke('ipc_invoke', { channel, payload: payload ?? null });
   } catch (error) {
     console.warn(`[RedBox] invoke failed for ${channel}:`, error);
@@ -29,6 +41,15 @@ function sendChannel(channel: string, payload?: unknown): void {
   void invoke('ipc_send', { channel, payload: payload ?? null }).catch((error) => {
     console.warn(`[RedBox] send failed for ${channel}:`, error);
   });
+}
+
+async function invokeCommand(command: string, args?: unknown): Promise<any> {
+  try {
+    return await invoke(command, args as Record<string, unknown> | undefined);
+  } catch (error) {
+    console.warn(`[RedBox] command invoke failed for ${command}:`, error);
+    throw error;
+  }
 }
 
 function resolveGuardFallback<T>(channel: string, error: unknown, fallback?: GuardedFallbackValue<T>): T {
@@ -77,6 +98,45 @@ async function invokeChannelGuarded<T = unknown>(
   } catch (error) {
     console.warn(`[RedBox] guarded invoke failed for ${channel}:`, error);
     return resolveGuardFallback(channel, error, options?.fallback);
+  }
+}
+
+async function invokeCommandGuarded<T = unknown>(
+  command: string,
+  args?: unknown,
+  options?: InvokeGuardOptions<T> & { fallbackChannel?: string },
+): Promise<T> {
+  const timeoutMs = Math.max(1, Number(options?.timeoutMs || 0));
+  const fallbackKey = options?.fallbackChannel || command;
+
+  try {
+    const value = timeoutMs > 0
+      ? await Promise.race<unknown>([
+          invokeCommand(command, args),
+          new Promise((resolve) => {
+            window.setTimeout(() => resolve(Symbol.for('__redbox_ipc_timeout__')), timeoutMs);
+          }),
+        ])
+      : await invokeCommand(command, args);
+
+    if (value === Symbol.for('__redbox_ipc_timeout__')) {
+      const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
+      console.warn(`[RedBox] command invoke timed out for ${command}:`, timeoutError.message);
+      return resolveGuardFallback(fallbackKey, timeoutError, options?.fallback);
+    }
+
+    if (options?.normalize) {
+      try {
+        return options.normalize(value);
+      } catch (error) {
+        console.warn(`[RedBox] command normalization failed for ${command}:`, error);
+        return resolveGuardFallback(fallbackKey, error, options?.fallback);
+      }
+    }
+
+    return value as T;
+  } catch (error) {
+    return resolveGuardFallback(fallbackKey, error, options?.fallback);
   }
 }
 
@@ -261,6 +321,111 @@ function createIpcRenderer() {
     invoke: (channel: string, ...args: unknown[]) => invokeChannel(channel, args.length <= 1 ? args[0] : args),
     invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: InvokeGuardOptions<T>) =>
       invokeChannelGuarded<T>(channel, payload, options),
+    command: <T = unknown>(command: string, args?: unknown) => invokeCommand(command, args) as Promise<T>,
+    commandGuarded: <T = unknown>(command: string, args?: unknown, options?: InvokeGuardOptions<T> & { fallbackChannel?: string }) =>
+      invokeCommandGuarded<T>(command, args, options),
+
+    spaces: {
+      list: () => invokeCommandGuarded<{ activeSpaceId?: string; spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> }>(
+        'spaces_list',
+        undefined,
+        {
+          timeoutMs: 2200,
+          fallbackChannel: 'spaces:list',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as {
+              activeSpaceId?: unknown;
+              spaces?: unknown;
+            } : {};
+            return {
+              activeSpaceId: typeof raw.activeSpaceId === 'string' ? raw.activeSpaceId : 'default',
+              spaces: Array.isArray(raw.spaces) ? raw.spaces as Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> : [],
+            };
+          },
+        },
+      ),
+      switch: (spaceId: string) => invokeChannel('spaces:switch', spaceId),
+      create: (name: string) => invokeChannel('spaces:create', name),
+      rename: (payload: { id: string; name: string }) => invokeChannel('spaces:rename', payload),
+    },
+
+    advisors: {
+      list: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'advisors_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'advisors:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      create: (payload: Record<string, unknown>) => invokeChannel('advisors:create', payload),
+      update: (payload: Record<string, unknown>) => invokeChannel('advisors:update', payload),
+      delete: (advisorId: string) => invokeChannel('advisors:delete', advisorId),
+      uploadKnowledge: (advisorId: string) => invokeChannel('advisors:upload-knowledge', advisorId),
+      deleteKnowledge: (payload: { advisorId: string; fileName: string }) => invokeChannel('advisors:delete-knowledge', payload),
+      optimizePrompt: (payload: Record<string, unknown>) => invokeChannel('advisors:optimize-prompt', payload),
+      optimizePromptDeep: (payload: Record<string, unknown>) => invokeChannel('advisors:optimize-prompt-deep', payload),
+      generatePersona: (payload: Record<string, unknown>) => invokeChannel('advisors:generate-persona', payload),
+      selectAvatar: () => invokeChannel('advisors:select-avatar'),
+    },
+
+    knowledge: {
+      listNotes: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listYoutube: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_list_youtube',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list-youtube',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listDocs: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_docs_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:docs:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      deleteNote: (noteId: string) => invokeChannel('knowledge:delete', noteId),
+      transcribe: (noteId: string) => invokeChannel('knowledge:transcribe', noteId),
+      deleteYoutube: (videoId: string) => invokeChannel('knowledge:delete-youtube', videoId),
+      retryYoutubeSubtitle: (videoId: string) => invokeChannel('knowledge:retry-youtube-subtitle', videoId),
+      regenerateYoutubeSummaries: () => invokeChannel('knowledge:youtube-regenerate-summaries'),
+      addDocFiles: () => invokeChannel('knowledge:docs:add-files'),
+      addDocFolder: () => invokeChannel('knowledge:docs:add-folder'),
+      addObsidianVault: () => invokeChannel('knowledge:docs:add-obsidian-vault'),
+      deleteDocSource: (sourceId: string) => invokeChannel('knowledge:docs:delete-source', sourceId),
+    },
+
+    embedding: {
+      getManuscriptCache: (manuscriptId: string) => invokeChannel('embedding:get-manuscript-cache', manuscriptId),
+      compute: (content: string) => invokeChannel('embedding:compute', content),
+      saveManuscriptCache: (payload: Record<string, unknown>) => invokeChannel('embedding:save-manuscript-cache', payload),
+      getSortedSources: (embedding: unknown) => invokeChannel('embedding:get-sorted-sources', embedding),
+    },
+
+    similarity: {
+      getCache: (manuscriptId: string) => invokeChannel('similarity:get-cache', manuscriptId),
+      getKnowledgeVersion: () => invokeChannel('similarity:get-knowledge-version'),
+      saveCache: (payload: Record<string, unknown>) => invokeChannel('similarity:save-cache', payload),
+    },
+
+    files: {
+      showInFolder: (payload: { source: string }) => invokeChannel('file:show-in-folder', payload),
+      copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
+    },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
@@ -357,6 +522,8 @@ function createIpcRenderer() {
     getAppVersion: () => invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => invokeChannel('app:check-update', { force }),
     openAppReleasePage: (url?: string) => invokeChannel('app:open-release-page', { url }),
+    openPath: (path: string) => invokeChannel('app:open-path', { path }),
+    clipboardReadText: () => invokeChannel('clipboard:read-text'),
     openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
@@ -395,7 +562,10 @@ function createIpcRenderer() {
       getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId)
     },
     redclawRunner: {
-      getStatus: () => invokeChannel('redclaw:runner-status'),
+      getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
+        timeoutMs: 2800,
+        fallbackChannel: 'redclaw:runner-status',
+      }),
       start: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-start', payload || {}),
       stop: () => invokeChannel('redclaw:runner-stop'),
       runNow: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-run-now', payload || {}),
@@ -434,6 +604,13 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
+    skills: {
+      save: (payload: Record<string, unknown>) => invokeChannel('skills:save', payload),
+      create: (payload: { name: string }) => invokeChannel('skills:create', payload),
+      enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
+      disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
+      marketInstall: (payload: { slug: string; tag?: string }) => invokeChannel('skills:market-install', payload),
+    },
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),
       runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),
@@ -467,6 +644,10 @@ function createIpcRenderer() {
     updateAdvisorYoutubeSettings: (advisorId: string, settings: unknown) => invokeChannel('advisors:update-youtube-settings', { advisorId, settings }),
     getAdvisorYoutubeRunnerStatus: () => invokeChannel('advisors:youtube-runner-status'),
     runAdvisorYoutubeNow: (advisorId?: string) => invokeChannel('advisors:youtube-runner-run-now', { advisorId })
+    ,
+    cover: {
+      saveTemplateImage: (payload: { imageSource: string }) => invokeChannel('cover:save-template-image', payload),
+    }
   };
 }
 

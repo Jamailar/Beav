@@ -278,17 +278,11 @@ export function RedClaw({
         }
         try {
             const spaceInfo = await uiMeasure('redclaw', 'init_session:spaces', async () => (
-                window.ipcRenderer.invokeGuarded<RedClawSpaceListPayload>('spaces:list', undefined, {
-                    timeoutMs: 2200,
-                    normalize: normalizeRedClawSpaceListPayload,
-                    fallback: {
-                        activeSpaceId: 'default',
-                        spaces: [{ id: 'default', name: '默认空间' }],
-                    },
-                })
+                window.ipcRenderer.spaces.list()
             )) as RedClawSpaceListPayload;
-            const nextActiveSpaceId = spaceInfo.activeSpaceId || 'default';
-            const nextSpaceName = spaceInfo.spaces.find((space) => space.id === nextActiveSpaceId)?.name || nextActiveSpaceId;
+            const normalizedSpaceInfo = normalizeRedClawSpaceListPayload(spaceInfo);
+            const nextActiveSpaceId = normalizedSpaceInfo.activeSpaceId || 'default';
+            const nextSpaceName = normalizedSpaceInfo.spaces.find((space) => space.id === nextActiveSpaceId)?.name || nextActiveSpaceId;
             await loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true });
         } catch (error) {
             console.error('Failed to initialize RedClaw session list:', error);
@@ -615,8 +609,11 @@ export function RedClaw({
 
     const toggleSkill = useCallback(async (skill: SkillDefinition) => {
         try {
-            const channel = skill.disabled ? 'skills:enable' : 'skills:disable';
-            const res = await window.ipcRenderer.invoke(channel, { name: skill.name }) as { success?: boolean; error?: string };
+            const res = (
+                skill.disabled
+                    ? await window.ipcRenderer.skills.enable({ name: skill.name })
+                    : await window.ipcRenderer.skills.disable({ name: skill.name })
+            ) as { success?: boolean; error?: string };
             if (!res?.success) {
                 setSkillsMessage(res?.error || '技能状态更新失败');
                 return;
@@ -640,7 +637,7 @@ export function RedClaw({
 
         setIsInstallingSkill(true);
         try {
-            const result = await window.ipcRenderer.invoke('skills:market-install', { slug, tag: 'latest' }) as {
+            const result = await window.ipcRenderer.skills.marketInstall({ slug, tag: 'latest' }) as {
                 success?: boolean;
                 error?: string;
                 displayName?: string;

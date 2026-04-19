@@ -20,6 +20,16 @@ use crate::{
     payload_field, payload_string, redclaw_state_value, update_redclaw_profile_doc, AppState,
 };
 
+pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_redclaw(state);
+    with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
+}
+
+#[tauri::command]
+pub async fn redclaw_runner_status(state: State<'_, AppState>) -> Result<Value, String> {
+    redclaw_runner_status_value(&state)
+}
+
 fn stop_redclaw_runtime(runtime: &mut RedclawRuntime) {
     runtime.stop.store(true, Ordering::Relaxed);
     if let Some(join) = runtime.scheduler_join.take() {
@@ -63,10 +73,7 @@ pub fn handle_redclaw_channel(
     payload: &Value,
 ) -> Option<Result<Value, String>> {
     let result: Result<Value, String> = match channel {
-        "redclaw:runner-status" => {
-            let _ = ensure_store_hydrated_for_redclaw(state);
-            with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
-        }
+        "redclaw:runner-status" => redclaw_runner_status_value(state),
         "redclaw:list-projects" => Ok(json!([])),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;

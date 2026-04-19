@@ -6428,7 +6428,16 @@ fn main() {
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
             diagnostics: Mutex::new(DiagnosticsState::default()),
         })
-        .invoke_handler(tauri::generate_handler![ipc_invoke, ipc_send])
+        .invoke_handler(tauri::generate_handler![
+            ipc_invoke,
+            ipc_send,
+            commands::spaces::spaces_list,
+            commands::advisor_ops::advisors_list,
+            commands::library::knowledge_list,
+            commands::library::knowledge_list_youtube,
+            commands::library::knowledge_docs_list,
+            commands::redclaw::redclaw_runner_status
+        ])
         .setup(|app| {
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();

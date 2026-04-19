@@ -95,6 +95,20 @@ fn refresh_advisor_videos(
     })
 }
 
+pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_advisors(state);
+    with_store(state, |store| {
+        let mut advisors = store.advisors.clone();
+        advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(json!(advisors))
+    })
+}
+
+#[tauri::command]
+pub async fn advisors_list(state: State<'_, AppState>) -> Result<Value, String> {
+    advisors_list_value(&state)
+}
+
 pub fn handle_advisor_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -131,14 +145,7 @@ pub fn handle_advisor_channel(
 
     Some((|| -> Result<Value, String> {
         match channel {
-            "advisors:list" => {
-                let _ = ensure_store_hydrated_for_advisors(state);
-                with_store(state, |store| {
-                    let mut advisors = store.advisors.clone();
-                    advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    Ok(json!(advisors))
-                })
-            }
+            "advisors:list" => advisors_list_value(state),
             "advisors:create" => {
                 let advisor = with_store_mut(state, |store| {
                     let timestamp = now_iso();

@@ -96,7 +96,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const loadSpaces = useCallback(async () => {
     try {
       const result = await uiMeasure('layout', 'load_spaces', async () => (
-        window.ipcRenderer.invoke('spaces:list') as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
+        window.ipcRenderer.spaces.list() as Promise<{ spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null>
       )) as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
       setSpaces(result?.spaces || []);
       setActiveSpaceId(result?.activeSpaceId || '');
@@ -204,7 +204,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
     setIsOpeningReleasePage(true);
     try {
-      const result = await window.ipcRenderer.invoke('app:open-release-page', { url: updateNotice.htmlUrl }) as { success?: boolean; error?: string } | null;
+      const result = await window.ipcRenderer.openAppReleasePage(updateNotice.htmlUrl);
       if (!result?.success) {
         void appAlert(result?.error || '打开下载页面失败');
       }
@@ -220,7 +220,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     if (!nextSpaceId || nextSpaceId === activeSpaceId) return;
     setIsSwitchingSpace(true);
     try {
-      const result = await window.ipcRenderer.invoke('spaces:switch', nextSpaceId) as { success?: boolean; error?: string } | null;
+      const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
         void appAlert(result?.error || '切换空间失败');
         return;
@@ -299,7 +299,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     setIsSpaceDialogSubmitting(true);
     try {
       if (spaceDialogMode === 'create') {
-        const result = await window.ipcRenderer.invoke('spaces:create', trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
+        const result = await window.ipcRenderer.spaces.create(trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
         if (!result?.success || !result.space) {
           void appAlert(result?.error || '创建空间失败');
           return;
@@ -317,7 +317,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         return;
       }
 
-      const result = await window.ipcRenderer.invoke('spaces:rename', { id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
+      const result = await window.ipcRenderer.spaces.rename({ id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
         void appAlert(result?.error || '重命名失败');
         return;

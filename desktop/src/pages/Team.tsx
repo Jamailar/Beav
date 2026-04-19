@@ -71,11 +71,11 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   useEffect(() => {
     let cancelled = false;
 
-    const loadSidebarData = async () => {
+        const loadSidebarData = async () => {
       try {
         const [roomList, advisorList] = await Promise.all([
           window.ipcRenderer.invoke('chatrooms:list') as Promise<CreativeChatRoom[]>,
-          window.ipcRenderer.invoke('advisors:list') as Promise<AdvisorProfile[]>,
+          window.ipcRenderer.advisors.list<AdvisorProfile>(),
         ]);
         if (cancelled) return;
         setRooms(Array.isArray(roomList) ? roomList : []);

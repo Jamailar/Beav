@@ -91,6 +91,48 @@ pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Re
     )
 }
 
+pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    with_store(state, |store| {
+        let mut items = store.knowledge_notes.clone();
+        items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(json!(items))
+    })
+}
+
+pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    with_store(state, |store| {
+        let mut items = store.youtube_videos.clone();
+        items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(json!(items))
+    })
+}
+
+pub(crate) fn knowledge_docs_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_knowledge(state);
+    with_store(state, |store| {
+        let mut items = store.document_sources.clone();
+        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(json!(items))
+    })
+}
+
+#[tauri::command]
+pub async fn knowledge_list(state: State<'_, AppState>) -> Result<Value, String> {
+    knowledge_list_value(&state)
+}
+
+#[tauri::command]
+pub async fn knowledge_list_youtube(state: State<'_, AppState>) -> Result<Value, String> {
+    knowledge_list_youtube_value(&state)
+}
+
+#[tauri::command]
+pub async fn knowledge_docs_list(state: State<'_, AppState>) -> Result<Value, String> {
+    knowledge_docs_list_value(&state)
+}
+
 pub fn handle_library_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -137,30 +179,9 @@ pub fn handle_library_channel(
     }
     Some((|| -> Result<Value, String> {
         match channel {
-            "knowledge:list" => {
-                let _ = ensure_store_hydrated_for_knowledge(state);
-                with_store(state, |store| {
-                    let mut items = store.knowledge_notes.clone();
-                    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                    Ok(json!(items))
-                })
-            }
-            "knowledge:list-youtube" => {
-                let _ = ensure_store_hydrated_for_knowledge(state);
-                with_store(state, |store| {
-                    let mut items = store.youtube_videos.clone();
-                    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                    Ok(json!(items))
-                })
-            }
-            "knowledge:docs:list" => {
-                let _ = ensure_store_hydrated_for_knowledge(state);
-                with_store(state, |store| {
-                    let mut items = store.document_sources.clone();
-                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    Ok(json!(items))
-                })
-            }
+            "knowledge:list" => knowledge_list_value(state),
+            "knowledge:list-youtube" => knowledge_list_youtube_value(state),
+            "knowledge:docs:list" => knowledge_docs_list_value(state),
             "knowledge:health" => knowledge::knowledge_http_health(
                 state,
                 knowledge::knowledge_http_body_limit(),

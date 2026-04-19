@@ -344,7 +344,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         // 立即尝试从缓存读取
         (async () => {
             try {
-                const cacheResult = await window.ipcRenderer.invoke('similarity:get-cache', manuscriptId) as any;
+                const cacheResult = await window.ipcRenderer.similarity.getCache(manuscriptId) as any;
 
                 if (!isMountedRef.current) return;
 
@@ -368,18 +368,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     if (!isMountedRef.current) return;
 
                     try {
-                        const embCacheResult = await window.ipcRenderer.invoke('embedding:get-manuscript-cache', manuscriptId) as any;
+                        const embCacheResult = await window.ipcRenderer.embedding.getManuscriptCache(manuscriptId) as any;
                         if (!isMountedRef.current) return;
 
                         let embedding: number[] | null = null;
-                        const currentVersion = await window.ipcRenderer.invoke('similarity:get-knowledge-version');
+                        const currentVersion = await window.ipcRenderer.similarity.getKnowledgeVersion();
 
                         if (embCacheResult?.success && embCacheResult?.cached?.contentHash === contentHash) {
                             console.log('[Knowledge] Using cached embedding');
                             embedding = embCacheResult.cached.embedding;
                         } else {
                             console.log('[Knowledge] Computing embedding...');
-                            const computeResult = await window.ipcRenderer.invoke('embedding:compute', referenceContent) as any;
+                            const computeResult = await window.ipcRenderer.embedding.compute(referenceContent) as any;
                             if (!isMountedRef.current) return;
 
                             if (!computeResult?.success || !computeResult?.embedding) {
@@ -390,7 +390,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                             embedding = computeResult.embedding;
 
-                            window.ipcRenderer.invoke('embedding:save-manuscript-cache', {
+                            window.ipcRenderer.embedding.saveManuscriptCache({
                                 filePath: manuscriptId,
                                 contentHash,
                                 embedding
@@ -399,7 +399,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                         if (!isMountedRef.current) return;
 
-                        const sortResult = await window.ipcRenderer.invoke('embedding:get-sorted-sources', embedding) as any;
+                        const sortResult = await window.ipcRenderer.embedding.getSortedSources(embedding) as any;
                         if (!isMountedRef.current) return;
 
                         if (sortResult?.success && sortResult?.sorted) {
@@ -408,7 +408,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             sortedIds.forEach((id: string, index: number) => orderMap.set(id, index));
                             setSimilarityOrder(orderMap);
                             lastContentHashRef.current = contentHash;
-                            window.ipcRenderer.invoke('similarity:save-cache', {
+                            window.ipcRenderer.similarity.saveCache({
                                 manuscriptId,
                                 contentHash,
                                 knowledgeVersion: currentVersion,
@@ -499,11 +499,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invokeGuarded<Note[] | null>('knowledge:list', undefined, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as Note[] : [],
-            });
+            const list = await window.ipcRenderer.knowledge.listNotes<Note>();
             if (requestId !== loadNotesRequestRef.current) return;
             if (list == null) {
                 if (!hasLocalData) {
@@ -534,11 +530,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invokeGuarded<YouTubeVideo[] | null>('knowledge:list-youtube', undefined, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as YouTubeVideo[] : [],
-            });
+            const list = await window.ipcRenderer.knowledge.listYoutube<YouTubeVideo>();
             if (requestId !== loadYoutubeVideosRequestRef.current) return;
             if (list == null) {
                 if (!hasLocalData) {
@@ -569,11 +561,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invokeGuarded<DocumentKnowledgeSource[] | null>('knowledge:docs:list', undefined, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as DocumentKnowledgeSource[] : [],
-            });
+            const list = await window.ipcRenderer.knowledge.listDocs<DocumentKnowledgeSource>();
             if (requestId !== loadDocumentSourcesRequestRef.current) return;
             if (list == null) {
                 if (!hasLocalData) {
@@ -605,21 +593,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
         try {
             const [noteList, videoList, docList] = await Promise.all([
-                window.ipcRenderer.invokeGuarded<Note[] | null>('knowledge:list', undefined, {
-                    timeoutMs: 3200,
-                    fallback: null,
-                    normalize: (value) => Array.isArray(value) ? value as Note[] : [],
-                }),
-                window.ipcRenderer.invokeGuarded<YouTubeVideo[] | null>('knowledge:list-youtube', undefined, {
-                    timeoutMs: 3200,
-                    fallback: null,
-                    normalize: (value) => Array.isArray(value) ? value as YouTubeVideo[] : [],
-                }),
-                window.ipcRenderer.invokeGuarded<DocumentKnowledgeSource[] | null>('knowledge:docs:list', undefined, {
-                    timeoutMs: 3200,
-                    fallback: null,
-                    normalize: (value) => Array.isArray(value) ? value as DocumentKnowledgeSource[] : [],
-                }),
+                window.ipcRenderer.knowledge.listNotes<Note>(),
+                window.ipcRenderer.knowledge.listYoutube<YouTubeVideo>(),
+                window.ipcRenderer.knowledge.listDocs<DocumentKnowledgeSource>(),
             ]);
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
             const hasAnyResult = noteList != null || videoList != null || docList != null;
@@ -957,7 +933,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         if (!(await appConfirm('确定要删除这篇笔记吗？', { title: '删除笔记', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
-            await window.ipcRenderer.invoke('knowledge:delete', noteId);
+            await window.ipcRenderer.knowledge.deleteNote(noteId);
             setNotes(notes.filter(n => n.id !== noteId));
             if (selectedNote?.id === noteId) {
                 setSelectedNote(null);
@@ -972,10 +948,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsTranscribing(true);
             setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'processing' } : note));
             setSelectedNote(prev => prev && prev.id === noteId ? { ...prev, transcriptionStatus: 'processing' } : prev);
-            const res = await window.ipcRenderer.invoke('knowledge:transcribe', noteId) as { success: boolean; transcript?: string; error?: string };
+            const res = await window.ipcRenderer.knowledge.transcribe(noteId) as { success: boolean; transcript?: string; error?: string };
             if (res.success) {
                 await loadNotes();
-                const updated = await window.ipcRenderer.invoke('knowledge:list') as Note[];
+                const updated = await window.ipcRenderer.knowledge.listNotes<Note>();
                 setNotes(updated || []);
                 const refreshed = (updated || []).find(n => n.id === noteId) || null;
                 setSelectedNote(refreshed);
@@ -1028,7 +1004,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
             let persistedCoverImage = coverImage;
             try {
-                const saved = await window.ipcRenderer.invoke('cover:save-template-image', {
+                const saved = await window.ipcRenderer.cover.saveTemplateImage({
                     imageSource: coverImage,
                 }) as { success?: boolean; previewUrl?: string; error?: string };
                 if (saved?.success && saved.previewUrl) {
@@ -1087,7 +1063,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         if (!(await appConfirm('确定要删除这个视频吗？', { title: '删除视频', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
-            await window.ipcRenderer.invoke('knowledge:delete-youtube', videoId);
+            await window.ipcRenderer.knowledge.deleteYoutube(videoId);
             setYoutubeVideos(youtubeVideos.filter(v => v.id !== videoId));
             if (selectedVideo?.id === videoId) {
                 setSelectedVideo(null);
@@ -1111,7 +1087,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 setSelectedVideo(prev => prev ? { ...prev, status: 'processing' } : null);
             }
 
-            await window.ipcRenderer.invoke('knowledge:retry-youtube-subtitle', videoId);
+            await window.ipcRenderer.knowledge.retryYoutubeSubtitle(videoId);
             // 状态更新会通过 IPC 事件 'knowledge:youtube-video-updated' 自动处理
         } catch (e) {
             console.error('Failed to retry subtitle:', e);
@@ -1121,7 +1097,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleRefreshYoutubeSummaries = async () => {
         try {
             setIsRefreshingYoutubeSummaries(true);
-            const result = await window.ipcRenderer.invoke('knowledge:youtube-regenerate-summaries') as {
+            const result = await window.ipcRenderer.knowledge.regenerateYoutubeSummaries() as {
                 success?: boolean;
                 updated?: number;
                 skipped?: number;
@@ -1144,7 +1120,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddDocumentFiles = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-files') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addDocFiles() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加文件失败');
             return;
@@ -1153,7 +1129,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddDocumentFolder = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-folder') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addDocFolder() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加文件夹失败');
             return;
@@ -1162,7 +1138,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddObsidianVault = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-obsidian-vault') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addObsidianVault() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加 Obsidian 仓库失败');
             return;
@@ -1172,7 +1148,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
     const handleDeleteDocumentSource = async (source: DocumentKnowledgeSource) => {
         if (!(await appConfirm(`确定要移除文档源“${source.name}”吗？`, { title: '移除文档源', confirmLabel: '移除', tone: 'danger' }))) return;
-        const result = await window.ipcRenderer.invoke('knowledge:docs:delete-source', source.id) as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.deleteDocSource(source.id) as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '删除文档源失败');
             return;
@@ -1183,7 +1159,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleShowInFolder = async (source?: string) => {
         const normalized = String(source || '').trim();
         if (!normalized) return;
-        const result = await window.ipcRenderer.invoke('file:show-in-folder', { source: normalized }) as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.files.showInFolder({ source: normalized }) as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '打开文件夹失败');
         }

@@ -798,6 +798,8 @@ declare global {
       getAppVersion: () => Promise<string>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
+      openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
+      clipboardReadText: () => Promise<string>;
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
         getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; error?: string }>;
@@ -814,6 +816,16 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
+      skills: {
+        save: (payload: Record<string, unknown>) => Promise<unknown>;
+        create: (payload: { name: string }) => Promise<unknown>;
+        enable: (payload: { name: string }) => Promise<unknown>;
+        disable: (payload: { name: string }) => Promise<unknown>;
+        marketInstall: (payload: { slug: string; tag?: string }) => Promise<unknown>;
+      };
+      cover: {
+        saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;
+      };
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;
         runDirect: (toolName: string) => Promise<ToolDiagnosticRunResult>;
@@ -824,6 +836,58 @@ declare global {
       removeAllListeners: (channel: string) => void;
       invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
       invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: IpcInvokeGuardOptions<T>) => Promise<T>;
+      command: <T = unknown>(command: string, args?: unknown) => Promise<T>;
+      commandGuarded: <T = unknown>(command: string, args?: unknown, options?: IpcInvokeGuardOptions<T> & { fallbackChannel?: string }) => Promise<T>;
+      spaces: {
+        list: () => Promise<{
+          activeSpaceId?: string;
+          spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }>;
+        }>;
+        switch: (spaceId: string) => Promise<unknown>;
+        create: (name: string) => Promise<unknown>;
+        rename: (payload: { id: string; name: string }) => Promise<unknown>;
+      };
+      advisors: {
+        list: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        create: (payload: Record<string, unknown>) => Promise<unknown>;
+        update: (payload: Record<string, unknown>) => Promise<unknown>;
+        delete: (advisorId: string) => Promise<unknown>;
+        uploadKnowledge: (advisorId: string) => Promise<unknown>;
+        deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
+        optimizePrompt: (payload: Record<string, unknown>) => Promise<unknown>;
+        optimizePromptDeep: (payload: Record<string, unknown>) => Promise<unknown>;
+        generatePersona: (payload: Record<string, unknown>) => Promise<unknown>;
+        selectAvatar: () => Promise<unknown>;
+      };
+      knowledge: {
+        listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listYoutube: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listDocs: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        deleteNote: (noteId: string) => Promise<unknown>;
+        transcribe: (noteId: string) => Promise<unknown>;
+        deleteYoutube: (videoId: string) => Promise<unknown>;
+        retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
+        regenerateYoutubeSummaries: () => Promise<unknown>;
+        addDocFiles: () => Promise<unknown>;
+        addDocFolder: () => Promise<unknown>;
+        addObsidianVault: () => Promise<unknown>;
+        deleteDocSource: (sourceId: string) => Promise<unknown>;
+      };
+      embedding: {
+        getManuscriptCache: (manuscriptId: string) => Promise<unknown>;
+        compute: (content: string) => Promise<unknown>;
+        saveManuscriptCache: (payload: Record<string, unknown>) => Promise<unknown>;
+        getSortedSources: (embedding: unknown) => Promise<unknown>;
+      };
+      similarity: {
+        getCache: (manuscriptId: string) => Promise<unknown>;
+        getKnowledgeVersion: () => Promise<unknown>;
+        saveCache: (payload: Record<string, unknown>) => Promise<unknown>;
+      };
+      files: {
+        showInFolder: (payload: { source: string }) => Promise<unknown>;
+        copyImage: (payload: { source: string }) => Promise<unknown>;
+      };
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;

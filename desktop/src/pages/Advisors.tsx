@@ -115,11 +115,7 @@ export function Advisors({
             setIsLoading(true);
         }
         try {
-            const list = await window.ipcRenderer.invokeGuarded<Advisor[] | null>('advisors:list', undefined, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as Advisor[] : [],
-            });
+            const list = await window.ipcRenderer.advisors.list<Advisor>();
             if (requestId !== loadAdvisorsRequestRef.current) return [];
             if (list == null) {
                 return hasLoadedSnapshotRef.current ? advisors : [];
@@ -346,7 +342,7 @@ export function Advisors({
     const handleOptimizePrompt = useCallback(async (advisor: Advisor) => {
         setIsOptimizingPrompt(true);
         try {
-            const result = await window.ipcRenderer.invoke('advisors:optimize-prompt-deep', {
+            const result = await window.ipcRenderer.advisors.optimizePromptDeep({
                 advisorId: advisor.id,
                 name: advisor.name,
                 personality: advisor.personality,
@@ -354,7 +350,7 @@ export function Advisors({
             }) as { success: boolean; prompt?: string; error?: string };
 
             if (result.success && result.prompt) {
-                await window.ipcRenderer.invoke('advisors:update', {
+                await window.ipcRenderer.advisors.update({
                     ...advisor,
                     systemPrompt: result.prompt,
                 });
@@ -417,7 +413,7 @@ export function Advisors({
     const handleDelete = async (advisorId: string) => {
         if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
         try {
-            await window.ipcRenderer.invoke('advisors:delete', advisorId);
+            await window.ipcRenderer.advisors.delete(advisorId);
             await loadAdvisors();
             if (selectedAdvisor?.id === advisorId) {
                 setSelectedAdvisor(null);
@@ -435,7 +431,7 @@ export function Advisors({
         try {
             let newId: string | undefined;
             if (editingAdvisor) {
-                await window.ipcRenderer.invoke('advisors:update', { ...editingAdvisor, ...data });
+                await window.ipcRenderer.advisors.update({ ...editingAdvisor, ...data });
                 newId = editingAdvisor.id;
             } else {
                 // Include youtubeChannel in create call if from YouTube import
@@ -446,7 +442,7 @@ export function Advisors({
                         channelId: youtubeParams.channelId || ''
                     };
                 }
-                const res = await window.ipcRenderer.invoke('advisors:create', createData) as { success: boolean; id?: string };
+                const res = await window.ipcRenderer.advisors.create(createData) as { success: boolean; id?: string };
                 if (res.success) newId = res.id;
             }
 
@@ -473,7 +469,7 @@ export function Advisors({
 
     const handleUploadKnowledge = async (advisorId: string) => {
         try {
-            const result = await window.ipcRenderer.invoke('advisors:upload-knowledge', advisorId);
+            const result = await window.ipcRenderer.advisors.uploadKnowledge(advisorId);
             if (result) {
                 const list = await loadAdvisors();
                 const updated = list.find(a => a.id === advisorId);
@@ -487,7 +483,7 @@ export function Advisors({
     const handleDeleteKnowledge = async (advisorId: string, fileName: string) => {
         if (!(await appConfirm(`确定要删除知识库文件 "${fileName}" 吗？`, { title: '删除知识文件', confirmLabel: '删除', tone: 'danger' }))) return;
         try {
-            await window.ipcRenderer.invoke('advisors:delete-knowledge', { advisorId, fileName });
+            await window.ipcRenderer.advisors.deleteKnowledge({ advisorId, fileName });
             await loadAdvisors();
         } catch (e) {
             console.error('Failed to delete knowledge file:', e);
@@ -1602,7 +1598,7 @@ function AdvisorModal({
         const info = `角色名称: ${name}\n一句话描述: ${personality}\n当前设定: ${systemPrompt || '(未填写)'}`;
 
         try {
-            const result = await window.ipcRenderer.invoke('advisors:optimize-prompt', { info }) as { success: boolean; prompt?: string; error?: string };
+            const result = await window.ipcRenderer.advisors.optimizePrompt({ info }) as { success: boolean; prompt?: string; error?: string };
             if (result.success && result.prompt) {
                 setSystemPrompt(result.prompt);
             } else {
@@ -1625,7 +1621,7 @@ function AdvisorModal({
 
         setIsOptimizing(true);
         try {
-            const result = await window.ipcRenderer.invoke('advisors:generate-persona', {
+            const result = await window.ipcRenderer.advisors.generatePersona({
                 advisorId: advisor?.id,
                 channelName: youtubeInfo.channelName,
                 channelDescription: youtubeInfo.channelDescription || '',
@@ -1656,7 +1652,7 @@ function AdvisorModal({
 
     const handleSelectAvatar = async () => {
         try {
-            const filePath = await window.ipcRenderer.invoke('advisors:select-avatar');
+            const filePath = await window.ipcRenderer.advisors.selectAvatar();
             if (filePath) {
                 const previewUrl = resolveAssetUrl(String(filePath));
                 setAvatar(previewUrl);

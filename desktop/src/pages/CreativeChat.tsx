@@ -179,7 +179,7 @@ export function CreativeChat({
 
     const loadAdvisorsOnly = useCallback(async () => {
         try {
-            const advisorList = await window.ipcRenderer.invoke('advisors:list') as Advisor[];
+            const advisorList = await window.ipcRenderer.advisors.list<Advisor>();
             setAdvisors(normalizeAdvisors(advisorList));
         } catch (e) {
             console.error('Failed to refresh advisors:', e);
@@ -196,7 +196,7 @@ export function CreativeChat({
         try {
             const [roomList, advisorList] = await Promise.all([
                 window.ipcRenderer.invoke('chatrooms:list') as Promise<ChatRoom[]>,
-                window.ipcRenderer.invoke('advisors:list') as Promise<Advisor[]>
+                window.ipcRenderer.advisors.list<Advisor>()
             ]);
             const normalizedRooms = (roomList || [])
                 .filter((room): room is ChatRoom => Boolean(room && typeof room === 'object' && typeof room.id === 'string' && room.id.trim()))
