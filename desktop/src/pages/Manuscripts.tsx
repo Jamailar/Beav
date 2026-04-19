@@ -2219,7 +2219,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 associatedPackageStyleEditRule:
                     draftType === 'richpost'
                         ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? '当前处于图文主题编辑模式。优先修改 layout.tokens.json 与首页、内容页、尾页母版；只有在母版和 tokens 不足以达成目标时，才调整 richpost-page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
+                            ? '当前处于图文主题编辑模式。当前主题同时包含 coverFrame、bodyFrame、endingFrame 三个真实文字区域。优先修改 richpost-themes.json、layout.tokens.json 与首页、内容页、尾页母版；只有在母版、tokens 和 frame 不足以达成目标时，才调整 richpost-page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
                             : '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
                         : draftType === 'longform'
                             ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
@@ -2239,6 +2239,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             previewShell: 'layout.html',
                             pagesDir: 'pages/page-xxx.html',
                             themeSource: 'manifest.richpostThemeId',
+                            themeEditableFrames: [
+                                'coverFrame',
+                                'bodyFrame',
+                                'endingFrame',
+                            ],
                             templateEditingFocus: editorAiWorkspaceMode.id === 'richpost-theme-editing'
                                 ? ['cover', 'body', 'ending']
                                 : [],

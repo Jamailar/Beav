@@ -180,6 +180,10 @@ pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {
     package_path.join("pages")
 }
 
+pub(crate) fn package_richpost_theme_backgrounds_dir(package_path: &Path) -> PathBuf {
+    package_path.join("theme-backgrounds")
+}
+
 pub(crate) fn package_richpost_page_html_path(package_path: &Path, page_id: &str) -> PathBuf {
     package_richpost_pages_dir(package_path).join(format!("{page_id}.html"))
 }

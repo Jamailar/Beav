@@ -3,8 +3,8 @@ allowedRuntimeModes: [chatroom]
 hookMode: inline
 autoActivate: false
 activationScope: session
-contextNote: 当前文件会话处于 richpost 图文主题编辑模式。目标不是改正文，而是调整首页、内容页和尾页对应的模板、tokens 与分页绑定规则，让主题编辑页左侧三张预览反映真实模板结果。
-promptPrefix: 你当前必须遵守 richpost-theme-editor。当前任务是修改 richpost 的模板层，而不是改正文内容。先把页面理解成首页、内容页、尾页三类母版；优先修改 layout.tokens.json 和 masters/*.master.html，只有在母版和 tokens 不足以达成目标时，才调整 richpost-page-plan.json 的 master、zones 或 styleOverrides。
+contextNote: 当前文件会话处于 richpost 图文主题编辑模式。目标不是改正文，而是调整首页、内容页和尾页对应的模板、tokens、真实文字区域 frame 与分页绑定规则，让主题编辑页左侧三张预览反映真实模板结果。
+promptPrefix: 你当前必须遵守 richpost-theme-editor。当前任务是修改 richpost 的模板层，而不是改正文内容。先把页面理解成首页、内容页、尾页三类母版；当前主题还包含 coverFrame、bodyFrame、endingFrame 三个真实文字区域。优先修改 richpost-themes.json、layout.tokens.json 和 masters/*.master.html，只有在母版、tokens 和 frame 不足以达成目标时，才调整 richpost-page-plan.json 的 master、zones 或 styleOverrides。
 promptSuffix: 不要改 content.md，不要改 content-map.json，不要直接在 pages/page-xxx.html 里手写正文，也不要补写额外文案。模板调整完成后，结果必须仍然由当前工程的 tokens、masters 和 page-plan 渲染出来。
 maxPromptChars: 3200
 ---
@@ -25,6 +25,8 @@ maxPromptChars: 3200
 
 - `content.md`：正文唯一真相层
 - `content-map.json`：正文块映射，宿主自动生成
+- `richpost-themes.json`：当前工程自定义主题目录，主题的 `coverFrame / bodyFrame / endingFrame` 与 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath` 也保存在这里
+- `theme-backgrounds/`：主题编辑页上传的背景图资产目录
 - `layout.tokens.json`：主题 token，控制颜色、字号、行高、边距、宽度、圆角、阴影等基础样式
 - `masters/cover.master.html`：首页母版
 - `masters/body.master.html`：内容页母版
@@ -36,10 +38,12 @@ maxPromptChars: 3200
 ## 工作顺序
 
 1. 先判断需求属于哪一层：
+   - 真实文字区域：改 `richpost-themes.json` 里的 `coverFrame / bodyFrame / endingFrame`
    - 视觉风格：改 `layout.tokens.json`
    - 页面结构：改 `masters/*.master.html`
    - 页面内容分配或 zone 绑定：改 `richpost-page-plan.json`
 2. 默认优先级固定为：
+   - `richpost-themes.json`
    - `layout.tokens.json`
    - `masters/*.master.html`
    - `richpost-page-plan.json`
@@ -66,6 +70,16 @@ maxPromptChars: 3200
   - 内边距
   - 相对位置
   - 与图片区的层级关系
+- 文字区域的真实矩形由：
+  - `coverFrame`
+  - `bodyFrame`
+  - `endingFrame`
+  控制。主题编辑页左侧的矩形就是这三个字段的可视化编辑层。
+- 三个母版的背景图来源于：
+  - `coverBackgroundPath`
+  - `bodyBackgroundPath`
+  - `endingBackgroundPath`
+  它们都指向当前工程 `theme-backgrounds/` 里的图片资产。
 - 可以让首页、内容页、尾页使用完全不同的布局。
 
 ## 强制限制

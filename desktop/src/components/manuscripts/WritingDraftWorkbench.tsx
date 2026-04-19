@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import clsx from 'clsx';
 import {
   ArrowLeft,
@@ -17,7 +17,7 @@ import { CodeMirrorEditor } from './CodeMirrorEditor';
 import { MarkdownItPreview } from './MarkdownItPreview';
 import { WritingDiffProposalPanel } from './WritingDiffProposalPanel';
 import { resolveAssetUrl } from '../../utils/pathManager';
-import { appAlert } from '../../utils/appDialogs';
+import { appAlert, appConfirm } from '../../utils/appDialogs';
 
 const ChatWorkspace = lazy(async () => ({
   default: (await import('../../pages/Chat')).Chat,
@@ -75,6 +75,19 @@ type RichpostThemePreset = {
   accentColor?: string | null;
   headingFont?: string | null;
   bodyFont?: string | null;
+  coverFrame?: RichpostZoneFrame | null;
+  bodyFrame?: RichpostZoneFrame | null;
+  endingFrame?: RichpostZoneFrame | null;
+  coverBackgroundPath?: string | null;
+  bodyBackgroundPath?: string | null;
+  endingBackgroundPath?: string | null;
+};
+
+type RichpostZoneFrame = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 };
 
 type RichpostThemeDraft = {
@@ -96,6 +109,12 @@ type RichpostThemeDraft = {
   accentColor: string;
   headingFont: string;
   bodyFont: string;
+  coverFrame: RichpostZoneFrame;
+  bodyFrame: RichpostZoneFrame;
+  endingFrame: RichpostZoneFrame;
+  coverBackgroundPath: string;
+  bodyBackgroundPath: string;
+  endingBackgroundPath: string;
 };
 
 type LongformLayoutPreset = {
@@ -117,6 +136,12 @@ type AiWorkspaceMode = {
 };
 
 type PackageStateLike = Record<string, unknown>;
+type RichpostThemeContextMenuState = {
+  visible: boolean;
+  x: number;
+  y: number;
+  theme: RichpostThemePreset | null;
+};
 
 export interface WritingDraftWorkbenchProps {
   draftType: WritingDraftType;
@@ -183,6 +208,7 @@ const RICHPOST_FONT_SCALE_MIN = 0.8;
 const RICHPOST_FONT_SCALE_MAX = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN = 0.8;
 const RICHPOST_LINE_HEIGHT_SCALE_MAX = 1.4;
+const RICHPOST_FRAME_MIN_SIZE = 0.08;
 
 function clampScale(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -195,17 +221,24 @@ type RichpostThemePreviewRecord = {
   html: string;
 };
 
+type RichpostZoneFrameRole = 'cover' | 'body' | 'ending';
+
 function RichpostThemePreviewFrame({
   html,
   active = false,
+  bare = false,
+  capturePointer = false,
 }: {
   html?: string | null;
   active?: boolean;
+  bare?: boolean;
+  capturePointer?: boolean;
 }) {
   return (
     <div
       className={clsx(
-        'w-full overflow-hidden rounded-[14px] bg-surface-secondary/55 transition',
+        'relative w-full overflow-hidden transition',
+        bare ? 'bg-transparent' : 'rounded-[14px] bg-surface-secondary/55',
         active ? 'ring-1 ring-accent-primary/35' : ''
       )}
     >
@@ -215,15 +248,16 @@ function RichpostThemePreviewFrame({
             title={PRESET_PREVIEW_TITLE}
             srcDoc={html}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="h-full w-full border-0 bg-white"
+            className="pointer-events-none h-full w-full border-0 bg-white"
             tabIndex={-1}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-[11px] text-text-tertiary">
+          <div className="pointer-events-none flex h-full items-center justify-center text-[11px] text-text-tertiary">
             预览加载中
           </div>
         )}
       </div>
+      {capturePointer ? <div className="absolute inset-0 z-[2]" aria-hidden="true" /> : null}
     </div>
   );
 }
@@ -247,7 +281,33 @@ const DEFAULT_RICHPOST_THEME_DRAFT: RichpostThemeDraft = {
   accentColor: '#111111',
   headingFont: '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
   bodyFont: '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+  coverFrame: { x: 0.12, y: 0.18, w: 0.76, h: 0.58 },
+  bodyFrame: { x: 0.08, y: 0.10, w: 0.84, h: 0.78 },
+  endingFrame: { x: 0.12, y: 0.24, w: 0.76, h: 0.48 },
+  coverBackgroundPath: '',
+  bodyBackgroundPath: '',
+  endingBackgroundPath: '',
 };
+
+function clampRichpostZoneFrame(frame?: Partial<RichpostZoneFrame> | null, fallback?: RichpostZoneFrame): RichpostZoneFrame {
+  const base = fallback || DEFAULT_RICHPOST_THEME_DRAFT.bodyFrame;
+  let x = Number.isFinite(frame?.x) ? Number(frame?.x) : base.x;
+  let y = Number.isFinite(frame?.y) ? Number(frame?.y) : base.y;
+  let w = Number.isFinite(frame?.w) ? Number(frame?.w) : base.w;
+  let h = Number.isFinite(frame?.h) ? Number(frame?.h) : base.h;
+  x = Math.max(0, Math.min(0.92, x));
+  y = Math.max(0, Math.min(0.92, y));
+  w = Math.max(RICHPOST_FRAME_MIN_SIZE, Math.min(1, w));
+  h = Math.max(RICHPOST_FRAME_MIN_SIZE, Math.min(1, h));
+  if (x + w > 1) x = Math.max(0, 1 - w);
+  if (y + h > 1) y = Math.max(0, 1 - h);
+  return {
+    x: Number(x.toFixed(3)),
+    y: Number(y.toFixed(3)),
+    w: Number(w.toFixed(3)),
+    h: Number(h.toFixed(3)),
+  };
+}
 
 function normalizeRichpostThemeDraft(theme?: RichpostThemePreset | null): RichpostThemeDraft {
   return {
@@ -271,22 +331,202 @@ function normalizeRichpostThemeDraft(theme?: RichpostThemePreset | null): Richpo
     accentColor: typeof theme?.accentColor === 'string' && theme.accentColor.trim() ? theme.accentColor : DEFAULT_RICHPOST_THEME_DRAFT.accentColor,
     headingFont: typeof theme?.headingFont === 'string' && theme.headingFont.trim() ? theme.headingFont : DEFAULT_RICHPOST_THEME_DRAFT.headingFont,
     bodyFont: typeof theme?.bodyFont === 'string' && theme.bodyFont.trim() ? theme.bodyFont : DEFAULT_RICHPOST_THEME_DRAFT.bodyFont,
+    coverFrame: clampRichpostZoneFrame(theme?.coverFrame, DEFAULT_RICHPOST_THEME_DRAFT.coverFrame),
+    bodyFrame: clampRichpostZoneFrame(theme?.bodyFrame, DEFAULT_RICHPOST_THEME_DRAFT.bodyFrame),
+    endingFrame: clampRichpostZoneFrame(theme?.endingFrame, DEFAULT_RICHPOST_THEME_DRAFT.endingFrame),
+    coverBackgroundPath: typeof theme?.coverBackgroundPath === 'string' ? theme.coverBackgroundPath : '',
+    bodyBackgroundPath: typeof theme?.bodyBackgroundPath === 'string' ? theme.bodyBackgroundPath : '',
+    endingBackgroundPath: typeof theme?.endingBackgroundPath === 'string' ? theme.endingBackgroundPath : '',
   };
+}
+
+function richpostFrameForRole(draft: RichpostThemeDraft, role: RichpostZoneFrameRole): RichpostZoneFrame {
+  if (role === 'cover') return draft.coverFrame;
+  if (role === 'ending') return draft.endingFrame;
+  return draft.bodyFrame;
+}
+
+function richpostBackgroundPathForRole(draft: RichpostThemeDraft, role: RichpostZoneFrameRole): string {
+  if (role === 'cover') return draft.coverBackgroundPath;
+  if (role === 'ending') return draft.endingBackgroundPath;
+  return draft.bodyBackgroundPath;
+}
+
+function updateRichpostThemeDraftFrame(
+  draft: RichpostThemeDraft,
+  role: RichpostZoneFrameRole,
+  frame: RichpostZoneFrame
+): RichpostThemeDraft {
+  if (role === 'cover') {
+    return { ...draft, coverFrame: frame };
+  }
+  if (role === 'ending') {
+    return { ...draft, endingFrame: frame };
+  }
+  return { ...draft, bodyFrame: frame };
+}
+
+function richpostThemeDraftSignature(draft: RichpostThemeDraft): string {
+  return JSON.stringify(draft);
+}
+
+type RichpostZoneFrameHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se';
+
+function RichpostZoneFrameOverlay({
+  frame,
+  onChange,
+}: {
+  frame: RichpostZoneFrame;
+  onChange: (frame: RichpostZoneFrame) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    handle: RichpostZoneFrameHandle;
+    startX: number;
+    startY: number;
+    startFrame: RichpostZoneFrame;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      dragStateRef.current = null;
+    };
+  }, []);
+
+  const beginDrag = (handle: RichpostZoneFrameHandle, event: ReactPointerEvent<HTMLDivElement>) => {
+    const host = hostRef.current;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragStateRef.current = {
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
+      startFrame: frame,
+      width: rect.width,
+      height: rect.height,
+    };
+    const handleMove = (moveEvent: PointerEvent) => {
+      const state = dragStateRef.current;
+      if (!state) return;
+      const dx = (moveEvent.clientX - state.startX) / state.width;
+      const dy = (moveEvent.clientY - state.startY) / state.height;
+      let next = state.startFrame;
+      switch (state.handle) {
+        case 'move':
+          next = {
+            ...state.startFrame,
+            x: state.startFrame.x + dx,
+            y: state.startFrame.y + dy,
+          };
+          break;
+        case 'nw':
+          next = {
+            x: state.startFrame.x + dx,
+            y: state.startFrame.y + dy,
+            w: state.startFrame.w - dx,
+            h: state.startFrame.h - dy,
+          };
+          break;
+        case 'ne':
+          next = {
+            x: state.startFrame.x,
+            y: state.startFrame.y + dy,
+            w: state.startFrame.w + dx,
+            h: state.startFrame.h - dy,
+          };
+          break;
+        case 'sw':
+          next = {
+            x: state.startFrame.x + dx,
+            y: state.startFrame.y,
+            w: state.startFrame.w - dx,
+            h: state.startFrame.h + dy,
+          };
+          break;
+        case 'se':
+          next = {
+            x: state.startFrame.x,
+            y: state.startFrame.y,
+            w: state.startFrame.w + dx,
+            h: state.startFrame.h + dy,
+          };
+          break;
+      }
+      onChange(clampRichpostZoneFrame(next, state.startFrame));
+    };
+    const handleUp = () => {
+      dragStateRef.current = null;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp, { once: true });
+  };
+
+  return (
+    <div ref={hostRef} className="absolute inset-0 z-[3]">
+      <div
+        className="absolute border-2 border-accent-primary/60 bg-accent-primary/12 shadow-[0_14px_36px_rgba(15,23,42,0.12)] backdrop-blur-[1px]"
+        style={{
+          left: `${frame.x * 100}%`,
+          top: `${frame.y * 100}%`,
+          width: `${frame.w * 100}%`,
+          height: `${frame.h * 100}%`,
+        }}
+      >
+        <div
+          className="flex h-full w-full cursor-move items-center justify-center px-3 text-center"
+          onPointerDown={(event) => beginDrag('move', event)}
+        >
+          <div className="text-[22px] font-black tracking-[0.22em] text-black/28">文字区域</div>
+        </div>
+        {([
+          ['nw', 'cursor-nwse-resize', '-left-2 -top-2'],
+          ['ne', 'cursor-nesw-resize', '-right-2 -top-2'],
+          ['sw', 'cursor-nesw-resize', '-bottom-2 -left-2'],
+          ['se', 'cursor-nwse-resize', '-bottom-2 -right-2'],
+        ] as Array<[RichpostZoneFrameHandle, string, string]>).map(([handle, cursorClass, positionClass]) => (
+          <div
+            key={handle}
+            className={clsx(
+              'absolute h-4 w-4 rounded-full border border-white bg-accent-primary shadow-sm',
+              cursorClass,
+              positionClass,
+            )}
+            onPointerDown={(event) => beginDrag(handle, event)}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function RichpostThemeEditorOverlay({
   previews,
+  themeDraft,
   isPreviewLoading,
+  uploadingBackgroundRole,
   editorChatSessionId,
   isActive,
   shortcuts,
+  onThemeDraftChange,
+  onUploadBackground,
   onClose,
 }: {
   previews: RichpostThemePreviewRecord[];
+  themeDraft: RichpostThemeDraft;
   isPreviewLoading: boolean;
+  uploadingBackgroundRole: RichpostZoneFrameRole | null;
   editorChatSessionId: string | null;
   isActive: boolean;
   shortcuts: Array<{ label: string; text: string }>;
+  onThemeDraftChange: (draft: RichpostThemeDraft) => void;
+  onUploadBackground: (role: RichpostZoneFrameRole) => void;
   onClose: () => void;
 }) {
   return (
@@ -325,16 +565,23 @@ function RichpostThemeEditorOverlay({
                   { id: 'body', label: '内容页', html: '' },
                   { id: 'ending', label: '尾页', html: '' },
                 ]).map((preview) => (
-                  <div key={preview.id} className="rounded-[28px] border border-black/6 bg-white/72 p-4 shadow-[0_22px_60px_rgba(15,23,42,0.06)] backdrop-blur-xl">
-                    <div className="mb-3 flex items-center justify-between">
+                  <div key={preview.id} className="space-y-3">
+                    <div className="flex items-center justify-between px-1">
                       <div className="text-[12px] font-semibold tracking-[0.08em] text-text-secondary">{preview.label || preview.id}</div>
-                      <div className="rounded-full border border-black/6 bg-white/76 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">3:4</div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">3:4</div>
                     </div>
                     <div className="relative">
-                      <RichpostThemePreviewFrame html={preview.html} />
-                      <div className="pointer-events-none absolute inset-x-[13%] top-[24%] bottom-[16%] flex items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-white/58 backdrop-blur-[1px]">
-                        <div className="text-[22px] font-black tracking-[0.22em] text-black/24">文字区域</div>
-                      </div>
+                      <RichpostThemePreviewFrame html={preview.html} bare />
+                      <RichpostZoneFrameOverlay
+                        frame={richpostFrameForRole(
+                          themeDraft,
+                          preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body',
+                        )}
+                        onChange={(frame) => {
+                          const role = preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body';
+                          onThemeDraftChange(updateRichpostThemeDraftFrame(themeDraft, role, frame));
+                        }}
+                      />
                       {isPreviewLoading ? (
                         <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-white/45 backdrop-blur-[2px]">
                           <div className="inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/88 px-3 py-1.5 text-[12px] text-text-secondary shadow-sm">
@@ -343,6 +590,28 @@ function RichpostThemeEditorOverlay({
                           </div>
                         </div>
                       ) : null}
+                    </div>
+                    <div className="flex items-center justify-between gap-3 px-1">
+                      <div className="truncate text-[11px] text-text-tertiary">
+                        {richpostBackgroundPathForRole(
+                          themeDraft,
+                          preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body',
+                        )
+                          ? '已设置背景图'
+                          : '未设置背景图'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onUploadBackground(preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body')}
+                        className="inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-text-primary transition hover:bg-white"
+                      >
+                        {uploadingBackgroundRole === (preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body') ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ImageIcon className="h-3.5 w-3.5" />
+                        )}
+                        上传背景图
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -876,6 +1145,17 @@ export function WritingDraftWorkbench({
   const [isCreatingRichpostThemeEditor, setIsCreatingRichpostThemeEditor] = useState(false);
   const [richpostThemePreviewHtmlMap, setRichpostThemePreviewHtmlMap] = useState<Record<string, string>>({});
   const [isLoadingRichpostThemePreviews, setIsLoadingRichpostThemePreviews] = useState(false);
+  const [richpostThemeContextMenu, setRichpostThemeContextMenu] = useState<RichpostThemeContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    theme: null,
+  });
+  const [richpostThemeRenameOpen, setRichpostThemeRenameOpen] = useState(false);
+  const [richpostThemeRenameValue, setRichpostThemeRenameValue] = useState('');
+  const [richpostThemeRenameTarget, setRichpostThemeRenameTarget] = useState<RichpostThemePreset | null>(null);
+  const [isUpdatingRichpostTheme, setIsUpdatingRichpostTheme] = useState(false);
+  const [uploadingThemeBackgroundRole, setUploadingThemeBackgroundRole] = useState<RichpostZoneFrameRole | null>(null);
   const [richpostThemeEditorDraft, setRichpostThemeEditorDraft] = useState<RichpostThemeDraft>(DEFAULT_RICHPOST_THEME_DRAFT);
   const [richpostThemeEditorBaseThemeId, setRichpostThemeEditorBaseThemeId] = useState<string | null>(null);
   const [richpostThemeEditorThemeId, setRichpostThemeEditorThemeId] = useState<string | null>(null);
@@ -890,6 +1170,11 @@ export function WritingDraftWorkbench({
   const pendingRichpostTypographyRef = useRef<{ fontScale: number; lineHeightScale: number } | null>(null);
   const richpostThemePreviewRequestIdRef = useRef(0);
   const richpostThemeEditorPreviewRequestIdRef = useRef(0);
+  const richpostThemeEditorSaveRequestIdRef = useRef(0);
+  const richpostThemeContextMenuRef = useRef<HTMLDivElement | null>(null);
+  const richpostThemeEditorLastSavedSignatureRef = useRef(
+    richpostThemeDraftSignature(DEFAULT_RICHPOST_THEME_DRAFT)
+  );
 
   useEffect(() => {
     setActiveTab('manuscript');
@@ -912,9 +1197,17 @@ export function WritingDraftWorkbench({
     setIsLongformLayoutDrawerOpen(false);
     setIsRichpostThemeEditorOpen(false);
     setIsCreatingRichpostThemeEditor(false);
+    setIsUpdatingRichpostTheme(false);
+    setUploadingThemeBackgroundRole(null);
+    setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+    setRichpostThemeRenameOpen(false);
+    setRichpostThemeRenameValue('');
+    setRichpostThemeRenameTarget(null);
     setRichpostThemeEditorThemeId(null);
     setRichpostThemeEditorThemeLabel(null);
     setRichpostThemeEditorThemeFile(null);
+    setRichpostThemeEditorPreviewPages([]);
+    richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(DEFAULT_RICHPOST_THEME_DRAFT);
   }, [activeTab, filePath, draftType, isSplitCompareEnabled, splitPreviewTab]);
 
   const isRichPost = draftType === 'richpost';
@@ -1070,14 +1363,36 @@ export function WritingDraftWorkbench({
     () => normalizedThemePresets.find((theme) => String(theme.id || '') === String(richpostThemeId || '')) || normalizedThemePresets[0] || null,
     [normalizedThemePresets, richpostThemeId]
   );
-  const openRichpostThemeEditor = () => {
-    if (!filePath || isCreatingRichpostThemeEditor) return;
-    const baseTheme = activeRichpostThemePreset || normalizedThemePresets[0] || null;
+  const openRichpostThemeEditor = (targetTheme?: RichpostThemePreset | null) => {
+    if (!filePath || isCreatingRichpostThemeEditor || isUpdatingRichpostTheme) return;
+    const baseTheme = targetTheme || activeRichpostThemePreset || normalizedThemePresets[0] || null;
     const baseThemeId = typeof baseTheme?.id === 'string' ? baseTheme.id : null;
+    if (targetTheme?.source === 'custom' && baseThemeId) {
+      const normalizedDraft = normalizeRichpostThemeDraft(baseTheme);
+      setRichpostThemeEditorDraft(normalizedDraft);
+      richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(normalizedDraft);
+      setRichpostThemeEditorBaseThemeId(baseThemeId);
+      setRichpostThemeEditorThemeId(baseThemeId);
+      setRichpostThemeEditorThemeLabel(typeof baseTheme.label === 'string' ? baseTheme.label : normalizedDraft.label);
+      setRichpostThemeEditorThemeFile('richpost-themes.json');
+      setRichpostThemeEditorPreviewPages([]);
+      setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+      setIsRichpostThemeDrawerOpen(false);
+      setIsRichpostThemeEditorOpen(true);
+      return;
+    }
     setIsCreatingRichpostThemeEditor(true);
     void window.ipcRenderer.invoke('manuscripts:create-richpost-custom-theme', {
       filePath,
       baseThemeId,
+      theme: baseTheme
+        ? {
+          ...normalizeRichpostThemeDraft(baseTheme),
+          label: typeof baseTheme.label === 'string' && baseTheme.label.trim()
+            ? `${baseTheme.label} 副本`
+            : DEFAULT_RICHPOST_THEME_DRAFT.label,
+        }
+        : undefined,
     }).then((result) => {
       const payload = result as {
         success?: boolean;
@@ -1089,16 +1404,19 @@ export function WritingDraftWorkbench({
       if (!payload?.success || !payload.theme) {
         throw new Error(payload?.error || '创建主题失败');
       }
-      setRichpostThemeEditorDraft(normalizeRichpostThemeDraft(payload.theme));
-      setRichpostThemeEditorBaseThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : baseThemeId);
+      const normalizedDraft = normalizeRichpostThemeDraft(payload.theme);
+      setRichpostThemeEditorDraft(normalizedDraft);
+      richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(normalizedDraft);
+      setRichpostThemeEditorBaseThemeId(baseThemeId || (typeof payload.theme.id === 'string' ? payload.theme.id : null));
       setRichpostThemeEditorThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : null);
-      setRichpostThemeEditorThemeLabel(typeof payload.theme.label === 'string' ? payload.theme.label : '新主题');
+      setRichpostThemeEditorThemeLabel(typeof payload.theme.label === 'string' ? payload.theme.label : normalizedDraft.label);
       setRichpostThemeEditorThemeFile(typeof payload.themeFile === 'string' ? payload.themeFile : null);
       setRichpostThemeEditorPreviewPages([]);
       if (payload.state) {
         onPackageStateChange?.(payload.state);
       }
       setIsRichpostThemeDrawerOpen(false);
+      setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
       setIsRichpostThemeEditorOpen(true);
     }).catch((error) => {
       console.error('Failed to create richpost custom theme:', error);
@@ -1137,6 +1455,7 @@ export function WritingDraftWorkbench({
       void window.ipcRenderer.invoke('manuscripts:preview-richpost-theme-draft', {
         filePath,
         baseThemeId: richpostThemeEditorBaseThemeId,
+        existingThemeId: richpostThemeEditorThemeId,
         theme: richpostThemeEditorDraft,
       }).then((result) => {
         if (richpostThemeEditorPreviewRequestIdRef.current !== requestId) {
@@ -1170,6 +1489,72 @@ export function WritingDraftWorkbench({
     isRichpostThemeEditorOpen,
     richpostThemeEditorBaseThemeId,
     richpostThemeEditorDraft,
+    richpostThemeEditorThemeId,
+  ]);
+
+  useEffect(() => {
+    if (!isRichPost || !isRichpostThemeEditorOpen || !filePath || !richpostThemeEditorThemeId) {
+      return;
+    }
+    const nextSignature = richpostThemeDraftSignature(richpostThemeEditorDraft);
+    if (nextSignature === richpostThemeEditorLastSavedSignatureRef.current) {
+      return;
+    }
+    const requestId = ++richpostThemeEditorSaveRequestIdRef.current;
+    const timeoutId = window.setTimeout(() => {
+      void window.ipcRenderer.invoke('manuscripts:save-richpost-custom-theme', {
+        filePath,
+        baseThemeId: richpostThemeEditorBaseThemeId,
+        existingThemeId: richpostThemeEditorThemeId,
+        theme: richpostThemeEditorDraft,
+        apply: true,
+      }).then((result) => {
+        if (richpostThemeEditorSaveRequestIdRef.current !== requestId) {
+          return;
+        }
+        const payload = result as {
+          success?: boolean;
+          error?: string;
+          state?: PackageStateLike;
+          theme?: RichpostThemePreset | null;
+          themeId?: string | null;
+        } | null;
+        if (!payload?.success || !payload.theme) {
+          throw new Error(payload?.error || '保存主题失败');
+        }
+        const normalizedDraft = normalizeRichpostThemeDraft(payload.theme);
+        const normalizedSignature = richpostThemeDraftSignature(normalizedDraft);
+        richpostThemeEditorLastSavedSignatureRef.current = normalizedSignature;
+        if (normalizedSignature !== nextSignature) {
+          setRichpostThemeEditorDraft(normalizedDraft);
+        }
+        if (typeof payload.themeId === 'string' && payload.themeId.trim()) {
+          setRichpostThemeEditorThemeId(payload.themeId);
+        }
+        if (typeof payload.theme?.label === 'string' && payload.theme.label.trim()) {
+          setRichpostThemeEditorThemeLabel(payload.theme.label);
+        }
+        if (payload.state) {
+          onPackageStateChange?.(payload.state);
+        }
+      }).catch((error) => {
+        if (richpostThemeEditorSaveRequestIdRef.current !== requestId) {
+          return;
+        }
+        console.error('Failed to save richpost custom theme:', error);
+      });
+    }, 220);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    filePath,
+    isRichPost,
+    isRichpostThemeEditorOpen,
+    onPackageStateChange,
+    richpostThemeEditorBaseThemeId,
+    richpostThemeEditorDraft,
+    richpostThemeEditorThemeId,
   ]);
 
   useEffect(() => {
@@ -1214,6 +1599,168 @@ export function WritingDraftWorkbench({
     normalizedThemePresets,
     richpostThemePreviewKey,
   ]);
+
+  useEffect(() => {
+    if (!richpostThemeContextMenu.visible) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!richpostThemeContextMenuRef.current?.contains(event.target as Node)) {
+        setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [richpostThemeContextMenu.visible]);
+
+  const handleOpenRichpostThemeContextMenu = (
+    event: React.MouseEvent<HTMLElement>,
+    theme: RichpostThemePreset
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setRichpostThemeContextMenu({
+      visible: true,
+      x: event.clientX,
+      y: event.clientY,
+      theme,
+    });
+  };
+
+  const handleStartRenameRichpostTheme = () => {
+    const targetTheme = richpostThemeContextMenu.theme;
+    if (!targetTheme || targetTheme.source !== 'custom') return;
+    setRichpostThemeRenameTarget(targetTheme);
+    setRichpostThemeRenameValue(typeof targetTheme.label === 'string' ? targetTheme.label : '');
+    setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+    setRichpostThemeRenameOpen(true);
+  };
+
+  const handleConfirmRenameRichpostTheme = async () => {
+    const targetTheme = richpostThemeRenameTarget;
+    const themeId = String(targetTheme?.id || '').trim();
+    if (!filePath || !themeId || !targetTheme || targetTheme.source !== 'custom') return;
+    const nextLabel = richpostThemeRenameValue.trim();
+    if (!nextLabel) return;
+    setIsUpdatingRichpostTheme(true);
+    try {
+      const result = await window.ipcRenderer.invoke('manuscripts:save-richpost-custom-theme', {
+        filePath,
+        baseThemeId: themeId,
+        existingThemeId: themeId,
+        theme: {
+          ...targetTheme,
+          label: nextLabel,
+        },
+        apply: false,
+      }) as {
+        success?: boolean;
+        error?: string;
+        state?: PackageStateLike;
+        theme?: RichpostThemePreset | null;
+      };
+      if (!result?.success || !result.theme) {
+        throw new Error(result?.error || '重命名主题失败');
+      }
+      if (result.state) {
+        onPackageStateChange?.(result.state);
+      }
+      if (themeId === richpostThemeEditorThemeId) {
+        setRichpostThemeEditorDraft((current) => ({ ...current, label: nextLabel }));
+        setRichpostThemeEditorThemeLabel(nextLabel);
+      }
+      setRichpostThemeRenameOpen(false);
+      setRichpostThemeRenameTarget(null);
+      setRichpostThemeRenameValue('');
+    } catch (error) {
+      void appAlert(error instanceof Error ? error.message : '重命名主题失败');
+    } finally {
+      setIsUpdatingRichpostTheme(false);
+    }
+  };
+
+  const handleDeleteRichpostTheme = async () => {
+    const targetTheme = richpostThemeContextMenu.theme;
+    const themeId = String(targetTheme?.id || '').trim();
+    if (!filePath || !themeId || !targetTheme || targetTheme.source !== 'custom') return;
+    const confirmed = await appConfirm(`确认删除主题“${targetTheme.label || themeId}”吗？`, {
+      title: '删除主题',
+      confirmLabel: '删除',
+      cancelLabel: '取消',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+    setIsUpdatingRichpostTheme(true);
+    try {
+      const result = await window.ipcRenderer.invoke('manuscripts:delete-richpost-custom-theme', {
+        filePath,
+        themeId,
+      }) as {
+        success?: boolean;
+        error?: string;
+        state?: PackageStateLike;
+      };
+      if (!result?.success) {
+        throw new Error(result?.error || '删除主题失败');
+      }
+      if (themeId === richpostThemeEditorThemeId) {
+        setIsRichpostThemeEditorOpen(false);
+        setRichpostThemeEditorThemeId(null);
+        setRichpostThemeEditorThemeLabel(null);
+        setRichpostThemeEditorThemeFile(null);
+        setRichpostThemeEditorPreviewPages([]);
+      }
+      if (result.state) {
+        onPackageStateChange?.(result.state);
+      }
+    } catch (error) {
+      void appAlert(error instanceof Error ? error.message : '删除主题失败');
+    } finally {
+      setIsUpdatingRichpostTheme(false);
+    }
+  };
+
+  const handleUploadRichpostThemeBackground = async (role: RichpostZoneFrameRole) => {
+    if (!filePath || !richpostThemeEditorThemeId || uploadingThemeBackgroundRole) return;
+    setUploadingThemeBackgroundRole(role);
+    try {
+      const result = await window.ipcRenderer.invoke('manuscripts:upload-richpost-theme-background', {
+        filePath,
+        themeId: richpostThemeEditorThemeId,
+        role,
+      }) as {
+        success?: boolean;
+        canceled?: boolean;
+        error?: string;
+        state?: PackageStateLike;
+        theme?: RichpostThemePreset | null;
+      };
+      if (result?.canceled) {
+        return;
+      }
+      if (!result?.success || !result.theme) {
+        throw new Error(result?.error || '上传背景图失败');
+      }
+      const normalizedDraft = normalizeRichpostThemeDraft(result.theme);
+      setRichpostThemeEditorDraft(normalizedDraft);
+      richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(normalizedDraft);
+      if (result.state) {
+        onPackageStateChange?.(result.state);
+      }
+    } catch (error) {
+      void appAlert(error instanceof Error ? error.message : '上传背景图失败');
+    } finally {
+      setUploadingThemeBackgroundRole(null);
+    }
+  };
 
   const renderPreviewContent = (tab: WritingWorkbenchTab, compact = false) => {
     if (tab === 'layout') {
@@ -1334,18 +1881,28 @@ export function WritingDraftWorkbench({
                     const active = themeId === richpostThemeId;
                     const previewHtml = richpostThemePreviewHtmlMap[themeId] || '';
                     return (
-                      <button
+                      <div
                         key={themeId}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => {
                           onSelectRichpostTheme?.(themeId);
                           setIsRichpostThemeDrawerOpen(false);
                         }}
-                        disabled={isApplyingRichpostTheme}
+                        onContextMenu={(event) => handleOpenRichpostThemeContextMenu(event, theme)}
+                        onKeyDown={(event) => {
+                          if (isApplyingRichpostTheme) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            onSelectRichpostTheme?.(themeId);
+                            setIsRichpostThemeDrawerOpen(false);
+                          }
+                        }}
+                        aria-disabled={isApplyingRichpostTheme}
                         className={clsx(
-                          'w-full text-left transition duration-200',
+                          'w-full cursor-pointer text-left transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/40',
                           active ? 'opacity-100' : 'hover:-translate-y-0.5',
-                          isApplyingRichpostTheme && 'opacity-70'
+                          isApplyingRichpostTheme && 'pointer-events-none opacity-70'
                         )}
                       >
                         <div className={clsx('truncate text-[11px] font-medium', active ? 'text-accent-primary' : 'text-text-secondary')}>
@@ -1355,9 +1912,10 @@ export function WritingDraftWorkbench({
                           <RichpostThemePreviewFrame
                             html={previewHtml}
                             active={active}
+                            capturePointer
                           />
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1365,8 +1923,8 @@ export function WritingDraftWorkbench({
               <div className="border-t border-border px-3 py-3">
                 <button
                   type="button"
-                  onClick={openRichpostThemeEditor}
-                  disabled={isCreatingRichpostThemeEditor}
+                  onClick={() => openRichpostThemeEditor()}
+                  disabled={isCreatingRichpostThemeEditor || isUpdatingRichpostTheme}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-accent-primary/28 bg-accent-primary/6 px-4 py-3 text-[13px] font-semibold text-accent-primary transition hover:bg-accent-primary/10"
                 >
                   {isCreatingRichpostThemeEditor ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -1374,6 +1932,44 @@ export function WritingDraftWorkbench({
                 </button>
               </div>
             </aside>
+            {richpostThemeContextMenu.visible && richpostThemeContextMenu.theme ? (
+              <div
+                ref={richpostThemeContextMenuRef}
+                className="fixed z-[120] min-w-[172px] overflow-hidden rounded-2xl border border-border bg-white/96 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                style={{
+                  left: Math.min(richpostThemeContextMenu.x, window.innerWidth - 188),
+                  top: Math.min(richpostThemeContextMenu.y, window.innerHeight - 160),
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const theme = richpostThemeContextMenu.theme;
+                    setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
+                    openRichpostThemeEditor(theme);
+                  }}
+                  className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartRenameRichpostTheme}
+                  disabled={richpostThemeContextMenu.theme.source !== 'custom'}
+                  className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary disabled:cursor-not-allowed disabled:text-text-tertiary/50 disabled:hover:bg-transparent"
+                >
+                  重命名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteRichpostTheme()}
+                  disabled={richpostThemeContextMenu.theme.source !== 'custom'}
+                  className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-text-tertiary/50 disabled:hover:bg-transparent"
+                >
+                  删除
+                </button>
+              </div>
+            ) : null}
           </>
         ) : null}
         {shouldShowLongformLayoutDrawer ? (
@@ -1767,17 +2363,81 @@ export function WritingDraftWorkbench({
     {isRichPost && isRichpostThemeEditorOpen ? (
       <RichpostThemeEditorOverlay
         previews={richpostThemeEditorPreviewPages}
+        themeDraft={richpostThemeEditorDraft}
         isPreviewLoading={isLoadingRichpostThemeEditorPreview}
+        uploadingBackgroundRole={uploadingThemeBackgroundRole}
         editorChatSessionId={editorChatSessionId}
         isActive={isActive}
         shortcuts={shortcuts}
+        onThemeDraftChange={setRichpostThemeEditorDraft}
+        onUploadBackground={handleUploadRichpostThemeBackground}
         onClose={() => {
           setIsRichpostThemeEditorOpen(false);
           setRichpostThemeEditorThemeId(null);
           setRichpostThemeEditorThemeLabel(null);
           setRichpostThemeEditorThemeFile(null);
+          setRichpostThemeEditorPreviewPages([]);
         }}
       />
+    ) : null}
+    {richpostThemeRenameOpen ? (
+      <div
+        className="fixed inset-0 z-[130] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[1px]"
+        onMouseDown={() => !isUpdatingRichpostTheme && setRichpostThemeRenameOpen(false)}
+      >
+        <div
+          className="w-full max-w-md rounded-3xl border border-border bg-background shadow-2xl"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-border/70 px-6 py-5">
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">重命名主题</h2>
+              <p className="mt-1 text-sm text-text-secondary">输入新的主题名称。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => !isUpdatingRichpostTheme && setRichpostThemeRenameOpen(false)}
+              className="rounded-xl p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="space-y-3 px-6 py-6">
+            <label className="text-sm font-medium text-text-primary">名称</label>
+            <input
+              autoFocus
+              value={richpostThemeRenameValue}
+              onChange={(event) => setRichpostThemeRenameValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !isUpdatingRichpostTheme) {
+                  event.preventDefault();
+                  void handleConfirmRenameRichpostTheme();
+                }
+              }}
+              placeholder="输入新的主题名称"
+              className="w-full rounded-2xl border border-border bg-surface-secondary/30 px-4 py-3 text-sm focus:border-accent-primary focus:outline-none"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 rounded-b-3xl border-t border-border/70 bg-surface-secondary/10 px-6 py-5">
+            <button
+              type="button"
+              onClick={() => setRichpostThemeRenameOpen(false)}
+              disabled={isUpdatingRichpostTheme}
+              className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleConfirmRenameRichpostTheme()}
+              disabled={isUpdatingRichpostTheme || !richpostThemeRenameValue.trim()}
+              className="rounded-xl bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+            >
+              {isUpdatingRichpostTheme ? '处理中...' : '重命名'}
+            </button>
+          </div>
+        </div>
+      </div>
     ) : null}
     </>
   );
