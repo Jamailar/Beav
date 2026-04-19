@@ -2,6 +2,8 @@ use base64::Engine;
 use serde_json::{json, Value};
 use std::io::Write;
 
+use crate::configure_background_command;
+
 #[derive(Debug, Clone)]
 pub(crate) struct HttpJsonResponse {
     pub status: u16,
@@ -22,6 +24,7 @@ fn build_curl_json_command(
     no_buffer: bool,
 ) -> Result<std::process::Command, String> {
     let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
     command.arg("-sS").arg("-X").arg(method).arg(url);
     if no_buffer {
         command.arg("-N");
@@ -224,6 +227,7 @@ pub(crate) fn run_curl_text(
     body: Option<String>,
 ) -> Result<String, String> {
     let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     for (header, value) in extra_headers {
         command.arg("-H").arg(format!("{header}: {value}"));
@@ -268,6 +272,7 @@ pub(crate) fn run_curl_bytes(
 ) -> Result<Vec<u8>, String> {
     let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
         command

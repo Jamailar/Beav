@@ -14,6 +14,7 @@ mod helpers;
 mod http_utils;
 mod interactive_runtime_shared;
 mod knowledge;
+mod knowledge_index;
 mod legacy_import;
 mod manuscript_package;
 mod mcp;
@@ -21,6 +22,7 @@ mod media_generation;
 mod memory_maintenance;
 mod official_support;
 mod persistence;
+mod process_utils;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
@@ -83,6 +85,7 @@ pub(crate) use manuscript_package::*;
 pub(crate) use media_generation::*;
 pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
+pub(crate) use process_utils::*;
 pub(crate) use redclaw_profile::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -688,6 +691,7 @@ struct AppState {
     runtime_warm: Mutex<RuntimeWarmState>,
     skill_watch: Mutex<skills::SkillWatcherSnapshot>,
     diagnostics: Mutex<DiagnosticsState>,
+    knowledge_index_state: Mutex<knowledge_index::KnowledgeIndexRuntimeState>,
 }
 
 struct AssistantRuntime {
@@ -1354,7 +1358,9 @@ fn run_osascript_json(script: &str) -> Result<Value, String> {
 
 #[cfg(target_os = "windows")]
 fn run_powershell_json(script: &str) -> Result<Value, String> {
-    let output = std::process::Command::new("powershell")
+    let mut command = std::process::Command::new("powershell");
+    configure_background_command(&mut command);
+    let output = command
         .arg("-NoProfile")
         .arg("-NonInteractive")
         .arg("-Command")
@@ -4263,6 +4269,7 @@ fn run_anthropic_interactive_chat_runtime(
         }
 
         let mut command = std::process::Command::new("curl");
+        configure_background_command(&mut command);
         command
             .arg("-sS")
             .arg("-N")
@@ -4847,6 +4854,7 @@ fn run_gemini_interactive_chat_runtime(
             endpoint.push_str("?alt=sse");
         }
         let mut command = std::process::Command::new("curl");
+        configure_background_command(&mut command);
         command
             .arg("-sS")
             .arg("-N")
@@ -6427,6 +6435,7 @@ fn main() {
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
             diagnostics: Mutex::new(DiagnosticsState::default()),
+            knowledge_index_state: Mutex::new(knowledge_index::KnowledgeIndexRuntimeState::default()),
         })
         .invoke_handler(tauri::generate_handler![
             ipc_invoke,
@@ -6436,11 +6445,19 @@ fn main() {
             commands::library::knowledge_list,
             commands::library::knowledge_list_youtube,
             commands::library::knowledge_docs_list,
+            commands::library::knowledge_list_page,
+            commands::library::knowledge_get_item_detail,
+            commands::library::knowledge_get_index_status,
+            commands::library::knowledge_rebuild_catalog,
+            commands::library::knowledge_open_index_root,
             commands::redclaw::redclaw_runner_status
         ])
         .setup(|app| {
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
+            if let Err(error) = knowledge_index::initialize(app.handle(), &state) {
+                eprintln!("[RedBox knowledge index init] {error}");
+            }
             if let Err(error) = auth::initialize_auth_runtime(app.handle(), &state) {
                 eprintln!("[RedBox auth init] {error}");
             }

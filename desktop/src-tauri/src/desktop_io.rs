@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    file_url_for_path, normalize_base_url, now_iso, now_ms, payload_string, AdvisorVideoRecord,
+    configure_background_command, file_url_for_path, normalize_base_url, now_iso, now_ms,
+    payload_string, AdvisorVideoRecord,
 };
 
 pub(crate) fn write_base64_payload_to_file(
@@ -63,6 +64,7 @@ pub(crate) fn run_curl_transcription_with_response_format(
     response_format: Option<&str>,
 ) -> Result<String, String> {
     let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
     command
         .arg("-sS")
         .arg("-X")
@@ -131,10 +133,9 @@ pub(crate) fn resolve_transcription_settings(
 }
 
 pub(crate) fn detect_ytdlp() -> Option<(String, String)> {
-    let output = std::process::Command::new("yt-dlp")
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("yt-dlp");
+    configure_background_command(&mut command);
+    let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -162,7 +163,9 @@ pub(crate) fn ensure_ytdlp_installed(update: bool) -> Result<(String, String), S
         ),
     ];
     for (binary, args) in pip_commands {
-        let output = std::process::Command::new(binary).args(args).output();
+        let mut command = std::process::Command::new(binary);
+        configure_background_command(&mut command);
+        let output = command.args(args).output();
         if let Ok(output) = output {
             if output.status.success() {
                 if let Some(found) = detect_ytdlp() {
@@ -175,7 +178,9 @@ pub(crate) fn ensure_ytdlp_installed(update: bool) -> Result<(String, String), S
 }
 
 pub(crate) fn run_ytdlp_json(args: &[&str]) -> Result<Value, String> {
-    let output = std::process::Command::new("yt-dlp")
+    let mut command = std::process::Command::new("yt-dlp");
+    configure_background_command(&mut command);
+    let output = command
         .args(args)
         .output()
         .map_err(|error| error.to_string())?;
@@ -266,7 +271,9 @@ pub(crate) fn download_ytdlp_subtitle(
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
     let template = target_dir.join(format!("{file_prefix}.%(ext)s"));
-    let output = std::process::Command::new("yt-dlp")
+    let mut command = std::process::Command::new("yt-dlp");
+    configure_background_command(&mut command);
+    let output = command
         .args([
             "--skip-download",
             "--write-auto-sub",

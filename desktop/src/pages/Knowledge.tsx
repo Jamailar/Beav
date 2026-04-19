@@ -68,6 +68,47 @@ interface DocumentKnowledgeSource {
     updatedAt: string;
 }
 
+interface KnowledgeCatalogSummary {
+    itemId: string;
+    kind: 'redbook-note' | 'youtube-video' | 'document-source';
+    noteType?: string;
+    captureKind?: string;
+    title: string;
+    author: string;
+    siteName?: string;
+    sourceUrl?: string;
+    folderPath?: string;
+    rootPath?: string;
+    coverUrl?: string;
+    thumbnailUrl?: string;
+    previewText: string;
+    createdAt: string;
+    updatedAt: string;
+    language?: string;
+    hasVideo: boolean;
+    hasTranscript: boolean;
+    tags: string[];
+    status?: string;
+    sampleFiles: string[];
+    fileCount: number;
+}
+
+interface KnowledgeListPageResponse {
+    items: KnowledgeCatalogSummary[];
+    nextCursor?: string | null;
+    total: number;
+    kindCounts?: Record<string, number>;
+}
+
+interface KnowledgeIndexStatus {
+    indexedCount: number;
+    pendingCount: number;
+    failedCount: number;
+    lastIndexedAt?: string | null;
+    isBuilding: boolean;
+    lastError?: string | null;
+}
+
 interface KnowledgeCardItem {
     id: string;
     kind: Exclude<KnowledgeTypeFilter, 'all'>;
@@ -145,6 +186,63 @@ const normalizeCoverTemplate = (raw: unknown): CoverTemplate | null => {
     };
 };
 
+const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
+    id: item.itemId,
+    type: item.noteType,
+    sourceUrl: item.sourceUrl,
+    title: item.title,
+    author: item.author || '原文链接',
+    content: '',
+    excerpt: item.previewText,
+    siteName: item.siteName,
+    captureKind: item.captureKind,
+    htmlFile: undefined,
+    htmlFileUrl: undefined,
+    images: [],
+    tags: item.tags,
+    cover: item.coverUrl,
+    video: undefined,
+    videoUrl: undefined,
+    transcript: item.hasTranscript ? '' : undefined,
+    transcriptionStatus: item.status as Note['transcriptionStatus'],
+    stats: {
+        likes: 0,
+        collects: undefined,
+    },
+    createdAt: item.createdAt,
+    folderPath: item.folderPath,
+});
+
+const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => ({
+    id: item.itemId,
+    videoId: item.itemId,
+    videoUrl: item.sourceUrl || '',
+    title: item.title,
+    originalTitle: undefined,
+    description: item.previewText,
+    summary: item.previewText,
+    thumbnailUrl: item.thumbnailUrl || '',
+    hasSubtitle: item.hasTranscript,
+    subtitleContent: undefined,
+    status: item.status as YouTubeVideo['status'],
+    createdAt: item.createdAt,
+    folderPath: item.folderPath,
+});
+
+const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): DocumentKnowledgeSource => ({
+    id: item.itemId,
+    kind: 'tracked-folder',
+    name: item.title,
+    rootPath: item.rootPath || '',
+    locked: false,
+    indexing: item.status === 'indexing',
+    indexError: undefined,
+    fileCount: Number(item.fileCount || 0),
+    sampleFiles: Array.isArray(item.sampleFiles) ? item.sampleFiles : [],
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+});
+
 // 轻量级关键词提取（用于判断内容变化率）
 const extractKeywords = (text: string): Set<string> => {
     if (!text) return new Set();
@@ -205,8 +303,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isSubtitleLoading, setIsSubtitleLoading] = useState(false);
     const [isRefreshingYoutubeSummaries, setIsRefreshingYoutubeSummaries] = useState(false);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [isSelectedNoteVideoPlaying, setIsSelectedNoteVideoPlaying] = useState(false);
     const [embeddedViewportWidth, setEmbeddedViewportWidth] = useState(0);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [kindCounts, setKindCounts] = useState<Record<string, number>>({});
+    const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus>({
+        indexedCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        lastIndexedAt: null,
+        isBuilding: false,
+        lastError: null,
+    });
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
     const selectedNoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -214,10 +323,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
     const hasKnowledgeSnapshotRef = useRef(false);
-    const loadNotesRequestRef = useRef(0);
-    const loadYoutubeVideosRequestRef = useRef(0);
-    const loadDocumentSourcesRequestRef = useRef(0);
     const loadAllKnowledgeRequestRef = useRef(0);
+    const loadDetailRequestRef = useRef(0);
 
     // 搜索框状态
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -491,136 +598,79 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         setSelectedNote(null);
     }, [isExpandableXiaohongshuNote, onNavigateToRedClaw]);
 
-    const loadNotes = useCallback(async () => {
-        const requestId = loadNotesRequestRef.current + 1;
-        loadNotesRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
+    const refreshIndexStatus = useCallback(async () => {
         try {
-            const list = await window.ipcRenderer.knowledge.listNotes<Note>();
-            if (requestId !== loadNotesRequestRef.current) return;
-            if (list == null) {
-                if (!hasLocalData) {
-                    setNotes([]);
-                }
-                return;
-            }
-            setNotes(list);
-            hasKnowledgeSnapshotRef.current = true;
-        } catch (e) {
-            if (requestId !== loadNotesRequestRef.current) return;
-            console.error('Failed to load notes:', e);
-            if (!hasLocalData) {
-                setNotes([]);
-            }
-        } finally {
-            if (requestId === loadNotesRequestRef.current) {
-                setIsLoading(false);
-            }
-        }
-    }, [hasKnowledgeDataSnapshot]);
-
-    const loadYoutubeVideos = useCallback(async () => {
-        const requestId = loadYoutubeVideosRequestRef.current + 1;
-        loadYoutubeVideosRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
-        try {
-            const list = await window.ipcRenderer.knowledge.listYoutube<YouTubeVideo>();
-            if (requestId !== loadYoutubeVideosRequestRef.current) return;
-            if (list == null) {
-                if (!hasLocalData) {
-                    setYoutubeVideos([]);
-                }
-                return;
-            }
-            setYoutubeVideos(list);
-            hasKnowledgeSnapshotRef.current = true;
-        } catch (e) {
-            if (requestId !== loadYoutubeVideosRequestRef.current) return;
-            console.error('Failed to load YouTube videos:', e);
-            if (!hasLocalData) {
-                setYoutubeVideos([]);
-            }
-        } finally {
-            if (requestId === loadYoutubeVideosRequestRef.current) {
-                setIsLoading(false);
-            }
-        }
-    }, [hasKnowledgeDataSnapshot]);
-
-    const loadDocumentSources = useCallback(async () => {
-        const requestId = loadDocumentSourcesRequestRef.current + 1;
-        loadDocumentSourcesRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
-        try {
-            const list = await window.ipcRenderer.knowledge.listDocs<DocumentKnowledgeSource>();
-            if (requestId !== loadDocumentSourcesRequestRef.current) return;
-            if (list == null) {
-                if (!hasLocalData) {
-                    setDocumentSources([]);
-                }
-                return;
-            }
-            setDocumentSources(Array.isArray(list) ? list : []);
-            hasKnowledgeSnapshotRef.current = true;
+            const status = await window.ipcRenderer.knowledge.getIndexStatus<KnowledgeIndexStatus>();
+            setIndexStatus(status);
         } catch (error) {
-            if (requestId !== loadDocumentSourcesRequestRef.current) return;
-            console.error('Failed to load document sources:', error);
-            if (!hasLocalData) {
-                setDocumentSources([]);
-            }
-        } finally {
-            if (requestId === loadDocumentSourcesRequestRef.current) {
-                setIsLoading(false);
-            }
+            console.error('Failed to load knowledge index status:', error);
         }
-    }, [hasKnowledgeDataSnapshot]);
+    }, []);
 
-    const loadAllKnowledge = useCallback(async () => {
+    const resolveBackendKind = useCallback((typeFilter: KnowledgeTypeFilter): string | undefined => {
+        if (typeFilter === 'youtube') return 'youtube-video';
+        if (typeFilter === 'docs') return 'document-source';
+        if (typeFilter === 'all') return undefined;
+        return 'redbook-note';
+    }, []);
+
+    const applyCatalogPage = useCallback((items: KnowledgeCatalogSummary[], append: boolean) => {
+        const nextNotes = items
+            .filter((item) => item.kind === 'redbook-note')
+            .map(catalogSummaryToNote);
+        const nextVideos = items
+            .filter((item) => item.kind === 'youtube-video')
+            .map(catalogSummaryToVideo);
+        const nextDocs = items
+            .filter((item) => item.kind === 'document-source')
+            .map(catalogSummaryToDocSource);
+        const mergeById = <T extends { id: string }>(current: T[], incoming: T[]) => {
+            const merged = new Map<string, T>();
+            current.forEach((item) => merged.set(item.id, item));
+            incoming.forEach((item) => merged.set(item.id, item));
+            return Array.from(merged.values());
+        };
+        setNotes((prev) => append ? mergeById(prev, nextNotes) : nextNotes);
+        setYoutubeVideos((prev) => append ? mergeById(prev, nextVideos) : nextVideos);
+        setDocumentSources((prev) => append ? mergeById(prev, nextDocs) : nextDocs);
+        hasKnowledgeSnapshotRef.current = hasKnowledgeSnapshotRef.current || items.length > 0;
+    }, []);
+
+    const loadCatalogPage = useCallback(async (reset: boolean) => {
         const requestId = loadAllKnowledgeRequestRef.current + 1;
         loadAllKnowledgeRequestRef.current = requestId;
         const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
+        if (reset) {
+            if (!hasLocalData) {
+                setIsLoading(true);
+            }
+        } else {
+            setIsLoadingMore(true);
         }
         try {
-            const [noteList, videoList, docList] = await Promise.all([
-                window.ipcRenderer.knowledge.listNotes<Note>(),
-                window.ipcRenderer.knowledge.listYoutube<YouTubeVideo>(),
-                window.ipcRenderer.knowledge.listDocs<DocumentKnowledgeSource>(),
-            ]);
+            const response = await window.ipcRenderer.knowledge.listPage<KnowledgeListPageResponse>({
+                cursor: reset ? null : nextCursor,
+                limit: 200,
+                kind: resolveBackendKind(selectedTypeFilter),
+                query: searchQuery.trim() || undefined,
+                sort: 'updated-desc',
+            });
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
-            const hasAnyResult = noteList != null || videoList != null || docList != null;
-            if (Array.isArray(noteList)) {
-                setNotes(noteList);
-            } else if (!hasLocalData) {
+            const pageItems = Array.isArray(response?.items) ? response.items : [];
+            applyCatalogPage(pageItems, !reset);
+            setNextCursor(typeof response?.nextCursor === 'string' ? response.nextCursor : null);
+            setKindCounts((response?.kindCounts && typeof response.kindCounts === 'object')
+                ? response.kindCounts
+                : {});
+            if (reset && pageItems.length === 0 && !hasLocalData) {
                 setNotes([]);
-            }
-            if (Array.isArray(videoList)) {
-                setYoutubeVideos(videoList);
-            } else if (!hasLocalData) {
                 setYoutubeVideos([]);
-            }
-            if (Array.isArray(docList)) {
-                setDocumentSources(docList);
-            } else if (!hasLocalData) {
                 setDocumentSources([]);
-            }
-            if (hasAnyResult) {
-                hasKnowledgeSnapshotRef.current = true;
             }
         } catch (error) {
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
-            console.error('Failed to load knowledge:', error);
-            if (!hasLocalData) {
+            console.error('Failed to load knowledge catalog page:', error);
+            if (reset && !hasLocalData) {
                 setNotes([]);
                 setYoutubeVideos([]);
                 setDocumentSources([]);
@@ -628,13 +678,67 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         } finally {
             if (requestId === loadAllKnowledgeRequestRef.current) {
                 setIsLoading(false);
+                setIsLoadingMore(false);
             }
         }
-    }, [hasKnowledgeDataSnapshot]);
+    }, [applyCatalogPage, hasKnowledgeDataSnapshot, nextCursor, resolveBackendKind, searchQuery, selectedTypeFilter]);
+
+    const loadAllKnowledge = useCallback(async () => {
+        await Promise.all([refreshIndexStatus(), loadCatalogPage(true)]);
+    }, [loadCatalogPage, refreshIndexStatus]);
+
+    const loadNotes = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadYoutubeVideos = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadDocumentSources = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadKnowledgeDetail = useCallback(async (itemId: string, kind: 'redbook-note' | 'youtube-video' | 'document-source') => {
+        const requestId = loadDetailRequestRef.current + 1;
+        loadDetailRequestRef.current = requestId;
+        try {
+            return await window.ipcRenderer.knowledge.getItemDetail<Record<string, unknown>>({
+                itemId,
+                kind,
+            });
+        } catch (error) {
+            console.error('Failed to load knowledge detail:', error);
+            return null;
+        }
+    }, []);
+
+    const openNoteDetail = useCallback(async (note: Note) => {
+        setSelectedNote(note);
+        const detail = await loadKnowledgeDetail(note.id, 'redbook-note');
+        if (detail && loadDetailRequestRef.current > 0) {
+            setSelectedNote(detail as unknown as Note);
+        }
+    }, [loadKnowledgeDetail]);
+
+    const openVideoDetail = useCallback(async (video: YouTubeVideo) => {
+        setSelectedVideo(video);
+        const detail = await loadKnowledgeDetail(video.id, 'youtube-video');
+        if (detail && loadDetailRequestRef.current > 0) {
+            setSelectedVideo(detail as unknown as YouTubeVideo);
+        }
+    }, [loadKnowledgeDetail]);
 
     useEffect(() => {
         void loadAllKnowledge();
     }, [loadAllKnowledge]);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            void loadAllKnowledge();
+        }, 180);
+        return () => window.clearTimeout(timeout);
+    }, [searchQuery, selectedTypeFilter, loadAllKnowledge]);
 
     // 每次从其他页面切回知识库时，强制刷新当前列表，避免页面显示旧缓存。
     useEffect(() => {
@@ -646,56 +750,49 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         void loadAllKnowledge();
     }, [isActive, loadAllKnowledge]);
 
+    const loadMoreKnowledge = useCallback(async () => {
+        if (!nextCursor || isLoadingMore) return;
+        await loadCatalogPage(false);
+    }, [isLoadingMore, loadCatalogPage, nextCursor]);
+
     // 监听 YouTube 视频更新事件
     useEffect(() => {
         const handleVideoUpdated = (_event: unknown, data: { noteId: string; status: string; hasSubtitle?: boolean; title?: string; summary?: string }) => {
             console.log('[Knowledge] Video updated:', data);
-            setYoutubeVideos(prev => prev.map(video =>
-                video.id === data.noteId
-                    ? {
-                        ...video,
-                        status: data.status as YouTubeVideo['status'],
-                        hasSubtitle: data.hasSubtitle ?? video.hasSubtitle,
-                        title: typeof data.title === 'string' && data.title.trim() ? data.title : video.title,
-                        summary: typeof data.summary === 'string' ? data.summary : video.summary,
-                    }
-                    : video
-            ));
-            // 如果当前选中的视频更新了，也更新选中状态
-            if (selectedVideo?.id === data.noteId) {
-                setSelectedVideo(prev => prev ? {
-                    ...prev,
-                    status: data.status as YouTubeVideo['status'],
-                    hasSubtitle: data.hasSubtitle ?? prev.hasSubtitle,
-                    title: typeof data.title === 'string' && data.title.trim() ? data.title : prev.title,
-                    summary: typeof data.summary === 'string' ? data.summary : prev.summary,
-                } : null);
-            }
+            void Promise.all([refreshIndexStatus(), loadYoutubeVideos()]);
         };
 
         const handleNewVideo = (_event: unknown, data: { noteId: string; title: string; status?: string }) => {
             console.log('[Knowledge] New video added:', data);
-            void loadYoutubeVideos();
+            void Promise.all([refreshIndexStatus(), loadYoutubeVideos()]);
+        };
+
+        const handleKnowledgeChanged = () => {
+            void Promise.all([refreshIndexStatus(), loadAllKnowledge()]);
         };
 
         window.ipcRenderer.on('knowledge:youtube-video-updated', handleVideoUpdated);
         window.ipcRenderer.on('knowledge:new-youtube-video', handleNewVideo);
+        window.ipcRenderer.on('knowledge:changed', handleKnowledgeChanged);
+        window.ipcRenderer.on('knowledge:catalog-updated', handleKnowledgeChanged);
 
         return () => {
             window.ipcRenderer.off('knowledge:youtube-video-updated', handleVideoUpdated);
             window.ipcRenderer.off('knowledge:new-youtube-video', handleNewVideo);
+            window.ipcRenderer.off('knowledge:changed', handleKnowledgeChanged);
+            window.ipcRenderer.off('knowledge:catalog-updated', handleKnowledgeChanged);
         };
-    }, [loadYoutubeVideos, selectedVideo?.id]);
+    }, [loadAllKnowledge, loadYoutubeVideos, refreshIndexStatus]);
 
     useEffect(() => {
         const handleDocsUpdated = () => {
-            void loadDocumentSources();
+            void Promise.all([refreshIndexStatus(), loadDocumentSources()]);
         };
         window.ipcRenderer.on('knowledge:docs-updated', handleDocsUpdated);
         return () => {
             window.ipcRenderer.off('knowledge:docs-updated', handleDocsUpdated);
         };
-    }, [loadDocumentSources]);
+    }, [loadDocumentSources, refreshIndexStatus]);
 
     // Aggregate tags from notes
     const allTags = useMemo(() => {
@@ -739,7 +836,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 ? note.captureKind === 'wechat-article'
                     ? 'wechat-article'
                     : 'link-article'
-                : note.video
+                : (note.captureKind === 'xhs-video' || note.video)
                     ? 'xhs-video'
                     : 'xhs-image';
 
@@ -754,7 +851,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     note.author,
                     note.siteName,
                     note.excerpt,
-                    note.content,
                     note.sourceUrl,
                     ...(note.tags || []),
                 ].join('\n').toLowerCase(),
@@ -796,14 +892,17 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             'xhs-video': 0,
             'link-article': 0,
             'wechat-article': 0,
-            'youtube': 0,
-            'docs': 0,
+            'youtube': Number(kindCounts['youtube-video'] || 0),
+            'docs': Number(kindCounts['document-source'] || 0),
         };
         knowledgeItems.forEach((item) => {
+            if (item.kind === 'youtube' || item.kind === 'docs') {
+                return;
+            }
             counts[item.kind] += 1;
         });
         return [
-            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
+            { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
             { key: 'link-article' as const, label: '链接文章', count: counts['link-article'] },
@@ -811,14 +910,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
             { key: 'docs' as const, label: '文档', count: counts.docs },
         ].filter((item) => item.key === 'all' || item.count > 0);
-    }, [knowledgeItems]);
+    }, [kindCounts, knowledgeItems]);
 
     const youtubeSummaryPendingCount = useMemo(() => {
         return youtubeVideos.filter((video) => video.hasSubtitle && !String(video.summary || '').trim()).length;
     }, [youtubeVideos]);
 
     const filteredKnowledgeItems = useMemo(() => {
-        const query = searchQuery.trim().toLowerCase();
         const filtered = knowledgeItems.filter((item) => {
             if (selectedTypeFilter !== 'all' && item.kind !== selectedTypeFilter) {
                 return false;
@@ -826,10 +924,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             if (selectedTag && !item.tags.includes(selectedTag)) {
                 return false;
             }
-            if (!query) {
-                return true;
-            }
-            return item.searchText.includes(query);
+            return true;
         });
 
         if (similarityOrder.size > 0) {
@@ -907,27 +1002,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
     useEffect(() => {
         const handleNoteUpdated = (_event: unknown, data: { noteId: string; hasTranscript?: boolean; transcriptionStatus?: 'processing' | 'completed' | 'failed' }) => {
-            setNotes(prev => prev.map(note => {
-                if (note.id !== data.noteId) return note;
-                return {
-                    ...note,
-                    transcript: data.hasTranscript ? note.transcript : note.transcript,
-                    transcriptionStatus: data.transcriptionStatus || note.transcriptionStatus,
-                };
-            }));
-            if (selectedNote?.id === data.noteId && data.transcriptionStatus) {
-                setSelectedNote(prev => prev && prev.id === data.noteId
-                    ? { ...prev, transcriptionStatus: data.transcriptionStatus }
-                    : prev
-                );
-            }
-            void loadNotes();
+            void Promise.all([refreshIndexStatus(), loadNotes()]);
         };
         window.ipcRenderer.on('knowledge:note-updated', handleNoteUpdated);
         return () => {
             window.ipcRenderer.off('knowledge:note-updated', handleNoteUpdated);
         };
-    }, [loadNotes, selectedNote]);
+    }, [loadNotes, refreshIndexStatus]);
 
     const handleDeleteNote = async (noteId: string) => {
         if (!(await appConfirm('确定要删除这篇笔记吗？', { title: '删除笔记', confirmLabel: '删除', tone: 'danger' }))) return;
@@ -950,11 +1031,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setSelectedNote(prev => prev && prev.id === noteId ? { ...prev, transcriptionStatus: 'processing' } : prev);
             const res = await window.ipcRenderer.knowledge.transcribe(noteId) as { success: boolean; transcript?: string; error?: string };
             if (res.success) {
-                await loadNotes();
-                const updated = await window.ipcRenderer.knowledge.listNotes<Note>();
-                setNotes(updated || []);
-                const refreshed = (updated || []).find(n => n.id === noteId) || null;
-                setSelectedNote(refreshed);
+                await Promise.all([refreshIndexStatus(), loadNotes()]);
+                const refreshed = await loadKnowledgeDetail(noteId, 'redbook-note');
+                setSelectedNote((refreshed as unknown as Note) || null);
                 setShowTranscript(true);
             } else {
                 setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'failed' } : note));
@@ -1580,6 +1659,15 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                 </span>
                                             </button>
                                         )}
+
+                                        <button
+                                            onClick={() => void window.ipcRenderer.knowledge.rebuildCatalog().then(() => refreshIndexStatus())}
+                                            className="inline-flex items-center gap-1.5 h-9 px-3.5 text-[12px] font-bold rounded-xl bg-black/[0.04] text-text-primary hover:bg-black/[0.08] transition-all active:scale-95"
+                                            title="重建知识索引"
+                                        >
+                                            <RefreshCw className="w-3.5 h-3.5" />
+                                            重建索引
+                                        </button>
                                         
                                         <div className="flex items-center gap-1 bg-text-primary p-1 rounded-xl shadow-lg shadow-text-primary/10">
                                             <button
@@ -1641,6 +1729,22 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     </span>
                                 </button>
                             ))}
+                        </div>
+                    )}
+
+                    {!isEmbedded && (
+                        <div className="flex items-center gap-3 text-[11px] font-medium text-text-tertiary/70">
+                            <span>已索引 {indexStatus.indexedCount}</span>
+                            {indexStatus.isBuilding && (
+                                <span className="inline-flex items-center gap-1.5 text-amber-600">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    索引构建中
+                                </span>
+                            )}
+                            {indexStatus.pendingCount > 0 && <span>待处理 {indexStatus.pendingCount}</span>}
+                            {indexStatus.failedCount > 0 && <span className="text-red-500">失败 {indexStatus.failedCount}</span>}
+                            {indexStatus.lastIndexedAt && <span>最近更新 {new Date(indexStatus.lastIndexedAt).toLocaleString()}</span>}
+                            {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}
                         </div>
                     )}
                 </div>
@@ -1722,7 +1826,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         return (
                                             <button
                                                 key={item.id}
-                                                onClick={() => setSelectedVideo(video)}
+                                                onClick={() => void openVideoDetail(video)}
                                                 className={clsx(
                                                     'group mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
                                                     isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
@@ -1803,7 +1907,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     return (
                                         <button
                                             key={item.id}
-                                            onClick={() => setSelectedNote(note)}
+                                            onClick={() => void openNoteDetail(note)}
                                             className={clsx(
                                                 'mb-4 break-inside-avoid w-full text-left bg-white border border-black/[0.04] rounded-[20px] shadow-sm transition-all duration-300',
                                                 isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
@@ -1979,6 +2083,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         </button>
                                     );
                                 })}
+                            </div>
+                        )}
+
+                        {nextCursor && filteredKnowledgeItems.length > 0 && (
+                            <div className="flex justify-center pt-2">
+                                <button
+                                    onClick={() => void loadMoreKnowledge()}
+                                    disabled={isLoadingMore}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-4 py-2 text-[12px] font-bold text-text-primary shadow-sm hover:bg-black/[0.02] disabled:opacity-50"
+                                >
+                                    {isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                    {isLoadingMore ? '加载中...' : '加载更多'}
+                                </button>
                             </div>
                         )}
 

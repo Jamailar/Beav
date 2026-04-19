@@ -21,6 +21,11 @@ const explicitCommandRoutes: Record<string, string> = {
   'knowledge:list': 'knowledge_list',
   'knowledge:list-youtube': 'knowledge_list_youtube',
   'knowledge:docs:list': 'knowledge_docs_list',
+  'knowledge:list-page': 'knowledge_list_page',
+  'knowledge:get-item-detail': 'knowledge_get_item_detail',
+  'knowledge:get-index-status': 'knowledge_get_index_status',
+  'knowledge:rebuild-catalog': 'knowledge_rebuild_catalog',
+  'knowledge:open-index-root': 'knowledge_open_index_root',
   'redclaw:runner-status': 'redclaw_runner_status',
 };
 
@@ -155,8 +160,23 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'cover:list') {
     return { success: true, assets: [] };
   }
-  if (channel === 'knowledge:list' || channel === 'knowledge:list-youtube' || channel === 'knowledge:docs:list') {
+  if (
+    channel === 'knowledge:list'
+    || channel === 'knowledge:list-youtube'
+    || channel === 'knowledge:docs:list'
+    || channel === 'knowledge:list-page'
+  ) {
     return [];
+  }
+  if (channel === 'knowledge:get-index-status') {
+    return {
+      indexedCount: 0,
+      pendingCount: 0,
+      failedCount: 0,
+      lastIndexedAt: null,
+      isBuilding: false,
+      lastError: null,
+    };
   }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
     return [];
@@ -398,6 +418,59 @@ function createIpcRenderer() {
           normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
         },
       ),
+      listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => invokeCommandGuarded<T>(
+        'knowledge_list_page',
+        { payload: payload || {} },
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list-page',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            return {
+              items: Array.isArray(raw.items) ? raw.items : [],
+              nextCursor: typeof raw.nextCursor === 'string' ? raw.nextCursor : null,
+              total: typeof raw.total === 'number' ? raw.total : 0,
+              kindCounts: (raw.kindCounts && typeof raw.kindCounts === 'object') ? raw.kindCounts : {},
+            } as T;
+          },
+        },
+      ),
+      getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => invokeCommandGuarded<T | null>(
+        'knowledge_get_item_detail',
+        { payload },
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:get-item-detail',
+          normalize: (value) => (value && typeof value === 'object') ? value as T : null,
+        },
+      ),
+      getIndexStatus: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
+        'knowledge_get_index_status',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallbackChannel: 'knowledge:get-index-status',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            return {
+              indexedCount: typeof raw.indexedCount === 'number' ? raw.indexedCount : 0,
+              pendingCount: typeof raw.pendingCount === 'number' ? raw.pendingCount : 0,
+              failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
+              lastIndexedAt: typeof raw.lastIndexedAt === 'string' ? raw.lastIndexedAt : null,
+              isBuilding: raw.isBuilding === true,
+              lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+            } as T;
+          },
+        },
+      ),
+      rebuildCatalog: () => invokeCommandGuarded('knowledge_rebuild_catalog', undefined, {
+        timeoutMs: 1800,
+        fallbackChannel: 'knowledge:rebuild-catalog',
+      }),
+      openIndexRoot: () => invokeCommandGuarded('knowledge_open_index_root', undefined, {
+        timeoutMs: 1800,
+        fallbackChannel: 'knowledge:open-index-root',
+      }),
       deleteNote: (noteId: string) => invokeChannel('knowledge:delete', noteId),
       transcribe: (noteId: string) => invokeChannel('knowledge:transcribe', noteId),
       deleteYoutube: (videoId: string) => invokeChannel('knowledge:delete-youtube', videoId),

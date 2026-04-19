@@ -258,6 +258,7 @@ fn refresh_knowledge_projection_and_emit(
 ) -> Result<(), String> {
     refresh_knowledge_projection(state)?;
     if let Some(app) = app {
+        crate::knowledge_index::jobs::schedule_rebuild(app, "knowledge-mutation");
         let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
         if let Some((name, payload)) = event {
             let _ = app.emit(name, payload);

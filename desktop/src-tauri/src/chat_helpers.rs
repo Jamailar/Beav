@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    decode_base64_bytes, generate_chat_response, invoke_structured_chat_by_protocol,
+    configure_background_command, decode_base64_bytes, generate_chat_response,
+    invoke_structured_chat_by_protocol,
     load_redbox_prompt_or_embedded, markdown_to_html, now_ms, payload_field, payload_string,
     render_redbox_prompt, resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json,
     url_encode_component, AdvisorRecord, WechatOfficialBindingRecord,
@@ -170,7 +171,9 @@ pub(crate) fn upload_wechat_thumb_media(
         "https://api.weixin.qq.com/cgi-bin/material/add_material?access_token={}&type=image",
         url_encode_component(access_token)
     );
-    let output = std::process::Command::new("curl")
+    let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
+    let output = command
         .arg("-sS")
         .arg("-F")
         .arg(format!("media=@{}", image_path.display()))

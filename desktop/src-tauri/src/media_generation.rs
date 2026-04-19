@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::{
-    decode_base64_bytes, normalize_base_url, payload_field, payload_string, run_curl_bytes,
-    run_curl_json, run_curl_json_response,
+    configure_background_command, decode_base64_bytes, normalize_base_url, payload_field,
+    payload_string, run_curl_bytes, run_curl_json, run_curl_json_response,
 };
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
@@ -506,6 +506,7 @@ fn run_curl_form_json(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
     command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
     if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
         command

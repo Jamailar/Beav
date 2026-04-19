@@ -1,12 +1,30 @@
 use crate::knowledge;
+use crate::knowledge_index;
+use crate::knowledge_index::catalog::KnowledgeCatalogSummary;
 use crate::persistence::{
-    ensure_store_hydrated_for_cover, ensure_store_hydrated_for_knowledge,
-    ensure_store_hydrated_for_media, with_store, with_store_mut,
+    ensure_store_hydrated_for_cover, ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, State};
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeListPageRequest {
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+    pub kind: Option<String>,
+    pub query: Option<String>,
+    pub sort: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeItemDetailRequest {
+    pub item_id: String,
+    pub kind: String,
+}
 
 fn builtin_animation_elements() -> Vec<Value> {
     vec![json!({
@@ -91,31 +109,156 @@ pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Re
     )
 }
 
-pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_knowledge(state);
-    with_store(state, |store| {
-        let mut items = store.knowledge_notes.clone();
-        items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(json!(items))
+fn summary_to_legacy_note(summary: &KnowledgeCatalogSummary) -> Value {
+    json!({
+        "id": summary.item_id,
+        "type": summary.note_type,
+        "sourceUrl": summary.source_url,
+        "title": summary.title,
+        "author": summary.author,
+        "content": "",
+        "excerpt": summary.preview_text,
+        "siteName": summary.site_name,
+        "captureKind": summary.capture_kind,
+        "htmlFile": Value::Null,
+        "htmlFileUrl": Value::Null,
+        "images": [],
+        "tags": summary.tags,
+        "cover": summary.cover_url,
+        "video": if summary.has_video { summary.cover_url.clone() } else { None },
+        "videoUrl": Value::Null,
+        "transcript": Value::Null,
+        "transcriptionStatus": summary.status,
+        "stats": { "likes": 0, "collects": Value::Null },
+        "createdAt": summary.created_at,
+        "folderPath": summary.folder_path,
     })
+}
+
+fn summary_to_legacy_video(summary: &KnowledgeCatalogSummary) -> Value {
+    json!({
+        "id": summary.item_id,
+        "videoId": summary.item_id,
+        "videoUrl": summary.source_url,
+        "title": summary.title,
+        "originalTitle": Value::Null,
+        "description": summary.preview_text,
+        "summary": summary.preview_text,
+        "thumbnailUrl": summary.thumbnail_url,
+        "hasSubtitle": summary.has_transcript,
+        "subtitleContent": Value::Null,
+        "status": summary.status,
+        "createdAt": summary.created_at,
+        "folderPath": summary.folder_path,
+    })
+}
+
+fn summary_to_legacy_doc(summary: &KnowledgeCatalogSummary) -> Value {
+    json!({
+        "id": summary.item_id,
+        "kind": "tracked-folder",
+        "name": summary.title,
+        "rootPath": summary.root_path,
+        "locked": false,
+        "indexing": summary.status.as_deref() == Some("indexing"),
+        "indexError": Value::Null,
+        "fileCount": summary.file_count,
+        "sampleFiles": summary.sample_files,
+        "createdAt": summary.created_at,
+        "updatedAt": summary.updated_at,
+    })
+}
+
+fn load_note_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value, String> {
+    let root = knowledge_root(state)?;
+    let items = load_knowledge_notes_from_fs(&root);
+    let item = items
+        .into_iter()
+        .find(|entry| entry.id == item_id)
+        .ok_or_else(|| "未找到知识笔记".to_string())?;
+    serde_json::to_value(item).map_err(|error| error.to_string())
+}
+
+fn load_youtube_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value, String> {
+    let root = knowledge_root(state)?;
+    let items = load_youtube_videos_from_fs(&root);
+    let item = items
+        .into_iter()
+        .find(|entry| entry.id == item_id)
+        .ok_or_else(|| "未找到 YouTube 视频".to_string())?;
+    serde_json::to_value(item).map_err(|error| error.to_string())
+}
+
+fn load_document_source_detail(state: &State<'_, AppState>, item_id: &str) -> Result<Value, String> {
+    let root = knowledge_root(state)?;
+    let items = load_document_sources_from_fs(&root);
+    let item = items
+        .into_iter()
+        .find(|entry| entry.id == item_id)
+        .ok_or_else(|| "未找到文档源".to_string())?;
+    serde_json::to_value(item).map_err(|error| error.to_string())
+}
+
+pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let page = knowledge_index::catalog::list_page(state, None, 200, Some("redbook-note"), None, None)?;
+    Ok(Value::Array(
+        page.items
+            .iter()
+            .map(summary_to_legacy_note)
+            .collect::<Vec<_>>(),
+    ))
 }
 
 pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_knowledge(state);
-    with_store(state, |store| {
-        let mut items = store.youtube_videos.clone();
-        items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(json!(items))
-    })
+    let page = knowledge_index::catalog::list_page(state, None, 200, Some("youtube-video"), None, None)?;
+    Ok(Value::Array(
+        page.items
+            .iter()
+            .map(summary_to_legacy_video)
+            .collect::<Vec<_>>(),
+    ))
 }
 
 pub(crate) fn knowledge_docs_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    let _ = ensure_store_hydrated_for_knowledge(state);
-    with_store(state, |store| {
-        let mut items = store.document_sources.clone();
-        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        Ok(json!(items))
-    })
+    let page =
+        knowledge_index::catalog::list_page(state, None, 200, Some("document-source"), None, None)?;
+    Ok(Value::Array(
+        page.items
+            .iter()
+            .map(summary_to_legacy_doc)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+pub(crate) fn knowledge_list_page_value(
+    state: &State<'_, AppState>,
+    payload: &KnowledgeListPageRequest,
+) -> Result<Value, String> {
+    let page = knowledge_index::catalog::list_page(
+        state,
+        payload.cursor.as_deref(),
+        payload.limit.unwrap_or(60),
+        payload.kind.as_deref(),
+        payload.query.as_deref(),
+        payload.sort.as_deref(),
+    )?;
+    serde_json::to_value(page).map_err(|error| error.to_string())
+}
+
+pub(crate) fn knowledge_get_item_detail_value(
+    state: &State<'_, AppState>,
+    payload: &KnowledgeItemDetailRequest,
+) -> Result<Value, String> {
+    match payload.kind.as_str() {
+        "redbook-note" => load_note_detail(state, &payload.item_id),
+        "youtube-video" => load_youtube_detail(state, &payload.item_id),
+        "document-source" => load_document_source_detail(state, &payload.item_id),
+        other => Err(format!("未知知识项类型: {other}")),
+    }
+}
+
+pub(crate) fn knowledge_get_index_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    serde_json::to_value(knowledge_index::index_status(state)?).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -133,6 +276,45 @@ pub async fn knowledge_docs_list(state: State<'_, AppState>) -> Result<Value, St
     knowledge_docs_list_value(&state)
 }
 
+#[tauri::command]
+pub async fn knowledge_list_page(
+    state: State<'_, AppState>,
+    payload: KnowledgeListPageRequest,
+) -> Result<Value, String> {
+    knowledge_list_page_value(&state, &payload)
+}
+
+#[tauri::command]
+pub async fn knowledge_get_item_detail(
+    state: State<'_, AppState>,
+    payload: KnowledgeItemDetailRequest,
+) -> Result<Value, String> {
+    knowledge_get_item_detail_value(&state, &payload)
+}
+
+#[tauri::command]
+pub async fn knowledge_get_index_status(state: State<'_, AppState>) -> Result<Value, String> {
+    knowledge_get_index_status_value(&state)
+}
+
+#[tauri::command]
+pub async fn knowledge_rebuild_catalog(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let _ = knowledge_index::jobs::ensure_catalog_ready_async(&app, &state, "manual-rebuild");
+    knowledge_index::jobs::schedule_rebuild(&app, "manual-rebuild");
+    Ok(json!({ "success": true }))
+}
+
+#[tauri::command]
+pub async fn knowledge_open_index_root(state: State<'_, AppState>) -> Result<Value, String> {
+    let root = knowledge_index::catalog_root(&state)?;
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    open::that(&root).map_err(|error| error.to_string())?;
+    Ok(json!({ "success": true, "path": root.display().to_string() }))
+}
+
 pub fn handle_library_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -144,6 +326,11 @@ pub fn handle_library_channel(
         "knowledge:list"
             | "knowledge:list-youtube"
             | "knowledge:docs:list"
+            | "knowledge:list-page"
+            | "knowledge:get-item-detail"
+            | "knowledge:get-index-status"
+            | "knowledge:rebuild-catalog"
+            | "knowledge:open-index-root"
             | "knowledge:health"
             | "knowledge:ingest-entry"
             | "knowledge:ingest-document-source"
@@ -182,6 +369,28 @@ pub fn handle_library_channel(
             "knowledge:list" => knowledge_list_value(state),
             "knowledge:list-youtube" => knowledge_list_youtube_value(state),
             "knowledge:docs:list" => knowledge_docs_list_value(state),
+            "knowledge:list-page" => {
+                let request: KnowledgeListPageRequest = serde_json::from_value(payload.clone())
+                    .map_err(|error| format!("knowledge list page payload 无效: {error}"))?;
+                knowledge_list_page_value(state, &request)
+            }
+            "knowledge:get-item-detail" => {
+                let request: KnowledgeItemDetailRequest = serde_json::from_value(payload.clone())
+                    .map_err(|error| format!("knowledge detail payload 无效: {error}"))?;
+                knowledge_get_item_detail_value(state, &request)
+            }
+            "knowledge:get-index-status" => knowledge_get_index_status_value(state),
+            "knowledge:rebuild-catalog" => {
+                let _ = knowledge_index::jobs::ensure_catalog_ready_async(app, state, "manual-rebuild");
+                knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
+                Ok(json!({ "success": true }))
+            }
+            "knowledge:open-index-root" => {
+                let root = knowledge_index::catalog_root(state)?;
+                std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+                open::that(&root).map_err(|error| error.to_string())?;
+                Ok(json!({ "success": true, "path": root.display().to_string() }))
+            }
             "knowledge:health" => knowledge::knowledge_http_health(
                 state,
                 knowledge::knowledge_http_body_limit(),

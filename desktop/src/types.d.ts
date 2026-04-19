@@ -863,6 +863,11 @@ declare global {
         listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
         listYoutube: <T = Record<string, unknown>>() => Promise<Array<T>>;
         listDocs: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => Promise<T>;
+        getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => Promise<T | null>;
+        getIndexStatus: <T = Record<string, unknown>>() => Promise<T>;
+        rebuildCatalog: () => Promise<unknown>;
+        openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
