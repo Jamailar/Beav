@@ -382,8 +382,10 @@ type PackageState = {
 type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
-const RICHPOST_CARD_PREVIEW_WIDTH = 360;
-const RICHPOST_CARD_PREVIEW_HEIGHT = 480;
+const RICHPOST_CARD_PREVIEW_WIDTH = 540;
+const RICHPOST_CARD_PREVIEW_HEIGHT = 720;
+const RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH = 1080;
+const RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT = 1440;
 const RICHPOST_CARD_PREVIEW_DEBOUNCE_MS = 700;
 
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
@@ -1626,6 +1628,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             const dataUrl = await renderRichpostHtmlToPng(html, targetFilePath, {
                 width: RICHPOST_CARD_PREVIEW_WIDTH,
                 height: RICHPOST_CARD_PREVIEW_HEIGHT,
+                viewportWidth: RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH,
+                viewportHeight: RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT,
             });
             const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
             const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-card-preview', {

@@ -73,6 +73,8 @@ export function injectRichpostPreviewScale(
 type RichpostPngRenderOptions = {
   width?: number;
   height?: number;
+  viewportWidth?: number;
+  viewportHeight?: number;
 };
 
 async function waitForIframeContentReady(frame: HTMLIFrameElement): Promise<Document> {
@@ -315,23 +317,23 @@ export async function renderRichpostPageUrlToPng(
   if (!String(sourceUrl || '').trim()) {
     throw new Error('图文预览页地址为空');
   }
-  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
-  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
+  const viewportWidth = Math.max(1, Math.round(Number(options?.viewportWidth) || 1080));
+  const viewportHeight = Math.max(1, Math.round(Number(options?.viewportHeight) || 1440));
   const frame = document.createElement('iframe');
   frame.src = sourceUrl;
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
   frame.style.position = 'fixed';
   frame.style.left = '-20000px';
   frame.style.top = '0';
-  frame.style.width = `${width}px`;
-  frame.style.height = `${height}px`;
+  frame.style.width = `${viewportWidth}px`;
+  frame.style.height = `${viewportHeight}px`;
   frame.style.border = '0';
   frame.style.opacity = '0';
   frame.style.pointerEvents = 'none';
   frame.style.background = '#ffffff';
   document.body.appendChild(frame);
   try {
-    return await renderRichpostFrameToPng(frame, { width, height });
+    return await renderRichpostFrameToPng(frame, options);
   } finally {
     frame.remove();
   }
@@ -343,23 +345,23 @@ export async function renderRichpostHtmlToPng(
   options?: RichpostPngRenderOptions
 ): Promise<string> {
   void pageId;
-  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
-  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
+  const viewportWidth = Math.max(1, Math.round(Number(options?.viewportWidth) || 1080));
+  const viewportHeight = Math.max(1, Math.round(Number(options?.viewportHeight) || 1440));
   const frame = document.createElement('iframe');
   frame.srcdoc = materializeRichpostBackgroundInHtml(html);
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
   frame.style.position = 'fixed';
   frame.style.left = '-20000px';
   frame.style.top = '0';
-  frame.style.width = `${width}px`;
-  frame.style.height = `${height}px`;
+  frame.style.width = `${viewportWidth}px`;
+  frame.style.height = `${viewportHeight}px`;
   frame.style.border = '0';
   frame.style.opacity = '0';
   frame.style.pointerEvents = 'none';
   frame.style.background = '#ffffff';
   document.body.appendChild(frame);
   try {
-    return await renderRichpostFrameToPng(frame, { width, height });
+    return await renderRichpostFrameToPng(frame, options);
   } finally {
     frame.remove();
   }
