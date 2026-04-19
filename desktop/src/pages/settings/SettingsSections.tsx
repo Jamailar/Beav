@@ -213,6 +213,7 @@ interface GeneralSettingsSectionProps {
     setFormData: Dispatch<SetStateAction<any>>;
     handlePickWorkspaceDir: () => Promise<void>;
     handleResetWorkspaceDir: () => void;
+    handleOpenKnowledgeApiGuide: () => Promise<void>;
     recentDebugLogs: string[];
     isDebugLogsLoading: boolean;
     handleRefreshDebugLogs: () => Promise<void>;
@@ -243,12 +244,15 @@ function GeneralSettingsSectionInner({
     setFormData,
     handlePickWorkspaceDir,
     handleResetWorkspaceDir,
+    handleOpenKnowledgeApiGuide,
     recentDebugLogs,
     isDebugLogsLoading,
     handleRefreshDebugLogs,
     handleOpenDebugLogDir,
     handleVersionTap,
 }: GeneralSettingsSectionProps) {
+    const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
+
     return (
         <section className="space-y-6">
             <h2 className="text-lg font-medium text-text-primary mb-6">常规设置</h2>
@@ -325,48 +329,78 @@ function GeneralSettingsSectionInner({
                 </p>
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div>
-                    <h3 className="text-sm font-medium text-text-primary">全局网络代理</h3>
-                    <p className="text-xs text-text-tertiary mt-1">
-                        用于扫码登录、远程请求和需要走代理的外部连接。
-                    </p>
-                </div>
-                <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-text-secondary">启用全局代理</label>
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isProxySettingsExpanded && 'border-accent-primary/30',
+            )}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={() => setIsProxySettingsExpanded((prev) => !prev)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        aria-expanded={isProxySettingsExpanded}
+                        aria-controls="general-proxy-settings-panel"
+                    >
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                            <ChevronDown className={clsx('h-4 w-4 transition-transform', isProxySettingsExpanded ? 'rotate-0' : '-rotate-90')} />
+                        </span>
+                        <h3 className="truncate text-sm font-medium text-text-primary">全局网络代理</h3>
+                    </button>
                     <button
                         type="button"
                         onClick={() => setFormData((prev: any) => ({ ...prev, proxy_enabled: !prev.proxy_enabled }))}
-                        className="ui-switch-track"
+                        className="ui-switch-track shrink-0"
                         data-size="lg"
                         data-state={formData.proxy_enabled ? 'on' : 'off'}
+                        aria-label="启用全局代理"
                     >
                         <span className="ui-switch-thumb" />
                     </button>
                 </div>
-                <div>
-                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">代理地址</label>
-                    <input
-                        type="text"
-                        value={formData.proxy_url}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
-                        placeholder="http://127.0.0.1:7890"
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                    />
+
+                {isProxySettingsExpanded && (
+                    <div id="general-proxy-settings-panel" className="space-y-4 border-t border-border/70 px-4 py-4">
+                        <p className="text-xs text-text-tertiary">
+                            用于扫码登录、远程请求和需要走代理的外部连接。
+                        </p>
+                        <div>
+                            <label className="mb-1.5 block text-xs font-medium text-text-secondary">代理地址</label>
+                            <input
+                                type="text"
+                                value={formData.proxy_url}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
+                                placeholder="http://127.0.0.1:7890"
+                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="mb-1.5 block text-xs font-medium text-text-secondary">直连白名单</label>
+                            <input
+                                type="text"
+                                value={formData.proxy_bypass}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
+                                placeholder="localhost,127.0.0.1,::1"
+                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                            />
+                        </div>
+                        <p className="text-[10px] text-text-tertiary">
+                            默认保留 `localhost`、`127.0.0.1` 和 `::1` 直连。
+                        </p>
+                    </div>
+                )}
+            </div>
+
+            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-text-primary">知识库导入</span>
+                    <button
+                        type="button"
+                        onClick={() => void handleOpenKnowledgeApiGuide()}
+                        className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
+                    >
+                        打开 API 文档
+                    </button>
                 </div>
-                <div>
-                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">直连白名单</label>
-                    <input
-                        type="text"
-                        value={formData.proxy_bypass}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
-                        placeholder="localhost,127.0.0.1,::1"
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                    />
-                </div>
-                <p className="text-[10px] text-text-tertiary">
-                    默认保留 `localhost`、`127.0.0.1` 和 `::1` 直连。
-                </p>
             </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
@@ -374,7 +408,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            开启后会把主进程日志、聊天日志和工具诊断日志写入本地日志文件，便于追踪 RedClaw 工具调用失败。
+                            开启后会保留当前运行期间的主进程日志、聊天日志和工具诊断日志预览，便于追踪 RedClaw 工具调用失败。
                         </p>
                     </div>
                     <button
@@ -400,7 +434,7 @@ function GeneralSettingsSectionInner({
                         onClick={() => void handleOpenDebugLogDir()}
                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                     >
-                        打开日志目录
+                        打开数据目录
                     </button>
                 </div>
                 <div className="rounded-lg border border-border bg-surface-primary/60 p-3">
@@ -1606,7 +1640,6 @@ interface ToolsSettingsSectionProps {
     isPreparingBrowserPlugin: boolean;
     handlePrepareBrowserPlugin: () => Promise<void>;
     handleOpenBrowserPluginDir: () => Promise<void>;
-    handleOpenKnowledgeApiGuide: () => Promise<void>;
     isInstallingTool: boolean;
     installProgress: number;
     showDeveloperDiagnostics: boolean;
@@ -1706,7 +1739,6 @@ export function ToolsSettingsSection({
     isPreparingBrowserPlugin,
     handlePrepareBrowserPlugin,
     handleOpenBrowserPluginDir,
-    handleOpenKnowledgeApiGuide,
     isInstallingTool,
     installProgress,
     showDeveloperDiagnostics,
@@ -2098,27 +2130,6 @@ export function ToolsSettingsSection({
                         ))}
                     </div>
                 )}
-            </div>
-
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                <div className="flex items-start justify-between gap-3">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                            知识导入 API 文档
-                        </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            打开本地 HTML 文档页，里面包含开放 API 的请求格式、curl 示例，以及一键复制 Markdown 文档。
-                        </p>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => void handleOpenKnowledgeApiGuide()}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary"
-                    >
-                        <FolderOpen className="h-3 w-3" />
-                        打开文档
-                    </button>
-                </div>
             </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">

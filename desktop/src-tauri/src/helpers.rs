@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
+use url::Url;
 
 use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
 
@@ -164,8 +165,35 @@ pub(crate) fn package_richpost_page_plan_path(package_path: &Path) -> PathBuf {
     package_path.join("richpost-page-plan.json")
 }
 
-pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
+pub(crate) fn package_workspace_root_path(package_path: &Path) -> PathBuf {
+    let start = if package_path.is_dir() {
+        package_path
+    } else {
+        package_path.parent().unwrap_or(package_path)
+    };
+    for ancestor in start.ancestors() {
+        if ancestor
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value == "manuscripts")
+            .unwrap_or(false)
+        {
+            return ancestor.parent().unwrap_or(ancestor).to_path_buf();
+        }
+    }
+    start.parent().unwrap_or(start).to_path_buf()
+}
+
+pub(crate) fn legacy_package_richpost_themes_path(package_path: &Path) -> PathBuf {
     package_path.join("richpost-themes.json")
+}
+
+pub(crate) fn package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    package_workspace_root_path(package_path).join("themes")
+}
+
+pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join("richpost-themes.json")
 }
 
 pub(crate) fn package_richpost_masters_dir(package_path: &Path) -> PathBuf {
@@ -180,12 +208,20 @@ pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {
     package_path.join("pages")
 }
 
+pub(crate) fn package_richpost_preview_dir(package_path: &Path) -> PathBuf {
+    package_path.join("previews")
+}
+
 pub(crate) fn package_richpost_theme_backgrounds_dir(package_path: &Path) -> PathBuf {
-    package_path.join("theme-backgrounds")
+    package_richpost_theme_store_dir(package_path).join("richpost-theme-assets")
 }
 
 pub(crate) fn package_richpost_page_html_path(package_path: &Path, page_id: &str) -> PathBuf {
     package_richpost_pages_dir(package_path).join(format!("{page_id}.html"))
+}
+
+pub(crate) fn package_richpost_card_preview_image_path(package_path: &Path) -> PathBuf {
+    package_richpost_preview_dir(package_path).join("card-first-page.png")
 }
 
 pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
@@ -438,12 +474,18 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
     } else {
         Some(markdown_summary(&entry_content, 72))
     };
-    let (richpost_preview_file, richpost_preview_file_url, richpost_preview_updated_at) =
-        if draft_type == "richpost" {
-            resolve_richpost_first_page_preview(path)
-        } else {
-            (None, None, None)
-        };
+    let (
+        richpost_preview_file,
+        richpost_preview_file_url,
+        richpost_preview_updated_at,
+        richpost_preview_page_file,
+        richpost_preview_page_file_url,
+        richpost_preview_page_updated_at,
+    ) = if draft_type == "richpost" {
+        resolve_richpost_first_page_preview(path)
+    } else {
+        (None, None, None, None, None, None)
+    };
     FileNode {
         name: file_name.to_string(),
         path: relative,
@@ -457,6 +499,9 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
         richpost_preview_file,
         richpost_preview_file_url,
         richpost_preview_updated_at,
+        richpost_preview_page_file,
+        richpost_preview_page_file_url,
+        richpost_preview_page_updated_at,
     }
 }
 
@@ -499,6 +544,9 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         richpost_preview_file: None,
         richpost_preview_file_url: None,
         richpost_preview_updated_at: None,
+        richpost_preview_page_file: None,
+        richpost_preview_page_file_url: None,
+        richpost_preview_page_updated_at: None,
     }
 }
 
@@ -512,7 +560,14 @@ fn path_updated_at_ms(path: &Path) -> Option<i64> {
 
 fn resolve_richpost_first_page_preview(
     package_path: &Path,
-) -> (Option<String>, Option<String>, Option<i64>) {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+) {
     let page_plan = read_json_value_or(&package_richpost_page_plan_path(package_path), json!({}));
     let Some(page_id) = page_plan
         .get("pages")
@@ -527,16 +582,36 @@ fn resolve_richpost_first_page_preview(
             })
         })
     else {
-        return (None, None, None);
+        return (None, None, None, None, None, None);
     };
     let page_path = package_richpost_page_html_path(package_path, &page_id);
     if !page_path.exists() {
-        return (None, None, None);
+        return (None, None, None, None, None, None);
     }
+    let page_updated_at = path_updated_at_ms(&page_path);
+    let preview_path = package_richpost_card_preview_image_path(package_path);
+    let preview_updated_at = path_updated_at_ms(&preview_path);
+    let has_fresh_preview = preview_path.exists()
+        && preview_updated_at.unwrap_or_default() >= page_updated_at.unwrap_or_default();
     (
+        if has_fresh_preview {
+            Some(preview_path.display().to_string())
+        } else {
+            None
+        },
+        if has_fresh_preview {
+            Some(file_url_for_path(&preview_path))
+        } else {
+            None
+        },
+        if has_fresh_preview {
+            preview_updated_at
+        } else {
+            None
+        },
         Some(page_path.display().to_string()),
         Some(file_url_for_path(&page_path)),
-        path_updated_at_ms(&page_path),
+        page_updated_at,
     )
 }
 
@@ -615,6 +690,9 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 richpost_preview_file: None,
                 richpost_preview_file_url: None,
                 richpost_preview_updated_at: None,
+                richpost_preview_page_file: None,
+                richpost_preview_page_file_url: None,
+                richpost_preview_page_updated_at: None,
             });
         } else if file_type.is_file() {
             if file_name.ends_with(".md") {
@@ -633,6 +711,9 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                     richpost_preview_file: None,
                     richpost_preview_file_url: None,
                     richpost_preview_updated_at: None,
+                    richpost_preview_page_file: None,
+                    richpost_preview_page_file_url: None,
+                    richpost_preview_page_updated_at: None,
                 });
             }
         }
@@ -671,5 +752,7 @@ pub(crate) fn escape_html(value: &str) -> String {
 }
 
 pub(crate) fn file_url_for_path(path: &Path) -> String {
-    format!("file://{}", path.display())
+    Url::from_file_path(path)
+        .map(|url| url.into())
+        .unwrap_or_else(|_| format!("file://{}", path.display()))
 }

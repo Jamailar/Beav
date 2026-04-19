@@ -28,6 +28,12 @@ window.alert = ((message?: unknown) => {
   void appAlert(String(message ?? ''));
 }) as typeof window.alert;
 
+const disableNativeContextMenu = (event: MouseEvent) => {
+  event.preventDefault();
+};
+
+document.addEventListener('contextmenu', disableNativeContextMenu);
+
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);

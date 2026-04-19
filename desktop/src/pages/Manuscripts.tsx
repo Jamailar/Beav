@@ -27,6 +27,7 @@ import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
+import { renderRichpostPageUrlToPng } from '../components/manuscripts/richpostPreviewImage';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -77,6 +78,9 @@ type FileNode = {
     richpostPreviewFile?: string;
     richpostPreviewFileUrl?: string;
     richpostPreviewUpdatedAt?: number;
+    richpostPreviewPageFile?: string;
+    richpostPreviewPageFileUrl?: string;
+    richpostPreviewPageUpdatedAt?: number;
 };
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported' | 'external';
@@ -168,6 +172,31 @@ type FileCardMeta = {
     summary: string;
     richpostPreviewFileUrl?: string;
     richpostPreviewUpdatedAt?: number;
+    richpostPreviewPageFile?: string;
+    richpostPreviewPageFileUrl?: string;
+    richpostPreviewPageUpdatedAt?: number;
+};
+
+type RichpostPreviewOverride = {
+    fileUrl: string;
+    updatedAt: number;
+};
+
+type DraftCard = {
+    id: string;
+    kind: 'draft';
+    updatedAt: number;
+    createdAt: number;
+    file: FileNode;
+    meta?: FileCardMeta;
+    title: string;
+    summary: string;
+    draftType: CreateKind | 'unknown';
+    richpostPreviewFileUrl: string;
+    richpostPreviewUpdatedAt: number;
+    richpostPreviewPageFile: string;
+    richpostPreviewPageFileUrl: string;
+    richpostPreviewPageUpdatedAt: number;
 };
 
 type EditorDescriptor = {
@@ -431,7 +460,6 @@ const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
 const MANUSCRIPTS_INITIAL_ASSET_LIMIT = 0;
 const MANUSCRIPTS_ACTIVE_ASSET_LIMIT = 60;
 const MANUSCRIPTS_CARD_RENDER_LIMIT = 80;
-const RICHPOST_CARD_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox';
 
 const IMAGE_ASPECT_RATIO_OPTIONS = [
     { value: '3:4', label: '3:4' },
@@ -763,6 +791,9 @@ function collectFileMetaMap(nodes: FileNode[]): Record<string, FileCardMeta> {
                 summary: item.summary || '',
                 richpostPreviewFileUrl: item.richpostPreviewFileUrl || undefined,
                 richpostPreviewUpdatedAt: Number(item.richpostPreviewUpdatedAt || 0) || undefined,
+                richpostPreviewPageFile: item.richpostPreviewPageFile || undefined,
+                richpostPreviewPageFileUrl: item.richpostPreviewPageFileUrl || undefined,
+                richpostPreviewPageUpdatedAt: Number(item.richpostPreviewPageUpdatedAt || 0) || undefined,
             };
         }
     };
@@ -820,6 +851,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         filePath: '',
         title: '',
     });
+    const [richpostPreviewOverrides, setRichpostPreviewOverrides] = useState<Record<string, RichpostPreviewOverride>>({});
     const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
     const [workingId, setWorkingId] = useState<string | null>(null);
     const [pendingDeleteDraftPath, setPendingDeleteDraftPath] = useState<string | null>(null);
@@ -898,6 +930,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const editorBodyDirtyRef = useRef(false);
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
     const richpostTypographyRequestIdRef = useRef(0);
+    const richpostPreviewGenerationRef = useRef<Set<string>>(new Set());
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter !== 'drafts';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
@@ -2594,7 +2627,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
 
     const contentCards = useMemo(() => {
-        const draftCards = visibleDrafts.map((file) => {
+        const draftCards: DraftCard[] = visibleDrafts.map((file) => {
             const meta = fileMetaMap[file.path];
             const draftType = meta?.draftType || 'unknown';
             return {
@@ -2609,6 +2642,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 draftType,
                 richpostPreviewFileUrl: meta?.richpostPreviewFileUrl || '',
                 richpostPreviewUpdatedAt: Number(meta?.richpostPreviewUpdatedAt || 0) || 0,
+                richpostPreviewPageFile: meta?.richpostPreviewPageFile || '',
+                richpostPreviewPageFileUrl: meta?.richpostPreviewPageFileUrl || '',
+                richpostPreviewPageUpdatedAt: Number(meta?.richpostPreviewPageUpdatedAt || 0) || 0,
             };
         });
 
@@ -2638,6 +2674,59 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             .sort(compareCards)
             .slice(0, MANUSCRIPTS_CARD_RENDER_LIMIT);
     }, [fileMetaMap, visibleAssets, visibleDrafts]);
+
+    useEffect(() => {
+        if (mode !== 'gallery' || filter !== 'drafts') return;
+        const pendingCards = contentCards.filter((card): card is DraftCard => {
+            if (card.kind !== 'draft' || card.draftType !== 'richpost' || !card.richpostPreviewPageFileUrl) {
+                return false;
+            }
+            const override = richpostPreviewOverrides[card.file.path];
+            const overrideIsFresh = Boolean(
+                override?.fileUrl
+                && Number(override.updatedAt || 0) >= Number(card.richpostPreviewPageUpdatedAt || 0)
+            );
+            return !card.richpostPreviewFileUrl
+                && !overrideIsFresh
+                && !richpostPreviewGenerationRef.current.has(card.file.path);
+        });
+        if (pendingCards.length === 0) return;
+
+        let cancelled = false;
+        void (async () => {
+            for (const card of pendingCards) {
+                if (cancelled) return;
+                richpostPreviewGenerationRef.current.add(card.file.path);
+                try {
+                    const dataUrl = await renderRichpostPageUrlToPng(card.richpostPreviewPageFileUrl, card.id);
+                    const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+                    const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-card-preview', {
+                        filePath: card.file.path,
+                        dataBase64,
+                    }) as { success?: boolean; fileUrl?: string; updatedAt?: number; error?: string };
+                    if (!saved?.success || !saved.fileUrl) {
+                        throw new Error(saved?.error || '保存图文缩略图失败');
+                    }
+                    if (cancelled) return;
+                    setRichpostPreviewOverrides((prev) => ({
+                        ...prev,
+                        [card.file.path]: {
+                            fileUrl: saved.fileUrl || '',
+                            updatedAt: Number(saved.updatedAt || Date.now()) || Date.now(),
+                        },
+                    }));
+                } catch (error) {
+                    console.error('Failed to build richpost card preview:', error);
+                } finally {
+                    richpostPreviewGenerationRef.current.delete(card.file.path);
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [contentCards, filter, mode, richpostPreviewOverrides]);
 
     const bindableImageAssets = useMemo(
         () => assets.filter((asset) => inferAssetKind(asset) === 'image'),
@@ -3433,18 +3522,24 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                     ? Clapperboard
                                                     : card.draftType === 'audio'
                                                         ? FileAudio
-                                                    : card.draftType === 'richpost'
+                                                        : card.draftType === 'richpost'
                                                             ? FileImage
                                                             : FileText;
+                                                const previewOverride = richpostPreviewOverrides[card.file.path];
+                                                const previewOverrideIsFresh = Boolean(
+                                                    previewOverride?.fileUrl
+                                                    && Number(previewOverride.updatedAt || 0) >= Number(card.richpostPreviewPageUpdatedAt || 0)
+                                                );
                                                 const richpostPreviewSrc = card.draftType === 'richpost'
                                                     ? resolveAssetUrl(
-                                                        card.richpostPreviewFileUrl
-                                                            ? `${card.richpostPreviewFileUrl}${card.richpostPreviewFileUrl.includes('?') ? '&' : '?'}v=${card.richpostPreviewUpdatedAt || card.updatedAt || 0}`
+                                                        previewOverrideIsFresh
+                                                            ? `${previewOverride?.fileUrl || ''}${String(previewOverride?.fileUrl || '').includes('?') ? '&' : '?'}v=${previewOverride?.updatedAt || card.updatedAt || 0}`
+                                                            : card.richpostPreviewFileUrl
+                                                                ? `${card.richpostPreviewFileUrl}${card.richpostPreviewFileUrl.includes('?') ? '&' : '?'}v=${card.richpostPreviewUpdatedAt || card.updatedAt || 0}`
                                                             : ''
                                                     )
                                                     : '';
                                                 const showRichpostPreview = card.draftType === 'richpost'
-                                                    && Boolean(card.summary.trim())
                                                     && Boolean(richpostPreviewSrc);
                                                 const openDraftCard = () => {
                                                     void openDraftEditor(card.file.path);
@@ -3471,12 +3566,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                                     !showRichpostPreview && typeTheme.tile
                                                                 )}>
                                                                     {showRichpostPreview ? (
-                                                                        <iframe
-                                                                            title={`${card.title} 首屏预览`}
+                                                                        <img
                                                                             src={richpostPreviewSrc}
-                                                                            sandbox={RICHPOST_CARD_PREVIEW_SANDBOX}
+                                                                            alt={`${card.title} 首图缩略图`}
                                                                             loading="lazy"
-                                                                            className="h-full w-full pointer-events-none border-0 bg-white"
+                                                                            draggable={false}
+                                                                            className="h-full w-full select-none object-cover pointer-events-none bg-white"
                                                                         />
                                                                     ) : (
                                                                         <div className="absolute inset-0 p-4 flex flex-col">

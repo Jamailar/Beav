@@ -3,420 +3,1630 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RedBox Knowledge API Guide</title>
+    <title>RedBox 知识库导入指南</title>
     <style>
       :root {
-        --color-bg: #f8fafc;
-        --color-surface: #ffffff;
-        --color-border: rgba(0, 0, 0, 0.05);
-        --color-text-primary: #0f172a;
-        --color-text-secondary: #475569;
-        --color-text-tertiary: #94a3b8;
-        --color-accent: #3b82f6;
-        --color-accent-soft: rgba(59, 130, 246, 0.08);
-        --color-emerald: #10b981;
-        --color-rose: #f43f5e;
-        --font-sans: 'Inter', 'PingFang SC', system-ui, sans-serif;
-        --font-mono: 'JetBrains Mono', 'Menlo', 'ui-monospace', monospace;
+        color-scheme: light;
+        --bg: rgb(251 250 247);
+        --surface: rgb(255 255 255 / 0.92);
+        --surface-strong: rgb(247 243 236 / 0.96);
+        --surface-soft: rgb(255 255 255 / 0.7);
+        --border: rgb(231 224 212 / 0.95);
+        --border-strong: rgb(214 202 186 / 1);
+        --text: rgb(25 25 25);
+        --text-secondary: rgb(93 86 75);
+        --text-tertiary: rgb(141 134 123);
+        --accent: rgb(162 120 75);
+        --accent-hover: rgb(137 101 63);
+        --accent-soft: rgb(246 237 224);
+        --success: rgb(28 133 69);
+        --success-soft: rgb(228 244 233);
+        --warning: rgb(185 105 0);
+        --warning-soft: rgb(255 241 223);
+        --danger: rgb(196 62 62);
+        --danger-soft: rgb(255 233 232);
+        --shadow: 0 18px 40px rgb(42 30 17 / 0.07);
+        --shadow-soft: 0 8px 20px rgb(42 30 17 / 0.045);
+        --radius-xl: 22px;
+        --radius-lg: 16px;
+        --radius-md: 12px;
+        --radius-sm: 8px;
+        --font-sans: "SF Pro Text", "PingFang SC", "Noto Sans SC", "Segoe UI", Inter, system-ui, sans-serif;
+        --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       }
 
-      * { box-sizing: border-box; }
-      html { scroll-behavior: smooth; }
-      
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: rgb(17 15 13);
+          --surface: rgb(31 28 24 / 0.92);
+          --surface-strong: rgb(39 35 30 / 0.96);
+          --surface-soft: rgb(34 30 26 / 0.78);
+          --border: rgb(72 61 50 / 0.92);
+          --border-strong: rgb(94 78 63 / 1);
+          --text: rgb(237 231 223);
+          --text-secondary: rgb(187 175 161);
+          --text-tertiary: rgb(131 121 111);
+          --accent: rgb(203 159 113);
+          --accent-hover: rgb(223 181 138);
+          --accent-soft: rgb(69 53 37);
+          --success: rgb(109 205 142);
+          --success-soft: rgb(28 53 35);
+          --warning: rgb(255 181 84);
+          --warning-soft: rgb(71 49 24);
+          --danger: rgb(255 141 141);
+          --danger-soft: rgb(73 34 34);
+          --shadow: 0 28px 70px rgb(0 0 0 / 0.34);
+          --shadow-soft: 0 16px 36px rgb(0 0 0 / 0.24);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
       body {
         margin: 0;
-        padding: 0;
+        min-height: 100vh;
         font-family: var(--font-sans);
-        background-color: var(--color-bg);
-        color: var(--color-text-primary);
-        line-height: 1.5;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top right, rgb(162 120 75 / 0.12), transparent 28%),
+          radial-gradient(circle at top left, rgb(255 255 255 / 0.38), transparent 24%),
+          linear-gradient(180deg, rgb(255 255 255 / 0.26), transparent 22%),
+          var(--bg);
+        line-height: 1.55;
         -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
 
-      .container {
-        max-width: 1000px;
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        max-width: 1320px;
         margin: 0 auto;
-        padding: 48px 24px;
+        padding: 28px 20px 48px;
       }
 
-      header {
-        margin-bottom: 48px;
-        text-align: left;
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xl);
+        background:
+          linear-gradient(145deg, rgb(255 255 255 / 0.82), rgb(247 243 236 / 0.78)),
+          var(--surface);
+        box-shadow: var(--shadow);
+        padding: 24px;
       }
 
-      .badge {
+      @media (prefers-color-scheme: dark) {
+        .hero {
+          background:
+            linear-gradient(145deg, rgb(55 46 38 / 0.9), rgb(27 24 20 / 0.95)),
+            var(--surface);
+        }
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: auto -80px -110px auto;
+        width: 280px;
+        height: 280px;
+        border-radius: 999px;
+        background: radial-gradient(circle, rgb(162 120 75 / 0.18), transparent 70%);
+        pointer-events: none;
+      }
+
+      .hero-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .eyebrow {
         display: inline-flex;
         align-items: center;
-        padding: 4px 10px;
-        border-radius: 99px;
-        background: var(--color-accent-soft);
-        color: var(--color-accent);
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
         font-size: 11px;
-        font-weight: 800;
+        font-weight: 700;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin-bottom: 16px;
       }
 
-      h1 {
-        font-size: 32px;
-        font-weight: 900;
-        letter-spacing: -0.02em;
-        margin: 0 0 12px 0;
+      .hero h1 {
+        margin: 12px 0 8px;
+        font-size: clamp(26px, 4vw, 40px);
+        line-height: 1.05;
+        letter-spacing: -0.04em;
       }
 
-      .subtitle {
-        color: var(--color-text-secondary);
-        font-size: 16px;
-        max-width: 600px;
+      .hero p {
+        max-width: 860px;
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 14px;
       }
 
-      .grid {
-        display: grid;
-        grid-template-columns: 2fr 1fr;
-        gap: 24px;
-      }
-
-      section {
-        margin-bottom: 32px;
-      }
-
-      .card {
-        background: var(--color-surface);
-        border: 1px solid var(--color-border);
-        border-radius: 20px;
-        padding: 24px;
-        box-shadow: 0 4px 20px -12px rgba(0, 0, 0, 0.05);
-      }
-
-      h2 {
-        font-size: 18px;
-        font-weight: 800;
-        margin: 0 0 20px 0;
+      .hero-actions {
         display: flex;
-        align-items: center;
+        flex-wrap: wrap;
         gap: 8px;
       }
 
-      .base-url-box {
-        background: #0f172a;
-        color: #e2e8f0;
-        padding: 16px 20px;
-        border-radius: 14px;
-        font-family: var(--font-mono);
-        font-size: 14px;
+      .ghost-link,
+      .primary-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: 160ms ease;
+        text-decoration: none;
+      }
+
+      .primary-btn {
+        border: 1px solid rgb(162 120 75 / 0.22);
+        background: linear-gradient(180deg, rgb(162 120 75), rgb(137 101 63));
+        color: white;
+        padding: 10px 14px;
+        box-shadow: 0 10px 20px rgb(162 120 75 / 0.16);
+      }
+
+      .primary-btn:hover {
+        transform: translateY(-1px);
+        background: linear-gradient(180deg, rgb(171 128 82), rgb(145 107 67));
+      }
+
+      .ghost-link {
+        border: 1px solid var(--border);
+        background: rgb(255 255 255 / 0.55);
+        color: var(--text);
+        padding: 10px 14px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .ghost-link {
+          background: rgb(255 255 255 / 0.04);
+        }
+      }
+
+      .ghost-link:hover {
+        border-color: var(--border-strong);
+        background: var(--surface-strong);
+      }
+
+      .section-stack {
+        display: grid;
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .module {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        background: var(--surface);
+        box-shadow: var(--shadow-soft);
+        overflow: hidden;
+      }
+
+      .module > summary {
+        list-style: none;
+      }
+
+      .module > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .module-summary {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 20px;
-      }
-
-      .endpoint {
-        border: 1px solid var(--color-border);
-        border-radius: 16px;
-        margin-bottom: 16px;
-        overflow: hidden;
-        background: var(--color-bg);
-      }
-
-      .endpoint-header {
-        padding: 12px 16px;
-        display: flex;
-        align-items: center;
         gap: 12px;
-        border-bottom: 1px solid var(--color-border);
-        background: #fff;
+        padding: 14px 16px;
+        cursor: pointer;
+        transition: background-color 160ms ease;
+      }
+
+      .module-summary:hover {
+        background: var(--surface-strong);
+      }
+
+      .module-title-wrap {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .module-kicker {
+        display: inline-flex;
+        margin-bottom: 4px;
+        color: var(--text-tertiary);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .module-title {
+        margin: 0;
+        font-size: 17px;
+        letter-spacing: -0.03em;
+      }
+
+      .module-desc {
+        margin: 4px 0 0;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .module-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        color: var(--text-tertiary);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .module-chevron {
+        width: 10px;
+        height: 10px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(45deg);
+        transition: transform 160ms ease;
+      }
+
+      .module[open] .module-chevron {
+        transform: rotate(-135deg);
+      }
+
+      .module-body {
+        padding: 0 16px 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .base-url {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgb(24 21 18);
+        color: rgb(243 237 228);
+      }
+
+      .base-url code {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .hero-meta {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .meta-pill {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: var(--surface-strong);
+        border: 1px solid var(--border);
+      }
+
+      .meta-pill .label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--text-tertiary);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .meta-pill strong {
+        font-size: 15px;
+        letter-spacing: -0.02em;
+      }
+
+      .stack {
+        display: grid;
+        gap: 24px;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        background: var(--surface);
+        box-shadow: var(--shadow-soft);
+        overflow: hidden;
+      }
+
+      .panel-header {
+        padding: 24px 24px 0;
+      }
+
+      .panel-header h2 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        letter-spacing: -0.03em;
+      }
+
+      .panel-header p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      .panel-body {
+        padding: 24px;
+      }
+
+      .quick-facts {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .method-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .method-card {
+        padding: 18px;
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+      }
+
+      .method-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .method-card h3 {
+        margin: 14px 0 8px;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+      }
+
+      .method-card p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .step-row {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgb(255 255 255 / 0.46);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .step-row {
+          background: rgb(255 255 255 / 0.04);
+        }
+      }
+
+      .step-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .micro-note {
+        margin-top: 10px;
+        color: var(--text-tertiary);
+        font-size: 11px;
+      }
+
+      .api-section {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface-strong);
+      }
+
+      .api-section:first-of-type {
+        margin-top: 0;
+      }
+
+      .api-section h3 {
+        margin: 0 0 4px;
+        font-size: 15px;
+        letter-spacing: -0.02em;
+      }
+
+      .api-section p.section-desc {
+        margin: 0 0 10px;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .fact {
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+      }
+
+      .fact h3 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+
+      .fact p,
+      .fact li {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .fact ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .endpoint-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .endpoint-card {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface-strong);
+        overflow: hidden;
+      }
+
+      .endpoint-card > summary {
+        list-style: none;
+      }
+
+      .endpoint-card > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .endpoint-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 14px 16px;
+        cursor: pointer;
+      }
+
+      .endpoint-heading {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        flex: 1;
+      }
+
+      .endpoint-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-tertiary);
+        font-size: 11px;
+        font-weight: 700;
+        flex-shrink: 0;
       }
 
       .method {
-        font-family: var(--font-mono);
-        font-weight: 800;
-        font-size: 11px;
-        padding: 4px 8px;
-        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         min-width: 50px;
-        text-align: center;
+        padding: 5px 8px;
+        border-radius: 8px;
+        font-size: 10px;
+        font-weight: 800;
+        font-family: var(--font-mono);
+        letter-spacing: 0.08em;
       }
 
-      .method.post { background: var(--color-accent-soft); color: var(--color-accent); }
-      .method.get { background: rgba(16, 185, 129, 0.1); color: var(--color-emerald); }
+      .method.get {
+        background: var(--success-soft);
+        color: var(--success);
+      }
+
+      .method.post {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
 
       .path {
         font-family: var(--font-mono);
+        font-size: 12px;
         font-weight: 700;
-        font-size: 13px;
-        color: var(--color-text-primary);
+        overflow-wrap: anywhere;
       }
 
-      .endpoint-body {
-        padding: 16px;
+      .endpoint-inner {
+        padding: 14px 16px 16px;
+        border-top: 1px solid var(--border);
+      }
+
+      .endpoint-title {
+        margin: 0 0 4px;
+        font-size: 16px;
+        letter-spacing: -0.02em;
       }
 
       .endpoint-desc {
-        font-size: 13px;
-        color: var(--color-text-secondary);
+        margin: 0 0 12px;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
         margin-bottom: 12px;
-        font-weight: 500;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgb(255 255 255 / 0.55);
+        color: var(--text-secondary);
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .tag {
+          background: rgb(255 255 255 / 0.04);
+        }
+      }
+
+      .example-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .code-card {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        background: rgb(24 21 18);
+        color: rgb(243 237 228);
+      }
+
+      .code-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgb(255 255 255 / 0.08);
+        background: rgb(37 32 28);
+      }
+
+      .code-head span {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+      }
+
+      .copy-btn {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: rgb(255 255 255 / 0.08);
+        color: inherit;
+        padding: 6px 10px;
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: 160ms ease;
+      }
+
+      .copy-btn:hover {
+        background: rgb(255 255 255 / 0.14);
+      }
+
+      .copy-btn[data-tone="light"] {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .copy-btn[data-tone="light"]:hover {
+        background: rgb(236 224 206);
       }
 
       pre {
         margin: 0;
-        background: #1e293b;
-        color: #f1f5f9;
-        padding: 16px;
-        border-radius: 10px;
-        font-size: 12px;
+        padding: 12px;
+        overflow: auto;
         font-family: var(--font-mono);
-        overflow-x: auto;
-        line-height: 1.6;
+        font-size: 11px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
-      .side-card {
-        padding: 20px;
+      .mini-list {
+        display: grid;
+        gap: 8px;
       }
 
-      .side-card h3 {
-        font-size: 13px;
-        font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--color-text-tertiary);
-        margin: 0 0 16px 0;
+      .mini-item {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
       }
 
-      .list-item {
-        padding: 12px 0;
-        border-bottom: 1px solid var(--color-border);
-      }
-
-      .list-item:last-child { border: none; }
-
-      .list-title {
-        font-size: 13px;
-        font-weight: 700;
+      .mini-item strong {
+        display: block;
         margin-bottom: 4px;
-        color: var(--color-text-primary);
-      }
-
-      .list-desc {
         font-size: 12px;
-        color: var(--color-text-tertiary);
-        font-weight: 500;
       }
 
-      .copy-btn {
-        background: transparent;
-        border: none;
-        color: var(--color-accent);
-        font-family: var(--font-mono);
-        font-size: 11px;
+      .mini-item p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .markdown-box {
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+        padding: 12px;
+      }
+
+      .markdown-box p {
+        margin: 0 0 10px;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .notice {
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--warning-soft);
+        color: var(--warning);
+        border: 1px solid rgb(255 180 84 / 0.18);
+        font-size: 12px;
         font-weight: 700;
-        cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 6px;
-        transition: all 0.2s;
       }
 
-      .copy-btn:hover { background: var(--color-accent-soft); }
-
-      .auth-box {
-        border-left: 3px solid var(--color-accent);
-        background: var(--color-accent-soft);
-        padding: 12px 16px;
-        border-radius: 0 10px 10px 0;
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--color-text-secondary);
-      }
-
-      .chip-group {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-
-      .chip {
-        background: var(--color-bg);
-        border: 1px solid var(--color-border);
-        padding: 4px 10px;
-        border-radius: 8px;
+      .footer-note {
+        margin-top: 18px;
+        color: var(--text-tertiary);
         font-size: 11px;
-        font-family: var(--font-mono);
-        font-weight: 600;
-        color: var(--color-text-secondary);
+        text-align: center;
       }
 
-      @media (max-width: 850px) {
-        .grid { grid-template-columns: 1fr; }
+      @media (max-width: 720px) {
+        .shell {
+          padding: 18px 12px 30px;
+        }
+
+        .hero,
+        .panel-body,
+        .module-body {
+          padding: 14px;
+        }
+
+        .panel-header {
+          padding: 18px 18px 0;
+        }
+
+        .hero h1 {
+          font-size: 28px;
+        }
+
+        .module-summary {
+          padding: 12px 14px;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <header>
-        <div class="badge">API Developer Guide</div>
-        <h1>知识与素材导入接口</h1>
-        <div class="subtitle">供浏览器扩展及第三方应用调用的本地 API，用于把知识条目写入知识库，把纯图片写入素材库。</div>
-      </header>
+    <div class="shell">
+      <section class="hero">
+        <div class="hero-top">
+            <div>
+              <div class="eyebrow">RedBox Knowledge Import Guide</div>
+              <h1>知识库导入指南</h1>
+              <p>
+              RedBox 现在支持两种知识库导入方式：浏览器插件导入，以及自建 APP / 第三方 APP 的 API 导入。
+              这里先讲怎么选方式，再展开当前最新版接口格式、限制和请求示例。
+              </p>
+            </div>
+          <div class="hero-actions">
+            <button class="primary-btn" type="button" id="copy-markdown-btn">复制 Markdown 文档</button>
+            <a class="ghost-link" href="#import-methods">查看导入方式</a>
+          </div>
+        </div>
 
-      <div class="grid">
-        <main>
-          <section class="card">
-            <h2>服务地址</h2>
-            <div class="base-url-box">
-              <span id="base-url-text">http://127.0.0.1:31937/api/knowledge</span>
-              <button class="copy-btn" onclick="copyText('base-url-text', this)">COPY</button>
+      </section>
+
+      <div class="section-stack" id="import-methods">
+          <details class="module">
+            <summary class="module-summary">
+              <div class="module-title-wrap">
+                <span class="module-kicker">方式 1</span>
+                <h2 class="module-title">插件导入</h2>
+                <p class="module-desc">在浏览器里看到内容时，直接导入到 RedBox。</p>
+              </div>
+              <div class="module-meta">
+                <span>默认折叠</span>
+                <span class="module-chevron" aria-hidden="true"></span>
+              </div>
+            </summary>
+            <div class="module-body">
+              <div class="action-row">
+                <button class="primary-btn" type="button" id="install-plugin-btn">一键安装插件</button>
+                <button class="ghost-link" type="button" id="open-extension-page-btn">打开扩展管理页</button>
+              </div>
+              <div class="micro-note">
+                先在 RedBox 的 设置 → 工具 里点击“一键准备插件”。
+              </div>
+              <div class="tag-row" style="margin-top: 14px; margin-bottom: 0;">
+                <span class="tag">Chrome: chrome://extensions</span>
+                <span class="tag">Edge: edge://extensions</span>
+              </div>
+              <div class="step-list" id="plugin-install-steps">
+                <div class="step-row">
+                  <span class="step-index">1</span>
+                  <div>打开 RedBox，进入 设置 → 工具，点击“一键准备插件”。</div>
+                </div>
+                <div class="step-row">
+                  <span class="step-index">2</span>
+                  <div>在 Chrome 或 Edge 打开扩展管理页，并开启开发者模式。</div>
+                </div>
+                <div class="step-row">
+                  <span class="step-index">3</span>
+                  <div>点击“加载已解压的扩展程序”，选择 RedBox 准备好的插件目录。</div>
+                </div>
+                <div class="step-row">
+                  <span class="step-index">4</span>
+                  <div>回到网页后，直接使用插件采集内容，导入结果会进入当前活动空间。</div>
+                </div>
+              </div>
             </div>
-            <div class="auth-box">
-              裸 API：应用打开后即可直接调用，无需额外 Token。
-            </div>
+          </details>
+
+          <details class="module">
+            <summary class="module-summary">
+              <div class="module-title-wrap">
+                <span class="module-kicker">方式 2</span>
+                <h2 class="module-title">API 导入</h2>
+                <p class="module-desc">用于脚本、自动化流程或第三方工具接入。</p>
+              </div>
+              <div class="module-meta">
+                <span>默认折叠</span>
+                <span class="module-chevron" aria-hidden="true"></span>
+              </div>
+            </summary>
+            <div class="module-body">
+              <div class="mini-list" style="margin-bottom: 16px;">
+                <div class="mini-item">
+                  <strong>支持内容</strong>
+                  <p>知识条目、文档源、图片素材、批量导入。</p>
+                </div>
+              </div>
+
+              <section class="api-section">
+                <h3>服务入口</h3>
+                <p class="section-desc">复制地址后即可开始接入。</p>
+                  <div class="base-url">
+                    <code id="base-url">http://127.0.0.1:31937/api/knowledge</code>
+                    <button class="copy-btn" type="button" data-copy-target="base-url">复制地址</button>
+                  </div>
+                  <div class="notice" style="margin-top: 14px;">应用保持运行即可使用，导入内容会进入当前空间。</div>
+              </section>
+
+              <section class="api-section">
+                <h3>当前限制</h3>
+                <p class="section-desc">提交前先看这三个限制。</p>
+                  <div class="hero-meta">
+                    <div class="meta-pill">
+                      <span class="label">Body Limit</span>
+                      <strong>16 MB</strong>
+                    </div>
+                    <div class="meta-pill">
+                      <span class="label">Batch Limit</span>
+                      <strong>64 Items</strong>
+                    </div>
+                    <div class="meta-pill">
+                      <span class="label">Entry Routes</span>
+                      <strong>5 个接口</strong>
+                    </div>
+                    <div class="meta-pill">
+                      <span class="label">更新时间</span>
+                      <strong>2026-04-19</strong>
+                    </div>
+                  </div>
+              </section>
+
+          <section class="api-section" id="routes">
+              <h3>接口清单</h3>
+              <p class="section-desc">可直接复制请求示例。</p>
+              <div class="endpoint-list" id="endpoint-list"></div>
           </section>
 
-          <section class="card">
-            <h2>核心接口</h2>
-            
-            <div class="endpoint">
-              <div class="endpoint-header">
-                <span class="method get">GET</span>
-                <span class="path">/health</span>
-              </div>
-              <div class="endpoint-body">
-                <div class="endpoint-desc">检查服务状态及导入限制。</div>
-                <pre>curl http://127.0.0.1:31937/api/knowledge/health</pre>
-              </div>
-            </div>
-
-            <div class="endpoint">
-              <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span class="path">/entries</span>
-              </div>
-              <div class="endpoint-body">
-                <div class="endpoint-desc">导入单条知识记录（网页、笔记、视频、纯文字）。</div>
-                <pre>{
-  "kind": "link-article",
-  "source": {
-    "sourceDomain": "example.com",
-    "sourceLink": "https://example.com/article",
-    "sourceUrl": "https://example.com/article"
-  },
-  "content": { "title": "标题", "text": "正文内容" },
-  "options": { "allowUpdate": true }
-}</pre>
-              </div>
-            </div>
-
-            <div class="endpoint">
-              <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span class="path">/media-assets</span>
-              </div>
-              <div class="endpoint-body">
-                <div class="endpoint-desc">导入纯图片素材，写入素材库而不是知识库。</div>
-                <pre>{
-  "source": {
-    "sourceDomain": "www.xiaohongshu.com",
-    "sourceLink": "https://www.xiaohongshu.com/explore/...",
-    "sourceUrl": "https://www.xiaohongshu.com/explore/..."
-  },
-  "items": [
-    { "title": "封面图", "source": "https://example.com/image.webp" }
-  ]
-}</pre>
-              </div>
-            </div>
-
-            <div class="endpoint">
-              <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span class="path">/document-sources</span>
-              </div>
-              <div class="endpoint-body">
-                <div class="endpoint-desc">导入本地文件夹或文档源。</div>
-                <pre>{
-  "kind": "tracked-folder",
-  "rootPath": "/absolute/path/to/folder",
-  "name": "我的文档库"
-}</pre>
-              </div>
-            </div>
-
-            <div class="endpoint">
-              <div class="endpoint-header">
-                <span class="method post">POST</span>
-                <span class="path">/batch-ingest</span>
-              </div>
-              <div class="endpoint-body">
-                <div class="endpoint-desc">混合提交 entries、media-assets、document-sources。</div>
-                <pre>{
-  "entries": [{ "kind": "text-note", "content": { "text": "一段纯文字摘录" } }],
-  "mediaAssets": [{ "items": [{ "source": "data:image/png;base64,..." }] }]
-}</pre>
-              </div>
-            </div>
+          <section class="api-section">
+              <h3>可用类型</h3>
+              <p class="section-desc">`POST /entries` 支持这些 `kind`。</p>
+              <div class="tag-row" id="entry-kind-tags"></div>
           </section>
-        </main>
 
-        <aside class="stack">
-          <div class="card side-card">
-            <h3>支持类型 (Kinds)</h3>
-            <div class="chip-group">
-              <span class="chip">xhs-note</span>
-              <span class="chip">xhs-video</span>
-              <span class="chip">wechat-article</span>
-              <span class="chip">youtube-video</span>
-              <span class="chip">link-article</span>
-              <span class="chip">text-note</span>
-              <span class="chip">media-assets(image)</span>
-              <span class="chip">tracked-folder</span>
-              <span class="chip">obsidian-vault</span>
-            </div>
-          </div>
+          <section class="api-section">
+              <h3>Source 字段</h3>
+              <p class="section-desc">常用来源字段说明。</p>
+              <div class="mini-list">
+                <div class="mini-item">
+                  <strong>source.appId / source.pluginId</strong>
+                  <p>来源标记。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>source.externalId</strong>
+                  <p>外部内容 ID。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>source.sourceDomain</strong>
+                  <p>来源域名。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>source.sourceLink / source.sourceUrl</strong>
+                  <p>来源链接。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>source.capturedAt</strong>
+                  <p>采集时间，可选。</p>
+                </div>
+              </div>
+          </section>
 
-          <div class="card side-card" style="margin-top: 24px;">
-            <h3>来源字段</h3>
-            <div class="list-item">
-              <div class="list-title">sourceDomain</div>
-              <div class="list-desc">仅保存域名，方便按站点分类。</div>
-            </div>
-            <div class="list-item">
-              <div class="list-title">sourceLink / sourceUrl</div>
-              <div class="list-desc">保存完整原始链接；`sourceUrl` 目前作为兼容镜像保留。</div>
-            </div>
-          </div>
+          <section class="api-section">
+              <h3>响应说明</h3>
+              <p class="section-desc">常见返回字段。</p>
+              <div class="mini-list">
+                <div class="mini-item">
+                  <strong>success</strong>
+                  <p>是否成功。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>duplicate / updated</strong>
+                  <p>是否命中已有内容。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>requestedActions</strong>
+                  <p>回显请求里的处理选项。</p>
+                </div>
+                <div class="mini-item">
+                  <strong>assets / source / results</strong>
+                  <p>不同接口返回的主要结果数据。</p>
+                </div>
+              </div>
+          </section>
 
-          <div class="card side-card" style="margin-top: 24px;">
-            <h3>去重原则</h3>
-            <div class="list-item">
-              <div class="list-title">优先级</div>
-              <div class="list-desc">dedupeKey > externalId > sourceUrl</div>
+          <section class="api-section">
+              <h3>Markdown 版本</h3>
+              <p class="section-desc">复制整页内容为 Markdown。</p>
+              <div class="markdown-box">
+                <p>包含导入方式、接口说明和请求示例。</p>
+                <button class="primary-btn" type="button" id="copy-markdown-btn-side">一键复制 Markdown</button>
+              </div>
+          </section>
             </div>
-            <div class="list-item">
-              <div class="list-title">静默更新</div>
-              <div class="list-desc">allowUpdate=true 时，匹配项将被覆盖。</div>
-            </div>
-          </div>
-
-          <div class="card side-card" style="margin-top: 24px;">
-            <h3>响应格式</h3>
-            <pre style="background: transparent; color: var(--color-text-secondary); padding: 0; font-size: 11px;">{
-  "success": true,
-  "entryId": "..."
-}</pre>
-          </div>
-        </aside>
+          </details>
       </div>
+
+      <div class="footer-note">RedBox 知识库导入指南</div>
     </div>
 
     <script>
-      function copyText(id, btn) {
-        const text = document.getElementById(id).innerText;
-        navigator.clipboard.writeText(text).then(() => {
-          const original = btn.innerText;
-          btn.innerText = 'COPIED!';
-          setTimeout(() => btn.innerText = original, 2000);
-        });
+      const guide = {
+        title: 'RedBox 知识库导入指南',
+        updatedAt: '2026-04-19',
+        baseUrl: 'http://127.0.0.1:31937/api/knowledge',
+        limits: {
+          bodyBytes: 16 * 1024 * 1024,
+          bodyText: '16 MB',
+          batchItems: 64
+        },
+        importMethods: {
+          plugin: {
+            title: '插件导入',
+            description: '适合浏览器里直接采集内容，导入动作更轻。',
+            steps: [
+              '在 RedBox 的 设置 → 工具 里点击“一键准备插件”。',
+              '打开 Chrome 或 Edge 的扩展管理页，并开启开发者模式。',
+              '点击“加载已解压的扩展程序”，选择 RedBox 准备好的插件目录。',
+              '回到网页后直接用插件采集内容，导入结果会进入当前活动空间。'
+            ]
+          },
+          api: {
+            title: '自建 APP / 第三方 APP API 导入',
+            description: '适合本地脚本、自动化流程、第三方工具和你自己写的应用接入。'
+          }
+        },
+        entryKinds: [
+          'youtube-video',
+          'xhs-note',
+          'xhs-video',
+          'link-article',
+          'wechat-article',
+          'knowledge-note',
+          'webpage',
+          'article',
+          'text-note'
+        ],
+        endpoints: [
+          {
+            method: 'GET',
+            path: '/health',
+            title: '健康检查',
+            description: '返回当前空间、导入能力、路由和限制值。接入方建议启动前先调用一次。',
+            tags: ['无需请求体', '建议启动自检'],
+            examples: [
+              {
+                label: 'curl',
+                type: 'bash',
+                code: 'curl http://127.0.0.1:31937/api/knowledge/health'
+              },
+              {
+                label: '响应示例',
+                type: 'json',
+                code: `{
+  "success": true,
+  "counts": {
+    "entries": 128,
+    "youtubeVideos": 14,
+    "documentSources": 3,
+    "mediaAssets": 86
+  },
+  "limits": {
+    "bodyBytes": 16777216,
+    "batchItems": 64
+  },
+  "routes": {
+    "entries": "/api/knowledge/entries",
+    "documentSources": "/api/knowledge/document-sources",
+    "mediaAssets": "/api/knowledge/media-assets",
+    "batchIngest": "/api/knowledge/batch-ingest"
+  },
+  "capabilities": {
+    "sourceFields": ["sourceDomain", "sourceLink", "sourceUrl"],
+    "entryKinds": [
+      "youtube-video",
+      "xhs-note",
+      "xhs-video",
+      "link-article",
+      "wechat-article",
+      "knowledge-note",
+      "webpage",
+      "article",
+      "text-note"
+    ],
+    "mediaAssetKinds": ["image"]
+  },
+  "spaceId": "default"
+}`
+              }
+            ]
+          },
+          {
+            method: 'POST',
+            path: '/entries',
+            title: '导入知识条目',
+            description: '用于网页内容、笔记、视频元数据、纯文本和 YouTube 记录导入。当前仅 `youtube-video` 与普通 note 类 entry 两条写入链路。',
+            tags: ['支持去重', '默认 allowUpdate=true', '仅活动空间'],
+            examples: [
+              {
+                label: '普通网页 / 笔记类 entry',
+                type: 'json',
+                code: `{
+  "kind": "link-article",
+  "source": {
+    "appId": "browser-extension",
+    "pluginId": "redbox-capture",
+    "externalId": "article-001",
+    "sourceDomain": "example.com",
+    "sourceLink": "https://example.com/post/1",
+    "sourceUrl": "https://example.com/post/1",
+    "capturedAt": "2026-04-19T10:00:00+08:00"
+  },
+  "content": {
+    "title": "标题",
+    "author": "作者",
+    "text": "正文内容",
+    "excerpt": "摘要摘录",
+    "html": "<article>...</article>",
+    "description": "描述",
+    "summary": "现成摘要",
+    "siteName": "Example",
+    "transcript": "",
+    "tags": ["案例", "抓取"],
+    "stats": {
+      "likes": 12,
+      "collects": 5
+    }
+  },
+  "assets": {
+    "coverUrl": "https://example.com/cover.jpg",
+    "imageUrls": [
+      "https://example.com/1.jpg",
+      "https://example.com/2.jpg"
+    ],
+    "videoUrl": "",
+    "thumbnailUrl": ""
+  },
+  "options": {
+    "dedupeKey": "article-001",
+    "allowUpdate": true,
+    "summarize": false,
+    "transcribe": false
+  }
+}`
+              },
+              {
+                label: 'YouTube entry',
+                type: 'json',
+                code: `{
+  "kind": "youtube-video",
+  "source": {
+    "externalId": "dQw4w9WgXcQ",
+    "sourceLink": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "sourceUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  },
+  "content": {
+    "title": "视频标题",
+    "description": "视频描述",
+    "summary": "可选摘要",
+    "transcript": "可选字幕文本"
+  },
+  "assets": {
+    "thumbnailUrl": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+  },
+  "options": {
+    "allowUpdate": true,
+    "summarize": false,
+    "transcribe": false
+  }
+}`
+              },
+              {
+                label: '成功响应示例',
+                type: 'json',
+                code: `{
+  "success": true,
+  "kind": "link-article",
+  "duplicate": false,
+  "updated": false,
+  "entryId": "knowledge-example-post-1",
+  "requestedActions": {
+    "summarize": false,
+    "transcribe": false
+  }
+}`
+              }
+            ],
+            notes: [
+              '`kind: "text"` 会被自动归一化为 `text-note`。',
+              '普通 note 类支持：`xhs-note`、`xhs-video`、`link-article`、`wechat-article`、`knowledge-note`、`webpage`、`article`、`text-note`。',
+              '`youtube-video` 必须提供 `source.externalId` 和 `content.title`。',
+              '普通 note 会把 `text` / `description` / `excerpt` 里的内容写为 Markdown；如提供 `html` 和 `transcript` 也会落盘。'
+            ]
+          },
+          {
+            method: 'POST',
+            path: '/document-sources',
+            title: '导入文档源',
+            description: '把本地目录或本地文件批量注册为知识文档源。目录类直接引用原路径，`copied-file` 会复制到 workspace 内部。',
+            tags: ['tracked-folder', 'obsidian-vault', 'copied-file'],
+            examples: [
+              {
+                label: 'tracked-folder',
+                type: 'json',
+                code: `{
+  "kind": "tracked-folder",
+  "name": "产品资料库",
+  "rootPath": "/absolute/path/to/folder",
+  "options": {
+    "copyIntoWorkspace": true,
+    "allowUpdate": true
+  }
+}`
+              },
+              {
+                label: 'copied-file',
+                type: 'json',
+                code: `{
+  "kind": "copied-file",
+  "name": "本次导入文件",
+  "paths": [
+    "/absolute/path/to/spec-a.md",
+    "/absolute/path/to/spec-b.pdf"
+  ],
+  "options": {
+    "copyIntoWorkspace": true,
+    "allowUpdate": true
+  }
+}`
+              },
+              {
+                label: '成功响应示例',
+                type: 'json',
+                code: `{
+  "success": true,
+  "source": {
+    "id": "doc-source_xxx",
+    "kind": "tracked-folder",
+    "name": "产品资料库",
+    "rootPath": "/absolute/path/to/folder",
+    "locked": false,
+    "indexing": false,
+    "indexError": null,
+    "fileCount": 128,
+    "sampleFiles": ["README.md", "spec/intro.md"],
+    "createdAt": "2026-04-19T10:20:00+08:00",
+    "updatedAt": "2026-04-19T10:20:00+08:00"
+  },
+  "requestedOptions": {
+    "allowUpdate": true,
+    "copyIntoWorkspace": true
+  }
+}`
+              }
+            ],
+            notes: [
+              '`tracked-folder` 和 `obsidian-vault` 必须传有效目录。',
+              '`copied-file` 当前强制要求 `copyIntoWorkspace=true`。',
+              '`paths` 可传多个文件；`rootPath` 也可作为单文件或目录入口。'
+            ]
+          },
+          {
+            method: 'POST',
+            path: '/media-assets',
+            title: '导入图片素材',
+            description: '图片会进入 workspace 的素材库，而不是知识条目区。当前不接受视频或音频。',
+            tags: ['仅图片', '支持 URL / data URL / 本地路径'],
+            examples: [
+              {
+                label: '请求体示例',
+                type: 'json',
+                code: `{
+  "source": {
+    "sourceDomain": "www.xiaohongshu.com",
+    "sourceLink": "https://www.xiaohongshu.com/explore/abc",
+    "sourceUrl": "https://www.xiaohongshu.com/explore/abc"
+  },
+  "items": [
+    {
+      "title": "封面图",
+      "source": "https://example.com/cover.webp",
+      "mimeType": "image/webp"
+    },
+    {
+      "title": "截图",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+    },
+    {
+      "title": "本地文件",
+      "source": "/absolute/path/to/local-image.jpg"
+    }
+  ]
+}`
+              },
+              {
+                label: '成功响应示例',
+                type: 'json',
+                code: `{
+  "success": true,
+  "kind": "media-assets",
+  "imported": 3,
+  "assets": [
+    {
+      "id": "media_xxx",
+      "source": "knowledge-api",
+      "sourceDomain": "www.xiaohongshu.com",
+      "sourceLink": "https://www.xiaohongshu.com/explore/abc",
+      "title": "封面图",
+      "mimeType": "image/webp",
+      "relativePath": "imports/knowledge-api/...",
+      "absolutePath": "/Users/...",
+      "previewUrl": "file:///Users/...",
+      "exists": true
+    }
+  ]
+}`
+              }
+            ],
+            notes: [
+              '每次请求至少要有一个 `items`，且单次最多 64 项。',
+              '`mimeType` 可选；如果没传会按文件内容或 URL 后缀推断。',
+              '如果 source 不是图片，接口会直接返回错误。'
+            ]
+          },
+          {
+            method: 'POST',
+            path: '/batch-ingest',
+            title: '批量混合导入',
+            description: '把 `entries`、`documentSources` 和 `mediaAssets` 放在同一个请求里顺序执行。',
+            tags: ['总数上限 64', '逐项返回结果'],
+            examples: [
+              {
+                label: '请求体示例',
+                type: 'json',
+                code: `{
+  "entries": [
+    {
+      "kind": "text-note",
+      "content": {
+        "title": "摘录",
+        "text": "一段纯文字"
       }
+    }
+  ],
+  "documentSources": [
+    {
+      "kind": "tracked-folder",
+      "name": "资料夹",
+      "rootPath": "/absolute/path/to/folder"
+    }
+  ],
+  "mediaAssets": [
+    {
+      "items": [
+        {
+          "source": "https://example.com/image.png"
+        }
+      ]
+    }
+  ]
+}`
+              },
+              {
+                label: '成功响应示例',
+                type: 'json',
+                code: `{
+  "success": true,
+  "count": 3,
+  "results": [
+    { "type": "entry", "result": { "success": true, "entryId": "knowledge_xxx" } },
+    { "type": "document-source", "result": { "success": true, "source": { "id": "doc-source_xxx" } } },
+    { "type": "media-assets", "result": { "success": true, "imported": 1 } }
+  ]
+}`
+              }
+            ],
+            notes: [
+              '总项目数 = `entries.length + documentSources.length + mediaAssets.length`。',
+              '任一子项失败时，请求会直接报错，不会继续执行后续项。'
+            ]
+          }
+        ]
+      };
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+      }
+
+      function makeEndpointCard(endpoint) {
+        const notes = Array.isArray(endpoint.notes) && endpoint.notes.length
+          ? `<div class="mini-list" style="margin-top: 14px;">${endpoint.notes
+              .map((note) => `<div class="mini-item"><p>${escapeHtml(note)}</p></div>`)
+              .join('')}</div>`
+          : '';
+
+        return `
+          <details class="endpoint-card">
+            <summary class="endpoint-top">
+              <div class="endpoint-heading">
+                <span class="method ${endpoint.method.toLowerCase()}">${endpoint.method}</span>
+                <span class="path">${guide.baseUrl}${endpoint.path}</span>
+              </div>
+              <div class="endpoint-meta">
+                <span>默认折叠</span>
+                <span class="module-chevron" aria-hidden="true"></span>
+              </div>
+            </summary>
+            <div class="endpoint-inner">
+              <h3 class="endpoint-title">${endpoint.title}</h3>
+              <p class="endpoint-desc">${endpoint.description}</p>
+              <div class="tag-row">
+                ${endpoint.tags.map((tag) => `<span class="tag">${tag}</span>`).join('')}
+              </div>
+              <div class="example-grid">
+                ${endpoint.examples.map((example, index) => `
+                  <div class="code-card">
+                    <div class="code-head">
+                      <span>${example.label}</span>
+                      <button
+                        class="copy-btn"
+                        type="button"
+                        data-copy-code="${endpoint.path}-${index}"
+                      >复制</button>
+                    </div>
+                    <pre id="code-${endpoint.path}-${index}">${escapeHtml(example.code)}</pre>
+                  </div>
+                `).join('')}
+              </div>
+              ${notes}
+            </div>
+          </details>
+        `;
+      }
+
+      function render() {
+        const endpointList = document.getElementById('endpoint-list');
+        endpointList.innerHTML = guide.endpoints.map(makeEndpointCard).join('');
+
+        const kindTags = document.getElementById('entry-kind-tags');
+        kindTags.innerHTML = guide.entryKinds.map((kind) => `<span class="tag">${kind}</span>`).join('');
+      }
+
+      function buildMarkdown() {
+        const lines = [
+          `# ${guide.title}`,
+          '',
+          `更新时间：${guide.updatedAt}`,
+          '',
+          '## 导入方式',
+          '',
+          `### ${guide.importMethods.plugin.title}`,
+          '',
+          guide.importMethods.plugin.description,
+          '',
+          ...guide.importMethods.plugin.steps.map((step, index) => `${index + 1}. ${step}`),
+          '',
+          `### ${guide.importMethods.api.title}`,
+          '',
+          guide.importMethods.api.description,
+          '',
+          '## 基础信息',
+          '',
+          `- Base URL：\`${guide.baseUrl}\``,
+          '- 默认无需额外 Token，但应用必须正在运行。',
+          '- 当前仅允许写入活动空间；传入其他 `spaceId` 会报错。',
+          `- 单次请求体大小上限：${guide.limits.bodyText}`,
+          `- 单次 batch 总项目上限：${guide.limits.batchItems}`,
+          '',
+          '## Source 字段',
+          '',
+          '- `source.appId` / `source.pluginId`：请求来源标记。',
+          '- `source.externalId`：外部平台主键，YouTube 导入强依赖它，其他 entry 可用于去重。',
+          '- `source.sourceDomain`：可不传；如果 `sourceLink` / `sourceUrl` 是合法 URL，会自动推导域名。',
+          '- `source.sourceLink` / `source.sourceUrl`：当前优先使用 `sourceLink`，`sourceUrl` 保留兼容。',
+          '- `source.capturedAt`：可选；会用于落盘记录的创建时间。',
+          '',
+          '## Entry Kinds',
+          '',
+          ...guide.entryKinds.map((kind) => `- \`${kind}\``),
+          '',
+          '## 媒体 source 支持形式',
+          '',
+          '- 本地绝对路径',
+          '- `file://` 路径',
+          '- `http://` / `https://` 图片 URL',
+          '- `data:image/...;base64,...`',
+          ''
+        ];
+
+        guide.endpoints.forEach((endpoint) => {
+          lines.push(`## ${endpoint.method} ${endpoint.path}`);
+          lines.push('');
+          lines.push(endpoint.title);
+          lines.push('');
+          lines.push(endpoint.description);
+          lines.push('');
+          if (endpoint.tags?.length) {
+            lines.push(`标签：${endpoint.tags.map((tag) => `\`${tag}\``).join('、')}`);
+            lines.push('');
+          }
+          endpoint.examples.forEach((example) => {
+            lines.push(`### ${example.label}`);
+            lines.push('');
+            lines.push(`\`\`\`${example.type}`);
+            lines.push(example.code);
+            lines.push('```');
+            lines.push('');
+          });
+          if (endpoint.notes?.length) {
+            lines.push('### 补充说明');
+            lines.push('');
+            endpoint.notes.forEach((note) => lines.push(`- ${note}`));
+            lines.push('');
+          }
+        });
+
+        lines.push('## 调用建议');
+        lines.push('');
+        lines.push('- 接入前先调用 `GET /health`，读取当前 `limits` 和 `routes`。');
+        lines.push('- `entries` 默认就是更新模式；如果你只想探测是否存在，建议自行先做外部去重。');
+        lines.push('- `media-assets` 只收图片，视频/音频不要走这个接口。');
+        lines.push('- `copied-file` 会复制文件进入 workspace；目录类文档源则保留原路径引用。');
+        lines.push('');
+        return lines.join('\n');
+      }
+
+      function flashButtonText(button, text) {
+        if (!(button instanceof HTMLElement)) return;
+        const original = button.dataset.originalText || button.textContent || '';
+        button.dataset.originalText = original;
+        button.textContent = text;
+        window.setTimeout(() => {
+          button.textContent = original;
+        }, 1800);
+      }
+
+      function pluginInstallGuideText() {
+        return [
+          'RedBox 插件导入安装步骤',
+          '',
+          ...guide.importMethods.plugin.steps.map((step, index) => `${index + 1}. ${step}`),
+          '',
+          '如果浏览器没有自动打开扩展管理页，可手动输入：',
+          '- Chrome: chrome://extensions',
+          '- Edge: edge://extensions'
+        ].join('\n');
+      }
+
+      function extensionManagerCandidates() {
+        const ua = navigator.userAgent.toLowerCase();
+        if (ua.includes('edg/')) {
+          return ['edge://extensions'];
+        }
+        if (ua.includes('chrome') || ua.includes('chromium')) {
+          return ['chrome://extensions', 'edge://extensions'];
+        }
+        return ['chrome://extensions', 'edge://extensions'];
+      }
+
+      function openExtensionManager() {
+        for (const url of extensionManagerCandidates()) {
+          try {
+            const popup = window.open(url, '_blank', 'noopener,noreferrer');
+            if (popup) {
+              return true;
+            }
+          } catch (error) {
+            console.warn('Open extension manager failed', error);
+          }
+        }
+        return false;
+      }
+
+      async function copyPlainText(text, button) {
+        const original = button ? button.textContent : '';
+        try {
+          await navigator.clipboard.writeText(text);
+          if (button) {
+            button.textContent = '已复制';
+            setTimeout(() => {
+              button.textContent = original;
+            }, 1600);
+          }
+        } catch (error) {
+          if (button) {
+            button.textContent = '复制失败';
+            setTimeout(() => {
+              button.textContent = original;
+            }, 1600);
+          }
+          console.error('Clipboard copy failed', error);
+        }
+      }
+
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        const copyTargetId = target.getAttribute('data-copy-target');
+        if (copyTargetId) {
+          const source = document.getElementById(copyTargetId);
+          if (source) {
+            copyPlainText(source.textContent || '', target);
+          }
+          return;
+        }
+
+        const codeKey = target.getAttribute('data-copy-code');
+        if (codeKey) {
+          const source = document.getElementById(`code-${codeKey}`);
+          if (source) {
+            copyPlainText(source.textContent || '', target);
+          }
+        }
+      });
+
+      const markdown = buildMarkdown();
+      document.getElementById('copy-markdown-btn').addEventListener('click', (event) => {
+        copyPlainText(markdown, event.currentTarget);
+      });
+      document.getElementById('copy-markdown-btn-side').addEventListener('click', (event) => {
+        copyPlainText(markdown, event.currentTarget);
+      });
+      document.getElementById('install-plugin-btn').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        const opened = openExtensionManager();
+        try {
+          await navigator.clipboard.writeText(pluginInstallGuideText());
+          flashButtonText(button, opened ? '已打开并复制' : '已复制步骤');
+        } catch (error) {
+          console.error('Plugin install guide copy failed', error);
+          flashButtonText(button, opened ? '已打开扩展页' : '请手动打开');
+        }
+      });
+      document.getElementById('open-extension-page-btn').addEventListener('click', (event) => {
+        const button = event.currentTarget;
+        const opened = openExtensionManager();
+        flashButtonText(button, opened ? '已打开' : '请手动打开');
+      });
+
+      render();
     </script>
   </body>
 </html>

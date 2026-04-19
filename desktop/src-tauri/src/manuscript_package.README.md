@@ -15,8 +15,8 @@
 - `content.md`
 - `content-map.json`
 - `layout.tokens.json`
-- `richpost-themes.json`
-- `theme-backgrounds/`
+- `../themes/richpost-themes.json`
+- `../themes/richpost-theme-assets/<theme-id>/`
 - `masters/cover.master.html`
 - `masters/body.master.html`
 - `masters/ending.master.html`
@@ -65,9 +65,10 @@
 9. 图文主题通过 `manifest.richpostThemeId` 控制默认 token 基线，只改样式层，不改正文层。
 10. 图文工具栏里的字体大小和行间距调整会写入 `manifest.richpostTypography`，并立即触发整套分页重排；主题提供基础值，用户调整是叠加覆盖值。
 11. 稿件画廊里的 `*.redpost` 卡片不会再伪造缩略图；只要正文非空且第一页 HTML 已生成，画廊就直接读取 `pages/` 里的第一页作为真实预览。
-12. `richpost-themes.json` 用来保存当前图文工程自己的自定义主题；抽屉里的主题目录会把内置主题和这份文件里的自定义主题合并返回。
-13. `richpost-themes.json` 里的每个主题都包含 `coverFrame / bodyFrame / endingFrame`，它们分别定义首页、内容页、尾页的真实文字区域；主题编辑页左侧的矩形就是这三个字段的可视化编辑层。
-14. `richpost-themes.json` 里的每个主题还可以包含 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`；这些路径指向工程内 `theme-backgrounds/` 下的图片资产，并直接驱动三种母版的背景层。
+12. 工作区级 `themes/richpost-themes.json` 用来保存当前空间共享的自定义图文主题；图文主题抽屉展示的是这份全局主题目录，不再内置预设主题库。
+13. `themes/richpost-themes.json` 里的每个主题都包含 `coverFrame / bodyFrame / endingFrame`，它们分别定义首页、内容页、尾页的真实文字区域；主题编辑页左侧的矩形就是这三个字段的可视化编辑层。
+14. `themes/richpost-themes.json` 里的每个主题还可以包含 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`；这些路径指向工作区级 `themes/richpost-theme-assets/<theme-id>/` 下的背景图资产，并直接驱动三种母版的背景层。
+15. 默认自动分页生成 page plan 时，多页稿件会把第一页映射到 `cover`、中间页映射到 `body`、最后一页映射到 `ending`，这样主题编辑页的三种文字区域会和真实稿件对应。
 
 ### 长文工程 `*.redarticle`
 
@@ -167,19 +168,19 @@
   - 当前文件会话会强制激活 `richpost-layout-designer`
   - AI 必须先按这个 skill 处理 richpost 主题、字体、分页和页面样式任务
 - 图文打开“添加主题”后的全屏主题编辑页时：
-  - 宿主会先在当前工程的 `richpost-themes.json` 中创建一个新的自定义主题条目
-  - 当前 AI 会话会绑定这条新主题的 `themeId / label / richpost-themes.json` 文件路径
+  - 宿主会先在当前工作区的 `themes/richpost-themes.json` 中创建一个新的自定义主题条目
+  - 当前 AI 会话会绑定这条新主题的 `themeId / label / themes/richpost-themes.json` 文件路径
   - 当前文件会话会切到 `图文主题编辑` 模式
   - 会强制激活 `richpost-layout-designer` + `richpost-theme-editor`
   - 左侧 `首页 / 内容页 / 尾页` 预览上的矩形会直接编辑当前主题的 `coverFrame / bodyFrame / endingFrame`
   - 这三个 frame 决定最终真实文字区域；主题的字体、字号、行高、颜色仍然由 `layout.tokens.json` 与母版控制
-  - 每张预览下都可以单独上传背景图，图片会保存到当前工程的 `theme-backgrounds/`，并写回当前主题的 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`
+  - 每张预览下都可以单独上传背景图，图片会复制进当前工作区的 `themes/richpost-theme-assets/<theme-id>/`，文件名使用时间戳重命名，并写回当前主题的 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`
   - 矩形调整会自动写回当前主题文件并立即重渲染当前工程页面
   - AI 必须优先按 `layout.tokens.json`、`masters/cover.master.html`、`masters/body.master.html`、`masters/ending.master.html` 的顺序理解和修改模板层
 - 图文主题抽屉里右击任一主题时：
   - 会出现 `编辑 / 重命名 / 删除`
   - `编辑` 对所有主题都可用；右击内置主题时会先基于它创建当前工程自己的副本，再进入全屏编辑页
-  - `重命名 / 删除` 只对 `richpost-themes.json` 里的自定义主题生效
+  - `重命名 / 删除` 只对 `themes/richpost-themes.json` 里的自定义主题生效
 - 图文点击“导出”时：
   - 前端逐页加载 `pages/page-xxx.html`
   - 以 1080x1440 的 3:4 固定画布导出 PNG

@@ -784,6 +784,12 @@ struct FileNode {
     richpost_preview_file_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     richpost_preview_updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_page_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_page_file_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    richpost_preview_page_updated_at: Option<i64>,
 }
 
 fn now_ms() -> u128 {
@@ -1761,21 +1767,36 @@ fn append_debug_log(store: &mut AppStore, line: String) {
     }
 }
 
+fn is_debug_log_enabled(store: &AppStore) -> bool {
+    store
+        .settings
+        .as_object()
+        .and_then(|settings| settings.get("debug_log_enabled"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
-    let _ = with_store_mut(state, |store| {
-        append_debug_log(store, line);
-        Ok(())
-    });
+    let Ok(mut store) = state.store.lock() else {
+        return;
+    };
+    if !is_debug_log_enabled(&store) {
+        return;
+    }
+    append_debug_log(&mut store, line);
 }
 
 pub(crate) fn append_debug_trace_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
     eprintln!("{}", line);
-    let _ = with_store_mut(state, |store| {
-        append_debug_log(store, line);
-        Ok(())
-    });
+    let Ok(mut store) = state.store.lock() else {
+        return;
+    };
+    if !is_debug_log_enabled(&store) {
+        return;
+    }
+    append_debug_log(&mut store, line);
 }
 
 fn log_timing_event(

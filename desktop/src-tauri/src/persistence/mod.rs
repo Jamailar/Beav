@@ -545,14 +545,15 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         Err(_) => return default_store(),
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
+    store.debug_logs.clear();
     let skills_migrated = ensure_builtin_skills_present(&mut store);
-    let assistant_daemon_migrated = if should_enable_assistant_daemon_by_default(&store.assistant_state)
-    {
-        store.assistant_state.enabled = true;
-        true
-    } else {
-        false
-    };
+    let assistant_daemon_migrated =
+        if should_enable_assistant_daemon_by_default(&store.assistant_state) {
+            store.assistant_state.enabled = true;
+            true
+        } else {
+            false
+        };
     crate::session_manager::enforce_default_retention(&mut store);
     if skills_migrated || assistant_daemon_migrated {
         let _ = persist_store(path, &store);
@@ -564,6 +565,7 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
     let mut snapshot = store.clone();
     crate::session_manager::enforce_default_retention(&mut snapshot);
     crate::auth::sanitize_store_for_persist(&mut snapshot);
+    snapshot.debug_logs.clear();
     let serialized = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -772,6 +774,7 @@ fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
     std::thread::spawn(move || {
         let mut snapshot = store.clone();
         crate::auth::sanitize_store_for_persist(&mut snapshot);
+        snapshot.debug_logs.clear();
         let serialized = match serde_json::to_string_pretty(&snapshot) {
             Ok(value) => value,
             Err(error) => {

@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     commands::manuscripts::{
         longform_layout_preset_catalog_value, longform_layout_preset_state_value,
-        richpost_theme_catalog_value, richpost_theme_state_value,
+        richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
         sync_manuscript_package_html_assets, timeline_clip_duration_ms,
     },
     file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
@@ -3122,7 +3122,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             Value::Null
         },
         "richpostThemeCatalog": if package_kind == Some("post") {
-            richpost_theme_catalog_value(Some(package_path))
+            richpost_theme_catalog_value_for_manifest(Some(package_path), &manifest)
         } else {
             Value::Null
         },

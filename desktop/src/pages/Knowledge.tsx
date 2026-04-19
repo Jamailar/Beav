@@ -140,6 +140,7 @@ interface SettingsShape {
 }
 
 const SHOW_WECHAT_KNOWLEDGE_ACTIONS = false;
+const INLINE_TAG_LIMIT = 8;
 
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
@@ -251,6 +252,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedTypeFilter, setSelectedTypeFilter] = useState<KnowledgeTypeFilter>('all');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
+    const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [imageAspectMap, setImageAspectMap] = useState<Record<string, 'portrait' | 'landscape'>>({});
     const [showSubtitle, setShowSubtitle] = useState(false);
@@ -274,6 +276,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
     const selectedNoteVideoRef = useRef<HTMLVideoElement>(null);
+    const allTagsDrawerRef = useRef<HTMLDivElement>(null);
     const notesRef = useRef<Note[]>([]);
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
@@ -335,6 +338,26 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         observer.observe(node);
         return () => observer.disconnect();
     }, [isEmbedded]);
+
+    useEffect(() => {
+        if (!isAllTagsDrawerOpen) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!allTagsDrawerRef.current?.contains(event.target as Node)) {
+                setIsAllTagsDrawerOpen(false);
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsAllTagsDrawerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isAllTagsDrawerOpen]);
 
     const embeddedUsesSingleColumn = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 640;
     const embeddedUsesCompactCard = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 420;
@@ -764,6 +787,31 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             .map(([tag, count]) => ({ tag, count }));
     }, [notes]);
 
+    useEffect(() => {
+        if (!selectedTag) return;
+        if (!allTags.some((item) => item.tag === selectedTag)) {
+            setSelectedTag(null);
+            setIsAllTagsDrawerOpen(false);
+        }
+    }, [allTags, selectedTag]);
+
+    const inlineTagItems = useMemo(() => {
+        const leadingTags = allTags.slice(0, INLINE_TAG_LIMIT);
+        if (!selectedTag) {
+            return leadingTags;
+        }
+        if (leadingTags.some((item) => item.tag === selectedTag)) {
+            return leadingTags;
+        }
+        const selectedEntry = allTags.find((item) => item.tag === selectedTag);
+        if (!selectedEntry) {
+            return leadingTags;
+        }
+        return [...leadingTags.slice(0, Math.max(0, INLINE_TAG_LIMIT - 1)), selectedEntry];
+    }, [allTags, selectedTag]);
+
+    const hasHiddenTags = allTags.length > inlineTagItems.length;
+
     const orderImages = (images: string[]) => {
         return [...images].sort((a, b) => {
             const extractIndex = (value: string) => {
@@ -898,6 +946,23 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         const aspect = imageAspectMap[key] || 'portrait';
         return aspect === 'landscape' ? 'aspect-[4/3]' : 'aspect-[3/4]';
     };
+
+    const handleAllTagsClick = useCallback(() => {
+        if (selectedTag) {
+            setSelectedTag(null);
+            setIsAllTagsDrawerOpen(false);
+            return;
+        }
+        if (!hasHiddenTags) {
+            return;
+        }
+        setIsAllTagsDrawerOpen((prev) => !prev);
+    }, [hasHiddenTags, selectedTag]);
+
+    const handleTagSelection = useCallback((tag: string) => {
+        setSelectedTag((prev) => prev === tag ? null : tag);
+        setIsAllTagsDrawerOpen(false);
+    }, []);
 
     const handleImageLoad = (key: string, event: SyntheticEvent<HTMLImageElement>) => {
         const img = event.currentTarget;
@@ -1618,43 +1683,114 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     </div>
 
                     {!isEmbedded && allTags.length > 0 && (
-                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-                            <button
-                                onClick={() => setSelectedTag(null)}
-                                className={clsx(
-                                    'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider',
-                                    !selectedTag
-                                        ? 'bg-black/[0.04] text-text-primary border-transparent shadow-sm'
-                                        : 'bg-transparent text-text-tertiary border-transparent hover:bg-black/[0.03] hover:text-text-secondary'
-                                )}
-                            >
-                                All Tags
-                            </button>
-                            {allTags.map(({ tag, count }) => (
+                        <div ref={allTagsDrawerRef} className="relative py-0.5">
+                            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                                 <button
-                                    key={tag}
-                                    onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                                    onClick={handleAllTagsClick}
                                     className={clsx(
-                                        'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
-                                        selectedTag === tag
-                                            ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
-                                            : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                        'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider inline-flex items-center gap-1.5',
+                                        !selectedTag
+                                            ? 'bg-black/[0.04] text-text-primary border-transparent shadow-sm'
+                                            : 'bg-transparent text-text-tertiary border-transparent hover:bg-black/[0.03] hover:text-text-secondary'
                                     )}
                                 >
-                                    <span className="opacity-40">#</span>
-                                    {tag}
+                                    <span>All Tags</span>
                                     <span
                                         className={clsx(
-                                            'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
-                                            selectedTag === tag
-                                                ? 'bg-white/20 text-white'
-                                                : 'bg-black/5 text-text-tertiary/60'
+                                            'inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[9px] font-bold',
+                                            !selectedTag
+                                                ? 'bg-black/5 text-text-tertiary/80'
+                                                : 'bg-black/[0.04] text-text-tertiary/70'
                                         )}
                                     >
-                                        {count}
+                                        {allTags.length}
                                     </span>
+                                    {hasHiddenTags && (
+                                        <ChevronRight
+                                            className={clsx(
+                                                'w-3 h-3 opacity-60 transition-transform duration-200',
+                                                !selectedTag && isAllTagsDrawerOpen && 'rotate-90'
+                                            )}
+                                        />
+                                    )}
                                 </button>
-                            ))}
+                                {inlineTagItems.map(({ tag, count }) => (
+                                    <button
+                                        key={tag}
+                                        onClick={() => handleTagSelection(tag)}
+                                        className={clsx(
+                                            'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
+                                            selectedTag === tag
+                                                ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                                : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                        )}
+                                    >
+                                        <span className="opacity-40">#</span>
+                                        {tag}
+                                        <span
+                                            className={clsx(
+                                                'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
+                                                selectedTag === tag
+                                                    ? 'bg-white/20 text-white'
+                                                    : 'bg-black/5 text-text-tertiary/60'
+                                            )}
+                                        >
+                                            {count}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {!selectedTag && isAllTagsDrawerOpen && hasHiddenTags && (
+                                <div className="absolute left-0 right-0 top-full z-20 mt-3">
+                                    <div className="rounded-2xl border border-black/[0.05] bg-white/95 shadow-xl shadow-black/[0.08] backdrop-blur-xl">
+                                    <div className="flex items-center justify-between gap-3 border-b border-black/[0.04] px-4 py-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[12px] font-extrabold text-text-primary tracking-tight">全部标签</div>
+                                            <div className="mt-1 text-[10px] font-medium text-text-tertiary/70">
+                                                共 {allTags.length} 个标签，点击即可筛选内容
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => setIsAllTagsDrawerOpen(false)}
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-text-tertiary hover:bg-black/[0.04] hover:text-text-primary transition-all active:scale-90"
+                                            title="收起标签抽屉"
+                                        >
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                    <div className="max-h-[240px] overflow-y-auto px-4 py-4">
+                                        <div className="flex flex-wrap gap-2">
+                                            {allTags.map(({ tag, count }) => (
+                                                <button
+                                                    key={`drawer-${tag}`}
+                                                    onClick={() => handleTagSelection(tag)}
+                                                    className={clsx(
+                                                        'px-3 py-1.5 text-[11px] rounded-xl transition-all flex items-center gap-1.5 border font-bold',
+                                                        selectedTag === tag
+                                                            ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                                            : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                                    )}
+                                                >
+                                                    <span className="opacity-40">#</span>
+                                                    {tag}
+                                                    <span
+                                                        className={clsx(
+                                                            'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
+                                                            selectedTag === tag
+                                                                ? 'bg-white/20 text-white'
+                                                                : 'bg-black/5 text-text-tertiary/60'
+                                                        )}
+                                                    >
+                                                        {count}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
