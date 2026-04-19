@@ -28,6 +28,7 @@ mod runtime;
 mod scheduler;
 mod session_manager;
 mod skills;
+mod startup_migration;
 mod subagents;
 mod tools;
 mod workspace_loaders;
@@ -87,6 +88,7 @@ pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
 pub(crate) use process_utils::*;
 pub(crate) use redclaw_profile::*;
+pub(crate) use startup_migration::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -676,6 +678,7 @@ struct AppState {
     store_path: PathBuf,
     store: Mutex<AppStore>,
     workspace_root_cache: Mutex<PathBuf>,
+    startup_migration: Mutex<startup_migration::StartupMigrationStatus>,
     store_persist_version: Arc<AtomicU64>,
     auth_runtime: Mutex<AuthRuntimeState>,
     official_auth_refresh_lock: Mutex<()>,
@@ -901,6 +904,14 @@ fn legacy_workspace_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".redconvert"))
 }
 
+fn legacy_default_workspace_dir() -> Option<PathBuf> {
+    legacy_workspace_dir().map(|root| root.join("spaces").join("default"))
+}
+
+fn has_legacy_workspace_layout() -> bool {
+    legacy_default_workspace_dir().is_some_and(|path| path.exists())
+}
+
 fn managed_workspace_dir_candidates(store_path: &Path) -> Vec<PathBuf> {
     let mut items = Vec::new();
     if let Some(root) = store_path.parent() {
@@ -924,39 +935,35 @@ fn configured_workspace_dir(settings: &Value) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn should_force_preferred_workspace_dir(configured: Option<&Path>, store_path: &Path) -> bool {
-    let Some(configured) = configured else {
-        return true;
-    };
-    if legacy_workspace_dir()
+fn compatible_workspace_base_dir(settings: &Value) -> PathBuf {
+    if let Some(configured) = configured_workspace_dir(settings) {
+        return configured;
+    }
+    if let Some(legacy) = legacy_workspace_dir().filter(|_| has_legacy_workspace_layout()) {
+        return legacy;
+    }
+    preferred_workspace_dir()
+}
+
+fn is_legacy_workspace_base(path: &Path) -> bool {
+    legacy_workspace_dir()
         .as_ref()
-        .is_some_and(|legacy| is_same_path(configured, legacy))
-    {
-        return true;
-    }
-    if managed_workspace_dir_candidates(store_path)
-        .iter()
-        .any(|candidate| is_same_path(configured, candidate))
-    {
-        return true;
-    }
-    false
+        .is_some_and(|legacy| is_same_path(path, legacy))
 }
 
 fn workspace_root_from_snapshot(
     settings: &Value,
     active_space_id: &str,
-    store_path: &Path,
+    _store_path: &Path,
 ) -> Result<PathBuf, String> {
-    let base = if should_force_preferred_workspace_dir(
-        configured_workspace_dir(settings).as_deref(),
-        store_path,
-    ) {
-        preferred_workspace_dir()
-    } else {
-        configured_workspace_dir(settings).unwrap_or_else(preferred_workspace_dir)
-    };
-    let root = if active_space_id == "default" {
+    let base = compatible_workspace_base_dir(settings);
+    let root = if is_legacy_workspace_base(&base) {
+        if active_space_id == "default" {
+            base.join("spaces").join("default")
+        } else {
+            base.join("spaces").join(active_space_id)
+        }
+    } else if active_space_id == "default" {
         base
     } else {
         base.join("spaces").join(active_space_id)

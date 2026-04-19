@@ -711,10 +711,19 @@ pub fn handle_chatrooms_channel(
                     json!({ "roomId": room_id.clone(), "message": user_message }),
                 );
 
-                let target_advisor_ids = if room.advisor_ids.is_empty() {
-                    vec!["director-system".to_string()]
-                } else {
+                let target_advisor_ids = if room.is_system.unwrap_or(false)
+                    && room.system_type.as_deref() == Some("six_thinking_hats")
+                {
                     room.advisor_ids.clone()
+                } else {
+                    let mut ordered = Vec::with_capacity(room.advisor_ids.len() + 1);
+                    ordered.push("director-system".to_string());
+                    for advisor_id in room.advisor_ids.iter() {
+                        if advisor_id != "director-system" {
+                            ordered.push(advisor_id.clone());
+                        }
+                    }
+                    ordered
                 };
                 let app_handle = app.clone();
                 let room_id_for_task = room_id.clone();
