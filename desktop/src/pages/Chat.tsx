@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Square, Film, ImageIcon, Music2, FileText, File as FileIcon } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
+import { ChatComposerFrame, getChatComposerPalette } from '../components/ChatComposerFrame';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
@@ -67,7 +68,7 @@ interface ChatProps {
   emptyStateVerticalAlign?: 'center' | 'lower';
 }
 
-interface UploadedFileAttachment {
+export interface UploadedFileAttachment {
   type: 'uploaded-file';
   name: string;
   ext?: string;
@@ -113,7 +114,7 @@ interface ChatErrorEventPayload {
   category?: string;
 }
 
-interface ChatModelOption {
+export interface ChatModelOption {
   key: string;
   modelName: string;
   sourceName: string;
@@ -122,7 +123,7 @@ interface ChatModelOption {
   isDefault?: boolean;
 }
 
-interface ChatSettingsSnapshot {
+export interface ChatSettingsSnapshot {
   api_endpoint?: string;
   api_key?: string;
   model_name?: string;
@@ -253,7 +254,7 @@ interface ComposerAttachmentPreviewProps {
   children: React.ReactNode;
 }
 
-function ComposerAttachmentPreview({
+export function ComposerAttachmentPreview({
   attachment,
   darkEmbedded,
   variant,
@@ -542,7 +543,7 @@ function decodeBase64DataUrl(dataUrl: string): string {
   return parts.length > 1 ? parts[1] : raw;
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
+export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(decodeBase64DataUrl(String(reader.result || '')));
@@ -551,7 +552,7 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatModelOption[] {
+export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatModelOption[] {
   if (!settings) return [];
 
   const options: ChatModelOption[] = [];
@@ -2449,26 +2450,16 @@ export function Chat({
   const contextRingCircumference = 2 * Math.PI * contextRingRadius;
   const contextUsageRingOffset = contextRingCircumference * (1 - Math.max(0, Math.min(1, compactRatio)));
   const darkEmbedded = embeddedTheme === 'dark';
-  const composerShellClass = darkEmbedded
-    ? 'bg-[#121417] border border-white/10 rounded-[24px] p-1.5'
-    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5';
-  const composerShellEmptyClass = darkEmbedded
-    ? 'bg-[#121417] border border-white/10 rounded-[28px] p-2'
-    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2';
-  const composerTextClass = darkEmbedded
-    ? 'text-white placeholder:text-white/28'
-    : 'text-text-primary placeholder:text-[#b4b2a8]';
-  const composerSubtleButtonClass = darkEmbedded
-    ? 'text-white/48 hover:text-white/82'
-    : 'text-text-tertiary hover:text-text-secondary';
+  const composerTheme = darkEmbedded ? 'dark' : 'default';
+  const composerPalette = getChatComposerPalette(composerTheme);
+  const composerTextClass = composerPalette.text;
+  const composerSubtleButtonClass = composerPalette.subtleButton;
   const composerModelPickerClass = darkEmbedded
     ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
     : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
   const composerSendButtonClass = input.trim() || pendingAttachment
-    ? 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]'
-    : darkEmbedded
-      ? 'bg-white/10 text-white/45 opacity-80'
-      : 'bg-[#edebe4] text-white opacity-60';
+    ? composerPalette.sendButtonActive
+    : composerPalette.sendButtonIdle;
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
     : 'bg-surface-primary pb-4 pt-2 md:pb-5';
@@ -2724,7 +2715,7 @@ export function Chat({
   const emptyComposerForm = (
     <form onSubmit={handleSubmit} className="relative w-full">
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-      <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
+      <ChatComposerFrame theme={composerTheme} variant="empty">
         {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
         <div className="flex items-center justify-between px-2 pb-1">
           <div className="flex items-center gap-1">
@@ -2794,7 +2785,7 @@ export function Chat({
             </button>
           </div>
         </div>
-      </div>
+      </ChatComposerFrame>
     </form>
   );
 
@@ -2933,7 +2924,7 @@ export function Chat({
               {/* 居中的输入框 (Codex Style) */}
               <form onSubmit={handleSubmit} className="relative w-full mt-10">
                 <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
+                <ChatComposerFrame theme={composerTheme} variant="empty">
                   {renderComposerInput('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...')}
                   <div className="flex items-center justify-between px-2 pb-1">
                     <div className="flex items-center gap-1">
@@ -3002,7 +2993,7 @@ export function Chat({
                       </button>
                     </div>
                   </div>
-                </div>
+                </ChatComposerFrame>
               </form>
             </div>
             {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
@@ -3065,7 +3056,7 @@ export function Chat({
 
                 <form onSubmit={handleSubmit} className="relative w-full">
                   <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                  <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellClass)}>
+                  <ChatComposerFrame theme={composerTheme} variant="main">
                     {renderComposerInput('composer', 'main', '发送消息...')}
                     <div className="flex items-center justify-between px-1.5 pb-0.5">
                       <div className="flex items-center gap-1">
@@ -3139,7 +3130,7 @@ export function Chat({
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </ChatComposerFrame>
                 </form>
                   </>
                 )}

@@ -436,6 +436,26 @@ fn emit_chatroom_runtime_tool_summaries(
     );
 }
 
+fn clear_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
+    if let Ok(mut guard) = state.creative_chat_cancellations.lock() {
+        guard.remove(room_id);
+    }
+}
+
+fn request_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
+    if let Ok(mut guard) = state.creative_chat_cancellations.lock() {
+        guard.insert(room_id.to_string());
+    }
+}
+
+fn is_chatroom_cancelled(state: &State<'_, AppState>, room_id: &str) -> bool {
+    state
+        .creative_chat_cancellations
+        .lock()
+        .map(|guard| guard.contains(room_id))
+        .unwrap_or(false)
+}
+
 pub fn handle_chatrooms_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -450,6 +470,7 @@ pub fn handle_chatrooms_channel(
             | "chatrooms:update"
             | "chatrooms:delete"
             | "chatrooms:clear"
+            | "chatrooms:cancel"
             | "chatrooms:send"
     ) {
         return None;
@@ -624,14 +645,32 @@ pub fn handle_chatrooms_channel(
                 });
                 Ok(result)
             }
+            "chatrooms:cancel" => {
+                let room_id = payload_string(payload, "roomId")
+                    .or_else(|| payload_value_as_string(payload))
+                    .unwrap_or_default();
+                if room_id.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "缺少 roomId" }));
+                }
+                request_chatroom_cancel(state, &room_id);
+                emit_creative_chat_checkpoint(
+                    app,
+                    &room_id,
+                    "creative_chat.done",
+                    json!({ "roomId": room_id, "cancelled": true }),
+                );
+                Ok(json!({ "success": true }))
+            }
             "chatrooms:send" => {
                 let room_id = payload_string(payload, "roomId").unwrap_or_default();
                 let message = payload_string(payload, "message").unwrap_or_default();
                 let client_message_id = payload_string(payload, "clientMessageId");
                 let context = payload_field(payload, "context").cloned();
+                let model_config = payload_field(payload, "modelConfig").cloned();
                 if room_id.trim().is_empty() || message.trim().is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少 roomId 或 message" }));
                 }
+                clear_chatroom_cancel(state, &room_id);
                 eprintln!(
                     "[creative-chat][send] roomId={} messageChars={}",
                     room_id,
@@ -681,6 +720,7 @@ pub fn handle_chatrooms_channel(
                 let room_id_for_task = room_id.clone();
                 let message_for_task = message.clone();
                 let context_for_task = context.clone();
+                let model_config_for_task = model_config.clone();
                 let advisors_for_task = advisors.clone();
                 let target_advisor_ids_for_task = target_advisor_ids.clone();
                 let room_history_for_task = with_store(state, |store| {
@@ -700,6 +740,9 @@ pub fn handle_chatrooms_channel(
                     );
                     let mut rolling_history = room_history_for_task;
                     for (index, advisor_id) in target_advisor_ids_for_task.iter().enumerate() {
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
+                        }
                         eprintln!(
                             "[creative-chat][advisor-start] roomId={} advisorId={} index={}",
                             room_id_for_task, advisor_id, index
@@ -746,7 +789,11 @@ pub fn handle_chatrooms_channel(
                                 &message_for_task,
                                 context_for_task.as_ref(),
                             );
-                            generate_response_with_settings(&settings_snapshot, None, &prompt)
+                            generate_response_with_settings(
+                                &settings_snapshot,
+                                model_config_for_task.as_ref(),
+                                &prompt,
+                            )
                         } else {
                             let runtime_message = build_chatroom_runtime_message(
                                 &room,
@@ -783,7 +830,8 @@ pub fn handle_chatrooms_channel(
                             .unwrap_or_default();
                             let runtime_payload = json!({
                                 "sessionId": session.id,
-                                "message": runtime_message
+                                "message": runtime_message,
+                                "modelConfig": model_config_for_task.clone()
                             });
                             match handle_runtime_query(
                                 &app_handle,
@@ -824,6 +872,9 @@ pub fn handle_chatrooms_channel(
                                 }
                             }
                         };
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
+                        }
                         eprintln!(
                             "[creative-chat][advisor-response] roomId={} advisorId={} chars={}",
                             room_id_for_task,
@@ -842,6 +893,9 @@ pub fn handle_chatrooms_channel(
                             }),
                         );
                         for chunk in split_stream_chunks(&response, 140) {
+                            if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                                break;
+                            }
                             emit_creative_chat_checkpoint(
                                 &app_handle,
                                 &room_id_for_task,
@@ -855,6 +909,9 @@ pub fn handle_chatrooms_channel(
                                     "done": false
                                 }),
                             );
+                        }
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
                         }
                         let ai_message = ChatRoomMessageRecord {
                             id: make_id("chatroom-message"),
@@ -889,6 +946,7 @@ pub fn handle_chatrooms_channel(
                         );
                     }
 
+                    clear_chatroom_cancel(&managed_state, &room_id_for_task);
                     emit_creative_chat_checkpoint(
                         &app_handle,
                         &room_id_for_task,

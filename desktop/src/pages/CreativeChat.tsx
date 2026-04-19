@@ -1,8 +1,17 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { MessageSquarePlus, Plus, Send, Loader2, X, MoreVertical, UserPlus, UserMinus, Pencil, Check, Trash2 } from 'lucide-react';
+import { MessageSquarePlus, Plus, ArrowUp, Loader2, X, MoreVertical, UserPlus, UserMinus, Pencil, Check, Trash2, ChevronDown, Mic, Square, StopCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ChatComposerFrame, getChatComposerPalette } from '../components/ChatComposerFrame';
+import {
+    blobToBase64,
+    buildChatModelOptions,
+    ComposerAttachmentPreview,
+    type ChatModelOption,
+    type ChatSettingsSnapshot,
+    type UploadedFileAttachment,
+} from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -66,6 +75,12 @@ const SIX_HAT_DOT_CLASS: Record<string, string> = {
 };
 const EMOJI_FONT_FAMILY = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif';
 
+function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+    const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
+    const native = event.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+    return Boolean(native?.isComposing) || Boolean(synthetic.isComposing) || native?.keyCode === 229;
+}
+
 const isLikelyEmojiAvatar = (avatar: string): boolean => {
     const normalized = String(avatar || '').trim();
     if (!normalized) return false;
@@ -126,9 +141,21 @@ export function CreativeChat({
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [isManageModalOpen, setIsManageModalOpen] = useState(false);
     const [isComposing, setIsComposing] = useState(false); // 中文输入法状态
+    const [errorNotice, setErrorNotice] = useState<string | null>(null);
+    const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
+    const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+    const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
+    const [showModelPicker, setShowModelPicker] = useState(false);
+    const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+    const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
     const [pendingRoomClear, setPendingRoomClear] = useState<ChatRoom | null>(null);
     const [pendingRoomDelete, setPendingRoomDelete] = useState<ChatRoom | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const composerRef = useRef<HTMLTextAreaElement>(null);
+    const modelPickerRef = useRef<HTMLDivElement>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const mediaChunksRef = useRef<Blob[]>([]);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
     const selectedRoomIdRef = useRef<string | null>(null);
     const selectedRoomRef = useRef<ChatRoom | null>(null);
     const roomsRef = useRef<ChatRoom[]>([]);
@@ -313,6 +340,221 @@ export function CreativeChat({
             messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         }
     }, [messages, hasStreamingMessage]);
+
+    const syncComposerHeight = useCallback(() => {
+        const textarea = composerRef.current;
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 300)}px`;
+    }, []);
+
+    useEffect(() => {
+        syncComposerHeight();
+    }, [inputValue, syncComposerHeight]);
+
+    const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
+
+    const closeModelPicker = useCallback(() => {
+        setShowModelPicker(false);
+    }, []);
+
+    const clearPendingAttachment = useCallback(() => {
+        setPendingAttachment(null);
+        requestAnimationFrame(() => {
+            syncComposerHeight();
+            composerRef.current?.focus();
+        });
+    }, [syncComposerHeight]);
+
+    const loadChatModelOptions = useCallback(async () => {
+        if (!isActiveRef.current) return;
+        try {
+            const settings = await window.ipcRenderer.getSettings() as ChatSettingsSnapshot | undefined;
+            const options = buildChatModelOptions(settings);
+            setChatModelOptions(options);
+            setSelectedChatModelKey((current) => {
+                if (current && options.some((item) => item.key === current)) return current;
+                return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+            });
+        } catch (error) {
+            console.error('Failed to load creative chat model options:', error);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isActive) return;
+        void loadChatModelOptions();
+    }, [isActive, loadChatModelOptions]);
+
+    useEffect(() => {
+        if (!isActive || !showModelPicker) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!modelPickerRef.current) return;
+            if (!modelPickerRef.current.contains(event.target as Node)) {
+                setShowModelPicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        return () => document.removeEventListener('mousedown', handlePointerDown);
+    }, [isActive, showModelPicker]);
+
+    const cleanupAudioCapture = useCallback(() => {
+        if (mediaRecorderRef.current) {
+            mediaRecorderRef.current.ondataavailable = null;
+            mediaRecorderRef.current.onstop = null;
+            mediaRecorderRef.current.onerror = null;
+            mediaRecorderRef.current = null;
+        }
+        if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+            mediaStreamRef.current = null;
+        }
+        mediaChunksRef.current = [];
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            cleanupAudioCapture();
+        };
+    }, [cleanupAudioCapture]);
+
+    const pickAttachment = useCallback(async () => {
+        if (isSending) return;
+        try {
+            const result = await window.ipcRenderer.chat.pickAttachment({
+                sessionId: selectedRoom?.id || undefined,
+            }) as { success?: boolean; canceled?: boolean; error?: string; attachment?: UploadedFileAttachment };
+            if (!result?.success) {
+                setErrorNotice(result?.error || '上传文件失败');
+                return;
+            }
+            if (result.canceled) return;
+            if (result.attachment) {
+                setErrorNotice(null);
+                setPendingAttachment(result.attachment);
+                requestAnimationFrame(() => {
+                    syncComposerHeight();
+                    composerRef.current?.focus();
+                });
+            }
+        } catch (error) {
+            setErrorNotice(String(error || '上传文件失败'));
+        }
+    }, [isSending, selectedRoom?.id, syncComposerHeight]);
+
+    const getChatModelConfig = useCallback(() => {
+        if (!selectedChatModel) return undefined;
+        return {
+            apiKey: selectedChatModel.apiKey,
+            baseURL: selectedChatModel.baseURL,
+            modelName: selectedChatModel.modelName,
+        };
+    }, [selectedChatModel]);
+
+    const transcribeAudioBlob = useCallback(async (blob: Blob) => {
+        setIsTranscribingAudio(true);
+        setErrorNotice(null);
+        try {
+            const audioBase64 = await blobToBase64(blob);
+            const result = await window.ipcRenderer.chat.transcribeAudio({
+                audioBase64,
+                mimeType: blob.type || 'audio/webm',
+                fileName: `creative_chat_audio_${Date.now()}.webm`,
+            });
+            if (!result?.success || !String(result.text || '').trim()) {
+                throw new Error(result?.error || '语音转文字失败');
+            }
+            setInputValue((prev) => {
+                const current = String(prev || '').trim();
+                const next = String(result.text || '').trim();
+                return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
+            });
+            requestAnimationFrame(() => {
+                composerRef.current?.focus();
+                syncComposerHeight();
+            });
+        } catch (error) {
+            setErrorNotice(error instanceof Error ? error.message : String(error));
+        } finally {
+            setIsTranscribingAudio(false);
+        }
+    }, [syncComposerHeight]);
+
+    const stopAudioRecording = useCallback(() => {
+        const recorder = mediaRecorderRef.current;
+        if (!recorder) return;
+        if (recorder.state !== 'inactive') {
+            recorder.stop();
+        } else {
+            cleanupAudioCapture();
+            setIsRecordingAudio(false);
+        }
+    }, [cleanupAudioCapture]);
+
+    const startAudioRecording = useCallback(async () => {
+        if (isSending || isTranscribingAudio) return;
+        if (!navigator.mediaDevices?.getUserMedia) {
+            setErrorNotice('当前环境不支持麦克风录音');
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const preferredMimeType = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : 'audio/webm';
+            const recorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
+            mediaStreamRef.current = stream;
+            mediaRecorderRef.current = recorder;
+            mediaChunksRef.current = [];
+
+            recorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    mediaChunksRef.current.push(event.data);
+                }
+            };
+            recorder.onerror = () => {
+                setErrorNotice('录音失败，请检查麦克风权限');
+                cleanupAudioCapture();
+                setIsRecordingAudio(false);
+            };
+            recorder.onstop = () => {
+                const chunks = [...mediaChunksRef.current];
+                cleanupAudioCapture();
+                setIsRecordingAudio(false);
+                if (!chunks.length) return;
+                void transcribeAudioBlob(new Blob(chunks, { type: recorder.mimeType || preferredMimeType || 'audio/webm' }));
+            };
+
+            recorder.start();
+            setIsRecordingAudio(true);
+            setErrorNotice(null);
+        } catch (error) {
+            cleanupAudioCapture();
+            setIsRecordingAudio(false);
+            setErrorNotice(error instanceof Error ? error.message : '无法访问麦克风');
+        }
+    }, [cleanupAudioCapture, isSending, isTranscribingAudio, transcribeAudioBlob]);
+
+    const handleAudioInput = useCallback(() => {
+        if (isRecordingAudio) {
+            stopAudioRecording();
+            return;
+        }
+        void startAudioRecording();
+    }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
+
+    const handleCancelSend = useCallback(async () => {
+        if (!selectedRoom) return;
+        try {
+            await window.ipcRenderer.invoke('chatrooms:cancel', { roomId: selectedRoom.id });
+        } catch (error) {
+            console.error('Failed to cancel creative chat:', error);
+        }
+        setIsSending(false);
+        setThinkingState({});
+        setMessages((prev) => prev.map((msg) => msg.isStreaming ? { ...msg, isStreaming: false } : msg));
+    }, [selectedRoom]);
 
     // Thinking chain state per advisor
     const [thinkingState, setThinkingState] = useState<Record<string, {
@@ -660,34 +902,50 @@ export function CreativeChat({
     }, [handleSelectRoom, rooms, selectedRoomId]);
 
     const handleSendMessage = async () => {
-        if (!inputValue.trim() || !selectedRoom || isSending) return;
+        const normalizedContent = String(inputValue || '').trim();
+        const attachment = pendingAttachment;
+        const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
+        if (!displayText || !selectedRoom || isSending) return;
 
         const clientMessageId = `msg_${Date.now()}`;
         const userMessage: ChatMessage = {
             id: clientMessageId,
             role: 'user',
-            content: inputValue.trim(),
+            content: displayText,
             timestamp: new Date().toISOString()
         };
 
         setMessages(prev => [...prev, userMessage]);
         setInputValue('');
+        setPendingAttachment(null);
+        setErrorNotice(null);
         setIsSending(true);
+        if (composerRef.current) {
+            composerRef.current.style.height = '72px';
+        }
 
         try {
             const targetRoomId = selectedRoom.id;
+            const contextPayload: Record<string, unknown> = {};
+            if (activeFile) {
+                contextPayload.activeFile = {
+                    filePath: activeFile.path,
+                    fileContent: activeFile.content.substring(0, 10000),
+                };
+            }
+            if (attachment) {
+                contextPayload.attachment = attachment;
+            }
             window.ipcRenderer.send('chatrooms:send', {
                 roomId: targetRoomId,
-                message: userMessage.content,
+                message: displayText,
                 clientMessageId,
-                context: activeFile ? {
-                    filePath: activeFile.path,
-                    fileContent: activeFile.content.substring(0, 10000) // 限制上下文长度，避免过长
-                } : undefined
+                context: Object.keys(contextPayload).length > 0 ? contextPayload : undefined,
+                modelConfig: getChatModelConfig(),
             });
-            setIsSending(false);
         } catch (e) {
             console.error('Failed to send message:', e);
+            setErrorNotice('发送消息失败');
             setIsSending(false);
         }
     };
@@ -838,6 +1096,63 @@ export function CreativeChat({
             <span className={clsx(sizeClasses[size], "flex items-center justify-center", className)}>
                 {renderAvatarText(avatar, size === 'lg' ? 'text-base' : size === 'md' ? 'text-sm' : 'text-[11px]')}
             </span>
+        );
+    };
+
+    const composerPalette = getChatComposerPalette('default');
+    const composerSubtleButtonClass = composerPalette.subtleButton;
+    const composerModelPickerClass = 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
+    const composerTextClass = clsx(
+        'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto',
+        composerPalette.text,
+    );
+    const composerSendButtonClass = (inputValue.trim() || pendingAttachment) && !isSending
+        ? composerPalette.sendButtonActive
+        : composerPalette.sendButtonIdle;
+
+    const renderComposerInput = () => {
+        const textarea = (
+            <textarea
+                ref={composerRef}
+                value={inputValue}
+                onChange={(e) => {
+                    setInputValue(e.target.value);
+                    syncComposerHeight();
+                }}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && !isComposing && !isImeComposingEvent(e)) {
+                        e.preventDefault();
+                        void handleSendMessage();
+                    }
+                }}
+                placeholder="发送消息..."
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                readOnly={isSending}
+                aria-disabled={isSending}
+                rows={1}
+                className={composerTextClass}
+            />
+        );
+
+        if (!pendingAttachment) {
+            return textarea;
+        }
+
+        return (
+            <div className="px-3.5 pt-3">
+                <ComposerAttachmentPreview
+                    attachment={pendingAttachment}
+                    darkEmbedded={false}
+                    variant="main"
+                    onRemove={clearPendingAttachment}
+                >
+                    {textarea}
+                </ComposerAttachmentPreview>
+            </div>
         );
     };
 
@@ -1086,32 +1401,100 @@ export function CreativeChat({
                         </div>
 
                         {/* Input */}
-                        <div className="p-4 border-t border-border">
-                            <div className="flex items-center gap-3">
-                                <input
-                                    type="text"
-                                    value={inputValue}
-                                    onChange={(e) => setInputValue(e.target.value)}
-                                    onCompositionStart={() => setIsComposing(true)}
-                                    onCompositionEnd={() => setIsComposing(false)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
-                                            e.preventDefault();
-                                            handleSendMessage();
-                                        }
-                                    }}
-                                    placeholder="输入你的问题，智囊团成员将依次发表观点..."
-                                    disabled={isSending}
-                                    className="flex-1 bg-surface-secondary border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary disabled:opacity-50"
-                                />
-                                <button
-                                    onClick={handleSendMessage}
-                                    disabled={!inputValue.trim() || isSending}
-                                    className="p-3 bg-accent-primary text-white rounded-xl hover:bg-accent-primary/90 disabled:opacity-50 transition-colors"
-                                >
-                                    {isSending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                                </button>
-                            </div>
+                        <div className="shrink-0 border-t border-border bg-surface-primary px-4 py-4">
+                            {errorNotice && (
+                                <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                                    {errorNotice}
+                                </div>
+                            )}
+                            <form
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    void handleSendMessage();
+                                }}
+                                className="mx-auto w-full"
+                            >
+                                <ChatComposerFrame theme="default" variant="main">
+                                    {renderComposerInput()}
+                                    <div className="flex items-center justify-between px-1.5 pb-0.5">
+                                        <div className="flex items-center gap-1">
+                                            <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
+                                                <Plus className="w-[18px] h-[18px]" />
+                                            </button>
+                                            <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowModelPicker((prev) => !prev)}
+                                                    className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
+                                                >
+                                                    <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
+                                                    <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
+                                                </button>
+                                                {showModelPicker && (
+                                                    <div className={composerModelPickerClass}>
+                                                        {chatModelOptions.length ? chatModelOptions.map((option) => {
+                                                            const active = option.key === selectedChatModelKey;
+                                                            return (
+                                                                <button
+                                                                    key={option.key}
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setSelectedChatModelKey(option.key);
+                                                                        closeModelPicker();
+                                                                    }}
+                                                                    className={clsx(
+                                                                        'w-full px-3 py-2.5 text-left transition-colors',
+                                                                        active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/50 text-text-secondary'
+                                                                    )}
+                                                                >
+                                                                    <div className="text-sm font-medium truncate">{option.modelName}</div>
+                                                                    <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
+                                                                </button>
+                                                            );
+                                                        }) : (
+                                                            <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {isSending ? (
+                                                <button type="button" onClick={() => void handleCancelSend()} className="p-2 rounded-lg text-red-500 transition-colors hover:bg-red-50" title="停止生成">
+                                                    <StopCircle className="w-5 h-5" />
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleAudioInput}
+                                                    disabled={isTranscribingAudio}
+                                                    className={clsx(
+                                                        'p-2 transition-colors',
+                                                        isRecordingAudio ? 'text-red-500 hover:text-red-600' : 'text-text-tertiary hover:text-text-secondary',
+                                                        isTranscribingAudio && 'opacity-60 cursor-not-allowed'
+                                                    )}
+                                                    title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
+                                                >
+                                                    {isTranscribingAudio ? (
+                                                        <Loader2 className="w-[18px] h-[18px] animate-spin" />
+                                                    ) : isRecordingAudio ? (
+                                                        <Square className="w-[18px] h-[18px] fill-current" />
+                                                    ) : (
+                                                        <Mic className="w-[18px] h-[18px]" />
+                                                    )}
+                                                </button>
+                                            )}
+                                            <button
+                                                type="submit"
+                                                disabled={(!inputValue.trim() && !pendingAttachment) || isSending}
+                                                className={clsx('flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200', composerSendButtonClass)}
+                                            >
+                                                {isSending ? <Loader2 className="h-4 w-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="h-5 w-5" />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </ChatComposerFrame>
+                            </form>
                         </div>
                     </>
                 ) : (
