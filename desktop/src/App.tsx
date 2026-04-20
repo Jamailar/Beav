@@ -44,6 +44,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'workboard',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
+const OFFICIAL_AUTH_NOTICE_ENABLED = false;
 const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
 const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
   'redbox-auth:display-session',
@@ -260,12 +261,12 @@ function App() {
       }
       if (nextStatus === 'reauthRequired') {
         clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_TEXT);
+        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
         return;
       }
       if (nextStatus === 'anonymous') {
         const cleared = clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(cleared ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+        setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
         return;
       }
       if (prevStatus === 'reauthRequired') {
@@ -283,12 +284,12 @@ function App() {
         lastAuthStatusRef.current = nextStatus;
         if (nextStatus === 'reauthRequired') {
           clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_TEXT);
+          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
           return;
         }
         if (nextStatus === 'anonymous') {
           const cleared = clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(cleared ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
           return;
         }
         setGlobalAuthNotice(null);
