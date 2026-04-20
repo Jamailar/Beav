@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,8 +13,9 @@ use crate::tools::registry::{
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
 };
 use crate::{
-    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, redbox_project_root,
-    render_redbox_prompt, slug_from_relative_path, truncate_chars, workspace_root, AppState,
+    AppState, load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
+    redbox_project_root, render_redbox_prompt, slug_from_relative_path, truncate_chars,
+    workspace_root,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(
@@ -232,7 +233,7 @@ pub(crate) fn interactive_runtime_system_prompt(
             }
         }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for spaces, subjects, manuscripts, media, image generation, video generation, projects, RedClaw, settings, memory, skills, and MCP.\n- When `knowledge_glob` / `knowledge_grep` / `knowledge_read` are available, use them for advisor/member-specific knowledge retrieval instead of broad `bash` scanning.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` tools may still exist in diagnostics or compatibility flows, but they are no longer the default mental model.\n",
+            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for advisors, chat sessions, spaces, subjects, manuscripts, theme/layout workflows, media, image generation, video generation, projects, RedClaw, runtime/tasks/background control, settings, memory, skills, AI config, and MCP.\n- When `redbox_fs` is available, use it as the default structured file tool. For advisor/member knowledge, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` instead of broad `bash` scanning.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` and `knowledge_*` tool names may still exist in compatibility flows, but they are no longer the default mental model.\n",
         );
         if !prompt_suffix.trim().is_empty() {
             rendered.push_str("\n\n");
@@ -277,7 +278,7 @@ fn advisor_runtime_context_section(
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `knowledge_glob`, `knowledge_grep`, and `knowledge_read` to inspect this advisor's files.\n- Suggested order: `knowledge_glob` -> `knowledge_grep` -> `knowledge_read`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
+        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
         advisor_name, advisor_id, advisor_knowledge_path, advisor_id
     )
 }
@@ -485,6 +486,60 @@ pub(crate) fn resolve_workspace_tool_path(
     let workspace_normalized = workspace.canonicalize().unwrap_or(workspace);
     if !normalized.starts_with(&workspace_normalized) {
         return Err("path is outside currentSpaceRoot".to_string());
+    }
+    Ok(normalized)
+}
+
+pub(crate) fn session_workspace_root_override(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
+    let session_id = session_id?;
+    with_store(state, |store| {
+        Ok(store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| {
+                let context_type = payload_string(metadata, "contextType").unwrap_or_default();
+                let workspace_mode =
+                    payload_string(metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
+                let is_theme_editing = context_type == "richpost-theme-editing"
+                    || workspace_mode == "richpost-theme-editing";
+                if !is_theme_editing {
+                    return None;
+                }
+                payload_string(metadata, "associatedFilePath")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+            }))
+    })
+    .ok()
+    .flatten()
+}
+
+pub(crate) fn resolve_workspace_tool_path_for_session(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("path is required".to_string());
+    }
+    let Some(root) = session_workspace_root_override(state, session_id) else {
+        return resolve_workspace_tool_path(state, raw_path);
+    };
+    let candidate = if Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else {
+        root.join(trimmed)
+    };
+    let normalized = candidate.canonicalize().unwrap_or(candidate.clone());
+    let root_normalized = root.canonicalize().unwrap_or(root);
+    if !normalized.starts_with(&root_normalized) {
+        return Err("path is outside currentPackageRoot".to_string());
     }
     Ok(normalized)
 }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::chat_state::{
     apply_context_binding_metadata, build_context_session_id, ensure_chat_session,
@@ -7,13 +7,13 @@ use crate::commands::chat_state::{
     resolve_runtime_mode_for_session, session_matches_context_binding,
 };
 use crate::runtime::{
+    SESSION_CONTEXT_TAIL_MESSAGES, SessionCheckpointRecord, SessionTranscriptFileMeta,
     chat_messages_for_session, checkpoint_count_for_session, checkpoints_for_session,
     last_checkpoint_for_session, runtime_context_messages_for_session,
     session_context_value_for_session, session_summary_text_for_session, tool_results_for_session,
-    trace_for_session, transcript_count_for_session, SessionCheckpointRecord,
-    SessionTranscriptFileMeta, SESSION_CONTEXT_TAIL_MESSAGES,
+    trace_for_session, transcript_count_for_session,
 };
-use crate::{make_id, now_iso, AppStore, ChatSessionContextRecord, ChatSessionRecord};
+use crate::{AppStore, ChatSessionContextRecord, ChatSessionRecord, make_id, now_iso};
 
 pub(crate) const SESSION_RETENTION_MAX_SESSIONS: usize = 200;
 
@@ -774,10 +774,12 @@ mod tests {
         let outcome = enforce_retention(&mut store, 2);
         assert_eq!(outcome.removed_session_ids, vec!["session-0".to_string()]);
         assert_eq!(store.chat_sessions.len(), 2);
-        assert!(store
-            .chat_messages
-            .iter()
-            .all(|message| message.session_id != "session-0"));
+        assert!(
+            store
+                .chat_messages
+                .iter()
+                .all(|message| message.session_id != "session-0")
+        );
     }
 
     #[test]

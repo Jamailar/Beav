@@ -34,7 +34,7 @@ mod subagents;
 mod tools;
 mod workspace_loaders;
 
-use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
+use agent::{PreparedWanderTurn, execute_prepared_wander_turn};
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
     resolve_runtime_mode_for_session, update_chat_runtime_state,
@@ -45,32 +45,30 @@ use events::{
     emit_runtime_tool_request, emit_runtime_tool_result, split_stream_chunks,
 };
 use persistence::{
-    build_store_path, ensure_store_hydrated_for_advisors, ensure_store_hydrated_for_knowledge,
-    ensure_store_hydrated_for_work, hydrate_store_from_workspace_files, load_store, persist_store,
-    with_store, with_store_mut,
+    build_store_path, ensure_store_hydrated_for_knowledge, hydrate_store_from_workspace_files,
+    load_store, persist_store, with_store, with_store_mut,
 };
 use runtime::{
-    append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
-    resolve_runtime_mode_from_context_type, role_sequence_for_route,
-    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord,
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
     RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig,
     RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry,
     RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
-    SkillRecord,
+    SkillRecord, append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms,
+    resolve_chat_config, resolve_runtime_mode_from_context_type, role_sequence_for_route,
+    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
     Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -2112,13 +2110,6 @@ fn collect_recent_chat_messages(
     interactive_runtime_shared::collect_recent_chat_messages(state, session_id, limit)
 }
 
-fn resolve_workspace_tool_path(
-    state: &State<'_, AppState>,
-    raw_path: &str,
-) -> Result<PathBuf, String> {
-    interactive_runtime_shared::resolve_workspace_tool_path(state, raw_path)
-}
-
 fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Value>, String> {
     interactive_runtime_shared::list_directory_entries(path, limit)
 }
@@ -2968,243 +2959,34 @@ fn execute_interactive_tool_call(
                 _ => Err(format!("unsupported redbox_editor action: {action}")),
             }
         }
-        "redbox_app_query" => {
-            let operation = payload_string(arguments, "operation").unwrap_or_default();
-            let limit = parse_usize_arg(arguments, "limit", 8, 20);
-            let query = payload_string(arguments, "query")
-                .unwrap_or_default()
-                .to_lowercase();
-            let status_filter = payload_string(arguments, "status");
-            match operation.as_str() {
-                "spaces.list" => with_store(state, |store| {
-                    Ok(json!({
-                        "spaces": store.spaces.iter().map(|item| json!({
-                            "id": item.id,
-                            "name": item.name,
-                            "isActive": item.id == store.active_space_id,
-                            "updatedAt": item.updated_at
-                        })).collect::<Vec<_>>()
-                    }))
-                }),
-                "advisors.list" => {
-                    let _ = ensure_store_hydrated_for_advisors(state);
-                    with_store(state, |store| {
-                        let mut items = store.advisors.clone();
-                        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                        Ok(json!({
-                            "advisors": items.into_iter().take(limit).map(|item| json!({
-                                "id": item.id,
-                                "name": item.name,
-                                "personality": item.personality,
-                                "knowledgeLanguage": item.knowledge_language,
-                                "knowledgeFileCount": item.knowledge_files.len(),
-                                "updatedAt": item.updated_at
-                            })).collect::<Vec<_>>()
-                        }))
-                    })
-                }
-                "knowledge.search" => {
-                    let page = crate::knowledge_index::catalog::list_page(
-                        state,
-                        None,
-                        limit.max(1),
-                        None,
-                        Some(&query),
-                        Some("updated-desc"),
-                    )?;
-                    Ok(json!({
-                        "results": page.items.into_iter().map(|item| {
-                            let kind = match item.kind.as_str() {
-                                "redbook-note" => "note",
-                                "youtube-video" => "youtube",
-                                "document-source" => "document-source",
-                                other => other,
-                            };
-                            json!({
-                                "kind": kind,
-                                "id": item.item_id,
-                                "title": item.title,
-                                "snippet": text_snippet(&item.preview_text, 220),
-                                "sourceUrl": item.source_url,
-                                "videoUrl": item.source_url,
-                                "rootPath": item.root_path,
-                            })
-                        }).collect::<Vec<_>>()
-                    }))
-                }
-                "work.list" => {
-                    let _ = ensure_store_hydrated_for_work(state);
-                    with_store(state, |store| {
-                        let mut items = store.work_items.clone();
-                        items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                        Ok(json!({
-                            "workItems": items
-                                .into_iter()
-                                .filter(|item| status_filter.as_ref().map(|status| &item.status == status).unwrap_or(true))
-                                .take(limit)
-                                .map(|item| json!({
-                                    "id": item.id,
-                                    "title": item.title,
-                                    "status": item.status,
-                                    "summary": item.summary,
-                                    "type": item.r#type,
-                                    "updatedAt": item.updated_at
-                                }))
-                                .collect::<Vec<_>>()
-                        }))
-                    })
-                }
-                "memory.search" => with_store(state, |store| {
-                    Ok(json!({
-                        "memories": store.memories
-                            .iter()
-                            .filter(|item| item.content.to_lowercase().contains(&query))
-                            .take(limit)
-                            .map(|item| json!({
-                                "id": item.id,
-                                "type": item.r#type,
-                                "content": text_snippet(&item.content, 220),
-                                "tags": item.tags,
-                                "updatedAt": item.updated_at
-                            }))
-                            .collect::<Vec<_>>()
-                    }))
-                }),
-                "chat.sessions.list" => with_store(state, |store| {
-                    let mut items = store.chat_sessions.clone();
-                    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    Ok(json!({
-                        "sessions": items.into_iter().take(limit).map(|item| json!({
-                            "id": item.id,
-                            "title": item.title,
-                            "updatedAt": item.updated_at
-                        })).collect::<Vec<_>>()
-                    }))
-                }),
-                "settings.summary" => with_store(state, |store| {
-                    let default_ai_source_id =
-                        payload_string(&store.settings, "default_ai_source_id");
-                    let model_name = payload_string(&store.settings, "model_name");
-                    let api_endpoint = payload_string(&store.settings, "api_endpoint");
-                    Ok(json!({
-                        "defaultAiSourceId": default_ai_source_id,
-                        "modelName": model_name,
-                        "apiEndpoint": api_endpoint,
-                        "hasApiKey": payload_string(&store.settings, "api_key").map(|value| !value.trim().is_empty()).unwrap_or(false),
-                        "hasEmbeddingKey": payload_string(&store.settings, "embedding_key").map(|value| !value.trim().is_empty()).unwrap_or(false),
-                        "hasMcpConfig": payload_string(&store.settings, "mcp_servers_json").map(|value| value != "[]" && !value.trim().is_empty()).unwrap_or(false)
-                    }))
-                }),
-                "redclaw.projects.list" => with_store(state, |_store| {
-                    Ok(json!({
-                        "projects": Vec::<Value>::new(),
-                        "deprecated": true
-                    }))
-                }),
-                "redclaw.profile.bundle" => {
-                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
-                    Ok(json!({
-                        "profileRoot": bundle.profile_root.display().to_string(),
-                        "docs": {
-                            "agent": {
-                                "path": bundle.profile_root.join("Agent.md").display().to_string(),
-                                "chars": bundle.agent.chars().count(),
-                                "preview": text_snippet(&bundle.agent, 240)
-                            },
-                            "soul": {
-                                "path": bundle.profile_root.join("Soul.md").display().to_string(),
-                                "chars": bundle.soul.chars().count(),
-                                "preview": text_snippet(&bundle.soul, 240)
-                            },
-                            "user": {
-                                "path": bundle.profile_root.join("user.md").display().to_string(),
-                                "chars": bundle.user.chars().count(),
-                                "preview": text_snippet(&bundle.user, 240)
-                            },
-                            "creatorProfile": {
-                                "path": bundle.profile_root.join("CreatorProfile.md").display().to_string(),
-                                "chars": bundle.creator_profile.chars().count(),
-                                "preview": text_snippet(&bundle.creator_profile, 240)
-                            }
-                        },
-                        "onboarding": bundle.onboarding_state
-                    }))
-                }
-                "redclaw.profile.onboarding" => {
-                    let onboarding_state = load_redclaw_onboarding_state(state)?;
-                    Ok(json!({
-                        "completed": onboarding_state
-                            .get("completedAt")
-                            .and_then(|value| value.as_str())
-                            .map(|value| !value.trim().is_empty())
-                            .unwrap_or(false),
-                        "state": onboarding_state
-                    }))
-                }
-                _ => Err(format!("unsupported app query operation: {operation}")),
-            }
-        }
-        "redbox_profile_doc" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            match action.as_str() {
-                "bundle" => {
-                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
-                    Ok(json!({
-                        "profileRoot": bundle.profile_root.display().to_string(),
-                        "agent": bundle.agent,
-                        "soul": bundle.soul,
-                        "identity": bundle.identity,
-                        "user": bundle.user,
-                        "creatorProfile": bundle.creator_profile,
-                        "bootstrap": bundle.bootstrap,
-                        "onboardingState": bundle.onboarding_state
-                    }))
-                }
-                "read" => {
-                    let doc_type =
-                        payload_string(arguments, "docType").unwrap_or_else(|| "user".to_string());
-                    let Some((file_name, _title)) = profile_doc_target(&doc_type) else {
-                        return Err(format!("unsupported profile doc type: {doc_type}"));
-                    };
-                    let bundle = load_redclaw_profile_prompt_bundle(state)?;
-                    let content = match doc_type.as_str() {
-                        "agent" => bundle.agent,
-                        "soul" => bundle.soul,
-                        "user" => bundle.user,
-                        "creator_profile" => bundle.creator_profile,
-                        _ => String::new(),
-                    };
-                    Ok(json!({
-                        "docType": doc_type,
-                        "fileName": file_name,
-                        "path": bundle.profile_root.join(file_name).display().to_string(),
-                        "content": content
-                    }))
-                }
-                "update" => {
-                    let doc_type = payload_string(arguments, "docType")
-                        .ok_or_else(|| "docType is required for update".to_string())?;
-                    let markdown = payload_string(arguments, "markdown")
-                        .ok_or_else(|| "markdown is required for update".to_string())?;
-                    let reason = payload_string(arguments, "reason");
-                    let mut result = update_redclaw_profile_doc(state, &doc_type, &markdown)?;
-                    if let Some(reason_text) = reason {
-                        if let Some(object) = result.as_object_mut() {
-                            object.insert("reason".to_string(), json!(reason_text));
-                        }
-                    }
-                    Ok(result)
-                }
-                _ => Err(format!("unsupported redbox_profile_doc action: {action}")),
-            }
-        }
         "redbox_fs" => {
             let action = payload_string(arguments, "action").unwrap_or_default();
+            let scope = payload_string(arguments, "scope")
+                .unwrap_or_else(|| "workspace".to_string())
+                .to_ascii_lowercase();
             let raw_path = payload_string(arguments, "path").unwrap_or_default();
             match action.as_str() {
+                "search" if scope == "knowledge" => {
+                    crate::tools::knowledge_search::execute_grep(state, session_id, arguments)
+                }
+                "list" if scope == "knowledge" => {
+                    crate::tools::knowledge_search::execute_glob(state, session_id, arguments)
+                }
+                "read" if scope == "knowledge" => {
+                    crate::tools::knowledge_search::execute_read(state, session_id, arguments)
+                }
                 "list" => {
+                    if raw_path.trim().is_empty() {
+                        return Err(
+                            "path is required for redbox_fs(action=list, scope=workspace)"
+                                .to_string(),
+                        );
+                    }
                     let limit = parse_usize_arg(arguments, "limit", 20, 50);
-                    let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+                    let resolved =
+                        interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                            state, session_id, &raw_path,
+                        )?;
                     if !resolved.is_dir() {
                         return Err(format!("not a directory: {}", resolved.display()));
                     }
@@ -3214,8 +2996,17 @@ fn execute_interactive_tool_call(
                     }))
                 }
                 "read" => {
+                    if raw_path.trim().is_empty() {
+                        return Err(
+                            "path is required for redbox_fs(action=read, scope=workspace)"
+                                .to_string(),
+                        );
+                    }
                     let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
-                    let resolved = resolve_workspace_tool_path(state, &raw_path)?;
+                    let resolved =
+                        interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                            state, session_id, &raw_path,
+                        )?;
                     if !resolved.is_file() {
                         return Err(format!("not a file: {}", resolved.display()));
                     }
@@ -3233,14 +3024,70 @@ fn execute_interactive_tool_call(
     }
 }
 
+fn read_text_excerpt_from_path(path: &str, max_chars: usize) -> String {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+    fs::read_to_string(normalized)
+        .map(|content| truncate_chars(&content, max_chars))
+        .unwrap_or_default()
+}
+
+fn find_richpost_theme_record<'a>(value: &'a Value, theme_id: &str) -> Option<&'a Value> {
+    if theme_id.trim().is_empty() {
+        return None;
+    }
+    if let Some(items) = value.as_array() {
+        return items.iter().find(|item| {
+            item.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim())
+        });
+    }
+    for field in ["themes", "items", "records"] {
+        if let Some(items) = value.get(field).and_then(Value::as_array) {
+            if let Some(found) = items.iter().find(|item| {
+                item.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim())
+            }) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn load_richpost_theme_record_excerpt(
+    theme_file: &str,
+    theme_id: &str,
+    max_chars: usize,
+) -> String {
+    let normalized = theme_file.trim();
+    if normalized.is_empty() || theme_id.trim().is_empty() {
+        return String::new();
+    }
+    let Ok(content) = fs::read_to_string(normalized) else {
+        return String::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
+        return String::new();
+    };
+    if parsed.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim()) {
+        return serde_json::to_string_pretty(&parsed)
+            .map(|value| truncate_chars(&value, max_chars))
+            .unwrap_or_default();
+    }
+    let Some(record) = find_richpost_theme_record(&parsed, theme_id) else {
+        return String::new();
+    };
+    serde_json::to_string_pretty(record)
+        .map(|value| truncate_chars(&value, max_chars))
+        .unwrap_or_default()
+}
+
 fn editor_session_prompt_context(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     runtime_mode: &str,
 ) -> String {
-    if !matches!(runtime_mode, "video-editor" | "audio-editor") {
-        return String::new();
-    }
     let Some(session_id) = session_id else {
         return String::new();
     };
@@ -3256,6 +3103,153 @@ fn editor_session_prompt_context(
     let Some(metadata) = metadata else {
         return String::new();
     };
+    if runtime_mode == "chatroom" {
+        let workspace_mode =
+            payload_string(&metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
+        let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
+        if workspace_mode == "richpost-theme-editing" && package_kind == "richpost" {
+            let file_path = payload_string(&metadata, "associatedFilePath")
+                .or_else(|| payload_string(&metadata, "contextId"))
+                .unwrap_or_default();
+            let title = payload_string(&metadata, "associatedPackageTitle").unwrap_or_default();
+            let theme_id =
+                payload_string(&metadata, "associatedPackageThemeEditingId").unwrap_or_default();
+            let theme_label =
+                payload_string(&metadata, "associatedPackageThemeEditingLabel").unwrap_or_default();
+            let applied_theme_id =
+                payload_string(&metadata, "associatedPackageAppliedThemeId").unwrap_or_default();
+            let applied_theme_label =
+                payload_string(&metadata, "associatedPackageAppliedThemeLabel").unwrap_or_default();
+            let theme_file =
+                payload_string(&metadata, "associatedPackageThemeEditingFile").unwrap_or_default();
+            let template_file =
+                payload_string(&metadata, "associatedPackageThemeEditingTemplateFile")
+                    .unwrap_or_default();
+            let style_rule =
+                payload_string(&metadata, "associatedPackageStyleEditRule").unwrap_or_default();
+            let target_files = metadata
+                .get("associatedPackageThemeEditingTargetFiles")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let theme_root = target_files
+                .get("themeRoot")
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_default();
+            let master_files = target_files
+                .get("masterFiles")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            let layout_tokens_file = target_files
+                .get("layoutTokensFile")
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_default();
+            let page_plan_file = target_files
+                .get("pagePlanFile")
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_default();
+            let template_guide_file = target_files
+                .get("templateGuideFile")
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| template_file.clone());
+            let theme_assets_dir = target_files
+                .get("assetsDir")
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .or_else(|| {
+                    if !theme_root.trim().is_empty() {
+                        Some(
+                            PathBuf::from(&theme_root)
+                                .join("assets")
+                                .display()
+                                .to_string(),
+                        )
+                    } else if !theme_file.trim().is_empty() {
+                        PathBuf::from(&theme_file)
+                            .parent()
+                            .map(|parent| parent.join("assets").display().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            let theme_record_json =
+                load_richpost_theme_record_excerpt(&theme_file, &theme_id, 2600);
+            let template_guide_excerpt = read_text_excerpt_from_path(&template_guide_file, 2600);
+            let master_files_json =
+                serde_json::to_string_pretty(&master_files).unwrap_or_else(|_| "[]".to_string());
+            let theme_record_json_for_prompt = theme_record_json.clone();
+            if let Some(template) = load_redbox_prompt("runtime/pi/richpost_theme_editor.txt") {
+                let rendered = render_redbox_prompt(
+                    &template,
+                    &[
+                        ("runtime_mode", runtime_mode.to_string()),
+                        ("workspace_mode", workspace_mode.clone()),
+                        ("package_file", file_path.clone()),
+                        ("title", title.clone()),
+                        ("theme_root", theme_root.clone()),
+                        ("theme_id", theme_id.clone()),
+                        ("theme_label", theme_label.clone()),
+                        ("applied_theme_id", applied_theme_id),
+                        ("applied_theme_label", applied_theme_label),
+                        ("theme_file", theme_file.clone()),
+                        ("template_file", template_file.clone()),
+                        ("template_guide_file", template_guide_file.clone()),
+                        ("layout_tokens_file", layout_tokens_file.clone()),
+                        ("page_plan_file", page_plan_file.clone()),
+                        ("master_files", master_files_json),
+                        ("theme_assets_dir", theme_assets_dir.clone()),
+                        ("style_rule", style_rule.clone()),
+                        ("theme_record_json", theme_record_json_for_prompt),
+                        ("template_guide_excerpt", template_guide_excerpt),
+                    ],
+                );
+                if !rendered.trim().is_empty() {
+                    return format!("\n\n{}", rendered.trim());
+                }
+            }
+            return format!(
+                "\n\n## 当前图文主题编辑上下文\n\
+runtime_mode: {runtime_mode}\n\
+workspaceMode: {workspace_mode}\n\
+packageFile: {file_path}\n\
+title: {title}\n\
+themeId: {theme_id}\n\
+themeLabel: {theme_label}\n\
+\n\
+## 当前真实编辑目标\n\
+themeRecordFile: {theme_file}\n\
+themeTemplateGuideFile: {template_file}\n\
+layoutTokensFile: {layout_tokens_file}\n\
+pagePlanFile: {page_plan_file}\n\
+masterFiles: {}\n\
+themeAssetsDir: {theme_assets_dir}\n\
+\n\
+## 理解规则\n\
+- 当前主题有自己的 theme root，当前正在编辑的是 `themes/<themeId>/` 下这一整套文件。\n\
+- 当前会话只允许处理当前稿件包内的主题文件；不要改全局 `~/.redbox/themes/...` 之类的共享主题目录。\n\
+- 如果 `themeRecordFile` 为空，先为当前稿件包创建或保存 package-local custom theme，再继续编辑。\n\
+- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `theme.json`、layout tokens、母版 HTML 还是 page plan。\n\
+- 添加渐变背景、背景图、容器、颜色、圆角、阴影、文字区域时，优先修改当前 theme root 里的 `theme.json`、`layout.tokens.json` 和 `masters/*.master.html`。\n\
+- 不要扫描其他 richpost 工程来猜当前模板；以上这些文件就是当前主题编辑页绑定的真实目标。\n\
+- 不要改 `content.md` 正文，不要手改 `pages/page-xxx.html` 作为最终来源。\n\
+- 工具调用失败就表示这次修改没有完成；在读回 package-local tokens 或预览前，不要宣称成功。\n\
+\n\
+## 当前规则\n\
+{style_rule}\n\
+\n\
+## 目标文件快照\n\
+themeRecordFileAgain: {theme_file}\n\
+themeTemplateGuideFileAgain: {template_guide_file}\n\
+\n\
+## 当前主题记录快照\n\
+{theme_record_json}\n",
+                serde_json::to_string(&master_files).unwrap_or_else(|_| "[]".to_string()),
+            );
+        }
+        return String::new();
+    }
+    if !matches!(runtime_mode, "video-editor" | "audio-editor") {
+        return String::new();
+    }
     let file_path = payload_string(&metadata, "associatedFilePath")
         .or_else(|| payload_string(&metadata, "contextId"))
         .unwrap_or_default();
@@ -5883,6 +5877,93 @@ fn run_openai_interactive_chat_runtime(
     })
 }
 
+fn run_openai_prompted_streaming_fallback(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    config: &ResolvedChatConfig,
+    message: &str,
+    runtime_mode: &str,
+) -> Result<String, String> {
+    let (system_prompt, prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+    let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
+    messages.insert(
+        0,
+        json!({
+            "role": "system",
+            "content": system_prompt
+        }),
+    );
+
+    if let Some(current_session_id) = session_id {
+        emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
+    }
+
+    let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
+    let disable_qwen_thinking =
+        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
+    let mut body = json!({
+        "model": config.model_name,
+        "messages": messages,
+        "stream": true
+    });
+    if disable_qwen_thinking {
+        body["enable_thinking"] = json!(false);
+    }
+
+    let streamed = run_openai_streaming_chat_completion(
+        app,
+        state,
+        session_id,
+        runtime_mode,
+        config,
+        &body,
+        Some(90),
+    )?;
+    let final_content = streamed.content;
+    if final_content.trim().is_empty() {
+        finalize_interactive_runtime_state(
+            state,
+            session_id,
+            &final_content,
+            Some("empty fallback response"),
+        );
+        return Err("interactive fallback returned an empty response".to_string());
+    }
+
+    canonical_messages.push(canonical_text_message("assistant", final_content.clone()));
+    save_runtime_session_bundle(
+        state,
+        session_id,
+        "openai",
+        runtime_mode,
+        &config.model_name,
+        &canonical_messages,
+    )?;
+    finalize_interactive_runtime_state(state, session_id, &final_content, None);
+
+    if let Some(current_session_id) = session_id {
+        emit_runtime_task_checkpoint_saved(
+            app,
+            None,
+            Some(current_session_id),
+            "chat.response_end",
+            "chat response completed",
+            Some(json!({ "content": final_content.clone() })),
+        );
+        emit_runtime_done(
+            app,
+            current_session_id,
+            "completed",
+            Some(runtime_mode),
+            Some(&final_content),
+            Some("response_end"),
+        );
+    }
+    Ok(final_content)
+}
+
 fn build_placeholder_assistant_response(message: &str) -> String {
     let trimmed = message.trim();
     if trimmed.is_empty() {
@@ -6392,12 +6473,55 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
 const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
-    thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        if auth::should_run_background_refresh(&state) {
-            let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+    thread::spawn(move || {
+        loop {
+            let state = app.state::<AppState>();
+            if auth::should_run_background_refresh(&state) {
+                let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+            }
+            thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
         }
-        thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
+    })
+}
+
+fn run_ytdlp_auto_updater(app: AppHandle) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let state = app.state::<AppState>();
+        if !desktop_io::should_auto_update_ytdlp(&state.store_path) {
+            return;
+        }
+        let outcome = match desktop_io::detect_ytdlp() {
+            Some((path, version)) => match desktop_io::ensure_ytdlp_installed(true) {
+                Ok((updated_path, updated_version)) => {
+                    let _ = app.emit(
+                        "youtube:ytdlp-auto-update",
+                        json!({
+                            "success": true,
+                            "previousPath": path,
+                            "previousVersion": version,
+                            "path": updated_path,
+                            "version": updated_version
+                        }),
+                    );
+                    format!("updated:{updated_path}:{updated_version}")
+                }
+                Err(error) => {
+                    eprintln!("[RedBox yt-dlp auto update] {error}");
+                    let _ = app.emit(
+                        "youtube:ytdlp-auto-update",
+                        json!({
+                            "success": false,
+                            "path": path,
+                            "version": version,
+                            "error": error
+                        }),
+                    );
+                    format!("error:{error}")
+                }
+            },
+            None => "skipped:not-installed".to_string(),
+        };
+        desktop_io::record_ytdlp_update_check(&state.store_path, &outcome);
     })
 }
 
@@ -6506,6 +6630,7 @@ fn main() {
                 });
             }
             let _ = run_official_cache_refresher(app.handle().clone());
+            let _ = run_ytdlp_auto_updater(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

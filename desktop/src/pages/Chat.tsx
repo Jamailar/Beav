@@ -18,7 +18,7 @@ import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
-import { uiDebug, uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
+import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 
 interface Session {
   id: string;
@@ -325,9 +325,7 @@ export function Chat({
   emptyStateComposerPlacement = 'inline',
   emptyStateVerticalAlign = 'center',
 }: ChatProps) {
-  const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
-    uiDebug('chat', event, extra);
-  }, []);
+  const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
   const [messages, setMessages] = useState<Message[]>(() => (
@@ -617,6 +615,40 @@ export function Chat({
     }
   }, []);
 
+  const ensureChatModelConfig = useCallback(async () => {
+    if (selectedChatModel) {
+      return {
+        apiKey: selectedChatModel.apiKey,
+        baseURL: selectedChatModel.baseURL,
+        modelName: selectedChatModel.modelName,
+      };
+    }
+    const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
+      window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
+    ));
+    const options = buildChatModelOptions(settings);
+    if (options.length === 0) {
+      return undefined;
+    }
+    setChatModelOptions(options);
+    const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+    if (resolvedKey) {
+      setSelectedChatModelKey((current) => {
+        if (current && options.some((item) => item.key === current)) return current;
+        return resolvedKey;
+      });
+    }
+    const resolved = options.find((item) => item.key === resolvedKey) || options[0];
+    if (!resolved) {
+      return undefined;
+    }
+    return {
+      apiKey: resolved.apiKey,
+      baseURL: resolved.baseURL,
+      modelName: resolved.modelName,
+    };
+  }, [selectedChatModel]);
+
   const cleanupAudioCapture = useCallback(() => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.ondataavailable = null;
@@ -741,7 +773,7 @@ export function Chat({
     };
     taskHints?: unknown;
   }) => {
-    uiDebug('chat', 'dispatch_send:queued', {
+    debugUi('dispatch_send:queued', {
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
       hasAttachment: Boolean(payload.attachment),
@@ -751,13 +783,13 @@ export function Chat({
       : (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0);
 
     schedule(() => {
-      uiDebug('chat', 'dispatch_send:flushed', {
+      debugUi('dispatch_send:flushed', {
         sessionId: payload.sessionId || null,
         chars: payload.message.length,
       });
       window.ipcRenderer.chat.send(payload);
     });
-  }, []);
+  }, [debugUi]);
 
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
@@ -799,6 +831,13 @@ export function Chat({
           onMessageConsumed?.();
           return;
         }
+      }
+      let resolvedModelConfig;
+      try {
+        resolvedModelConfig = await ensureChatModelConfig();
+      } catch (error) {
+        console.error('Failed to resolve pending chat model config:', error);
+        resolvedModelConfig = undefined;
       }
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
@@ -842,11 +881,7 @@ export function Chat({
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
         attachment: pendingMessage.attachment,
-        modelConfig: selectedChatModel ? {
-          apiKey: selectedChatModel.apiKey,
-          baseURL: selectedChatModel.baseURL,
-          modelName: selectedChatModel.modelName,
-        } : undefined,
+        modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
 
@@ -855,7 +890,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig]);
 
   const loadSessions = async () => {
     if (!isActiveRef.current) return;
@@ -1993,7 +2028,7 @@ export function Chat({
     void startAudioRecording();
   }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
 
-  const sendMessage = (content: string, attachment?: UploadedFileAttachment) => {
+  const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
@@ -2033,12 +2068,20 @@ export function Chat({
     setPendingAttachment(null);
     setIsProcessing(true);
 
+    let resolvedModelConfig;
+    try {
+      resolvedModelConfig = await ensureChatModelConfig();
+    } catch (error) {
+      console.error('Failed to resolve chat model config:', error);
+      resolvedModelConfig = undefined;
+    }
+
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
       message: normalizedContent || displayText,
       displayContent: displayText,
       attachment,
-      modelConfig: getChatModelConfig(),
+      modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: undefined,
     });
   };

@@ -4,7 +4,7 @@ use crate::persistence::{
 };
 use crate::runtime::tool_results_for_session;
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::runtime_query::handle_runtime_query;
@@ -295,7 +295,7 @@ fn build_chatroom_runtime_message(
         .unwrap_or_default();
     format!(
         "你正在群聊房间《{}》中以成员“{}”的身份参与讨论。\n\
-先结合最近群聊内容理解问题，再给出你的发言；如果需要确认该成员自己的资料、规则、案例或笔记，优先使用 knowledge_glob / knowledge_grep / knowledge_read 在该成员知识库中检索，不要假装已经知道。\n\n\
+先结合最近群聊内容理解问题，再给出你的发言；如果需要确认该成员自己的资料、规则、案例或笔记，优先使用 redbox_fs(scope=\"knowledge\", action=\"list|search|read\") 在该成员知识库中检索，不要假装已经知道。\n\n\
 最近群聊：\n{}\n\n\
 当前用户消息：\n{}{}",
         room.name,

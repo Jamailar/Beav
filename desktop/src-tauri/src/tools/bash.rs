@@ -1,15 +1,19 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
-use crate::interactive_runtime_shared::resolve_workspace_tool_path;
 use crate::AppState;
+use crate::interactive_runtime_shared::resolve_workspace_tool_path_for_session;
 
 const DEFAULT_OUTPUT_CHARS: usize = 8_000;
 const MAX_OUTPUT_CHARS: usize = 20_000;
 
-pub fn execute_bash(arguments: &Value, state: &State<'_, AppState>) -> Result<Value, String> {
+pub fn execute_bash(
+    arguments: &Value,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Result<Value, String> {
     let raw_command = arguments
         .get("command")
         .and_then(Value::as_str)
@@ -19,9 +23,11 @@ pub fn execute_bash(arguments: &Value, state: &State<'_, AppState>) -> Result<Va
     let cwd = arguments
         .get("cwd")
         .and_then(Value::as_str)
-        .map(|value| resolve_workspace_tool_path(state, value))
+        .map(|value| resolve_workspace_tool_path_for_session(state, session_id, value))
         .transpose()?
-        .unwrap_or(resolve_workspace_tool_path(state, ".")?);
+        .unwrap_or(resolve_workspace_tool_path_for_session(
+            state, session_id, ".",
+        )?);
     let max_chars = arguments
         .get("maxChars")
         .and_then(Value::as_u64)
@@ -99,7 +105,7 @@ fn ensure_git_args_allowed(args: &[String], cwd: &Path) -> Result<(), String> {
         _ => {
             return Err(format!(
                 "git subcommand is not allowed in bash: {subcommand}"
-            ))
+            ));
         }
     }
     for arg in args {

@@ -2,8 +2,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 const MAX_IDENTICAL_TOOL_ROUNDS: usize = 1;
-const FORCED_TOOLLESS_TURN_MESSAGE: &str =
-    "你已经重复执行了同样的工具调用且结果没有推进。不要继续调用工具。基于已有结果直接给出最终答复；如果仍有缺口，请明确指出缺口。";
+const FORCED_TOOLLESS_TURN_MESSAGE: &str = "你已经重复执行了同样的工具调用且结果没有推进。不要继续调用工具。基于已有结果直接给出最终答复；如果仍有缺口，请明确指出缺口。";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

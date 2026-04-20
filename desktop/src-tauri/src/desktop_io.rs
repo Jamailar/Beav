@@ -1,11 +1,13 @@
 use arboard::Clipboard;
 use serde_json::Value;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    configure_background_command, file_url_for_path, normalize_base_url, now_iso, now_ms,
-    payload_string, AdvisorVideoRecord,
+    AdvisorVideoRecord, configure_background_command, file_url_for_path, normalize_base_url,
+    now_iso, now_ms, payload_string,
 };
 
 pub(crate) fn write_base64_payload_to_file(
@@ -132,8 +134,101 @@ pub(crate) fn resolve_transcription_settings(
     Some((endpoint, api_key, model_name))
 }
 
-pub(crate) fn detect_ytdlp() -> Option<(String, String)> {
-    let mut command = std::process::Command::new("yt-dlp");
+const YTDLP_AUTO_UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const YTDLP_UPDATE_RECEIPT_FILE: &str = "yt-dlp-update-check.json";
+
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
+fn ytdlp_binary_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "yt-dlp.exe"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "yt-dlp"
+    }
+}
+
+fn command_output_string(binary: &str, args: &[&str]) -> Option<String> {
+    let mut command = std::process::Command::new(binary);
+    configure_background_command(&mut command);
+    let output = command.args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn python_user_base(binary: &str) -> Option<PathBuf> {
+    let raw = command_output_string(binary, &["-m", "site", "--user-base"])?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+fn ytdlp_candidate_paths() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let binary_name = ytdlp_binary_name();
+    candidates.push(PathBuf::from(binary_name));
+
+    for python_binary in ["python3", "python"] {
+        if let Some(user_base) = python_user_base(python_binary) {
+            #[cfg(target_os = "windows")]
+            let candidate = user_base.join("Scripts").join(binary_name);
+            #[cfg(not(target_os = "windows"))]
+            let candidate = user_base.join("bin").join(binary_name);
+            candidates.push(candidate);
+        }
+    }
+
+    if let Some(home) = home_dir() {
+        #[cfg(target_os = "windows")]
+        {
+            candidates.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("Python")
+                    .join("Scripts")
+                    .join(binary_name),
+            );
+            candidates.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("Python")
+                    .join("Scripts")
+                    .join(binary_name),
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            candidates.push(home.join(".local").join("bin").join(binary_name));
+        }
+    }
+
+    let mut deduped = Vec::new();
+    for path in candidates {
+        if !deduped.iter().any(|existing: &PathBuf| existing == &path) {
+            deduped.push(path);
+        }
+    }
+    deduped
+}
+
+fn detect_ytdlp_at(candidate: &Path) -> Option<(String, String)> {
+    let mut command = std::process::Command::new(candidate);
     configure_background_command(&mut command);
     let output = command.arg("--version").output().ok()?;
     if !output.status.success() {
@@ -143,7 +238,61 @@ pub(crate) fn detect_ytdlp() -> Option<(String, String)> {
     if version.is_empty() {
         return None;
     }
-    Some(("yt-dlp".to_string(), version))
+    Some((candidate.display().to_string(), version))
+}
+
+fn ytdlp_receipt_path(store_path: &Path) -> PathBuf {
+    store_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(YTDLP_UPDATE_RECEIPT_FILE)
+}
+
+pub(crate) fn should_auto_update_ytdlp(store_path: &Path) -> bool {
+    let receipt_path = ytdlp_receipt_path(store_path);
+    let contents = match fs::read_to_string(receipt_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == ErrorKind::NotFound => return true,
+        Err(_) => return true,
+    };
+    let value: Value = match serde_json::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(_) => return true,
+    };
+    let last_checked_ms = value
+        .get("lastCheckedAtMs")
+        .and_then(|item| item.as_u64())
+        .unwrap_or(0);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    now_ms.saturating_sub(last_checked_ms) >= YTDLP_AUTO_UPDATE_INTERVAL.as_millis() as u64
+}
+
+pub(crate) fn record_ytdlp_update_check(store_path: &Path, outcome: &str) {
+    let receipt_path = ytdlp_receipt_path(store_path);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "lastCheckedAtMs": now_ms,
+        "outcome": outcome,
+    });
+    if let Some(parent) = receipt_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(receipt_path, payload.to_string());
+}
+
+pub(crate) fn detect_ytdlp() -> Option<(String, String)> {
+    for candidate in ytdlp_candidate_paths() {
+        if let Some(found) = detect_ytdlp_at(&candidate) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 pub(crate) fn ensure_ytdlp_installed(update: bool) -> Result<(String, String), String> {
@@ -178,7 +327,9 @@ pub(crate) fn ensure_ytdlp_installed(update: bool) -> Result<(String, String), S
 }
 
 pub(crate) fn run_ytdlp_json(args: &[&str]) -> Result<Value, String> {
-    let mut command = std::process::Command::new("yt-dlp");
+    let (binary, _) = detect_ytdlp()
+        .ok_or_else(|| "未检测到可用的 yt-dlp，请先在设置中完成安装。".to_string())?;
+    let mut command = std::process::Command::new(&binary);
     configure_background_command(&mut command);
     let output = command
         .args(args)
@@ -271,11 +422,15 @@ pub(crate) fn download_ytdlp_subtitle(
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
     let template = target_dir.join(format!("{file_prefix}.%(ext)s"));
-    let mut command = std::process::Command::new("yt-dlp");
+    let (binary, _) = detect_ytdlp()
+        .ok_or_else(|| "未检测到可用的 yt-dlp，请先在设置中完成安装。".to_string())?;
+    let mut command = std::process::Command::new(&binary);
     configure_background_command(&mut command);
     let output = command
         .args([
             "--skip-download",
+            "--no-warnings",
+            "--no-progress",
             "--write-auto-sub",
             "--write-sub",
             "--sub-langs",

@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
-use crate::{copy_image_to_clipboard, payload_string, resolve_local_path, AppState};
+use crate::{AppState, copy_image_to_clipboard, payload_string, resolve_local_path};
 
 pub fn handle_file_ops_channel(
     _app: &AppHandle,

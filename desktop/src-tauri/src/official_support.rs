@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use tauri::{AppHandle, Emitter};
 
@@ -963,7 +963,9 @@ pub(crate) fn upsert_official_settings_session(settings: &mut Value, session: Op
             Some(session_value) => {
                 object.insert(
                     "redbox_auth_session_json".to_string(),
-                    json!(serde_json::to_string(session_value).unwrap_or_else(|_| "{}".to_string())),
+                    json!(
+                        serde_json::to_string(session_value).unwrap_or_else(|_| "{}".to_string())
+                    ),
                 );
             }
             None => {

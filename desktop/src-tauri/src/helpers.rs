@@ -1,11 +1,11 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use url::Url;
 
-use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
+use crate::{AppState, FileNode, ensure_parent_dir, manuscripts_root, payload_string};
 
 pub(crate) fn normalize_relative_path(value: &str) -> String {
     value
@@ -188,12 +188,60 @@ pub(crate) fn legacy_package_richpost_themes_path(package_path: &Path) -> PathBu
     package_path.join("richpost-themes.json")
 }
 
-pub(crate) fn package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+pub(crate) fn workspace_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
     package_workspace_root_path(package_path).join("themes")
 }
 
+pub(crate) fn workspace_richpost_themes_path(package_path: &Path) -> PathBuf {
+    workspace_richpost_theme_store_dir(package_path).join("richpost-themes.json")
+}
+
+pub(crate) fn package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    package_path.join("themes")
+}
+
 pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
-    package_richpost_theme_store_dir(package_path).join("richpost-themes.json")
+    package_richpost_theme_store_dir(package_path).join("index.json")
+}
+
+pub(crate) fn package_richpost_theme_template_path(package_path: &Path) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join("richpost-theme-template.md")
+}
+
+pub(crate) fn package_richpost_theme_root_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join(theme_id)
+}
+
+pub(crate) fn package_richpost_theme_config_path(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("theme.json")
+}
+
+pub(crate) fn package_richpost_theme_tokens_path(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("layout.tokens.json")
+}
+
+pub(crate) fn package_richpost_theme_page_plan_path(
+    package_path: &Path,
+    theme_id: &str,
+) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("page-plan.json")
+}
+
+pub(crate) fn package_richpost_theme_masters_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("masters")
+}
+
+pub(crate) fn package_richpost_theme_master_path(
+    package_path: &Path,
+    theme_id: &str,
+    master_name: &str,
+) -> PathBuf {
+    package_richpost_theme_masters_dir(package_path, theme_id)
+        .join(format!("{master_name}.master.html"))
+}
+
+pub(crate) fn package_richpost_theme_assets_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("assets")
 }
 
 pub(crate) fn package_richpost_masters_dir(package_path: &Path) -> PathBuf {
@@ -210,10 +258,6 @@ pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {
 
 pub(crate) fn package_richpost_preview_dir(package_path: &Path) -> PathBuf {
     package_path.join("previews")
-}
-
-pub(crate) fn package_richpost_theme_backgrounds_dir(package_path: &Path) -> PathBuf {
-    package_richpost_theme_store_dir(package_path).join("richpost-theme-assets")
 }
 
 pub(crate) fn package_richpost_page_html_path(package_path: &Path, page_id: &str) -> PathBuf {

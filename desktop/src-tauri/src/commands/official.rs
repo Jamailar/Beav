@@ -1,19 +1,19 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
-    emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
-    normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
-    official_auth_token_from_settings, official_fallback_products, official_points_snapshot,
-    official_response_items, official_settings_api_keys, official_settings_call_records_list,
-    official_settings_models, official_settings_orders, official_settings_points,
-    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
-    official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
-    run_official_public_json_request, upsert_official_settings_session, write_settings_json_array,
-    write_settings_json_value, AppState, REDBOX_OFFICIAL_BASE_URL,
+    AppState, REDBOX_OFFICIAL_BASE_URL, append_debug_trace_state, auth,
+    create_official_payment_form, emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
+    fetch_official_models_for_settings, make_id, normalize_official_auth_session, now_iso, now_ms,
+    official_account_summary_local, official_auth_token_from_settings, official_fallback_products,
+    official_points_snapshot, official_response_items, official_settings_api_keys,
+    official_settings_call_records_list, official_settings_models, official_settings_orders,
+    official_settings_points, official_settings_session, official_settings_wechat_login,
+    official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
+    payload_field, payload_string, run_official_public_json_request,
+    upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;

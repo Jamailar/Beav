@@ -70,6 +70,8 @@ type RichpostThemePreset = {
   previewCardBg?: string | null;
   previewCardBorder?: string | null;
   previewCardShadow?: string | null;
+  headingColor?: string | null;
+  bodyColor?: string | null;
   textColor?: string | null;
   mutedColor?: string | null;
   accentColor?: string | null;
@@ -104,6 +106,8 @@ type RichpostThemeDraft = {
   previewCardBg: string;
   previewCardBorder: string;
   previewCardShadow: string;
+  headingColor: string;
+  bodyColor: string;
   textColor: string;
   mutedColor: string;
   accentColor: string;
@@ -133,6 +137,7 @@ type AiWorkspaceMode = {
   themeEditingId?: string | null;
   themeEditingLabel?: string | null;
   themeEditingFile?: string | null;
+  themeEditingTemplateFile?: string | null;
 };
 
 type PackageStateLike = Record<string, unknown>;
@@ -160,6 +165,7 @@ export interface WritingDraftWorkbenchProps {
   isApplyingWriteProposal?: boolean;
   isRejectingWriteProposal?: boolean;
   editorChatSessionId: string | null;
+  editorChatReady?: boolean;
   isActive?: boolean;
   previewHtml?: string | null;
   layoutPreview?: HtmlPreviewSource | null;
@@ -209,6 +215,8 @@ const RICHPOST_FONT_SCALE_MAX = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN = 0.8;
 const RICHPOST_LINE_HEIGHT_SCALE_MAX = 1.4;
 const RICHPOST_FRAME_MIN_SIZE = 0.08;
+const RICHPOST_PREVIEW_PAGE_WIDTH = 420;
+const RICHPOST_PREVIEW_PAGE_WIDTH_COMPACT = 320;
 
 function clampScale(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -276,6 +284,8 @@ const DEFAULT_RICHPOST_THEME_DRAFT: RichpostThemeDraft = {
   previewCardBg: 'rgba(255,255,255,.82)',
   previewCardBorder: 'rgba(34,24,18,.08)',
   previewCardShadow: '0 18px 48px rgba(88,59,36,.08)',
+  headingColor: '#111111',
+  bodyColor: '#111111',
   textColor: '#111111',
   mutedColor: '#6b625a',
   accentColor: '#111111',
@@ -326,6 +336,12 @@ function normalizeRichpostThemeDraft(theme?: RichpostThemePreset | null): Richpo
     previewCardBg: typeof theme?.previewCardBg === 'string' && theme.previewCardBg.trim() ? theme.previewCardBg : DEFAULT_RICHPOST_THEME_DRAFT.previewCardBg,
     previewCardBorder: typeof theme?.previewCardBorder === 'string' && theme.previewCardBorder.trim() ? theme.previewCardBorder : DEFAULT_RICHPOST_THEME_DRAFT.previewCardBorder,
     previewCardShadow: typeof theme?.previewCardShadow === 'string' && theme.previewCardShadow.trim() ? theme.previewCardShadow : DEFAULT_RICHPOST_THEME_DRAFT.previewCardShadow,
+    headingColor: typeof theme?.headingColor === 'string' && theme.headingColor.trim()
+      ? theme.headingColor
+      : (typeof theme?.textColor === 'string' && theme.textColor.trim() ? theme.textColor : DEFAULT_RICHPOST_THEME_DRAFT.headingColor),
+    bodyColor: typeof theme?.bodyColor === 'string' && theme.bodyColor.trim()
+      ? theme.bodyColor
+      : (typeof theme?.textColor === 'string' && theme.textColor.trim() ? theme.textColor : DEFAULT_RICHPOST_THEME_DRAFT.bodyColor),
     textColor: typeof theme?.textColor === 'string' && theme.textColor.trim() ? theme.textColor : DEFAULT_RICHPOST_THEME_DRAFT.textColor,
     mutedColor: typeof theme?.mutedColor === 'string' && theme.mutedColor.trim() ? theme.mutedColor : DEFAULT_RICHPOST_THEME_DRAFT.mutedColor,
     accentColor: typeof theme?.accentColor === 'string' && theme.accentColor.trim() ? theme.accentColor : DEFAULT_RICHPOST_THEME_DRAFT.accentColor,
@@ -381,6 +397,110 @@ function normalizeRichpostThemeLabelInput(value: string, fallback: string): stri
 }
 
 type RichpostZoneFrameHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se';
+type RichpostTypographyPreviewTarget =
+  | 'heading-primary'
+  | 'heading-accent'
+  | 'heading-muted'
+  | 'body-primary'
+  | 'body-accent';
+
+type TypographyPreviewEditorState = {
+  id: RichpostTypographyPreviewTarget;
+  label: string;
+  fontFamily: string;
+  color: string;
+};
+
+const FALLBACK_SYSTEM_FONT_OPTIONS = [
+  '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+  '"Songti SC","STSong","Source Han Serif SC",serif',
+  '"Kaiti SC","STKaiti","KaiTi","Songti SC",serif',
+  '"STFangsong","FangSong","Songti SC",serif',
+  '"Helvetica Neue","Arial",sans-serif',
+  '"Times New Roman","Georgia",serif',
+  '"Avenir Next","Helvetica Neue",sans-serif',
+  '"SF Pro Display","PingFang SC",sans-serif',
+];
+
+function fontFamilyLabel(value: string): string {
+  const first = value.split(',')[0]?.trim() || value;
+  return first.replace(/^["']+|["']+$/g, '');
+}
+
+function richpostTypographyPreviewEditorState(
+  draft: RichpostThemeDraft,
+  target: RichpostTypographyPreviewTarget,
+): TypographyPreviewEditorState {
+  switch (target) {
+    case 'heading-accent':
+      return {
+        id: target,
+        label: '标题强调',
+        fontFamily: draft.headingFont || DEFAULT_RICHPOST_THEME_DRAFT.headingFont,
+        color: draft.accentColor || draft.textColor || DEFAULT_RICHPOST_THEME_DRAFT.accentColor,
+      };
+    case 'heading-muted':
+      return {
+        id: target,
+        label: '标题弱化',
+        fontFamily: draft.headingFont || DEFAULT_RICHPOST_THEME_DRAFT.headingFont,
+        color: draft.mutedColor || draft.textColor || DEFAULT_RICHPOST_THEME_DRAFT.mutedColor,
+      };
+    case 'body-primary':
+      return {
+        id: target,
+        label: '正文',
+        fontFamily: draft.bodyFont || DEFAULT_RICHPOST_THEME_DRAFT.bodyFont,
+        color: draft.bodyColor || draft.textColor || DEFAULT_RICHPOST_THEME_DRAFT.bodyColor,
+      };
+    case 'body-accent':
+      return {
+        id: target,
+        label: '正文强调',
+        fontFamily: draft.bodyFont || DEFAULT_RICHPOST_THEME_DRAFT.bodyFont,
+        color: draft.accentColor || draft.textColor || DEFAULT_RICHPOST_THEME_DRAFT.accentColor,
+      };
+    case 'heading-primary':
+    default:
+      return {
+        id: 'heading-primary',
+        label: '标题',
+        fontFamily: draft.headingFont || DEFAULT_RICHPOST_THEME_DRAFT.headingFont,
+        color: draft.headingColor || draft.textColor || DEFAULT_RICHPOST_THEME_DRAFT.headingColor,
+      };
+  }
+}
+
+function updateRichpostThemeDraftTypographyTarget(
+  draft: RichpostThemeDraft,
+  target: RichpostTypographyPreviewTarget,
+  patch: { fontFamily?: string; color?: string },
+): RichpostThemeDraft {
+  const next = { ...draft };
+  if (patch.fontFamily) {
+    if (target.startsWith('heading')) {
+      next.headingFont = patch.fontFamily;
+    } else {
+      next.bodyFont = patch.fontFamily;
+    }
+  }
+  if (patch.color) {
+    if (target === 'heading-accent' || target === 'body-accent') {
+      next.accentColor = patch.color;
+    } else if (target === 'heading-muted') {
+      next.mutedColor = patch.color;
+    } else if (target === 'heading-primary') {
+      next.headingColor = patch.color;
+      next.textColor = next.bodyColor || next.textColor;
+    } else if (target === 'body-primary') {
+      next.bodyColor = patch.color;
+      next.textColor = patch.color;
+    } else {
+      next.textColor = patch.color;
+    }
+  }
+  return next;
+}
 
 function RichpostZoneFrameOverlay({
   frame,
@@ -524,6 +644,7 @@ function RichpostThemeEditorOverlay({
   canSave,
   uploadingBackgroundRole,
   editorChatSessionId,
+  editorChatReady,
   isActive,
   shortcuts,
   onThemeDraftChange,
@@ -538,6 +659,7 @@ function RichpostThemeEditorOverlay({
   canSave: boolean;
   uploadingBackgroundRole: RichpostZoneFrameRole | null;
   editorChatSessionId: string | null;
+  editorChatReady: boolean;
   isActive: boolean;
   shortcuts: Array<{ label: string; text: string }>;
   onThemeDraftChange: (draft: RichpostThemeDraft) => void;
@@ -547,12 +669,39 @@ function RichpostThemeEditorOverlay({
 }) {
   const [isEditingThemeLabel, setIsEditingThemeLabel] = useState(false);
   const [themeLabelInput, setThemeLabelInput] = useState(themeDraft.label || DEFAULT_RICHPOST_THEME_DRAFT.label);
+  const [selectedTypographyTarget, setSelectedTypographyTarget] = useState<RichpostTypographyPreviewTarget>('heading-primary');
+  const [systemFontOptions, setSystemFontOptions] = useState<string[]>(FALLBACK_SYSTEM_FONT_OPTIONS);
 
   useEffect(() => {
     if (!isEditingThemeLabel) {
       setThemeLabelInput(themeDraft.label || DEFAULT_RICHPOST_THEME_DRAFT.label);
     }
   }, [isEditingThemeLabel, themeDraft.label]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const queryLocalFonts = (window as Window & {
+      queryLocalFonts?: () => Promise<Array<{ family: string }>>;
+    }).queryLocalFonts;
+    if (!queryLocalFonts) return;
+    void queryLocalFonts()
+      .then((fonts) => {
+        if (cancelled || !Array.isArray(fonts) || fonts.length === 0) return;
+        const next = Array.from(new Set(
+          fonts
+            .map((font) => (typeof font?.family === 'string' ? font.family.trim() : ''))
+            .filter((value) => value.length > 0)
+            .map((value) => `"${value}",sans-serif`)
+        ));
+        if (next.length > 0) {
+          setSystemFontOptions((prev) => Array.from(new Set([...next, ...prev])));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const commitThemeLabel = () => {
     const nextLabel = normalizeRichpostThemeLabelInput(
@@ -568,6 +717,8 @@ function RichpostThemeEditorOverlay({
       });
     }
   };
+
+  const typographyEditor = richpostTypographyPreviewEditorState(themeDraft, selectedTypographyTarget);
 
   return (
     <div className="fixed inset-0 z-[120] isolate overflow-hidden bg-[#ece6df] text-text-primary">
@@ -637,25 +788,50 @@ function RichpostThemeEditorOverlay({
           <section className="min-h-0 overflow-y-auto border-r border-black/6 px-6 py-6">
             <div className="mx-auto max-w-[1100px]">
               <div
-                className="mb-5 max-w-[560px] rounded-[22px] px-5 py-5"
+                className="mb-5 max-w-[720px] rounded-[22px] px-5 py-5"
                 style={{
                   background: themeDraft.pageBg || '#ffffff',
-                  color: themeDraft.textColor || '#111111',
+                  color: themeDraft.bodyColor || themeDraft.textColor || '#111111',
                   boxShadow: '0 12px 30px rgba(15,23,42,0.06)',
                 }}
               >
-                <div className="space-y-3">
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start">
+                  <div className="space-y-3">
                   <div
-                    className="text-[28px] font-black leading-[1.08]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedTypographyTarget('heading-primary')}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedTypographyTarget('heading-primary');
+                      }
+                    }}
+                    className={clsx(
+                      'cursor-pointer rounded-xl px-2 py-1 text-[28px] font-black leading-[1.08] outline-none transition',
+                      selectedTypographyTarget === 'heading-primary' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                    )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
-                      color: themeDraft.textColor || '#111111',
+                      color: themeDraft.headingColor || themeDraft.textColor || '#111111',
                     }}
                   >
                     这是标题
                   </div>
                   <div
-                    className="text-[21px] font-bold leading-[1.16]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedTypographyTarget('heading-accent')}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedTypographyTarget('heading-accent');
+                      }
+                    }}
+                    className={clsx(
+                      'cursor-pointer rounded-xl px-2 py-1 text-[21px] font-bold leading-[1.16] outline-none transition',
+                      selectedTypographyTarget === 'heading-accent' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                    )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
                       color: themeDraft.accentColor || themeDraft.textColor || '#111111',
@@ -664,7 +840,19 @@ function RichpostThemeEditorOverlay({
                     这是标题
                   </div>
                   <div
-                    className="text-[16px] font-semibold leading-[1.22]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedTypographyTarget('heading-muted')}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedTypographyTarget('heading-muted');
+                      }
+                    }}
+                    className={clsx(
+                      'cursor-pointer rounded-xl px-2 py-1 text-[16px] font-semibold leading-[1.22] outline-none transition',
+                      selectedTypographyTarget === 'heading-muted' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                    )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
                       color: themeDraft.mutedColor || themeDraft.textColor || '#111111',
@@ -673,16 +861,45 @@ function RichpostThemeEditorOverlay({
                     这是标题
                   </div>
                   <div
-                    className="space-y-2 text-[15px] leading-[1.85]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedTypographyTarget('body-primary')}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedTypographyTarget('body-primary');
+                      }
+                    }}
+                    className={clsx(
+                      'space-y-2 rounded-xl px-2 py-2 text-[15px] leading-[1.85] outline-none transition',
+                      selectedTypographyTarget === 'body-primary' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'cursor-pointer hover:bg-black/[0.03]'
+                    )}
                     style={{
                       fontFamily: themeDraft.bodyFont || 'inherit',
-                      color: themeDraft.textColor || '#111111',
+                      color: themeDraft.bodyColor || themeDraft.textColor || '#111111',
                     }}
                   >
                     <p className="m-0">这是正文，展示当前主题下正文的字体、颜色和行距。</p>
                     <p className="m-0">
                       这是正文，
                       <strong
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedTypographyTarget('body-accent');
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setSelectedTypographyTarget('body-accent');
+                          }
+                        }}
+                        className={clsx(
+                          'rounded px-1 outline-none transition',
+                          selectedTypographyTarget === 'body-accent' ? 'bg-black/[0.08] ring-1 ring-black/10' : 'hover:bg-black/[0.04]'
+                        )}
                         style={{
                           color: themeDraft.accentColor || themeDraft.textColor || '#111111',
                           fontWeight: 800,
@@ -692,6 +909,51 @@ function RichpostThemeEditorOverlay({
                       </strong>
                       ，用于确认强调内容会如何出现。
                     </p>
+                  </div>
+                  </div>
+                  <div className="w-full rounded-[18px] border border-black/8 bg-white/94 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl lg:sticky lg:top-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/42">文字样式</div>
+                    <div className="mt-1 text-[13px] font-semibold text-black">{typographyEditor.label}</div>
+                    <label className="mt-3 block">
+                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-black/42">颜色</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={typographyEditor.color}
+                          onChange={(event) => {
+                            onThemeDraftChange(updateRichpostThemeDraftTypographyTarget(
+                              themeDraft,
+                              selectedTypographyTarget,
+                              { color: event.target.value }
+                            ));
+                          }}
+                          className="h-9 w-10 cursor-pointer rounded border border-black/10 bg-transparent p-0"
+                        />
+                        <div className="rounded-lg border border-black/8 bg-black/[0.03] px-2.5 py-1.5 text-[11px] font-medium text-black/62">
+                          {typographyEditor.color}
+                        </div>
+                      </div>
+                    </label>
+                    <label className="mt-3 block">
+                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-black/42">字体</div>
+                      <select
+                        value={typographyEditor.fontFamily}
+                        onChange={(event) => {
+                          onThemeDraftChange(updateRichpostThemeDraftTypographyTarget(
+                            themeDraft,
+                            selectedTypographyTarget,
+                            { fontFamily: event.target.value }
+                          ));
+                        }}
+                        className="h-9 w-full rounded-xl border border-black/10 bg-white px-3 text-[12px] text-black outline-none focus:border-black/25"
+                      >
+                        {systemFontOptions.map((font) => (
+                          <option key={font} value={font}>
+                            {fontFamilyLabel(font)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -762,7 +1024,7 @@ function RichpostThemeEditorOverlay({
                 <div className="mt-2 text-[18px] font-semibold text-text-primary">直接描述你想要的主题风格</div>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
-                {editorChatSessionId ? (
+                {editorChatSessionId && editorChatReady ? (
                   <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
                     <ChatWorkspace
                       isActive={isActive}
@@ -781,14 +1043,16 @@ function RichpostThemeEditorOverlay({
                       welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
                       shortcuts={shortcuts}
                       welcomeShortcuts={shortcuts}
-                      fixedSessionBannerText="图文主题编辑"
+                      fixedSessionBannerText={`图文主题编辑 · ${themeDraft.label || '当前主题'}`}
                     />
                   </Suspense>
                 ) : (
                   <div className="flex h-full items-center justify-center px-6 text-center">
                     <div>
                       <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
-                      <div className="mt-3 text-sm text-text-secondary">正在初始化 AI 会话...</div>
+                      <div className="mt-3 text-sm text-text-secondary">
+                        {editorChatSessionId ? '正在同步当前主题上下文...' : '正在初始化 AI 会话...'}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -921,9 +1185,8 @@ function RichPostPreview({
 }) {
   const galleryAssets = imageAssets.slice(0, 4);
   const coverSrc = assetUrl(coverAsset);
-  const iframeHeight = compact
-    ? 'min(840px, calc(100vh - 220px))'
-    : 'min(960px, calc(100vh - 144px))';
+  const previewWidth = compact ? RICHPOST_PREVIEW_PAGE_WIDTH_COMPACT : RICHPOST_PREVIEW_PAGE_WIDTH;
+  const previewHeight = Math.round(previewWidth * 4 / 3);
   const previewFrameUrl = buildPreviewFrameUrl(
     previewSource?.fileUrl || previewSource?.filePath,
     previewSource?.updatedAt,
@@ -936,7 +1199,7 @@ function RichPostPreview({
 
   return (
     <div className={clsx('h-full overflow-auto', compact ? 'px-4 py-4' : 'px-8 py-8')}>
-      <div className={clsx('mx-auto w-full space-y-5', compact ? 'max-w-[520px]' : 'max-w-[560px]')}>
+      <div className="mx-auto w-fit space-y-5">
         {hasRenderedPages ? (
           <div className="space-y-4">
             {pages.map((page) => {
@@ -945,17 +1208,24 @@ function RichPostPreview({
                 lineHeightScale,
               });
               return (
-                <section key={page.id} className="border border-border bg-surface-primary p-4 shadow-sm">
+                <section
+                  key={page.id}
+                  className="border border-border bg-surface-primary p-4 shadow-sm"
+                  style={{ width: previewWidth + 32 }}
+                >
                   {frameUrl ? (
                     <iframe
                       title={page.title || page.label}
                       src={frameUrl}
                       sandbox={RICHPOST_PREVIEW_SANDBOX}
-                      className="w-full border border-border bg-white"
-                      style={{ aspectRatio: '3 / 4', height: 'auto' }}
+                      className="block border border-border bg-white"
+                      style={{ width: previewWidth, height: previewHeight }}
                     />
                   ) : (
-                    <div className="flex aspect-[3/4] items-center justify-center border border-dashed border-border bg-white text-sm text-text-tertiary">
+                    <div
+                      className="flex items-center justify-center border border-dashed border-border bg-white text-sm text-text-tertiary"
+                      style={{ width: previewWidth, height: previewHeight }}
+                    >
                       页面尚未渲染
                     </div>
                   )}
@@ -976,16 +1246,16 @@ function RichPostPreview({
             title="图文预览"
             src={previewFrameUrl}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="w-full border border-border bg-white"
-            style={{ height: iframeHeight }}
+            className="block border border-border bg-white"
+            style={{ width: previewWidth, height: previewHeight }}
           />
         ) : !hasRenderedPages && previewHtml?.trim() ? (
           <iframe
             title="图文预览"
             srcDoc={previewHtml}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="w-full border border-border bg-white"
-            style={{ height: iframeHeight }}
+            className="block border border-border bg-white"
+            style={{ width: previewWidth, height: previewHeight }}
           />
         ) : !hasRenderedPages ? (
           <div className="space-y-5 border border-border bg-surface-primary p-6">
@@ -1139,6 +1409,7 @@ export function WritingDraftWorkbench({
   isApplyingWriteProposal = false,
   isRejectingWriteProposal = false,
   editorChatSessionId,
+  editorChatReady = true,
   isActive = false,
   previewHtml,
   layoutPreview = null,
@@ -1202,6 +1473,7 @@ export function WritingDraftWorkbench({
   const [richpostThemeEditorThemeId, setRichpostThemeEditorThemeId] = useState<string | null>(null);
   const [richpostThemeEditorThemeLabel, setRichpostThemeEditorThemeLabel] = useState<string | null>(null);
   const [richpostThemeEditorThemeFile, setRichpostThemeEditorThemeFile] = useState<string | null>(null);
+  const [richpostThemeEditorThemeTemplateFile, setRichpostThemeEditorThemeTemplateFile] = useState<string | null>(null);
   const [richpostThemeEditorPreviewPages, setRichpostThemeEditorPreviewPages] = useState<RichpostThemePreviewRecord[]>([]);
   const [isLoadingRichpostThemeEditorPreview, setIsLoadingRichpostThemeEditorPreview] = useState(false);
   const committedRichpostTypographyRef = useRef({
@@ -1247,6 +1519,7 @@ export function WritingDraftWorkbench({
     setRichpostThemeEditorThemeId(null);
     setRichpostThemeEditorThemeLabel(null);
     setRichpostThemeEditorThemeFile(null);
+    setRichpostThemeEditorThemeTemplateFile(null);
     setRichpostThemeEditorPreviewPages([]);
     richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(DEFAULT_RICHPOST_THEME_DRAFT);
   }, [activeTab, filePath, draftType, isSplitCompareEnabled, splitPreviewTab]);
@@ -1311,6 +1584,7 @@ export function WritingDraftWorkbench({
         themeEditingId: richpostThemeEditorThemeId,
         themeEditingLabel: richpostThemeEditorThemeLabel,
         themeEditingFile: richpostThemeEditorThemeFile,
+        themeEditingTemplateFile: richpostThemeEditorThemeTemplateFile,
       };
     }
     const isRichpostLayoutMode = isRichPost
@@ -1349,6 +1623,7 @@ export function WritingDraftWorkbench({
     isRichpostThemeEditorOpen,
     isSplitCompareEnabled,
     richpostThemeEditorThemeFile,
+    richpostThemeEditorThemeTemplateFile,
     richpostThemeEditorThemeId,
     richpostThemeEditorThemeLabel,
     splitPreviewTab,
@@ -1507,7 +1782,8 @@ export function WritingDraftWorkbench({
       setRichpostThemeEditorBaseThemeId(baseThemeId);
       setRichpostThemeEditorThemeId(baseThemeId);
       setRichpostThemeEditorThemeLabel(typeof baseTheme.label === 'string' ? baseTheme.label : normalizedDraft.label);
-      setRichpostThemeEditorThemeFile('richpost-themes.json');
+      setRichpostThemeEditorThemeFile(`${filePath.replace(/\\/g, '/')}/themes/${baseThemeId}/theme.json`);
+      setRichpostThemeEditorThemeTemplateFile(`${filePath.replace(/\\/g, '/')}/themes/richpost-theme-template.md`);
       setRichpostThemeEditorPreviewPages([]);
       setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
       setIsRichpostThemeDrawerOpen(false);
@@ -1518,6 +1794,7 @@ export function WritingDraftWorkbench({
     void window.ipcRenderer.invoke('manuscripts:create-richpost-custom-theme', {
       filePath,
       baseThemeId,
+      createFromBlank: creatingBlankTheme,
       theme: creatingBlankTheme
         ? {
           ...DEFAULT_RICHPOST_THEME_DRAFT,
@@ -1546,7 +1823,10 @@ export function WritingDraftWorkbench({
         error?: string;
         theme?: RichpostThemePreset | null;
         state?: PackageStateLike;
+        themeRoot?: string | null;
         themeFile?: string | null;
+        themeIndexFile?: string | null;
+        themeTemplateFile?: string | null;
       } | null;
       if (!payload?.success || !payload.theme) {
         throw new Error(payload?.error || '创建主题失败');
@@ -1558,6 +1838,7 @@ export function WritingDraftWorkbench({
       setRichpostThemeEditorThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : null);
       setRichpostThemeEditorThemeLabel(typeof payload.theme.label === 'string' ? payload.theme.label : normalizedDraft.label);
       setRichpostThemeEditorThemeFile(typeof payload.themeFile === 'string' ? payload.themeFile : null);
+      setRichpostThemeEditorThemeTemplateFile(typeof payload.themeTemplateFile === 'string' ? payload.themeTemplateFile : null);
       setRichpostThemeEditorPreviewPages([]);
       if (payload.state) {
         onPackageStateChange?.(payload.state);
@@ -2407,7 +2688,7 @@ export function WritingDraftWorkbench({
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {editorChatSessionId ? (
+            {editorChatSessionId && editorChatReady ? (
               <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
                 <ChatWorkspace
                   isActive={isActive}
@@ -2426,14 +2707,20 @@ export function WritingDraftWorkbench({
                   welcomeSubtitle={isRichPost ? '围绕当前图文稿继续改标题、压缩段落、强化发布感。' : '围绕当前长文继续改结构、润色正文、生成发布版本。'}
                   shortcuts={shortcuts}
                   welcomeShortcuts={shortcuts}
-                  fixedSessionBannerText={aiWorkspaceMode.label}
+                  fixedSessionBannerText={
+                    aiWorkspaceMode.id === 'richpost-theme-editing'
+                      ? `图文主题编辑 · ${aiWorkspaceMode.themeEditingLabel || '当前主题'}`
+                      : aiWorkspaceMode.label
+                  }
                 />
               </Suspense>
             ) : (
               <div className="flex h-full items-center justify-center px-6 text-center">
                 <div>
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
-                  <div className="mt-3 text-sm text-text-secondary">正在初始化 AI 会话...</div>
+                  <div className="mt-3 text-sm text-text-secondary">
+                    {editorChatSessionId ? '正在同步当前页面上下文...' : '正在初始化 AI 会话...'}
+                  </div>
                 </div>
               </div>
             )}
@@ -2463,7 +2750,9 @@ export function WritingDraftWorkbench({
                   <MessageSquare className="h-3.5 w-3.5 text-emerald-500" />
                   会话状态
                 </div>
-                <div className="mt-2 text-xs font-medium text-text-primary">{editorChatSessionId ? '已绑定文件' : '初始化中'}</div>
+                <div className="mt-2 text-xs font-medium text-text-primary">
+                  {editorChatSessionId && editorChatReady ? '已绑定文件' : '初始化中'}
+                </div>
               </div>
             </div>
           </div>
@@ -2479,6 +2768,7 @@ export function WritingDraftWorkbench({
         canSave={isRichpostThemeEditorDirty}
         uploadingBackgroundRole={uploadingThemeBackgroundRole}
         editorChatSessionId={editorChatSessionId}
+        editorChatReady={editorChatReady}
         isActive={isActive}
         shortcuts={shortcuts}
         onThemeDraftChange={setRichpostThemeEditorDraft}

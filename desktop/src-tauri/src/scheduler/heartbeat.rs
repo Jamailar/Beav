@@ -1,13 +1,13 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::persistence::with_store_mut;
 use crate::AppState;
+use crate::persistence::with_store_mut;
 
 pub struct ExecutionHeartbeat {
     stop: Arc<AtomicBool>,

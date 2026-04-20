@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
@@ -6,7 +6,7 @@ use crate::runtime::{
     checkpoints_value_for_session, tool_results_value_for_session, trace_value_for_session,
 };
 use crate::session_manager::fork_session;
-use crate::{now_ms, payload_string, payload_value_as_string, AppState};
+use crate::{AppState, now_ms, payload_string, payload_value_as_string};
 
 pub fn runtime_state_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let requested_session_id = payload_value_as_string(payload).unwrap_or_default();

@@ -4,13 +4,13 @@ use std::path::Path;
 use url::Url;
 
 use crate::{
-    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path, now_iso,
-    optional_asset_url_from_note_path, read_text_file_or_empty, slug_from_relative_path,
     AdvisorRecord, ChatRoomMessageRecord, ChatRoomRecord, CoverAssetRecord,
     DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord,
     MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
     RedclawStateRecord, SubjectAttribute, SubjectCategory, SubjectRecord, UserMemoryRecord,
-    WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord,
+    WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord, extract_tags_from_text,
+    file_url_for_path, normalize_legacy_workspace_path, now_iso, optional_asset_url_from_note_path,
+    read_text_file_or_empty, slug_from_relative_path,
 };
 
 pub(crate) fn read_json_file(path: &Path) -> Option<Value> {

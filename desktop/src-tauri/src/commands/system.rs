@@ -1,12 +1,12 @@
 use arboard::Clipboard;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
-    refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
+    AppState, now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
+    refresh_runtime_warm_state, store_root, update_workspace_root_cache,
 };
 
 fn knowledge_api_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -153,9 +153,11 @@ pub fn handle_system_channel(
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path.display().to_string() }))
                 }
-                "clipboard:read-text" => Ok(json!(Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.get_text())
-                    .unwrap_or_default())),
+                "clipboard:read-text" => Ok(json!(
+                    Clipboard::new()
+                        .and_then(|mut clipboard| clipboard.get_text())
+                        .unwrap_or_default()
+                )),
                 "clipboard:write-html" => {
                     let text = payload_string(payload, "text")
                         .or_else(|| payload_string(payload, "html"))

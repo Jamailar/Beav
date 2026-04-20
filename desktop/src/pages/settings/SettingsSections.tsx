@@ -1640,6 +1640,8 @@ interface ToolsSettingsSectionProps {
     isPreparingBrowserPlugin: boolean;
     handlePrepareBrowserPlugin: () => Promise<void>;
     handleOpenBrowserPluginDir: () => Promise<void>;
+    handleCopyChromeExtensionsUrl: () => Promise<void>;
+    handleCopyEdgeExtensionsUrl: () => Promise<void>;
     isInstallingTool: boolean;
     installProgress: number;
     showDeveloperDiagnostics: boolean;
@@ -1739,6 +1741,8 @@ export function ToolsSettingsSection({
     isPreparingBrowserPlugin,
     handlePrepareBrowserPlugin,
     handleOpenBrowserPluginDir,
+    handleCopyChromeExtensionsUrl,
+    handleCopyEdgeExtensionsUrl,
     isInstallingTool,
     installProgress,
     showDeveloperDiagnostics,
@@ -2153,7 +2157,7 @@ export function ToolsSettingsSection({
                         </div>
                         <div className="mt-3 text-[11px] text-text-secondary space-y-1">
                             <div>1. 点击“一键准备插件”</div>
-                            <div>2. 在 Chrome / Edge 打开扩展管理页并开启开发者模式</div>
+                            <div>2. 复制扩展管理页地址，粘贴到浏览器地址栏打开并开启开发者模式</div>
                             <div>3. 点击“加载已解压的扩展程序”，选择上方导出目录</div>
                         </div>
                     </div>
@@ -2175,6 +2179,20 @@ export function ToolsSettingsSection({
                         >
                             <FolderOpen className="w-3 h-3" />
                             打开插件目录
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleCopyChromeExtensionsUrl()}
+                            className="px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
+                        >
+                            复制 Chrome 扩展页
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleCopyEdgeExtensionsUrl()}
+                            className="px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
+                        >
+                            复制 Edge 扩展页
                         </button>
                     </div>
                 </div>

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -7,9 +7,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
-    auth, compatible_workspace_base_dir, detect_best_legacy_db, emit_space_changed,
-    is_legacy_workspace_base, legacy_workspace_dir, maybe_import_legacy_store, now_iso,
-    persist_store, preferred_workspace_dir, AppState, AppStore,
+    AppState, AppStore, auth, compatible_workspace_base_dir, detect_best_legacy_db,
+    emit_space_changed, is_legacy_workspace_base, legacy_workspace_dir, maybe_import_legacy_store,
+    now_iso, persist_store, preferred_workspace_dir,
 };
 
 pub(crate) const STARTUP_MIGRATION_EVENT: &str = "app:startup-migration-status";

@@ -1,6 +1,6 @@
 ---
 allowedRuntimeModes: [video-editor]
-allowedTools: [redbox_editor, redbox_fs, redbox_skill]
+allowedTools: [redbox_editor, redbox_fs, app_cli]
 hookMode: inline
 autoActivate: true
 contextNote: 当前视频运行时默认启用 Remotion 官方最佳实践知识包。优先按 Composition / Sequence / timing / assets 的思路设计动画，但最终仍以 remotion.scene.json 与 editor.project.json 为宿主真相层。

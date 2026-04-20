@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::payload_string;
 use crate::runtime::ResolvedChatConfig;

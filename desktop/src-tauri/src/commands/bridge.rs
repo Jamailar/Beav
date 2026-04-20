@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::agent::{
-    build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+    PreparedSessionAgentTurn, build_session_bridge_turn, execute_prepared_session_agent_turn,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::transcript_session_meta_by_id;
@@ -13,7 +13,7 @@ use crate::scheduler::{
 use crate::session_manager::{
     create_session, list_sessions, session_bridge_detail_value, session_bridge_summary_value,
 };
-use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
+use crate::{AppState, log_timing_event, now_i64, now_ms, payload_field, payload_string};
 
 pub fn handle_bridge_channel(
     app: &AppHandle,
@@ -45,13 +45,15 @@ pub fn handle_bridge_channel(
                 })
                 .collect::<std::collections::HashMap<_, _>>();
             with_store(state, |store| {
-                Ok(json!(sessions
-                    .iter()
-                    .map(|session| {
-                        let transcript_meta = transcript_meta_by_session_id.get(&session.id);
-                        session_bridge_summary_value(&store, session, transcript_meta)
-                    })
-                    .collect::<Vec<_>>()))
+                Ok(json!(
+                    sessions
+                        .iter()
+                        .map(|session| {
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_bridge_summary_value(&store, session, transcript_meta)
+                        })
+                        .collect::<Vec<_>>()
+                ))
             })
         })(),
         "session-bridge:get-session" => (|| {

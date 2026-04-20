@@ -63,6 +63,7 @@ type EditorAiWorkspaceMode = {
     themeEditingId?: string | null;
     themeEditingLabel?: string | null;
     themeEditingFile?: string | null;
+    themeEditingTemplateFile?: string | null;
 };
 
 type FileNode = {
@@ -323,6 +324,8 @@ type PackageState = {
         previewCardBg?: string | null;
         previewCardBorder?: string | null;
         previewCardShadow?: string | null;
+        headingColor?: string | null;
+        bodyColor?: string | null;
         textColor?: string | null;
         mutedColor?: string | null;
         accentColor?: string | null;
@@ -346,6 +349,21 @@ type PackageState = {
         accentColor?: string | null;
     }>;
     richpostPagesDir?: string | null;
+    richpostThemesDir?: string | null;
+    richpostThemesFile?: string | null;
+    richpostThemeTemplateFile?: string | null;
+    richpostThemeRoot?: string | null;
+    richpostThemeConfigFile?: string | null;
+    richpostThemeTokensFile?: string | null;
+    richpostThemePagePlanFile?: string | null;
+    richpostThemeAssetsDir?: string | null;
+    richpostThemeMastersDir?: string | null;
+    richpostThemeMasters?: Array<{
+        id?: string;
+        file?: string | null;
+        fileUrl?: string | null;
+        updatedAt?: number | null;
+    }> | null;
     richpostPageCount?: number;
     richpostPages?: Array<{
         id?: string;
@@ -904,6 +922,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [bindAssetRole, setBindAssetRole] = useState<'cover' | 'image' | 'asset'>('image');
     const [isBindAssetModalOpen, setIsBindAssetModalOpen] = useState(false);
     const [editorChatSessionId, setEditorChatSessionId] = useState<string | null>(null);
+    const [editorChatSessionReady, setEditorChatSessionReady] = useState(false);
     const [editorBody, setEditorBody] = useState('');
     const [editorFrontmatterBlock, setEditorFrontmatterBlock] = useState<string | null>(null);
     const [editorMetadata, setEditorMetadata] = useState<Record<string, unknown>>({});
@@ -2215,28 +2234,58 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (!editorFile) {
             setEditorChatSessionId(null);
+            setEditorChatSessionReady(false);
             return;
         }
+        setEditorChatSessionReady(false);
+        const draftType = editorDescriptor?.draftType || 'unknown';
+        const isRichpostThemeEditingSession =
+            draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing';
+        const themeSessionId = String(editorAiWorkspaceMode.themeEditingId || '').trim()
+            || String(editorAiWorkspaceMode.themeEditingLabel || '').trim()
+            || 'draft';
+        const themeSessionTitle = String(editorAiWorkspaceMode.themeEditingLabel || '').trim() || '当前主题';
         let cancelled = false;
         void (async () => {
             try {
-                const session = await window.ipcRenderer.invoke('chat:getOrCreateFileSession', { filePath: editorFile }) as { id?: string } | null;
+                const session = await window.ipcRenderer.invoke(
+                    isRichpostThemeEditingSession ? 'chat:getOrCreateContextSession' : 'chat:getOrCreateFileSession',
+                    isRichpostThemeEditingSession
+                        ? {
+                            contextType: 'richpost-theme-editing',
+                            contextId: `${editorFile}::${themeSessionId}`,
+                            title: `主题编辑 · ${themeSessionTitle}`,
+                            initialContext: `当前会话绑定到 richpost 主题编辑：${themeSessionTitle}`,
+                        }
+                        : { filePath: editorFile }
+                ) as { id?: string } | null;
                 if (cancelled || !session?.id) return;
                 setEditorChatSessionId(session.id);
             } catch (error) {
                 console.error('Failed to prepare editor chat session:', error);
                 if (!cancelled) {
                     setEditorChatSessionId(null);
+                    setEditorChatSessionReady(false);
                 }
             }
         })();
         return () => {
             cancelled = true;
         };
-    }, [editorFile]);
+    }, [
+        editorAiWorkspaceMode.id,
+        editorAiWorkspaceMode.themeEditingId,
+        editorAiWorkspaceMode.themeEditingLabel,
+        editorDescriptor?.draftType,
+        editorFile,
+    ]);
 
     useEffect(() => {
-        if (!editorChatSessionId || !editorFile) return;
+        if (!editorChatSessionId || !editorFile) {
+            setEditorChatSessionReady(false);
+            return;
+        }
+        setEditorChatSessionReady(false);
         const draftType = editorDescriptor?.draftType || 'unknown';
         const isMediaDraft = draftType === 'video' || draftType === 'audio';
 
@@ -2247,15 +2296,42 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             ? timelineSummary.trackNames
             : Array.from(new Set(timelineClips.map((item) => String(item?.track || '').trim()).filter(Boolean)));
 
+        const isRichpostThemeEditingSession =
+            draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing';
+        const themeSessionId = String(editorAiWorkspaceMode.themeEditingId || '').trim()
+            || String(editorAiWorkspaceMode.themeEditingLabel || '').trim()
+            || 'draft';
+        const themeEditingFile = isRichpostThemeEditingSession
+            ? packageState?.richpostThemeConfigFile || editorAiWorkspaceMode.themeEditingFile || null
+            : null;
+        const themeEditingRoot = (() => {
+            const explicitRoot = isRichpostThemeEditingSession ? packageState?.richpostThemeRoot || null : null;
+            if (explicitRoot) return explicitRoot;
+            if (!themeEditingFile) return null;
+            const normalized = String(themeEditingFile).replace(/\\/g, '/');
+            if (normalized.endsWith('/theme.json')) {
+                return normalized.slice(0, -'/theme.json'.length);
+            }
+            return null;
+        })();
+
         void window.ipcRenderer.invoke('chat:update-session-metadata', {
             sessionId: editorChatSessionId,
             metadata: {
+                contextType: isRichpostThemeEditingSession ? 'richpost-theme-editing' : 'file',
+                contextId: isRichpostThemeEditingSession ? `${editorFile}::${themeSessionId}` : editorFile,
+                isContextBound: true,
+                allowedTools: isRichpostThemeEditingSession ? ['app_cli', 'redbox_fs'] : undefined,
                 associatedFilePath: editorFile,
                 associatedPackageKind: draftType,
                 agentProfile: draftType === 'video' ? 'video-editor' : draftType === 'audio' ? 'audio-editor' : 'default',
                 associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
                 associatedPackageWorkspaceMode: editorAiWorkspaceMode.id,
                 associatedPackageWorkspaceModeLabel: editorAiWorkspaceMode.label,
+                associatedPackagePromptProfile:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? 'richpost-theme-editor'
+                        : editorAiWorkspaceMode.id,
                 associatedPackageRequiredSkills: editorAiWorkspaceMode.activeSkills,
                 activeSkills: editorAiWorkspaceMode.activeSkills,
                 associatedPackageThemeId:
@@ -2296,7 +2372,45 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         : null,
                 associatedPackageThemeEditingFile:
                     draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? editorAiWorkspaceMode.themeEditingFile || null
+                        ? themeEditingFile
+                        : null,
+                associatedPackageThemeEditingTemplateFile:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || null
+                        : null,
+                associatedPackageThemeEditingTargetFiles:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? {
+                            themeRoot: themeEditingRoot,
+                            themeIndexFile: packageState?.richpostThemesFile || null,
+                            themeFile: themeEditingFile,
+                            templateGuideFile: packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || null,
+                            layoutTokensFile: packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || null,
+                            pagePlanFile: packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || null,
+                            assetsDir: packageState?.richpostThemeAssetsDir || (themeEditingRoot ? `${themeEditingRoot}/assets` : null),
+                            masterFiles: Array.isArray(packageState?.richpostThemeMasters)
+                                ? packageState.richpostThemeMasters
+                                    .map((item) => String(item?.file || '').trim())
+                                    .filter(Boolean)
+                                : Array.isArray(packageState?.richpostMasters)
+                                    ? packageState.richpostMasters
+                                        .map((item) => String(item?.file || '').trim())
+                                        .filter(Boolean)
+                                    : [],
+                            packageRenderTargets: {
+                                layoutTokensFile: packageState?.layoutTokensFile || null,
+                                pagePlanFile: packageState?.richpostPagePlanFile || null,
+                                masterFiles: Array.isArray(packageState?.richpostMasters)
+                                    ? packageState.richpostMasters
+                                        .map((item) => String(item?.file || '').trim())
+                                        .filter(Boolean)
+                                    : [],
+                            },
+                        }
+                        : null,
+                associatedPackageThemeRoot:
+                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
+                        ? themeEditingRoot
                         : null,
                 associatedPackageContentSource:
                     (draftType === 'richpost' || draftType === 'longform')
@@ -2306,12 +2420,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     draftType === 'richpost'
                         ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
                             ? [
-                                'richpost-themes.json',
-                                'layout.tokens.json',
-                                'masters/cover.master.html',
-                                'masters/body.master.html',
-                                'masters/ending.master.html',
-                                'richpost-page-plan.json',
+                                String(packageState?.richpostThemeRoot || 'themes/<theme-id>/'),
+                                String(packageState?.richpostThemeConfigFile || packageState?.richpostThemesFile || 'themes/<theme-id>/theme.json'),
+                                String(packageState?.richpostThemeTemplateFile || 'themes/richpost-theme-template.md'),
+                                String(packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || 'themes/<theme-id>/layout.tokens.json'),
+                                ...(Array.isArray(packageState?.richpostThemeMasters)
+                                    ? packageState.richpostThemeMasters
+                                        .map((item) => String(item?.file || '').trim())
+                                        .filter(Boolean)
+                                    : Array.isArray(packageState?.richpostMasters)
+                                        ? packageState.richpostMasters
+                                            .map((item) => String(item?.file || '').trim())
+                                            .filter(Boolean)
+                                        : [
+                                            'themes/<theme-id>/masters/cover.master.html',
+                                            'themes/<theme-id>/masters/body.master.html',
+                                            'themes/<theme-id>/masters/ending.master.html',
+                                        ]),
+                                String(packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || 'themes/<theme-id>/page-plan.json'),
+                                String(packageState?.richpostThemeAssetsDir || 'themes/<theme-id>/assets'),
                                 'layout.html',
                                 'pages/page-xxx.html',
                             ]
@@ -2329,7 +2456,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 associatedPackageStyleEditRule:
                     draftType === 'richpost'
                         ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? '当前处于图文主题编辑模式。当前主题同时包含 coverFrame、bodyFrame、endingFrame 三个真实文字区域。优先修改 richpost-themes.json、layout.tokens.json 与首页、内容页、尾页母版；只有在母版、tokens 和 frame 不足以达成目标时，才调整 richpost-page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
+                            ? '当前处于图文主题编辑模式。先阅读 richpost-theme-template.md 里的规则，再修改当前主题 root 里的 theme.json。优先修改 themes/<theme-id>/theme.json、layout.tokens.json 与首页、内容页、尾页母版；只有在母版、tokens 和 frame 不足以达成目标时，才调整 page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
                             : '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
                         : draftType === 'longform'
                             ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
@@ -2338,16 +2465,32 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     draftType === 'richpost'
                         ? {
                             contentSource: String(packageState?.manifest?.entry || 'content.md'),
-                            contentMap: 'content-map.json',
-                            themeCatalogFile: 'richpost-themes.json',
-                            layoutTokens: 'layout.tokens.json',
-                            mastersDir: 'masters/*.master.html',
-                            coverMaster: 'masters/cover.master.html',
-                            bodyMaster: 'masters/body.master.html',
-                            endingMaster: 'masters/ending.master.html',
-                            pagePlan: 'richpost-page-plan.json',
+                            contentMap: packageState?.contentMapFile || 'content-map.json',
+                            themeCatalogFile: packageState?.richpostThemesFile || 'themes/index.json',
+                            themeTemplateGuideFile: packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || 'themes/richpost-theme-template.md',
+                            themeRoot: packageState?.richpostThemeRoot || 'themes/<theme-id>/',
+                            themeConfig: packageState?.richpostThemeConfigFile || packageState?.richpostThemesFile || 'themes/<theme-id>/theme.json',
+                            themeAssetsDir: packageState?.richpostThemeAssetsDir || 'themes/<theme-id>/assets',
+                            layoutTokens: packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || 'themes/<theme-id>/layout.tokens.json',
+                            mastersDir: packageState?.richpostThemeMastersDir || packageState?.richpostMastersDir || 'themes/<theme-id>/masters/*.master.html',
+                            coverMaster: Array.isArray(packageState?.richpostThemeMasters)
+                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'cover')?.file || 'themes/<theme-id>/masters/cover.master.html'
+                                : Array.isArray(packageState?.richpostMasters)
+                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'cover')?.file || 'masters/cover.master.html'
+                                    : 'themes/<theme-id>/masters/cover.master.html',
+                            bodyMaster: Array.isArray(packageState?.richpostThemeMasters)
+                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'body')?.file || 'themes/<theme-id>/masters/body.master.html'
+                                : Array.isArray(packageState?.richpostMasters)
+                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'body')?.file || 'masters/body.master.html'
+                                    : 'themes/<theme-id>/masters/body.master.html',
+                            endingMaster: Array.isArray(packageState?.richpostThemeMasters)
+                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'ending')?.file || 'themes/<theme-id>/masters/ending.master.html'
+                                : Array.isArray(packageState?.richpostMasters)
+                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'ending')?.file || 'masters/ending.master.html'
+                                    : 'themes/<theme-id>/masters/ending.master.html',
+                            pagePlan: packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || 'themes/<theme-id>/page-plan.json',
                             previewShell: 'layout.html',
-                            pagesDir: 'pages/page-xxx.html',
+                            pagesDir: packageState?.richpostPagesDir || 'pages/page-xxx.html',
                             themeSource: 'manifest.richpostThemeId',
                             themeEditableFrames: [
                                 'coverFrame',
@@ -2357,8 +2500,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             templateEditingFocus: editorAiWorkspaceMode.id === 'richpost-theme-editing'
                                 ? ['cover', 'body', 'ending']
                                 : [],
-                            currentMasters: Array.isArray(packageState?.richpostMasters)
-                                ? packageState.richpostMasters
+                            currentMasters: Array.isArray(packageState?.richpostThemeMasters)
+                                ? packageState.richpostThemeMasters
                                     .map((item) => String(item?.id || '').trim())
                                     .filter(Boolean)
                                 : [],
@@ -2395,8 +2538,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     }))
                     : [],
             },
+        }).then(() => {
+            setEditorChatSessionReady(true);
         }).catch((error) => {
             console.error('Failed to sync editor chat metadata:', error);
+            setEditorChatSessionReady(false);
         });
     }, [
         editorAiWorkspaceMode.activeSkills,
@@ -2405,6 +2551,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         editorAiWorkspaceMode.themeEditingFile,
         editorAiWorkspaceMode.themeEditingId,
         editorAiWorkspaceMode.themeEditingLabel,
+        editorAiWorkspaceMode.themeEditingTemplateFile,
         editorBodyDirty,
         editorChatSessionId,
         editorDescriptor?.draftType,
@@ -3245,6 +3392,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         isApplyingWriteProposal={isApplyingWriteProposal}
                         isRejectingWriteProposal={isRejectingWriteProposal}
                         editorChatSessionId={editorChatSessionId}
+                        editorChatReady={editorChatSessionReady}
                         layoutPreview={articleLayoutPreview}
                         wechatPreview={articleWechatPreview}
                         hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}

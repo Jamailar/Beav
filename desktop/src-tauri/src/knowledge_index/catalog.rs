@@ -1,11 +1,11 @@
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::State;
 
 use crate::{
-    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready, workspace_id},
     AppState,
+    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready, workspace_id},
 };
 
 #[derive(Debug, Clone, Serialize)]

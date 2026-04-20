@@ -209,6 +209,12 @@ function inferImageAspectFromSize(size: string): string {
     return bestDelta <= 0.04 ? best : '';
 }
 
+function toSortableTime(value?: string): number {
+    if (!value) return 0;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [assets, setAssets] = useState<MediaAsset[]>([]);
     const [manuscripts, setManuscripts] = useState<string[]>([]);
@@ -351,6 +357,10 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 asset.id,
             ].join('\n').toLowerCase();
             return text.includes(keyword);
+        }).sort((a, b) => {
+            const createdDelta = toSortableTime(b.createdAt) - toSortableTime(a.createdAt);
+            if (createdDelta !== 0) return createdDelta;
+            return toSortableTime(b.updatedAt) - toSortableTime(a.updatedAt);
         });
     }, [assets, projectFilter, query, sourceFilter]);
 
@@ -822,7 +832,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 ) : filteredAssets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">暂无媒体资产</div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-4 [column-fill:_balance]">
                         {filteredAssets.map((asset) => {
                             const draft = getDraft(asset);
                             const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
@@ -830,37 +840,46 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             const isExpanded = expandedAssetId === asset.id;
                             const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
                             return (
-                                <div key={asset.id} className="group border border-border rounded-2xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                    <div className="relative aspect-[4/5] bg-surface-secondary">
+                                <div key={asset.id} className="group mb-4 break-inside-avoid border border-border rounded-2xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
+                                        <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border', sourceMeta.badgeClass)}>
+                                            {sourceMeta.label}
+                                        </span>
+                                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-secondary/70 text-text-secondary">
+                                            {new Date(asset.createdAt).toLocaleDateString()}
+                                        </span>
+                                    </div>
+
+                                    <div className="bg-surface-secondary">
                                         {asset.previewUrl && asset.exists ? (
                                             isVideoAsset(asset) ? (
-                                                <video src={resolveAssetUrl(asset.previewUrl)} className="w-full h-full object-cover bg-black" controls preload="metadata" />
+                                                <video
+                                                    src={resolveAssetUrl(asset.previewUrl)}
+                                                    className="block w-full h-auto max-h-[520px] bg-black"
+                                                    controls
+                                                    preload="metadata"
+                                                />
                                             ) : (
-                                                <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full h-full object-cover" />
+                                                <img
+                                                    src={resolveAssetUrl(asset.previewUrl)}
+                                                    alt={asset.title || asset.id}
+                                                    className="block w-full h-auto"
+                                                />
                                             )
                                         ) : (
-                                            <div className="w-full h-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
+                                            <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
                                                 {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
                                             </div>
                                         )}
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/15 to-transparent pointer-events-none" />
-                                        <div className="absolute top-2 left-2 right-2 flex items-start justify-between gap-2">
-                                            <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border backdrop-blur bg-black/15', sourceMeta.badgeClass)}>
-                                                {sourceMeta.label}
-                                            </span>
-                                            <span className="text-[10px] px-2 py-0.5 rounded-md border border-white/25 bg-black/25 text-white">
-                                                {new Date(asset.updatedAt).toLocaleDateString()}
-                                            </span>
-                                        </div>
-                                        <div className="absolute bottom-0 left-0 right-0 p-3 text-white">
-                                            <div className="text-sm font-medium truncate">{draft.title || asset.title || asset.id}</div>
-                                            <div className="text-[11px] text-white/80 truncate">
-                                                {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
-                                            </div>
-                                        </div>
                                     </div>
 
                                     <div className="p-3 space-y-2">
+                                        <div>
+                                            <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
+                                            <div className="text-[11px] text-text-tertiary truncate">
+                                                {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                            </div>
+                                        </div>
                                         <div className="text-[11px] text-text-tertiary truncate">
                                             提示词：{(draft.prompt || asset.prompt || '暂无提示词').replace(/\s+/g, ' ')}
                                         </div>

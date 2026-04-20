@@ -1,9 +1,9 @@
 use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
-    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
-    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
+    SessionTranscriptFileMeta, append_compact_boundary_entry, list_transcript_sessions,
+    session_context_usage_value, tool_results_value_for_session, trace_value_for_session,
+    transcript_resume_messages, transcript_session_meta_by_id, update_session_context_record,
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
@@ -11,7 +11,7 @@ use crate::session_manager::{
     session_list_item_value, session_resume_value, update_metadata,
 };
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -744,13 +744,16 @@ pub fn handle_chat_sessions_wander_channel(
                         })
                         .collect();
                 with_store(state, |store| {
-                    Ok(json!(items
-                        .iter()
-                        .map(|session| {
-                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
-                            session_list_item_value(&store, session, transcript_meta)
-                        })
-                        .collect::<Vec<_>>()))
+                    Ok(json!(
+                        items
+                            .iter()
+                            .map(|session| {
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, session, transcript_meta)
+                            })
+                            .collect::<Vec<_>>()
+                    ))
                 })
             }
             "chat:create-context-session" => {
@@ -1333,9 +1336,9 @@ pub fn handle_chat_sessions_wander_channel(
                     String::new()
                 } else {
                     format!(
-                    "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
-                    long_term_context
-                )
+                        "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
+                        long_term_context
+                    )
                 };
                 let materials_guide = build_wander_materials_guide(&items);
                 let prompt = build_legacy_wander_prompt(

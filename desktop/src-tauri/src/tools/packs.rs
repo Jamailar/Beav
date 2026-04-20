@@ -37,37 +37,12 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["bash"],
-        ToolPack::Chatroom => &[
-            "bash",
-            "app_cli",
-            "knowledge_glob",
-            "knowledge_grep",
-            "knowledge_read",
-        ],
-        ToolPack::Knowledge => &[
-            "bash",
-            "app_cli",
-            "knowledge_glob",
-            "knowledge_grep",
-            "knowledge_read",
-        ],
+        ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Redclaw => &["bash", "app_cli"],
         ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
-        ToolPack::Editor => &["bash", "app_cli", "redbox_editor"],
-        ToolPack::Diagnostics => &[
-            "bash",
-            "app_cli",
-            "knowledge_glob",
-            "knowledge_grep",
-            "knowledge_read",
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-            "redbox_editor",
-        ],
+        ToolPack::Editor => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
+        ToolPack::Diagnostics => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
     }
 }
 

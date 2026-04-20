@@ -7,7 +7,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -901,9 +901,9 @@ pub fn handle_library_channel(
                         continue;
                     }
                     let prompt = format!(
-                    "请基于下面的视频字幕，输出一段中文摘要，控制在 120 字以内。\n\n标题：{}\n\n字幕：\n{}",
-                    title, subtitle
-                );
+                        "请基于下面的视频字幕，输出一段中文摘要，控制在 120 字以内。\n\n标题：{}\n\n字幕：\n{}",
+                        title, subtitle
+                    );
                     let summary =
                         generate_response_with_settings(&settings_snapshot, None, &prompt);
                     updates.push((video_id.clone(), summary));
@@ -1070,7 +1070,7 @@ pub fn handle_library_channel(
                 let _ = ensure_store_hydrated_for_media(state);
                 with_store(state, |store| {
                     let mut assets = store.media_assets.clone();
-                    assets.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                     Ok(json!({ "success": true, "assets": assets }))
                 })
             }

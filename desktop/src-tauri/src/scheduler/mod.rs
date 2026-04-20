@@ -5,18 +5,18 @@ mod lease;
 mod retry;
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
 };
-use crate::{run_memory_maintenance_with_reason, AppState, AppStore};
+use crate::{AppState, AppStore, run_memory_maintenance_with_reason};
 
 pub use job_runtime::{
     archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,

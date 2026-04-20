@@ -6,6 +6,7 @@
 
 - `catalog.rs`：工具 descriptor 与 OpenAI schema 定义（kind / approval / concurrency / budget）。
 - `compat.rs`：历史工具名兼容层，统一映射到通用 `redbox_*` 工具入口。
+  - 兼容层应优先继续收敛到 canonical tools，而不是给 legacy tool 保持完整独立语义面。
 - `packs.rs`：`runtimeMode -> tool pack` 映射，以及 pack 允许的工具集合。
 - `registry.rs`：按 mode 提供工具列表、schema 列表和提示词可读描述。
 - `guards.rs`：执行前工具准入校验与 `ToolResultBudget` 截断策略。
@@ -16,12 +17,23 @@
 - 运行时执行工具前必须走 guard，禁止越权调用不在 pack 内的工具。
 - 通用工具收敛到：
   - `bash`
+  - `redbox_fs`
   - `app_cli`
   - `redbox_editor`（仅编辑器 runtime）
 - 兼容层保留：
   - `redbox_app_query`
-  - `redbox_fs`
   - `redbox_profile_doc`
   - `redbox_mcp`
   - `redbox_skill`
   - `redbox_runtime_control`
+
+## 治理规则
+
+- 顶层工具优先保持在少量通用入口，不按主题、模板、稿件、profile、MCP、skill、runtime 等领域继续拆新的顶层工具。
+- 如果能力只是作用域不同、文件不同、业务子域不同，优先扩已有工具的 `command` / `action` / `scope` / typed payload，而不是新增 sibling tool。
+- 文件相关能力优先收敛到 `redbox_fs`，不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类领域文件工具。
+- 宿主业务能力优先收敛到 `app_cli`，不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
+- `app_cli` 内部优先用清晰 namespace 组织：例如 `advisors`、`chat sessions`、`manuscripts theme/layout`、`runtime`、`skills`、`ai`、`mcp`。可以扩子命令，但不要回退到新的顶层工具。
+- 编辑器原生协议只放在 `redbox_editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的顶层工具。
+- compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。
+- 任何新工具都必须先回答一个问题：`bash`、`redbox_fs`、`app_cli`、`redbox_editor` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。

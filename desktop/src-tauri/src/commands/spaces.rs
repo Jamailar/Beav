@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{
@@ -6,8 +6,8 @@ use crate::persistence::{
     with_store_mut,
 };
 use crate::{
-    active_space_workspace_root_from_store, emit_space_changed, make_id, now_iso, payload_string,
-    payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
+    AppState, SpaceRecord, active_space_workspace_root_from_store, emit_space_changed, make_id,
+    now_iso, payload_string, payload_value_as_string, update_workspace_root_cache,
 };
 
 pub(crate) fn spaces_list_value(state: &State<'_, AppState>) -> Result<Value, String> {

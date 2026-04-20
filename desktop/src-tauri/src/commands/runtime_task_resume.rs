@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::commands::runtime_orchestration::{
@@ -6,10 +6,10 @@ use crate::commands::runtime_orchestration::{
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_task_node_changed};
 use crate::runtime::{
-    build_repair_goal, reviewer_rejected, route_for_task_snapshot, PreparedTaskResumeExecution,
-    RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent, RuntimeTaskRecord,
+    PreparedTaskResumeExecution, RuntimeArtifact, RuntimeCheckpointEvent, RuntimeNodeEvent,
+    RuntimeTaskRecord, build_repair_goal, reviewer_rejected, route_for_task_snapshot,
 };
-use crate::{payload_string, AppState};
+use crate::{AppState, payload_string};
 
 pub fn prepare_task_resume_execution(
     app: &AppHandle,
@@ -246,10 +246,12 @@ mod tests {
         assert_eq!(store.work_items.len(), 1);
         assert_eq!(store.work_items[0].r#type, "runtime-artifact");
         assert_eq!(store.runtime_tasks[0].status, "completed");
-        assert!(applied
-            .runtime_node_events
-            .iter()
-            .any(|(node_id, status, _, _)| node_id == "save_artifact" && status == "completed"));
+        assert!(
+            applied
+                .runtime_node_events
+                .iter()
+                .any(|(node_id, status, _, _)| node_id == "save_artifact" && status == "completed")
+        );
     }
 
     #[test]
@@ -287,9 +289,11 @@ mod tests {
         assert_eq!(store.work_items.len(), 1);
         assert_eq!(store.work_items[0].r#type, "runtime-repair");
         assert_eq!(store.runtime_tasks[0].status, "failed");
-        assert!(applied
-            .runtime_node_events
-            .iter()
-            .any(|(node_id, status, _, _)| node_id == "execute_tools" && status == "failed"));
+        assert!(
+            applied
+                .runtime_node_events
+                .iter()
+                .any(|(node_id, status, _, _)| node_id == "execute_tools" && status == "failed")
+        );
     }
 }

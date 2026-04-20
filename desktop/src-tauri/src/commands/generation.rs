@@ -2,11 +2,11 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::skills::{
-    load_skill_bundle_sections_from_root, load_skill_bundle_sections_from_sources,
-    split_skill_body, SkillBundleSections,
+    SkillBundleSections, load_skill_bundle_sections_from_root,
+    load_skill_bundle_sections_from_sources, split_skill_body,
 };
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use tauri::{AppHandle, Manager, State};
 

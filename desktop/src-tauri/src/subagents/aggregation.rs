@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::subagents::SubAgentOutput;
-use crate::{payload_string, AppStore};
+use crate::{AppStore, payload_string};
 
 fn fallback_summary(store: &AppStore, child_task_id: &str) -> Option<String> {
     store

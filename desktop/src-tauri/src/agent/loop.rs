@@ -1,13 +1,13 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent::{
+    ChatExchangeRequest, PreparedSessionAgentTurn, SessionAgentTurnExecution,
     persist_chat_exchange, resolve_chat_exchange_context, resolve_chat_exchange_response_stage,
-    update_post_exchange_maintenance, ChatExchangeRequest, PreparedSessionAgentTurn,
-    SessionAgentTurnExecution,
+    update_post_exchange_maintenance,
 };
 use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
 use crate::{
-    ensure_redclaw_onboarding_completed_with_defaults, handle_redclaw_onboarding_turn, AppState,
+    AppState, ensure_redclaw_onboarding_completed_with_defaults, handle_redclaw_onboarding_turn,
 };
 
 pub fn execute_prepared_session_agent_turn(

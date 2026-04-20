@@ -1,5 +1,4 @@
 import type { RuntimeUnifiedEvent } from '../types';
-import { uiDebug } from '../utils/uiDebug';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -456,18 +455,6 @@ export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers
     if (!parsed) return;
     const sessionId = toText(parsed.sessionId);
     if (shouldSkipBySession(handlers, sessionId)) return;
-    if (import.meta.env.DEV) {
-      const payload = toRecord(parsed.payload);
-      uiDebug('runtime-event', 'dispatch', {
-        eventType: parsed.eventType,
-        sessionId: parsed.sessionId,
-        taskId: parsed.taskId,
-        runtimeId: parsed.runtimeId,
-        checkpointType: toText(payload.checkpointType),
-        stream: toText(payload.stream),
-        contentChars: String(payload.content || '').length,
-      });
-    }
     dispatchRuntimeEnvelope(handlers, parsed);
   };
   window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);

@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::thread;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent::{
-    build_runtime_query_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
+    PreparedSessionAgentTurn, build_runtime_query_turn, execute_prepared_session_agent_turn,
 };
 use crate::events::{
     emit_runtime_subagent_finished, emit_runtime_subagent_spawned,
@@ -13,16 +13,16 @@ use crate::events::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace_scoped, append_session_checkpoint_scoped, create_runtime_task,
-    record_runtime_node, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord, append_runtime_task_trace_scoped,
+    append_session_checkpoint_scoped, create_runtime_task, record_runtime_node,
 };
 use crate::subagents::{
-    build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
-    SubAgentSpawnResult,
+    SubAgentConfig, SubAgentOutput, SubAgentSpawnResult, build_orchestration_value,
+    build_subagent_configs,
 };
 use crate::{
-    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
-    AppState, AppStore, ChatSessionRecord,
+    AppState, AppStore, ChatSessionRecord, append_debug_log_state, make_id, now_i64, now_iso,
+    parse_json_value_from_text, payload_string,
 };
 
 fn snippet(value: &str, limit: usize) -> String {
@@ -129,12 +129,7 @@ fn build_child_prompt(
         .unwrap_or_default();
     format!(
         "You are a RedBox child runtime.\nRole: {}\nGoal: {}\nUser input: {}\nAllowed tools: {}\nPrior outputs: {}\n{}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.",
-        config.role_id,
-        route.goal,
-        user_input,
-        allowed_tools,
-        prior_summary,
-        system_patch,
+        config.role_id, route.goal, user_input, allowed_tools, prior_summary, system_patch,
     )
 }
 
@@ -548,7 +543,11 @@ fn execute_subagent_config(
             spawn.child_task_id,
             output.approved,
             snippet(&output.summary, 280),
-            output.artifact.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            output
+                .artifact
+                .as_ref()
+                .map(|value| value.chars().count())
+                .unwrap_or(0),
             output
                 .artifact
                 .as_ref()

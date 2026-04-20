@@ -3,8 +3,8 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
+use std::sync::atomic::Ordering;
 use tauri::State;
 
 use crate::runtime::SkillRecord;
@@ -14,11 +14,11 @@ use crate::workspace_loaders::{
     load_memory_history_from_fs,
 };
 use crate::{
+    AppState, AppStore, AssistantStateRecord, RedclawStateRecord, SpaceRecord,
     active_space_workspace_root_from_store, load_advisors_from_fs, load_cover_assets_from_fs,
     load_document_sources_from_fs, load_knowledge_notes_from_fs, load_media_assets_from_fs,
     load_redclaw_state_from_fs, load_subject_categories_from_fs, load_subjects_from_fs,
-    load_work_items_from_fs, load_youtube_videos_from_fs, now_iso, AppState, AppStore,
-    AssistantStateRecord, RedclawStateRecord, SpaceRecord,
+    load_work_items_from_fs, load_youtube_videos_from_fs, now_iso,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -827,9 +827,11 @@ mod tests {
             .iter()
             .find(|item| item.name == "image-prompt-optimizer")
             .expect("refreshed image-prompt-optimizer should exist");
-        assert!(refreshed
-            .body
-            .contains("allowedRuntimeModes: [chatroom, redclaw, image-generation]"));
+        assert!(
+            refreshed
+                .body
+                .contains("allowedRuntimeModes: [chatroom, redclaw, image-generation]")
+        );
         assert_eq!(refreshed.disabled, Some(true));
         assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
         assert_eq!(refreshed.is_builtin, Some(true));

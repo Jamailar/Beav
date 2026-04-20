@@ -1,23 +1,23 @@
 use crate::agent::{
-    execute_prepared_session_agent_turn, AssistantDaemonTurn, PreparedSessionAgentTurn,
+    AssistantDaemonTurn, PreparedSessionAgentTurn, execute_prepared_session_agent_turn,
 };
 use crate::knowledge;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Stdio;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
-    now_iso, payload_string, run_curl_json, url_encode_component, with_store, AppState,
-    AssistantSidecarRuntime, AssistantStateRecord,
+    AppState, AssistantSidecarRuntime, AssistantStateRecord, now_iso, payload_string,
+    run_curl_json, url_encode_component, with_store,
 };
 
 pub(crate) fn value_to_i64_string(value: Option<&Value>) -> Option<String> {

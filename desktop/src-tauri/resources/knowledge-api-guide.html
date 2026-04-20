@@ -858,12 +858,8 @@
               </div>
             </summary>
             <div class="module-body">
-              <div class="action-row">
-                <button class="primary-btn" type="button" id="install-plugin-btn">一键安装插件</button>
-                <a class="ghost-link" id="open-extension-page-btn" href="#" target="_blank" rel="noopener noreferrer">打开插件设置页</a>
-              </div>
               <div class="micro-note">
-                先在 RedBox 的 设置 → 工具 里点击“一键准备插件”。
+                先在 RedBox 的 设置 → 工具 里点击“一键准备插件”，再在 app 里使用复制扩展管理页地址的按钮，把地址粘贴到浏览器地址栏打开。
               </div>
               <div class="step-list" id="plugin-install-steps">
                 <div class="step-row">
@@ -1552,56 +1548,6 @@
         }, 1800);
       }
 
-      function pluginInstallGuideText() {
-        return [
-          'RedBox 插件导入安装步骤',
-          '',
-          ...guide.importMethods.plugin.steps.map((step, index) => `${index + 1}. ${step}`),
-          '',
-          '如果没有自动打开，请手动打开浏览器扩展管理页。'
-        ].join('\n');
-      }
-
-      function extensionManagerUrl() {
-        const ua = navigator.userAgent.toLowerCase();
-        if (ua.includes('edg/')) {
-          return 'edge://extensions';
-        }
-        if (ua.includes('chrome') || ua.includes('chromium')) {
-          return 'chrome://extensions';
-        }
-        return '';
-      }
-
-      function openExtensionManager() {
-        const link = document.getElementById('open-extension-page-btn');
-        if (!(link instanceof HTMLAnchorElement) || !link.href || link.getAttribute('href') === '#') {
-          return false;
-        }
-        try {
-          link.click();
-          return true;
-        } catch (error) {
-          console.warn('Open extension manager failed', error);
-          return false;
-        }
-      }
-
-      function setupExtensionPageLink() {
-        const link = document.getElementById('open-extension-page-btn');
-        if (!(link instanceof HTMLAnchorElement)) {
-          return;
-        }
-        const url = extensionManagerUrl();
-        if (!url) {
-          link.setAttribute('href', '#');
-          link.setAttribute('aria-disabled', 'true');
-          return;
-        }
-        link.href = url;
-        link.removeAttribute('aria-disabled');
-      }
-
       async function copyPlainText(text, button) {
         const original = button ? button.textContent : '';
         try {
@@ -1652,18 +1598,6 @@
       document.getElementById('copy-markdown-btn-side').addEventListener('click', (event) => {
         copyPlainText(markdown, event.currentTarget);
       });
-      document.getElementById('install-plugin-btn').addEventListener('click', async (event) => {
-        const button = event.currentTarget;
-        const opened = openExtensionManager();
-        try {
-          await navigator.clipboard.writeText(pluginInstallGuideText());
-          flashButtonText(button, opened ? '已打开并复制' : '已复制步骤');
-        } catch (error) {
-          console.error('Plugin install guide copy failed', error);
-          flashButtonText(button, opened ? '已打开扩展页' : '请手动打开');
-        }
-      });
-      setupExtensionPageLink();
       render();
     </script>
   </body>

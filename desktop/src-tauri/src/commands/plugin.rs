@@ -1,9 +1,9 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::{
-    browser_plugin_bundled_root, browser_plugin_export_root, copy_dir_recursive, log_timing_event,
-    now_ms, AppState,
+    AppState, browser_plugin_bundled_root, browser_plugin_export_root, copy_dir_recursive,
+    log_timing_event, now_ms,
 };
 
 pub fn handle_plugin_channel(

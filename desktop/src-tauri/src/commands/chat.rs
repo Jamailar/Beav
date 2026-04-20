@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn};
+use crate::agent::{PreparedSessionAgentTurn, build_chat_send_turn, run_chat_send_turn};
 use crate::commands::chat_state::{
     latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
 };
@@ -11,8 +11,8 @@ use crate::runtime::SessionToolResultRecord;
 use crate::session_lineage_fields;
 use crate::skills::active_skill_activation_items;
 use crate::{
-    append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
-    now_ms, payload_field, payload_string, AppState,
+    AppState, append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64,
+    now_iso, now_ms, payload_field, payload_string,
 };
 
 fn requested_skill_names_from_task_hints(task_hints: &Value) -> Vec<String> {

@@ -1,11 +1,11 @@
 use tauri::{AppHandle, State};
 
+use crate::AppState;
 use crate::agent::{
-    resolve_chat_exchange_context, resolve_chat_exchange_response_stage, PreparedSessionAgentTurn,
-    PreparedWanderTurn, SessionAgentTurnExecution,
+    PreparedSessionAgentTurn, PreparedWanderTurn, SessionAgentTurnExecution,
+    resolve_chat_exchange_context, resolve_chat_exchange_response_stage,
 };
 use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
-use crate::AppState;
 
 pub fn execute_prepared_wander_turn(
     app: &AppHandle,

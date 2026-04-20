@@ -1,9 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::skills::build_skill_runtime_state;
-use crate::tools::catalog::{descriptor_by_name, schema_for_tool, ToolDescriptor};
-use crate::tools::packs::tool_names_for_runtime_mode;
 use crate::AppStore;
+use crate::skills::build_skill_runtime_state;
+use crate::tools::catalog::{ToolDescriptor, descriptor_by_name, schema_for_tool};
+use crate::tools::compat::canonical_tool_name;
+use crate::tools::packs::tool_names_for_runtime_mode;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
@@ -20,15 +21,7 @@ fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
 }
 
 fn normalize_requested_tool_name(name: &str) -> &str {
-    match name {
-        "redbox_app_query"
-        | "redbox_profile_doc"
-        | "redbox_skill"
-        | "redbox_runtime_control"
-        | "redbox_mcp" => "app_cli",
-        "redbox_fs" => "bash",
-        other => other,
-    }
+    canonical_tool_name(name)
 }
 
 pub fn base_tool_names_for_session_metadata(
@@ -43,14 +36,20 @@ pub fn base_tool_names_for_session_metadata(
         .and_then(|item| item.get("allowedTools"))
         .and_then(Value::as_array)
         .map(|items| {
-            items
+            let mut normalized = Vec::new();
+            for item in items
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
                 .map(normalize_requested_tool_name)
                 .map(ToString::to_string)
-                .collect::<Vec<_>>()
+            {
+                if !normalized.iter().any(|existing| existing == &item) {
+                    normalized.push(item);
+                }
+            }
+            normalized
         })
         .unwrap_or_default();
     if requested.is_empty() {
@@ -189,38 +188,25 @@ pub fn prompt_tool_lines_for_session(
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
-    [
-        "bash",
-        "app_cli",
-        "knowledge_glob",
-        "knowledge_grep",
-        "knowledge_read",
-        "redbox_app_query",
-        "redbox_fs",
-        "redbox_profile_doc",
-        "redbox_mcp",
-        "redbox_skill",
-        "redbox_runtime_control",
-        "redbox_editor",
-    ]
-    .iter()
-    .filter_map(|name| descriptor_by_name(name))
-    .map(|tool| {
-        json!({
-            "name": tool.name,
-            "displayName": format!("Runtime · {}", tool.name),
-            "description": tool.description,
-            "kind": kind_text(tool.kind),
-            "requiresApproval": tool.requires_approval,
-            "concurrencySafe": tool.concurrency_safe,
-            "outputBudgetChars": tool.output_budget_chars,
-            "visibility": "developer",
-            "contexts": ["desktop"],
-            "availabilityStatus": "available",
-            "availabilityReason": "Registered in Rust Tool Registry"
+    ["bash", "redbox_fs", "app_cli", "redbox_editor"]
+        .iter()
+        .filter_map(|name| descriptor_by_name(name))
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "displayName": format!("Runtime · {}", tool.name),
+                "description": tool.description,
+                "kind": kind_text(tool.kind),
+                "requiresApproval": tool.requires_approval,
+                "concurrencySafe": tool.concurrency_safe,
+                "outputBudgetChars": tool.output_budget_chars,
+                "visibility": "developer",
+                "contexts": ["desktop"],
+                "availabilityStatus": "available",
+                "availabilityReason": "Registered in Rust Tool Registry"
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -242,12 +228,6 @@ mod tests {
         });
 
         let names = tool_names_for_session(&store, "chatroom", Some("session-1"));
-        assert_eq!(
-            names,
-            vec![
-                "redbox_fs".to_string(),
-                "redbox_runtime_control".to_string()
-            ]
-        );
+        assert_eq!(names, vec!["redbox_fs".to_string(), "app_cli".to_string()]);
     }
 }

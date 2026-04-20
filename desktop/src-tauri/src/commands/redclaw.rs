@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -13,9 +13,10 @@ use crate::scheduler::{
     run_redclaw_job_runner, run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
-    handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
-    load_redclaw_profile_prompt_bundle, make_id, normalize_optional_string, now_i64, now_iso,
-    payload_field, payload_string, redclaw_state_value, update_redclaw_profile_doc, AppState,
+    AppState, handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded,
+    load_redclaw_onboarding_state, load_redclaw_profile_prompt_bundle, make_id,
+    normalize_optional_string, now_i64, now_iso, payload_field, payload_string,
+    redclaw_state_value, update_redclaw_profile_doc,
 };
 
 pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {

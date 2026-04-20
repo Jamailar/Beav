@@ -1,10 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    make_id, now_iso, payload_string, workspace_root, AppState, SubjectMutationInput, SubjectRecord,
+    AppState, SubjectMutationInput, SubjectRecord, make_id, now_iso, payload_string, workspace_root,
 };
 
 pub(crate) fn collect_json_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {

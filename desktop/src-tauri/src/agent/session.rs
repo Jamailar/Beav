@@ -6,7 +6,7 @@ use crate::commands::chat_state::{
     should_handle_redclaw_onboarding_for_session,
 };
 use crate::persistence::with_store;
-use crate::{make_id, AppState};
+use crate::{AppState, make_id};
 
 pub fn resolve_chat_exchange_context(
     state: &State<'_, AppState>,

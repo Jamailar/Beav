@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::{now_iso, with_store, workspace_root, AppState};
+use crate::{AppState, now_iso, with_store, workspace_root};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KnowledgeIndexRuntimeState {

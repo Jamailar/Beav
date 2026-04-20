@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -9,10 +9,11 @@ use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    AppState,
     commands::manuscripts::{
-        longform_layout_preset_catalog_value, longform_layout_preset_state_value,
-        richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
-        sync_manuscript_package_html_assets, timeline_clip_duration_ms,
+        ensure_richpost_theme_template_file, longform_layout_preset_catalog_value,
+        longform_layout_preset_state_value, richpost_theme_catalog_value_for_manifest,
+        richpost_theme_state_value, sync_manuscript_package_html_assets, timeline_clip_duration_ms,
     },
     file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
     get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
@@ -21,10 +22,15 @@ use crate::{
     package_layout_template_path, package_layout_tokens_path, package_manifest_path,
     package_remotion_input_props_path, package_remotion_path, package_richpost_master_path,
     package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
-    package_richpost_pages_dir, package_scene_ui_path, package_timeline_path,
-    package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
-    parse_json_value_from_text, read_json_value_or, redbox_project_root, resolve_manuscript_path,
-    title_from_relative_path, write_json_value, write_text_file, AppState,
+    package_richpost_pages_dir, package_richpost_theme_assets_dir,
+    package_richpost_theme_config_path, package_richpost_theme_master_path,
+    package_richpost_theme_masters_dir, package_richpost_theme_page_plan_path,
+    package_richpost_theme_root_dir, package_richpost_theme_template_path,
+    package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
+    package_timeline_path, package_track_ui_path, package_wechat_html_path,
+    package_wechat_template_path, parse_json_value_from_text, read_json_value_or,
+    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
+    write_text_file,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -2811,6 +2817,9 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("");
+    if get_package_kind_from_file_name(file_name) == Some("post") {
+        let _ = ensure_richpost_theme_template_file(package_path);
+    }
     let manifest = read_json_value_or(package_manifest_path(package_path).as_path(), json!({}));
     let assets = read_json_value_or(
         package_assets_path(package_path).as_path(),
@@ -2853,6 +2862,63 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     let richpost_page_plan_exists = richpost_page_plan_path.exists();
     let richpost_masters_dir = package_richpost_masters_dir(package_path);
     let richpost_pages_dir = package_richpost_pages_dir(package_path);
+    let richpost_themes_path = package_richpost_themes_path(package_path);
+    let richpost_theme_template_path = package_richpost_theme_template_path(package_path);
+    let active_richpost_theme_id = richpost_theme
+        .as_ref()
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let active_richpost_theme_root = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_root_dir(package_path, theme_id));
+    let active_richpost_theme_config = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_config_path(package_path, theme_id));
+    let active_richpost_theme_tokens = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_tokens_path(package_path, theme_id));
+    let active_richpost_theme_page_plan = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_page_plan_path(package_path, theme_id));
+    let active_richpost_theme_assets = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_assets_dir(package_path, theme_id));
+    let active_richpost_theme_masters_dir = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_masters_dir(package_path, theme_id));
+    let richpost_theme_root_masters = if package_kind == Some("post") {
+        active_richpost_theme_id
+            .as_ref()
+            .map(|theme_id| {
+                ["cover", "body", "ending"]
+                    .iter()
+                    .map(|master_id| {
+                        let path =
+                            package_richpost_theme_master_path(package_path, theme_id, master_id);
+                        json!({
+                            "id": master_id,
+                            "file": if path.exists() {
+                                json!(path.display().to_string())
+                            } else {
+                                Value::Null
+                            },
+                            "fileUrl": if path.exists() {
+                                json!(file_url_for_path(&path))
+                            } else {
+                                Value::Null
+                            },
+                            "updatedAt": file_modified_at_ms(&path)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let richpost_page_plan = if package_kind == Some("post") {
         Some(read_json_value_or(
             richpost_page_plan_path.as_path(),
@@ -3156,6 +3222,56 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             json!(richpost_masters_dir.display().to_string())
         } else {
             Value::Null
+        },
+        "richpostThemesFile": if richpost_themes_path.exists() {
+            json!(richpost_themes_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemesDir": if package_kind == Some("post") {
+            json!(package_path.join("themes").display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemeTemplateFile": if richpost_theme_template_path.exists() {
+            json!(richpost_theme_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemeRoot": active_richpost_theme_root
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeConfigFile": active_richpost_theme_config
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeTokensFile": active_richpost_theme_tokens
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemePagePlanFile": active_richpost_theme_page_plan
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeAssetsDir": active_richpost_theme_assets
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeMastersDir": active_richpost_theme_masters_dir
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeMasters": if richpost_theme_root_masters.is_empty() {
+            Value::Null
+        } else {
+            json!(richpost_theme_root_masters)
         },
         "richpostMasterCount": richpost_masters.len(),
         "richpostMasters": richpost_masters,

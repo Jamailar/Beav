@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
@@ -8,16 +8,16 @@ use crate::events::{
     emit_runtime_tool_result,
 };
 use crate::helpers::{
+    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
     extract_markdown_frontmatter_block, get_draft_type_from_file_name, normalize_relative_path,
-    strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION,
-    POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
+    strip_markdown_frontmatter,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
-use crate::runtime::SkillRecord;
+use crate::runtime::{McpServerRecord, SkillRecord};
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
-use crate::{make_id, now_iso, payload_field, payload_string, resolve_manuscript_path, AppState};
+use crate::{AppState, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path};
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
@@ -121,6 +121,8 @@ impl<'a> AppCliExecutor<'a> {
 
         match tokens[0].as_str() {
             "help" => Ok(help_response(tokens.get(1).map(String::as_str))),
+            "advisors" => self.handle_advisors(&tokens[1..], &payload),
+            "chat" => self.handle_chat(&tokens[1..], &payload),
             "spaces" => self.handle_spaces(&tokens[1..]),
             "subjects" => self.handle_subjects(&tokens[1..], &payload),
             "manuscripts" => self.handle_manuscripts(&tokens[1..], &payload),
@@ -131,10 +133,103 @@ impl<'a> AppCliExecutor<'a> {
             "work" => self.handle_work(&tokens[1..], &payload),
             "memory" => self.handle_memory(&tokens[1..], &payload),
             "redclaw" => self.handle_redclaw(&tokens[1..], &payload),
+            "runtime" => self.handle_runtime(&tokens[1..], &payload),
             "settings" => self.handle_settings(&tokens[1..], &payload),
             "skills" => self.handle_skills(&tokens[1..], &payload),
             "mcp" => self.handle_mcp(&tokens[1..], &payload),
+            "ai" => self.handle_ai(&tokens[1..], &payload),
             other => Err(format!("unsupported app_cli namespace: {other}")),
+        }
+    }
+
+    fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("advisors")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "list" => {
+                let result = self.call_channel("advisors:list", json!({}))?;
+                let mut advisors = result.as_array().cloned().unwrap_or_default();
+                let limit = args
+                    .i64(&["limit"])
+                    .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                    .unwrap_or(20)
+                    .clamp(1, 50) as usize;
+                advisors.truncate(limit);
+                Ok(json!({ "success": true, "advisors": advisors }))
+            }
+            "get" => {
+                let advisor_id = args
+                    .string(&["id", "advisor-id"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "advisors get requires --id".to_string())?;
+                let result = self.call_channel("advisors:list", json!({}))?;
+                let advisor = result.as_array().and_then(|items| {
+                    items.iter().find(|item| {
+                        item.get("id")
+                            .and_then(Value::as_str)
+                            .map(|value| value == advisor_id)
+                            .unwrap_or(false)
+                    })
+                });
+                Ok(json!({ "success": advisor.is_some(), "advisor": advisor.cloned() }))
+            }
+            "list-templates" => self.call_channel("advisors:list-templates", json!({})),
+            "create" => self.call_channel("advisors:create", merge_payload(&args.options, payload)),
+            "update" => self.call_channel("advisors:update", merge_payload(&args.options, payload)),
+            "delete" => self.call_channel(
+                "advisors:delete",
+                json!(
+                    args.string(&["id", "advisor-id"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "advisors delete requires --id".to_string())?
+                ),
+            ),
+            _ => Err(format!("unsupported advisors action: {action}")),
+        }
+    }
+
+    fn handle_chat(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("chat")));
+        };
+        match action {
+            "sessions" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
+                let args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "list" => {
+                        let result = self.call_channel("chat:get-sessions", json!({}))?;
+                        let mut sessions = result.as_array().cloned().unwrap_or_default();
+                        let limit = args
+                            .i64(&["limit"])
+                            .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                            .unwrap_or(20)
+                            .clamp(1, 50) as usize;
+                        sessions.truncate(limit);
+                        Ok(json!({ "success": true, "sessions": sessions }))
+                    }
+                    "get" => {
+                        let session_id = args
+                            .string(&["id", "session-id"])
+                            .or_else(|| args.positionals.first().cloned())
+                            .ok_or_else(|| "chat sessions get requires --id".to_string())?;
+                        let result = self.call_channel("chat:get-sessions", json!({}))?;
+                        let session = result.as_array().and_then(|items| {
+                            items.iter().find(|item| {
+                                item.get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|value| value == session_id)
+                                    .unwrap_or(false)
+                            })
+                        });
+                        Ok(json!({ "success": session.is_some(), "session": session.cloned() }))
+                    }
+                    _ => Err(format!("unsupported chat sessions action: {sub}")),
+                }
+            }
+            _ => Err(format!("unsupported chat action: {action}")),
         }
     }
 
@@ -286,15 +381,22 @@ impl<'a> AppCliExecutor<'a> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("manuscripts")));
         };
+        if action == "theme" {
+            return self.handle_manuscript_theme(&tokens[1..], payload);
+        }
+        if action == "layout" {
+            return self.handle_manuscript_layout(&tokens[1..], payload);
+        }
         let args = parse_cli_args(&tokens[1..])?;
         match action {
             "list" => self.call_channel("manuscripts:list", json!({})),
             "read" => self.call_channel(
                 "manuscripts:read",
-                json!(args
-                    .string(&["path"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "manuscripts read requires --path".to_string())?),
+                json!(
+                    args.string(&["path"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "manuscripts read requires --path".to_string())?
+                ),
             ),
             "write" | "save" => {
                 let path = args
@@ -385,12 +487,140 @@ impl<'a> AppCliExecutor<'a> {
             }
             "delete" => self.call_channel(
                 "manuscripts:delete",
-                json!(args
-                    .string(&["path"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "manuscripts delete requires --path".to_string())?),
+                json!(
+                    args.string(&["path"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "manuscripts delete requires --path".to_string())?
+                ),
             ),
             _ => Err(format!("unsupported manuscripts action: {action}")),
+        }
+    }
+
+    fn handle_manuscript_theme(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("manuscripts")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        let file_path = args
+            .string(&["path", "file-path", "filePath"])
+            .or_else(|| payload_string(payload, "path"))
+            .or_else(|| payload_string(payload, "filePath"));
+        match action {
+            "apply" => self.call_channel(
+                "manuscripts:set-richpost-theme",
+                json!({
+                    "filePath": file_path.ok_or_else(|| "manuscripts theme apply requires --path".to_string())?,
+                    "themeId": args
+                        .string(&["theme-id", "themeId"])
+                        .or_else(|| payload_string(payload, "themeId"))
+                        .ok_or_else(|| "manuscripts theme apply requires --theme-id".to_string())?,
+                }),
+            ),
+            "preview" => {
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    object.entry("filePath".to_string()).or_insert(json!(
+                        file_path.ok_or_else(|| "manuscripts theme preview requires --path".to_string())?
+                    ));
+                }
+                self.call_channel("manuscripts:preview-richpost-theme-draft", merged)
+            }
+            "create" => {
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    object.entry("filePath".to_string()).or_insert(json!(
+                        file_path.ok_or_else(|| "manuscripts theme create requires --path".to_string())?
+                    ));
+                }
+                self.call_channel("manuscripts:create-richpost-custom-theme", merged)
+            }
+            "save" => {
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    object.entry("filePath".to_string()).or_insert(json!(
+                        file_path.ok_or_else(|| "manuscripts theme save requires --path".to_string())?
+                    ));
+                }
+                self.call_channel("manuscripts:save-richpost-custom-theme", merged)
+            }
+            "delete" => self.call_channel(
+                "manuscripts:delete-richpost-custom-theme",
+                json!({
+                    "filePath": file_path.ok_or_else(|| "manuscripts theme delete requires --path".to_string())?,
+                    "themeId": args
+                        .string(&["theme-id", "themeId"])
+                        .or_else(|| payload_string(payload, "themeId"))
+                        .ok_or_else(|| "manuscripts theme delete requires --theme-id".to_string())?,
+                }),
+            ),
+            "background-upload" => self.call_channel(
+                "manuscripts:upload-richpost-theme-background",
+                json!({
+                    "filePath": file_path.ok_or_else(|| "manuscripts theme background-upload requires --path".to_string())?,
+                    "themeId": args
+                        .string(&["theme-id", "themeId"])
+                        .or_else(|| payload_string(payload, "themeId"))
+                        .ok_or_else(|| "manuscripts theme background-upload requires --theme-id".to_string())?,
+                    "role": args
+                        .string(&["role"])
+                        .or_else(|| payload_string(payload, "role")),
+                }),
+            ),
+            "previews" => {
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    object.entry("filePath".to_string()).or_insert(json!(
+                        file_path.ok_or_else(|| "manuscripts theme previews requires --path".to_string())?
+                    ));
+                }
+                self.call_channel("manuscripts:get-richpost-theme-previews", merged)
+            }
+            _ => Err(format!("unsupported manuscripts theme action: {action}")),
+        }
+    }
+
+    fn handle_manuscript_layout(
+        &self,
+        tokens: &[String],
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("manuscripts")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "get" => self.call_channel("manuscripts:get-layout", json!({})),
+            "save" => self.call_channel("manuscripts:save-layout", payload.clone()),
+            "preset" => self.call_channel(
+                "manuscripts:set-longform-layout-preset",
+                json!({
+                    "filePath": args
+                        .string(&["path", "file-path", "filePath"])
+                        .or_else(|| payload_string(payload, "path"))
+                        .or_else(|| payload_string(payload, "filePath"))
+                        .ok_or_else(|| "manuscripts layout preset requires --path".to_string())?,
+                    "presetId": args
+                        .string(&["preset-id", "presetId"])
+                        .or_else(|| payload_string(payload, "presetId"))
+                        .ok_or_else(|| "manuscripts layout preset requires --preset-id".to_string())?,
+                    "target": args.string(&["target"]).or_else(|| payload_string(payload, "target")),
+                    "modelConfig": payload_field(payload, "modelConfig").cloned(),
+                }),
+            ),
+            "render" => {
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    let file_path = args
+                        .string(&["path", "file-path", "filePath"])
+                        .or_else(|| payload_string(payload, "path"))
+                        .or_else(|| payload_string(payload, "filePath"))
+                        .ok_or_else(|| "manuscripts layout render requires --path".to_string())?;
+                    object.entry("filePath".to_string()).or_insert(json!(file_path));
+                }
+                self.call_channel("manuscripts:render-package-html", merged)
+            }
+            _ => Err(format!("unsupported manuscripts layout action: {action}")),
         }
     }
 
@@ -493,7 +723,7 @@ impl<'a> AppCliExecutor<'a> {
         }
     }
 
-    fn handle_knowledge(&self, tokens: &[String], _payload: &Value) -> Result<Value, String> {
+    fn handle_knowledge(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("knowledge")));
         };
@@ -511,6 +741,7 @@ impl<'a> AppCliExecutor<'a> {
             .and_then(|_| {
                 let query = args
                     .string(&["query", "q"])
+                    .or_else(|| payload_string(payload, "query"))
                     .or_else(|| {
                         if args.positionals.is_empty() {
                             None
@@ -520,7 +751,11 @@ impl<'a> AppCliExecutor<'a> {
                     })
                     .unwrap_or_default()
                     .to_lowercase();
-                let limit = args.i64(&["limit"]).unwrap_or(8).clamp(1, 20) as usize;
+                let limit = args
+                    .i64(&["limit"])
+                    .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                    .unwrap_or(8)
+                    .clamp(1, 20) as usize;
                 with_store(self.state, |store| {
                     let mut hits = Vec::<Value>::new();
                     for note in &store.knowledge_notes {
@@ -579,7 +814,28 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
-            "list" => self.call_channel("work:list", json!({})),
+            "list" => {
+                let result = self.call_channel("work:list", json!({}))?;
+                let mut items = result.as_array().cloned().unwrap_or_default();
+                let status = args
+                    .string(&["status"])
+                    .or_else(|| payload_string(payload, "status"));
+                if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+                    items.retain(|item| {
+                        item.get("status")
+                            .and_then(Value::as_str)
+                            .map(|value| value == status)
+                            .unwrap_or(false)
+                    });
+                }
+                let limit = args
+                    .i64(&["limit"])
+                    .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                    .unwrap_or(20)
+                    .clamp(1, 50) as usize;
+                items.truncate(limit);
+                Ok(json!({ "success": true, "workItems": items }))
+            }
             "ready" => self.call_channel("work:ready", json!({})),
             "get" => self.call_channel(
                 "work:get",
@@ -607,6 +863,7 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "query": args
                         .string(&["query", "q"])
+                        .or_else(|| payload_string(payload, "query"))
                         .or_else(|| {
                             if args.positionals.is_empty() {
                                 None
@@ -620,10 +877,11 @@ impl<'a> AppCliExecutor<'a> {
             "add" => self.call_channel("memory:add", merge_payload(&args.options, payload)),
             "delete" => self.call_channel(
                 "memory:delete",
-                json!(args
-                    .string(&["id"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "memory delete requires --id".to_string())?),
+                json!(
+                    args.string(&["id"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "memory delete requires --id".to_string())?
+                ),
             ),
             _ => Err(format!("unsupported memory action: {action}")),
         }
@@ -698,7 +956,200 @@ impl<'a> AppCliExecutor<'a> {
                     "reason": args.string(&["reason"])
                 }),
             ),
+            "profile-onboarding" => {
+                let bundle = self.call_channel("redclaw:profile:get-bundle", json!({}))?;
+                let onboarding = bundle
+                    .get("onboardingState")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                Ok(json!({
+                    "success": !onboarding.is_null(),
+                    "completed": onboarding
+                        .get("completedAt")
+                        .and_then(Value::as_str)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false),
+                    "state": onboarding
+                }))
+            }
             _ => Err(format!("unsupported redclaw action: {action}")),
+        }
+    }
+
+    fn handle_runtime(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("runtime")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "query" => self.call_channel(
+                "runtime:query",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId")),
+                    "message": args
+                        .string(&["message"])
+                        .or_else(|| payload_string(payload, "message"))
+                        .unwrap_or_default(),
+                    "modelConfig": payload_field(payload, "modelConfig").cloned().unwrap_or(Value::Null),
+                }),
+            ),
+            "resume" => self.call_channel(
+                "runtime:resume",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId"))
+                        .unwrap_or_default()
+                }),
+            ),
+            "fork-session" => self.call_channel(
+                "runtime:fork-session",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId"))
+                        .unwrap_or_default()
+                }),
+            ),
+            "get-trace" => self.call_channel(
+                "runtime:get-trace",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId"))
+                        .unwrap_or_default(),
+                    "limit": args
+                        .i64(&["limit"])
+                        .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                        .unwrap_or(50)
+                }),
+            ),
+            "get-checkpoints" => self.call_channel(
+                "runtime:get-checkpoints",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId"))
+                        .unwrap_or_default(),
+                    "limit": args
+                        .i64(&["limit"])
+                        .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                        .unwrap_or(50)
+                }),
+            ),
+            "get-tool-results" => self.call_channel(
+                "runtime:get-tool-results",
+                json!({
+                    "sessionId": args
+                        .string(&["session-id", "sessionId"])
+                        .or_else(|| payload_string(payload, "sessionId"))
+                        .unwrap_or_default(),
+                    "limit": args
+                        .i64(&["limit"])
+                        .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64))
+                        .unwrap_or(50)
+                }),
+            ),
+            "tasks" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "create" => self.call_channel(
+                        "tasks:create",
+                        payload_field(payload, "payload")
+                            .cloned()
+                            .unwrap_or_else(|| merge_payload(&nested_args.options, payload)),
+                    ),
+                    "list" => self.call_channel("tasks:list", json!({})),
+                    "get" => self.call_channel(
+                        "tasks:get",
+                        json!({
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId"))
+                                .ok_or_else(|| "runtime tasks get requires --task-id".to_string())?
+                        }),
+                    ),
+                    "resume" => self.call_channel(
+                        "tasks:resume",
+                        json!({
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId"))
+                                .ok_or_else(|| "runtime tasks resume requires --task-id".to_string())?
+                        }),
+                    ),
+                    "cancel" => self.call_channel(
+                        "tasks:cancel",
+                        json!({
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId"))
+                                .ok_or_else(|| "runtime tasks cancel requires --task-id".to_string())?
+                        }),
+                    ),
+                    _ => Err(format!("unsupported runtime tasks action: {sub}")),
+                }
+            }
+            "background" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "list" => self.call_channel("background-tasks:list", json!({})),
+                    "get" => self.call_channel(
+                        "background-tasks:get",
+                        json!({
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId"))
+                                .ok_or_else(|| "runtime background get requires --task-id".to_string())?
+                        }),
+                    ),
+                    "cancel" => self.call_channel(
+                        "background-tasks:cancel",
+                        json!({
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId"))
+                                .ok_or_else(|| "runtime background cancel requires --task-id".to_string())?
+                        }),
+                    ),
+                    _ => Err(format!("unsupported runtime background action: {sub}")),
+                }
+            }
+            "session-enter-diagnostics" => self.call_channel(
+                "chat:create-diagnostics-session",
+                json!({
+                    "title": args.string(&["title"]).or_else(|| payload_string(payload, "title")),
+                    "contextId": args
+                        .string(&["context-id", "contextId"])
+                        .or_else(|| payload_string(payload, "contextId")),
+                    "contextType": args
+                        .string(&["context-type", "contextType"])
+                        .or_else(|| payload_string(payload, "contextType")),
+                }),
+            ),
+            "session-bridge" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("status");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "status" => self.call_channel("session-bridge:status", json!({})),
+                    "list-sessions" => self.call_channel("session-bridge:list-sessions", json!({})),
+                    "get-session" => self.call_channel(
+                        "session-bridge:get-session",
+                        json!({
+                            "sessionId": nested_args
+                                .string(&["session-id", "sessionId"])
+                                .or_else(|| payload_string(payload, "sessionId"))
+                                .ok_or_else(|| "runtime session-bridge get-session requires --session-id".to_string())?
+                        }),
+                    ),
+                    _ => Err(format!("unsupported runtime session-bridge action: {sub}")),
+                }
+            }
+            _ => Err(format!("unsupported runtime action: {action}")),
         }
     }
 
@@ -762,6 +1213,26 @@ impl<'a> AppCliExecutor<'a> {
                         .ok_or_else(|| "skills enable requires --name".to_string())?
                 }),
             ),
+            "create" => self.call_channel(
+                "skills:create",
+                json!({
+                    "name": args
+                        .string(&["name"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "skills create requires --name".to_string())?
+                }),
+            ),
+            "save" => self.call_channel(
+                "skills:save",
+                json!({
+                    "location": args
+                        .string(&["location"])
+                        .ok_or_else(|| "skills save requires --location".to_string())?,
+                    "content": args
+                        .string(&["content"])
+                        .unwrap_or_default(),
+                }),
+            ),
             "disable" => self.call_channel(
                 "skills:disable",
                 json!({
@@ -769,6 +1240,15 @@ impl<'a> AppCliExecutor<'a> {
                         .string(&["name"])
                         .or_else(|| args.positionals.first().cloned())
                         .ok_or_else(|| "skills disable requires --name".to_string())?
+                }),
+            ),
+            "market-install" => self.call_channel(
+                "skills:market-install",
+                json!({
+                    "slug": args
+                        .string(&["slug"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "skills market-install requires --slug".to_string())?
                 }),
             ),
             _ => Err(format!("unsupported skills action: {action}")),
@@ -780,6 +1260,12 @@ impl<'a> AppCliExecutor<'a> {
             return Ok(help_response(Some("mcp")));
         };
         let args = parse_cli_args(&tokens[1..])?;
+        let server_value = payload_field(payload, "server")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let parse_server = || -> Result<McpServerRecord, String> {
+            serde_json::from_value(server_value.clone()).map_err(|error| error.to_string())
+        };
         match action {
             "list" => commands::mcp_tools::mcp_list_value(self.state),
             "sessions" => commands::mcp_tools::mcp_sessions_value(self.state),
@@ -791,7 +1277,111 @@ impl<'a> AppCliExecutor<'a> {
                     .ok_or_else(|| "mcp oauth-status requires --id".to_string())?,
             ),
             "save" => commands::mcp_tools::mcp_save_value(self.state, payload),
+            "test" => commands::mcp_tools::mcp_probe_value(self.state, &parse_server()?),
+            "call" => commands::mcp_tools::mcp_call_value(
+                self.state,
+                &parse_server()?,
+                &args
+                    .string(&["method"])
+                    .or_else(|| payload_string(payload, "method"))
+                    .unwrap_or_default(),
+                payload_field(payload, "params")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                args.string(&["session-id", "sessionId"])
+                    .or_else(|| payload_string(payload, "sessionId")),
+            ),
+            "list-tools" => commands::mcp_tools::mcp_call_value(
+                self.state,
+                &parse_server()?,
+                "tools/list",
+                json!({}),
+                args.string(&["session-id", "sessionId"])
+                    .or_else(|| payload_string(payload, "sessionId")),
+            ),
+            "list-resources" => commands::mcp_tools::mcp_call_value(
+                self.state,
+                &parse_server()?,
+                "resources/list",
+                json!({}),
+                args.string(&["session-id", "sessionId"])
+                    .or_else(|| payload_string(payload, "sessionId")),
+            ),
+            "list-resource-templates" => commands::mcp_tools::mcp_call_value(
+                self.state,
+                &parse_server()?,
+                "resources/templates/list",
+                json!({}),
+                args.string(&["session-id", "sessionId"])
+                    .or_else(|| payload_string(payload, "sessionId")),
+            ),
+            "disconnect" => commands::mcp_tools::mcp_disconnect_value(self.state, &parse_server()?),
+            "disconnect-all" => commands::mcp_tools::mcp_disconnect_all_value(self.state),
+            "discover-local" => commands::mcp_tools::mcp_discover_local_value(),
+            "import-local" => commands::mcp_tools::mcp_import_local_value(self.state),
             _ => Err(format!("unsupported mcp action: {action}")),
+        }
+    }
+
+    fn handle_ai(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("ai")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "roles-list" => self.call_channel("ai:roles:list", json!({})),
+            "detect-protocol" => self.call_channel(
+                "ai:detect-protocol",
+                json!({
+                    "baseURL": args
+                        .string(&["base-url", "baseURL"])
+                        .or_else(|| payload_string(payload, "baseURL"))
+                        .unwrap_or_default(),
+                    "presetId": args
+                        .string(&["preset-id", "presetId"])
+                        .or_else(|| payload_string(payload, "presetId")),
+                    "protocol": args
+                        .string(&["protocol"])
+                        .or_else(|| payload_string(payload, "protocol")),
+                }),
+            ),
+            "test-connection" => self.call_channel(
+                "ai:test-connection",
+                json!({
+                    "baseURL": args
+                        .string(&["base-url", "baseURL"])
+                        .or_else(|| payload_string(payload, "baseURL"))
+                        .unwrap_or_default(),
+                    "apiKey": args
+                        .string(&["api-key", "apiKey"])
+                        .or_else(|| payload_string(payload, "apiKey")),
+                    "presetId": args
+                        .string(&["preset-id", "presetId"])
+                        .or_else(|| payload_string(payload, "presetId")),
+                    "protocol": args
+                        .string(&["protocol"])
+                        .or_else(|| payload_string(payload, "protocol")),
+                }),
+            ),
+            "fetch-models" => self.call_channel(
+                "ai:fetch-models",
+                json!({
+                    "baseURL": args
+                        .string(&["base-url", "baseURL"])
+                        .or_else(|| payload_string(payload, "baseURL"))
+                        .unwrap_or_default(),
+                    "apiKey": args
+                        .string(&["api-key", "apiKey"])
+                        .or_else(|| payload_string(payload, "apiKey")),
+                    "presetId": args
+                        .string(&["preset-id", "presetId"])
+                        .or_else(|| payload_string(payload, "presetId")),
+                    "protocol": args
+                        .string(&["protocol"])
+                        .or_else(|| payload_string(payload, "protocol")),
+                }),
+            ),
+            _ => Err(format!("unsupported ai action: {action}")),
         }
     }
 
@@ -1408,6 +1998,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return result;
         }
         if let Some(result) =
+            commands::advisor_ops::handle_advisor_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) =
             commands::library::handle_library_channel(self.app, self.state, channel, &payload)
         {
             return result;
@@ -1440,6 +2035,21 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         if let Some(result) =
             commands::mcp_tools::handle_mcp_tools_channel(self.app, self.state, channel, &payload)
         {
+            return result;
+        }
+        if let Some(result) =
+            commands::runtime::handle_runtime_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) =
+            commands::bridge::handle_bridge_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) = commands::chat_sessions_wander::handle_chat_sessions_wander_channel(
+            self.app, self.state, channel, &payload,
+        ) {
             return result;
         }
         Err(format!("app_cli channel not handled: {channel}"))
@@ -2467,20 +3077,33 @@ fn help_response(namespace: Option<&str>) -> Value {
     let commands = match namespace {
         "root" => vec![
             "help [namespace]",
+            "advisors list|get|list-templates|create|update|delete",
+            "chat sessions list|get",
             "spaces list|get|create|rename|switch",
             "subjects list|get|search|categories list|create|update|delete",
-            "manuscripts list|read|write|create|delete",
+            "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save|preset|render",
             "media list|get|update|bind|delete",
             "image generate|history list|get|providers|models",
             "video generate|project-create|project-list|project-get|project-brief|project-script|project-asset-add",
             "knowledge list|search",
             "work list|ready|get|update",
             "memory list|search|add|delete",
-            "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|profile-bundle|profile-read|profile-update",
+            "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|profile-bundle|profile-read|profile-update|profile-onboarding",
+            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
-            "skills list|invoke|enable|disable",
-            "mcp list|sessions|oauth-status|save",
+            "skills list|invoke|create|save|enable|disable|market-install",
+            "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
+            "ai roles-list|detect-protocol|test-connection|fetch-models",
         ],
+        "advisors" => vec![
+            "advisors list",
+            "advisors get --id <advisorId>",
+            "advisors list-templates",
+            "advisors create [payload]",
+            "advisors update --id <advisorId> [payload]",
+            "advisors delete --id <advisorId>",
+        ],
+        "chat" => vec!["chat sessions list", "chat sessions get --id <sessionId>"],
         "spaces" => vec![
             "spaces list",
             "spaces get --id <spaceId>",
@@ -2503,6 +3126,17 @@ fn help_response(namespace: Option<&str>) -> Value {
             "manuscripts write --path <relativePath> [payload.content]",
             "manuscripts create --path <relativePath>",
             "manuscripts delete --path <relativePath>",
+            "manuscripts theme apply --path <relativePath> --theme-id <themeId>",
+            "manuscripts theme preview --path <relativePath> [payload.theme]",
+            "manuscripts theme create --path <relativePath> [payload.theme]",
+            "manuscripts theme save --path <relativePath> [payload.theme]",
+            "manuscripts theme delete --path <relativePath> --theme-id <themeId>",
+            "manuscripts theme background-upload --path <relativePath> --theme-id <themeId> [--role body]",
+            "manuscripts theme previews --path <relativePath> [payload.themeIds]",
+            "manuscripts layout get",
+            "manuscripts layout save [payload]",
+            "manuscripts layout preset --path <relativePath> --preset-id <presetId>",
+            "manuscripts layout render --path <relativePath> [--target layout]",
         ],
         "media" => vec![
             "media list",
@@ -2535,10 +3169,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "video project-asset-add --id <timestampStem> --path /abs/ref.png --kind reference-image",
             "video generate --mode reference-guided --duration 8 --aspect-ratio 9:16 --video-project-id <timestampStem>  # long prompt/reference data should go in payload; confirmed project scripts are used as storyboard input",
         ],
-        "knowledge" => vec![
-            "knowledge list",
-            "knowledge search --query \"keyword\"",
-        ],
+        "knowledge" => vec!["knowledge list", "knowledge search --query \"keyword\""],
         "work" => vec![
             "work list",
             "work ready",
@@ -2560,23 +3191,58 @@ fn help_response(namespace: Option<&str>) -> Value {
             "redclaw profile-bundle",
             "redclaw profile-read --doc-type user",
             "redclaw profile-update --doc-type user [payload.markdown]",
+            "redclaw profile-onboarding",
         ],
-        "settings" => vec![
-            "settings summary",
-            "settings get",
-            "settings set [payload]",
+        "runtime" => vec![
+            "runtime query [--session-id <sessionId>] --message \"...\"",
+            "runtime resume --session-id <sessionId>",
+            "runtime fork-session --session-id <sessionId>",
+            "runtime get-trace --session-id <sessionId> [--limit 50]",
+            "runtime get-checkpoints --session-id <sessionId> [--limit 50]",
+            "runtime get-tool-results --session-id <sessionId> [--limit 50]",
+            "runtime tasks create [payload or payload.payload]",
+            "runtime tasks list",
+            "runtime tasks get --task-id <taskId>",
+            "runtime tasks resume --task-id <taskId>",
+            "runtime tasks cancel --task-id <taskId>",
+            "runtime background list",
+            "runtime background get --task-id <taskId>",
+            "runtime background cancel --task-id <taskId>",
+            "runtime session-enter-diagnostics [--title <title>]",
+            "runtime session-bridge status",
+            "runtime session-bridge list-sessions",
+            "runtime session-bridge get-session --session-id <sessionId>",
         ],
+        "settings" => vec!["settings summary", "settings get", "settings set [payload]"],
         "skills" => vec![
             "skills list",
             "skills invoke --name <skill>",
+            "skills create --name <skill>",
+            "skills save --location <path> --content \"...\"",
             "skills enable --name <skill>",
             "skills disable --name <skill>",
+            "skills market-install --slug <slug>",
         ],
         "mcp" => vec![
             "mcp list",
             "mcp sessions",
             "mcp oauth-status --id <serverId>",
             "mcp save [payload]",
+            "mcp test [payload.server]",
+            "mcp call --method <method> [payload.server] [payload.params]",
+            "mcp list-tools [payload.server]",
+            "mcp list-resources [payload.server]",
+            "mcp list-resource-templates [payload.server]",
+            "mcp disconnect [payload.server]",
+            "mcp disconnect-all",
+            "mcp discover-local",
+            "mcp import-local",
+        ],
+        "ai" => vec![
+            "ai roles-list",
+            "ai detect-protocol --base-url <url>",
+            "ai test-connection --base-url <url> [--api-key <key>]",
+            "ai fetch-models --base-url <url> [--api-key <key>]",
         ],
         _ => vec!["help"],
     };
@@ -2649,11 +3315,12 @@ mod tests {
 
         assert!(path.starts_with("video/"));
         assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
-        assert!(path
-            .trim_start_matches("video/")
-            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
-            .chars()
-            .all(|ch| ch.is_ascii_digit()));
+        assert!(
+            path.trim_start_matches("video/")
+                .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+                .chars()
+                .all(|ch| ch.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -2664,11 +3331,12 @@ mod tests {
 
         assert!(path.starts_with("video/custom/"));
         assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
-        assert!(path
-            .trim_start_matches("video/custom/")
-            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
-            .chars()
-            .all(|ch| ch.is_ascii_digit()));
+        assert!(
+            path.trim_start_matches("video/custom/")
+                .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+                .chars()
+                .all(|ch| ch.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -2779,8 +3447,10 @@ mod tests {
         .expect("storyboard prompt should compile");
 
         assert!(prompt.contains("Image 1: Jamba 人物主体参考"));
-        assert!(prompt
-            .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。"));
+        assert!(
+            prompt
+                .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。")
+        );
         assert!(prompt.contains("Follow the beat order exactly; do not collapse the storyboard into one generic summary."));
         assert!(
             prompt.contains("Align body rhythm, lip-sync feel, and timing accents with Audio 1.")

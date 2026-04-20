@@ -1,12 +1,11 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    apply_skill_tool_permissions, build_skill_hook_output,
+    LoadedSkillRecord, SkillWatcherSnapshot, apply_skill_tool_permissions, build_skill_hook_output,
     build_skill_watcher_snapshot_with_discovery, load_skill_bundle_sections_from_sources,
     load_skill_catalog, normalized_activation_scope, skill_allows_runtime_mode, split_skill_body,
-    LoadedSkillRecord, SkillWatcherSnapshot,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -326,25 +325,27 @@ pub fn skills_catalog_list_value(
         discovery_fingerprint.unwrap_or_default(),
     );
     (
-        json!(skills
-            .iter()
-            .zip(state.catalog.iter())
-            .map(|(record, skill)| {
-                json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "location": skill.location,
-                    "body": record.body,
-                    "sourceScope": skill.source_scope,
-                    "isBuiltin": skill.is_builtin,
-                    "disabled": skill.disabled,
-                    "metadata": skill.metadata,
-                    "watchFingerprint": skill.fingerprint,
-                    "catalogFingerprint": watcher.fingerprint,
-                    "discoveryFingerprint": watcher.discovery_fingerprint,
+        json!(
+            skills
+                .iter()
+                .zip(state.catalog.iter())
+                .map(|(record, skill)| {
+                    json!({
+                        "name": skill.name,
+                        "description": skill.description,
+                        "location": skill.location,
+                        "body": record.body,
+                        "sourceScope": skill.source_scope,
+                        "isBuiltin": skill.is_builtin,
+                        "disabled": skill.disabled,
+                        "metadata": skill.metadata,
+                        "watchFingerprint": skill.fingerprint,
+                        "catalogFingerprint": watcher.fingerprint,
+                        "discoveryFingerprint": watcher.discovery_fingerprint,
+                    })
                 })
-            })
-            .collect::<Vec<_>>()),
+                .collect::<Vec<_>>()
+        ),
         watcher,
     )
 }
@@ -442,10 +443,12 @@ mod tests {
             ],
         );
         assert_eq!(state.active_skills.len(), 2);
-        assert_eq!(state.allowed_tools, Vec::<String>::new());
-        assert!(state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert_eq!(state.allowed_tools, vec!["app_cli".to_string()]);
+        assert!(
+            state
+                .skills_section
+                .contains("call `app_cli(command=\"skills invoke --name skill-name\")`")
+        );
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
 
@@ -494,9 +497,11 @@ mod tests {
         );
         assert!(state.skills_section.contains("redclaw-guide: desc"));
         assert!(state.skills_section.contains("cover-builder: desc"));
-        assert!(!state
-            .skills_section
-            .contains("remotion-best-practices: desc"));
+        assert!(
+            !state
+                .skills_section
+                .contains("remotion-best-practices: desc")
+        );
     }
 
     #[test]
@@ -515,9 +520,11 @@ mod tests {
             None,
             &["redbox_fs".to_string()],
         );
-        assert!(!state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert!(
+            !state
+                .skills_section
+                .contains("call `app_cli(command=\"skills invoke --name skill-name\")`")
+        );
         assert!(state.skills_section.contains("writing-style [inline]"));
     }
 
@@ -558,15 +565,21 @@ mod tests {
             &["app_cli".to_string()],
         );
         assert!(state.active_skills.is_empty());
-        assert!(state
-            .skills_section
-            .contains("image-prompt-optimizer: image desc"));
-        assert!(state
-            .skills_section
-            .contains("Before any `app_cli(command=\"image generate ...\")`"));
-        assert!(state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert!(
+            state
+                .skills_section
+                .contains("image-prompt-optimizer: image desc")
+        );
+        assert!(
+            state
+                .skills_section
+                .contains("Before any `app_cli(command=\"image generate ...\")`")
+        );
+        assert!(
+            state
+                .skills_section
+                .contains("call `app_cli(command=\"skills invoke --name skill-name\")`")
+        );
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {
@@ -583,11 +596,15 @@ mod tests {
             &["app_cli".to_string()],
         );
         assert!(redclaw_state.active_skills.is_empty());
-        assert!(redclaw_state
-            .skills_section
-            .contains("image-prompt-optimizer: image desc"));
-        assert!(redclaw_state
-            .skills_section
-            .contains("Before any `app_cli(command=\"image generate ...\")`"));
+        assert!(
+            redclaw_state
+                .skills_section
+                .contains("image-prompt-optimizer: image desc")
+        );
+        assert!(
+            redclaw_state
+                .skills_section
+                .contains("Before any `app_cli(command=\"image generate ...\")`")
+        );
     }
 }

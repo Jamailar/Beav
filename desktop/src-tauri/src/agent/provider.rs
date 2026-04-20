@@ -3,9 +3,9 @@ use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
 use crate::{
-    append_debug_log_state, generate_chat_response, resolve_chat_config,
+    AppState, append_debug_log_state, generate_chat_response, resolve_chat_config,
     run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
-    run_openai_interactive_chat_runtime, AppState,
+    run_openai_interactive_chat_runtime, run_openai_prompted_streaming_fallback,
 };
 
 pub fn resolve_chat_exchange_response_stage(
@@ -74,6 +74,43 @@ pub fn resolve_chat_exchange_response_stage(
                     );
                     if context.runtime_mode == "wander" {
                         return Err(error);
+                    }
+                    if config.protocol == "openai" {
+                        match run_openai_prompted_streaming_fallback(
+                            app,
+                            state,
+                            Some(context.working_session_id.as_str()),
+                            &config,
+                            message,
+                            &context.runtime_mode,
+                        ) {
+                            Ok(response) => {
+                                append_debug_log_state(
+                                    state,
+                                    format!(
+                                        "[runtime][{}][{}] interactive-runtime-fallback=openai-prompted-stream",
+                                        context.runtime_mode, context.working_session_id
+                                    ),
+                                );
+                                return Ok(ChatExchangeResponseStage {
+                                    response,
+                                    emitted_live_events: emits_live_events_for_runtime_mode(
+                                        &context.runtime_mode,
+                                    ),
+                                });
+                            }
+                            Err(fallback_error) => {
+                                append_debug_log_state(
+                                    state,
+                                    format!(
+                                        "[runtime][{}][{}] interactive-runtime-fallback-failed | {}",
+                                        context.runtime_mode,
+                                        context.working_session_id,
+                                        fallback_error
+                                    ),
+                                );
+                            }
+                        }
                     }
                 }
             }

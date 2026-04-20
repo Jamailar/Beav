@@ -5,13 +5,13 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, YoutubeVideoRecord,
     knowledge_index::{
-        catalog::{replace_catalog, KnowledgeCatalogSummary},
+        catalog::{KnowledgeCatalogSummary, replace_catalog},
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
-    now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    YoutubeVideoRecord,
+    now_iso, workspace_root,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);

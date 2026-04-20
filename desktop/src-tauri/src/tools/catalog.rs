@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,8 +30,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
     match name {
         "app_cli" => Some(ToolDescriptor {
             name: "app_cli",
-            description:
-                "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, RedClaw, settings, memory, skills, and MCP.",
+            description: "Unified business command surface for advisors, chat sessions, spaces, subjects, manuscripts, theme/layout workflows, media, image generation, video generation, RedClaw, runtime/tasks/background control, settings, memory, skills, AI config, and MCP.",
             kind: ToolKind::AppCli,
             requires_approval: false,
             concurrency_safe: false,
@@ -39,8 +38,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "bash" => Some(ToolDescriptor {
             name: "bash",
-            description:
-                "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands.",
+            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands.",
             kind: ToolKind::Bash,
             requires_approval: false,
             concurrency_safe: true,
@@ -48,8 +46,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_app_query" => Some(ToolDescriptor {
             name: "redbox_app_query",
-            description:
-                "Query app-managed RedBox data with one generic app tool. Prefer this over many specialized list/search tools.",
+            description: "Legacy compatibility alias for app queries. Prefer app_cli commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
             kind: ToolKind::AppQuery,
             requires_approval: false,
             concurrency_safe: true,
@@ -57,7 +54,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_fs" => Some(ToolDescriptor {
             name: "redbox_fs",
-            description: "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read.",
+            description: "Unified structured file access for currentSpaceRoot and advisor/member knowledge. Use scope=workspace or scope=knowledge with action=list/read/search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -65,8 +62,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_glob" => Some(ToolDescriptor {
             name: "knowledge_glob",
-            description:
-                "List files inside the current advisor/member knowledge directory. Use this before reading or grepping advisor-specific knowledge files.",
+            description: "Legacy compatibility alias for advisor/member knowledge listing. Prefer redbox_fs(scope=knowledge, action=list).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -74,8 +70,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_grep" => Some(ToolDescriptor {
             name: "knowledge_grep",
-            description:
-                "Search text content inside the current advisor/member knowledge directory. Returns matching files, line numbers, and snippets.",
+            description: "Legacy compatibility alias for advisor/member knowledge search. Prefer redbox_fs(scope=knowledge, action=search).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -83,8 +78,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_read" => Some(ToolDescriptor {
             name: "knowledge_read",
-            description:
-                "Read one advisor/member knowledge file by relative path with optional line offset and limit.",
+            description: "Legacy compatibility alias for advisor/member knowledge read. Prefer redbox_fs(scope=knowledge, action=read).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -92,8 +86,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_profile_doc" => Some(ToolDescriptor {
             name: "redbox_profile_doc",
-            description:
-                "Read or update RedClaw long-term profile docs (Agent.md, Soul.md, user.md, CreatorProfile.md). Update only when user requests durable profile changes.",
+            description: "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer app_cli redclaw profile-bundle/profile-read/profile-update commands.",
             kind: ToolKind::ProfileDoc,
             requires_approval: false,
             concurrency_safe: false,
@@ -101,7 +94,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_mcp" => Some(ToolDescriptor {
             name: "redbox_mcp",
-            description: "Unified MCP management and call bridge.",
+            description: "Legacy compatibility alias for MCP management. Prefer app_cli mcp list/save/call/list-tools/list-resources/disconnect commands.",
             kind: ToolKind::Mcp,
             requires_approval: false,
             concurrency_safe: true,
@@ -109,8 +102,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_skill" => Some(ToolDescriptor {
             name: "redbox_skill",
-            description:
-                "Unified skill runtime and AI-role management entry. Use action=invoke to load a skill into the current session.",
+            description: "Legacy compatibility alias for skill runtime and AI-role management. Prefer app_cli skills ... and ai ... commands.",
             kind: ToolKind::Skill,
             requires_approval: false,
             concurrency_safe: false,
@@ -118,7 +110,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_runtime_control" => Some(ToolDescriptor {
             name: "redbox_runtime_control",
-            description: "Unified runtime/session/task/background control entry.",
+            description: "Legacy compatibility alias for runtime/session/task/background control. Prefer app_cli runtime ... commands.",
             kind: ToolKind::RuntimeControl,
             requires_approval: false,
             concurrency_safe: false,
@@ -142,7 +134,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "app_cli",
-                "description": "Unified business command surface for spaces, subjects, manuscripts, media, image generation, video generation, RedClaw, settings, memory, skills, and MCP.",
+                "description": "Unified business command surface for advisors, chat sessions, spaces, subjects, manuscripts, theme/layout workflows, media, image generation, video generation, RedClaw, runtime/tasks/background control, settings, memory, skills, AI config, and MCP.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -175,7 +167,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_app_query",
-                "description": "Query app-managed RedBox data with one generic app tool. Prefer this over many specialized list/search tools.",
+                "description": "Legacy compatibility alias for app queries. Prefer app_cli commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -206,16 +198,22 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_fs",
-                "description": "Inspect files inside currentSpaceRoot with a single generic file tool. Use action=list before action=read.",
+                "description": "Unified structured file access for currentSpaceRoot and advisor/member knowledge. Use scope=workspace or scope=knowledge with action=list/read/search.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["list", "read"] },
+                        "scope": { "type": "string", "enum": ["workspace", "knowledge"] },
+                        "action": { "type": "string", "enum": ["list", "read", "search"] },
+                        "advisorId": { "type": "string" },
                         "path": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
-                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+                        "pattern": { "type": "string" },
+                        "query": { "type": "string" },
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 400 },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 },
+                        "snippetChars": { "type": "integer", "minimum": 80, "maximum": 800 }
                     },
-                    "required": ["action", "path"],
+                    "required": ["action"],
                     "additionalProperties": false
                 }
             }
@@ -224,7 +222,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "knowledge_glob",
-                "description": "List files inside the current advisor/member knowledge directory. Prefer this before reading or grepping member knowledge.",
+                "description": "Legacy compatibility alias for advisor/member knowledge listing. Prefer redbox_fs(scope=knowledge, action=list).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -240,7 +238,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "knowledge_grep",
-                "description": "Search text content inside the current advisor/member knowledge directory and return matching files, line numbers, and snippets.",
+                "description": "Legacy compatibility alias for advisor/member knowledge search. Prefer redbox_fs(scope=knowledge, action=search).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -259,7 +257,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "knowledge_read",
-                "description": "Read a single advisor/member knowledge file by relative path with optional line offset and limit.",
+                "description": "Legacy compatibility alias for advisor/member knowledge read. Prefer redbox_fs(scope=knowledge, action=read).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -278,7 +276,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_profile_doc",
-                "description": "Read or update RedClaw long-term profile docs (Agent.md, Soul.md, user.md, CreatorProfile.md). Update only when user requests durable profile changes.",
+                "description": "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer app_cli redclaw profile-bundle/profile-read/profile-update commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -296,7 +294,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_mcp",
-                "description": "Unified MCP management and call bridge.",
+                "description": "Legacy compatibility alias for MCP management. Prefer app_cli mcp list/save/call/list-tools/list-resources/disconnect commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -334,7 +332,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_skill",
-                "description": "Unified skill runtime and AI-role management entry. Use action=invoke to load a skill into the current session.",
+                "description": "Legacy compatibility alias for skill runtime and AI-role management. Prefer app_cli skills ... and ai ... commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -361,7 +359,7 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             "type": "function",
             "function": {
                 "name": "redbox_runtime_control",
-                "description": "Unified runtime/session/task/background control entry.",
+                "description": "Legacy compatibility alias for runtime/session/task/background control. Prefer app_cli runtime ... commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {

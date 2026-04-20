@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-use crate::{now_iso, workspace_root, AppState};
+use crate::{AppState, now_iso, workspace_root};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RedclawProfilePromptBundle {
