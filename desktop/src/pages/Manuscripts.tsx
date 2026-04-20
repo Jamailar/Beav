@@ -62,6 +62,7 @@ type EditorAiWorkspaceMode = {
     activeSkills: string[];
     themeEditingId?: string | null;
     themeEditingLabel?: string | null;
+    themeEditingRoot?: string | null;
     themeEditingFile?: string | null;
     themeEditingTemplateFile?: string | null;
 };
@@ -2305,7 +2306,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             ? packageState?.richpostThemeConfigFile || editorAiWorkspaceMode.themeEditingFile || null
             : null;
         const themeEditingRoot = (() => {
-            const explicitRoot = isRichpostThemeEditingSession ? packageState?.richpostThemeRoot || null : null;
+            const explicitRoot = isRichpostThemeEditingSession
+                ? packageState?.richpostThemeRoot || editorAiWorkspaceMode.themeEditingRoot || null
+                : null;
             if (explicitRoot) return explicitRoot;
             if (!themeEditingFile) return null;
             const normalized = String(themeEditingFile).replace(/\\/g, '/');
@@ -2548,6 +2551,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         editorAiWorkspaceMode.activeSkills,
         editorAiWorkspaceMode.id,
         editorAiWorkspaceMode.label,
+        editorAiWorkspaceMode.themeEditingRoot,
         editorAiWorkspaceMode.themeEditingFile,
         editorAiWorkspaceMode.themeEditingId,
         editorAiWorkspaceMode.themeEditingLabel,

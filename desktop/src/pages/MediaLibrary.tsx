@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, Pencil, X, Clapperboard, Trash2 } from 'lucide-react';
+import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
@@ -69,6 +69,18 @@ interface GeneratedAsset {
 interface ReferenceImageItem {
     name: string;
     dataUrl: string;
+}
+
+interface MediaAssetContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    asset: MediaAsset | null;
+}
+
+interface MediaAssetPreviewState {
+    asset: MediaAsset;
+    src: string;
 }
 
 interface SettingsShape {
@@ -259,6 +271,13 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
     const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
+    const [contextMenu, setContextMenu] = useState<MediaAssetContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        asset: null,
+    });
+    const [previewAsset, setPreviewAsset] = useState<MediaAssetPreviewState | null>(null);
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
     const hasLoadedSnapshotRef = useRef(false);
@@ -334,6 +353,30 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         if (!isActive) return;
         void loadSettings();
     }, [isActive, loadSettings]);
+
+    useEffect(() => {
+        if (!contextMenu.visible) return;
+        const close = () => setContextMenu((prev) => ({ ...prev, visible: false, asset: null }));
+        window.addEventListener('click', close);
+        window.addEventListener('scroll', close, true);
+        window.addEventListener('resize', close);
+        return () => {
+            window.removeEventListener('click', close);
+            window.removeEventListener('scroll', close, true);
+            window.removeEventListener('resize', close);
+        };
+    }, [contextMenu.visible]);
+
+    useEffect(() => {
+        if (!previewAsset) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setPreviewAsset(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [previewAsset]);
 
     useEffect(() => {
         if (!size) return;
@@ -481,6 +524,22 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             setWorkingId(null);
         }
     }, [loadData]);
+
+    const openAssetContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
+        event.preventDefault();
+        setContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            asset,
+        });
+    }, []);
+
+    const openAssetPreview = useCallback((asset: MediaAsset) => {
+        const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+        if (!src || !asset.exists) return;
+        setPreviewAsset({ asset, src });
+    }, []);
 
     const handleGenerate = useCallback(async () => {
         if (!prompt.trim()) {
@@ -835,12 +894,14 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                     <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-4 [column-fill:_balance]">
                         {filteredAssets.map((asset) => {
                             const draft = getDraft(asset);
-                            const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
-                            const busy = workingId === asset.id;
-                            const isExpanded = expandedAssetId === asset.id;
                             const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
                             return (
-                                <div key={asset.id} className="group mb-4 break-inside-avoid border border-border rounded-2xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                                <div
+                                    key={asset.id}
+                                    onClick={() => openAssetPreview(asset)}
+                                    onContextMenu={(event) => openAssetContextMenu(event, asset)}
+                                    className="group mb-4 block w-full break-inside-avoid cursor-pointer overflow-hidden rounded-2xl border border-border bg-surface-primary text-left shadow-sm transition-shadow hover:shadow-md"
+                                >
                                     <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
                                         <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border', sourceMeta.badgeClass)}>
                                             {sourceMeta.label}
@@ -858,6 +919,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                                     className="block w-full h-auto max-h-[520px] bg-black"
                                                     controls
                                                     preload="metadata"
+                                                    onClick={(event) => event.stopPropagation()}
                                                 />
                                             ) : (
                                                 <img
@@ -886,108 +948,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                         <div className="text-[11px] text-text-tertiary truncate">
                                             稿件：{asset.boundManuscriptPath || '(未绑定)'}
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
-                                                className="flex-1 px-2.5 py-2 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <ExternalLink className="w-3.5 h-3.5" />
-                                                    打开
-                                                </span>
-                                            </button>
-                                            <button
-                                                onClick={() => setExpandedAssetId((prev) => (prev === asset.id ? null : asset.id))}
-                                                className={clsx(
-                                                    'px-2.5 py-2 text-xs rounded border transition-colors',
-                                                    isExpanded
-                                                        ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
-                                                        : 'border-border hover:bg-surface-secondary text-text-secondary'
-                                                )}
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Pencil className="w-3.5 h-3.5" />
-                                                    {isExpanded ? '收起' : '编辑'}
-                                                </span>
-                                            </button>
-                                            <button
-                                                onClick={() => void handleDeleteAsset(asset)}
-                                                disabled={busy}
-                                                className="px-2.5 py-2 text-xs rounded border border-border hover:bg-red-50 hover:border-red-200 hover:text-red-600 text-text-secondary disabled:opacity-50"
-                                                title="删除媒体"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                    删除
-                                                </span>
-                                            </button>
-                                        </div>
-
-                                        {isExpanded && (
-                                            <div className="pt-2 mt-2 border-t border-border space-y-2">
-                                                <div className="grid grid-cols-1 gap-2">
-                                                    <input
-                                                        value={draft.title}
-                                                        onChange={(event) => updateDraft(asset.id, { title: event.target.value })}
-                                                        placeholder="标题"
-                                                        className="px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    />
-                                                    <input
-                                                        value={draft.projectId}
-                                                        onChange={(event) => updateDraft(asset.id, { projectId: event.target.value })}
-                                                        placeholder="项目ID"
-                                                        className="px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    />
-                                                </div>
-                                                <textarea
-                                                    value={draft.prompt}
-                                                    onChange={(event) => updateDraft(asset.id, { prompt: event.target.value })}
-                                                    placeholder="提示词"
-                                                    rows={3}
-                                                    className="w-full px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                />
-
-                                                <div className="text-[11px] text-text-tertiary break-all">
-                                                    {asset.relativePath || '(无文件路径)'}
-                                                </div>
-
-                                                <div className="flex items-center gap-2">
-                                                    <select
-                                                        value={selectedManuscript}
-                                                        onChange={(event) => setBindTarget((prev) => ({ ...prev, [asset.id]: event.target.value }))}
-                                                        className="flex-1 min-w-0 px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    >
-                                                        <option value="">选择稿件绑定</option>
-                                                        {manuscripts.map((filePath) => (
-                                                            <option key={filePath} value={filePath}>
-                                                                {filePath}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <button
-                                                        onClick={() => void handleBind(asset)}
-                                                        disabled={busy}
-                                                        className="px-2.5 py-2 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary disabled:opacity-50"
-                                                    >
-                                                        <span className="inline-flex items-center gap-1">
-                                                            <Link2 className="w-3.5 h-3.5" />
-                                                            绑定
-                                                        </span>
-                                                    </button>
-                                                </div>
-
-                                                <button
-                                                    onClick={() => void handleSaveMetadata(asset)}
-                                                    disabled={busy}
-                                                    className="w-full px-2.5 py-2 text-xs rounded bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50"
-                                                >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <Save className="w-3.5 h-3.5" />
-                                                        {busy ? '保存中...' : '保存元数据'}
-                                                    </span>
-                                                </button>
-                                            </div>
-                                        )}
                                     </div>
                                 </div>
                             );
@@ -995,6 +955,177 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                     </div>
                 )}
             </div>
+            {contextMenu.visible && contextMenu.asset && (
+                <div
+                    className="fixed z-50 min-w-[148px] overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setExpandedAssetId(contextMenu.asset!.id);
+                            setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                    >
+                        编辑
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const asset = contextMenu.asset;
+                            setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleDeleteAsset(asset);
+                            }
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                    >
+                        删除
+                    </button>
+                </div>
+            )}
+            {previewAsset && (
+                <div
+                    className="fixed inset-0 z-[60] bg-black/72"
+                    onClick={() => setPreviewAsset(null)}
+                >
+                    <div className="flex h-full w-full items-center justify-center p-6 md:p-8">
+                        <div
+                            className="flex h-full w-full items-center justify-center"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className="relative inline-flex max-h-[90vh] max-w-[90vw] overflow-hidden">
+                                {isVideoAsset(previewAsset.asset) ? (
+                                    <video
+                                        src={previewAsset.src}
+                                        className="block max-h-[90vh] max-w-[90vw] object-contain shadow-2xl"
+                                        controls
+                                        autoPlay
+                                    />
+                                ) : (
+                                    <img
+                                        src={previewAsset.src}
+                                        alt={previewAsset.asset.title || previewAsset.asset.id}
+                                        className="block max-h-[90vh] max-w-[90vw] object-contain shadow-2xl"
+                                    />
+                                )}
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0">
+                                    <div className="bg-gradient-to-t from-black/88 via-black/50 to-transparent px-5 pb-5 pt-16 md:px-8 md:pb-7">
+                                        <div className="space-y-1.5">
+                                            <div className="text-[11px] uppercase tracking-[0.12em] text-white/60">
+                                                {SOURCE_META[previewAsset.asset.source]?.label || '素材'}
+                                            </div>
+                                            <div className="text-sm leading-6 text-white/95 break-words">
+                                                {previewAsset.asset.title || previewAsset.asset.id}
+                                            </div>
+                                            <div className="text-[12px] leading-5 text-white/72">
+                                                {previewAsset.asset.projectId || '未设置项目ID'} · {previewAsset.asset.aspectRatio || previewAsset.asset.size || '原始比例'}
+                                            </div>
+                                            <div className="text-[12px] leading-5 text-white/72">
+                                                {new Date(previewAsset.asset.createdAt).toLocaleString()}
+                                            </div>
+                                            {previewAsset.asset.relativePath && (
+                                                <div className="text-[11px] leading-5 text-white/52 break-all">
+                                                    {previewAsset.asset.relativePath}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {expandedAssetId && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+                    <div className="w-full max-w-2xl rounded-2xl border border-border bg-surface-primary shadow-2xl">
+                        {(() => {
+                            const asset = assets.find((item) => item.id === expandedAssetId);
+                            if (!asset) return null;
+                            const draft = getDraft(asset);
+                            const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
+                            const busy = workingId === asset.id;
+                            return (
+                                <>
+                                    <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+                                        <div className="text-sm font-medium text-text-primary truncate">编辑素材</div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setExpandedAssetId(null)}
+                                            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-secondary hover:bg-surface-secondary"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <div className="p-5 space-y-3">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <input
+                                                value={draft.title}
+                                                onChange={(event) => updateDraft(asset.id, { title: event.target.value })}
+                                                placeholder="标题"
+                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            />
+                                            <input
+                                                value={draft.projectId}
+                                                onChange={(event) => updateDraft(asset.id, { projectId: event.target.value })}
+                                                placeholder="项目ID"
+                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            />
+                                        </div>
+                                        <textarea
+                                            value={draft.prompt}
+                                            onChange={(event) => updateDraft(asset.id, { prompt: event.target.value })}
+                                            placeholder="提示词"
+                                            rows={4}
+                                            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        />
+                                        <div className="text-[11px] text-text-tertiary break-all">
+                                            {asset.relativePath || '(无文件路径)'}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <select
+                                                value={selectedManuscript}
+                                                onChange={(event) => setBindTarget((prev) => ({ ...prev, [asset.id]: event.target.value }))}
+                                                className="flex-1 min-w-0 px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            >
+                                                <option value="">选择稿件绑定</option>
+                                                {manuscripts.map((filePath) => (
+                                                    <option key={filePath} value={filePath}>
+                                                        {filePath}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => void handleBind(asset)}
+                                                disabled={busy}
+                                                className="px-3 py-2 text-sm rounded-md border border-border hover:bg-surface-secondary text-text-secondary disabled:opacity-50"
+                                            >
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Link2 className="w-4 h-4" />
+                                                    绑定
+                                                </span>
+                                            </button>
+                                        </div>
+                                        <button
+                                            onClick={() => void handleSaveMetadata(asset)}
+                                            disabled={busy}
+                                            className="w-full px-3 py-2 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50"
+                                        >
+                                            <span className="inline-flex items-center gap-1">
+                                                <Save className="w-4 h-4" />
+                                                {busy ? '保存中...' : '保存元数据'}
+                                            </span>
+                                        </button>
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </div>
+                </div>
+            )}
             {isImageModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
                     <div className="w-full max-w-5xl max-h-[88vh] overflow-auto rounded-2xl border border-border bg-surface-primary shadow-2xl">

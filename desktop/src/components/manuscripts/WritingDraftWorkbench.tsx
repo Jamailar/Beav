@@ -136,6 +136,7 @@ type AiWorkspaceMode = {
   activeSkills: string[];
   themeEditingId?: string | null;
   themeEditingLabel?: string | null;
+  themeEditingRoot?: string | null;
   themeEditingFile?: string | null;
   themeEditingTemplateFile?: string | null;
 };
@@ -1472,6 +1473,7 @@ export function WritingDraftWorkbench({
   const [richpostThemeEditorBaseThemeId, setRichpostThemeEditorBaseThemeId] = useState<string | null>(null);
   const [richpostThemeEditorThemeId, setRichpostThemeEditorThemeId] = useState<string | null>(null);
   const [richpostThemeEditorThemeLabel, setRichpostThemeEditorThemeLabel] = useState<string | null>(null);
+  const [richpostThemeEditorThemeRoot, setRichpostThemeEditorThemeRoot] = useState<string | null>(null);
   const [richpostThemeEditorThemeFile, setRichpostThemeEditorThemeFile] = useState<string | null>(null);
   const [richpostThemeEditorThemeTemplateFile, setRichpostThemeEditorThemeTemplateFile] = useState<string | null>(null);
   const [richpostThemeEditorPreviewPages, setRichpostThemeEditorPreviewPages] = useState<RichpostThemePreviewRecord[]>([]);
@@ -1518,6 +1520,7 @@ export function WritingDraftWorkbench({
     setRichpostThemeRenameTarget(null);
     setRichpostThemeEditorThemeId(null);
     setRichpostThemeEditorThemeLabel(null);
+    setRichpostThemeEditorThemeRoot(null);
     setRichpostThemeEditorThemeFile(null);
     setRichpostThemeEditorThemeTemplateFile(null);
     setRichpostThemeEditorPreviewPages([]);
@@ -1583,6 +1586,7 @@ export function WritingDraftWorkbench({
         activeSkills: [RICHPOST_LAYOUT_SKILL_NAME, RICHPOST_THEME_EDITOR_SKILL_NAME],
         themeEditingId: richpostThemeEditorThemeId,
         themeEditingLabel: richpostThemeEditorThemeLabel,
+        themeEditingRoot: richpostThemeEditorThemeRoot,
         themeEditingFile: richpostThemeEditorThemeFile,
         themeEditingTemplateFile: richpostThemeEditorThemeTemplateFile,
       };
@@ -1622,6 +1626,7 @@ export function WritingDraftWorkbench({
     isRichPost,
     isRichpostThemeEditorOpen,
     isSplitCompareEnabled,
+    richpostThemeEditorThemeRoot,
     richpostThemeEditorThemeFile,
     richpostThemeEditorThemeTemplateFile,
     richpostThemeEditorThemeId,
@@ -1687,6 +1692,7 @@ export function WritingDraftWorkbench({
     setIsRichpostThemeEditorOpen(false);
     setRichpostThemeEditorThemeId(null);
     setRichpostThemeEditorThemeLabel(null);
+    setRichpostThemeEditorThemeRoot(null);
     setRichpostThemeEditorThemeFile(null);
     setRichpostThemeEditorPreviewPages([]);
   }, []);
@@ -1724,6 +1730,8 @@ export function WritingDraftWorkbench({
         state?: PackageStateLike;
         theme?: RichpostThemePreset | null;
         themeId?: string | null;
+        themeRoot?: string | null;
+        themeFile?: string | null;
       };
       if (!result?.success || !result.theme) {
         throw new Error(result?.error || '保存主题失败');
@@ -1736,6 +1744,12 @@ export function WritingDraftWorkbench({
       }
       if (typeof result.themeId === 'string' && result.themeId.trim()) {
         setRichpostThemeEditorThemeId(result.themeId);
+      }
+      if (typeof result.themeRoot === 'string' && result.themeRoot.trim()) {
+        setRichpostThemeEditorThemeRoot(result.themeRoot);
+      }
+      if (typeof result.themeFile === 'string' && result.themeFile.trim()) {
+        setRichpostThemeEditorThemeFile(result.themeFile);
       }
       if (typeof result.theme?.label === 'string' && result.theme.label.trim()) {
         setRichpostThemeEditorThemeLabel(result.theme.label);
@@ -1782,6 +1796,7 @@ export function WritingDraftWorkbench({
       setRichpostThemeEditorBaseThemeId(baseThemeId);
       setRichpostThemeEditorThemeId(baseThemeId);
       setRichpostThemeEditorThemeLabel(typeof baseTheme.label === 'string' ? baseTheme.label : normalizedDraft.label);
+      setRichpostThemeEditorThemeRoot(`${filePath.replace(/\\/g, '/')}/themes/${baseThemeId}`);
       setRichpostThemeEditorThemeFile(`${filePath.replace(/\\/g, '/')}/themes/${baseThemeId}/theme.json`);
       setRichpostThemeEditorThemeTemplateFile(`${filePath.replace(/\\/g, '/')}/themes/richpost-theme-template.md`);
       setRichpostThemeEditorPreviewPages([]);
@@ -1837,6 +1852,7 @@ export function WritingDraftWorkbench({
       setRichpostThemeEditorBaseThemeId(baseThemeId || (typeof payload.theme.id === 'string' ? payload.theme.id : null));
       setRichpostThemeEditorThemeId(typeof payload.theme.id === 'string' ? payload.theme.id : null);
       setRichpostThemeEditorThemeLabel(typeof payload.theme.label === 'string' ? payload.theme.label : normalizedDraft.label);
+      setRichpostThemeEditorThemeRoot(typeof payload.themeRoot === 'string' ? payload.themeRoot : null);
       setRichpostThemeEditorThemeFile(typeof payload.themeFile === 'string' ? payload.themeFile : null);
       setRichpostThemeEditorThemeTemplateFile(typeof payload.themeTemplateFile === 'string' ? payload.themeTemplateFile : null);
       setRichpostThemeEditorPreviewPages([]);
