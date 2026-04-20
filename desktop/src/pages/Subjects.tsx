@@ -73,6 +73,8 @@ interface SubjectDraft {
     };
 }
 
+type CategoryDialogMode = 'create' | 'rename';
+
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
 const SUBJECT_VOICE_RECORDING_SECONDS = 6;
@@ -151,6 +153,11 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const [query, setQuery] = useState('');
     const [categoryFilter, setCategoryFilter] = useState<string>('all');
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+    const [categoryDialogMode, setCategoryDialogMode] = useState<CategoryDialogMode>('create');
+    const [categoryDialogName, setCategoryDialogName] = useState('');
+    const [categoryDialogTargetId, setCategoryDialogTargetId] = useState<string | null>(null);
+    const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
     const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [recording, setRecording] = useState(false);
@@ -266,6 +273,31 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         setError('');
         setIsModalOpen(true);
     }, []);
+
+    const openCreateCategoryDialog = useCallback(() => {
+        setCategoryDialogMode('create');
+        setCategoryDialogTargetId(null);
+        setCategoryDialogName('');
+        setIsCategoryDialogOpen(true);
+    }, []);
+
+    const openRenameCategoryDialog = useCallback((category: SubjectCategory) => {
+        setCategoryDialogMode('rename');
+        setCategoryDialogTargetId(category.id);
+        setCategoryDialogName(category.name);
+        setIsCategoryDialogOpen(true);
+    }, []);
+
+    const resetCategoryDialog = useCallback(() => {
+        setIsCategoryDialogOpen(false);
+        setCategoryDialogTargetId(null);
+        setCategoryDialogName('');
+    }, []);
+
+    const closeCategoryDialog = useCallback(() => {
+        if (isCategoryDialogSubmitting) return;
+        resetCategoryDialog();
+    }, [isCategoryDialogSubmitting, resetCategoryDialog]);
 
     const clearRecordingTimers = useCallback(() => {
         if (recordingIntervalRef.current) {
@@ -474,31 +506,55 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         }
     }, [clearRecordingTimers, recording, saveVoiceDataUrl, stopRecordingSession]);
 
-    const handleCreateCategory = useCallback(async () => {
-        const name = window.prompt('输入分类名称');
-        if (!name) return;
-        const result = await window.ipcRenderer.subjects.categories.create({ name: name.trim() });
-        if (!result?.success) {
-            void appAlert(result?.error || '创建分类失败');
+    const submitCategoryDialog = useCallback(async () => {
+        const trimmedName = categoryDialogName.trim();
+        if (!trimmedName) {
+            void appAlert('分类名称不能为空');
             return;
         }
-        await loadData();
-        if (result.category?.id) {
-            setCategoryFilter(result.category.id);
-            setDraft((current) => ({ ...current, categoryId: result.category?.id || '' }));
-        }
-    }, [loadData]);
 
-    const handleRenameCategory = useCallback(async (category: SubjectCategory) => {
-        const name = window.prompt('重命名分类', category.name);
-        if (!name || name.trim() === category.name) return;
-        const result = await window.ipcRenderer.subjects.categories.update({ id: category.id, name: name.trim() });
-        if (!result?.success) {
-            void appAlert(result?.error || '重命名分类失败');
-            return;
+        setIsCategoryDialogSubmitting(true);
+        try {
+            if (categoryDialogMode === 'create') {
+                const result = await window.ipcRenderer.subjects.categories.create({ name: trimmedName });
+                if (!result?.success) {
+                    void appAlert(result?.error || '创建分类失败');
+                    return;
+                }
+                resetCategoryDialog();
+                await loadData();
+                if (result.category?.id) {
+                    setCategoryFilter(result.category.id);
+                    setDraft((current) => ({ ...current, categoryId: result.category?.id || '' }));
+                }
+                return;
+            }
+
+            if (!categoryDialogTargetId) {
+                void appAlert('未找到要重命名的分类');
+                return;
+            }
+
+            const currentCategory = categories.find((item) => item.id === categoryDialogTargetId);
+            if (currentCategory && trimmedName === currentCategory.name) {
+                resetCategoryDialog();
+                return;
+            }
+
+            const result = await window.ipcRenderer.subjects.categories.update({ id: categoryDialogTargetId, name: trimmedName });
+            if (!result?.success) {
+                void appAlert(result?.error || '重命名分类失败');
+                return;
+            }
+            resetCategoryDialog();
+            await loadData();
+        } catch (e) {
+            console.error('Failed to submit category dialog:', e);
+            void appAlert(categoryDialogMode === 'create' ? '创建分类失败，请重试' : '重命名分类失败，请重试');
+        } finally {
+            setIsCategoryDialogSubmitting(false);
         }
-        await loadData();
-    }, [loadData]);
+    }, [categories, categoryDialogMode, categoryDialogName, categoryDialogTargetId, loadData, resetCategoryDialog]);
 
     const handleDeleteCategory = useCallback(async (category: SubjectCategory) => {
         if (!(await appConfirm(`删除分类“${category.name}”？如果仍有主体使用该分类，将会被拒绝。`, { title: '删除分类', confirmLabel: '删除', tone: 'danger' }))) return;
@@ -667,7 +723,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                         );
                     })}
                     <button
-                        onClick={() => void handleCreateCategory()}
+                        onClick={openCreateCategoryDialog}
                         className="ml-auto text-[11px] px-2.5 py-1 rounded-md border border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary"
                     >
                         <span className="inline-flex items-center gap-1">
@@ -809,7 +865,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                                 </select>
                                                 <button
                                                     type="button"
-                                                    onClick={() => void handleCreateCategory()}
+                                                    onClick={openCreateCategoryDialog}
                                                     className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary"
                                                 >
                                                     新建
@@ -819,7 +875,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                                 <div className="mt-2 flex items-center gap-2 text-xs text-text-tertiary">
                                                     <button type="button" onClick={() => {
                                                         const category = categories.find((item) => item.id === draft.categoryId);
-                                                        if (category) void handleRenameCategory(category);
+                                                        if (category) openRenameCategoryDialog(category);
                                                     }} className="hover:text-text-primary">
                                                         重命名当前分类
                                                     </button>
@@ -1075,6 +1131,66 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                         {draft.id ? <Pencil className="w-4 h-4" /> : <Save className="w-4 h-4" />}
                                         {working ? '处理中...' : draft.id ? '保存修改' : '创建主体'}
                                     </span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isCategoryDialogOpen && (
+                <div
+                    className="fixed inset-0 z-[130] bg-black/35 flex items-center justify-center p-6"
+                    onMouseDown={closeCategoryDialog}
+                >
+                    <div
+                        className="w-full max-w-sm rounded-2xl border border-border bg-surface-primary shadow-2xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="px-5 py-4 border-b border-border">
+                            <div className="text-sm font-semibold text-text-primary">
+                                {categoryDialogMode === 'create' ? '新建分类' : '重命名分类'}
+                            </div>
+                            <div className="mt-1 text-xs leading-5 text-text-tertiary">
+                                {categoryDialogMode === 'create'
+                                    ? '输入分类名称后即可在主体库中直接使用。'
+                                    : '更新分类名称后，已关联的主体会自动沿用该分类。'}
+                            </div>
+                        </div>
+                        <div className="px-5 py-4 space-y-3">
+                            <input
+                                autoFocus
+                                value={categoryDialogName}
+                                onChange={(event) => setCategoryDialogName(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        void submitCategoryDialog();
+                                    } else if (event.key === 'Escape') {
+                                        closeCategoryDialog();
+                                    }
+                                }}
+                                placeholder="请输入分类名称"
+                                className="w-full h-10 rounded-md border border-border bg-surface-secondary px-3 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={closeCategoryDialog}
+                                    disabled={isCategoryDialogSubmitting}
+                                    className="h-9 px-3 text-sm rounded-md border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-50"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void submitCategoryDialog();
+                                    }}
+                                    disabled={isCategoryDialogSubmitting}
+                                    className="h-9 px-3 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-hover disabled:opacity-50"
+                                >
+                                    {isCategoryDialogSubmitting ? '处理中...' : '确定'}
                                 </button>
                             </div>
                         </div>
