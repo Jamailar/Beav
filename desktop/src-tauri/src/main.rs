@@ -1666,6 +1666,26 @@ fn load_work_items_from_fs(redclaw_root: &Path) -> Vec<WorkItemRecord> {
     workspace_loaders::load_work_items_from_fs(redclaw_root)
 }
 
+fn bundled_resource_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            roots.push(path);
+        }
+    };
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push(resource_dir.clone());
+        push(resource_dir.join("_up_"));
+        push(resource_dir.join("resources"));
+        push(resource_dir.join("_up_").join("resources"));
+    }
+
+    roots
+}
+
 fn browser_plugin_bundled_candidates(app: &AppHandle) -> Vec<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1679,15 +1699,17 @@ fn browser_plugin_bundled_candidates(app: &AppHandle) -> Vec<PathBuf> {
         }
     };
 
-    push(cwd.join("Plugin"));
-    push(cwd.join("../Plugin"));
-    push(cwd.join("../../Plugin"));
-    push(manifest_dir.join("../Plugin"));
-    push(manifest_dir.join("../../Plugin"));
+    for root in bundled_resource_roots(app) {
+        push(root.join("Plugin"));
+        push(root.join("browser-extension"));
+    }
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        push(resource_dir.join("Plugin"));
-        push(resource_dir.join("browser-extension"));
+    if cfg!(debug_assertions) {
+        push(cwd.join("Plugin"));
+        push(cwd.join("../Plugin"));
+        push(cwd.join("../../Plugin"));
+        push(manifest_dir.join("../Plugin"));
+        push(manifest_dir.join("../../Plugin"));
     }
 
     candidates
