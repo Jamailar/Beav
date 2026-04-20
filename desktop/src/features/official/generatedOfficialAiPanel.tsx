@@ -374,10 +374,10 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       }
       return sessionData;
     }
-    const fallback = readDisplaySessionSnapshot();
-    if (fallback) {
-      applySession(fallback);
-      return fallback;
+    const status = String(snapshot?.status || '').trim();
+    const loggedIn = Boolean(snapshot?.loggedIn);
+    if (status === 'anonymous' || status === 'reauthRequired' || !loggedIn) {
+      writePanelDisplaySnapshot(null);
     }
     applySession(null);
     return sessionData;
@@ -801,6 +801,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         setPoints(null);
         setModels([]);
         setCallRecords([]);
+        writePanelDisplaySnapshot(null);
         return;
       }
       requestSettingsRefresh();
