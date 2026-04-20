@@ -202,6 +202,176 @@ fn source_domain_from_input(source: &KnowledgeSourceInput) -> Option<String> {
         })
 }
 
+fn asset_extension_from_url_or_path(source: &str) -> Option<String> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let raw_path = Url::parse(trimmed)
+        .ok()
+        .map(|parsed| parsed.path().to_string())
+        .unwrap_or_else(|| trimmed.to_string());
+    Path::new(&raw_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value == "jpeg" {
+                "jpg".to_string()
+            } else {
+                value
+            }
+        })
+}
+
+fn asset_extension_from_data_url(meta: &str, kind: &str) -> &'static str {
+    let mime = meta
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match mime.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
+        "video/webm" => "webm",
+        "video/x-matroska" => "mkv",
+        _ if kind == "video" => "mp4",
+        _ => "png",
+    }
+}
+
+fn asset_extension_from_bytes(bytes: &[u8], kind: &str) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "gif"
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "webp"
+    } else if bytes.starts_with(b"BM") {
+        "bmp"
+    } else if bytes.starts_with(b"<svg") || bytes.windows(4).any(|chunk| chunk == b"<svg") {
+        "svg"
+    } else if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        if bytes.windows(4).any(|chunk| chunk == b"webm") {
+            "webm"
+        } else {
+            "mkv"
+        }
+    } else if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" {
+        if bytes.windows(4).any(|chunk| chunk == b"qt  ") {
+            "mov"
+        } else {
+            "mp4"
+        }
+    } else if kind == "video" {
+        "mp4"
+    } else {
+        "png"
+    }
+}
+
+fn materialize_note_asset_source(
+    entry_dir: &Path,
+    source: &str,
+    target_dir_relative: &str,
+    file_stem: &str,
+    kind: &str,
+) -> Result<String, String> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "未提供可用的{}源",
+            if kind == "video" { "视频" } else { "图片" }
+        ));
+    }
+
+    let target_dir = normalize_legacy_workspace_path(&entry_dir.join(target_dir_relative));
+    fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+
+    if let Some(data) = trimmed.strip_prefix("data:") {
+        let (meta, encoded) = data
+            .split_once(',')
+            .ok_or_else(|| "无效 data URL".to_string())?;
+        let bytes = decode_base64_bytes(encoded)?;
+        let extension = asset_extension_from_data_url(meta, kind);
+        let relative_path =
+            normalize_relative_path(&format!("{target_dir_relative}/{file_stem}.{extension}"));
+        let target_path = entry_dir.join(&relative_path);
+        fs::write(&target_path, bytes).map_err(|error| error.to_string())?;
+        return Ok(relative_path);
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let bytes = run_curl_bytes("GET", trimmed, None, &[], None)?;
+        let extension = asset_extension_from_url_or_path(trimmed)
+            .unwrap_or_else(|| asset_extension_from_bytes(&bytes, kind).to_string());
+        let relative_path =
+            normalize_relative_path(&format!("{target_dir_relative}/{file_stem}.{extension}"));
+        let target_path = entry_dir.join(&relative_path);
+        fs::write(&target_path, bytes).map_err(|error| error.to_string())?;
+        return Ok(relative_path);
+    }
+
+    let local_path = resolve_local_path(trimmed)
+        .filter(|path| path.exists())
+        .ok_or_else(|| {
+            format!(
+                "未找到可用的{}源: {trimmed}",
+                if kind == "video" { "视频" } else { "图片" }
+            )
+        })?;
+    let normalized_source = normalize_legacy_workspace_path(&local_path);
+    let extension = asset_extension_from_url_or_path(trimmed)
+        .or_else(|| {
+            normalized_source
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| {
+            if kind == "video" {
+                "mp4".to_string()
+            } else {
+                "png".to_string()
+            }
+        });
+    let relative_path =
+        normalize_relative_path(&format!("{target_dir_relative}/{file_stem}.{extension}"));
+    let target_path = normalize_legacy_workspace_path(&entry_dir.join(&relative_path));
+    if normalized_source != target_path {
+        fs::copy(&normalized_source, &target_path).map_err(|error| error.to_string())?;
+    }
+    Ok(relative_path)
+}
+
+fn materialize_note_image_assets(
+    entry_dir: &Path,
+    sources: &[String],
+) -> Result<Vec<String>, String> {
+    let mut saved = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        saved.push(materialize_note_asset_source(
+            entry_dir,
+            source,
+            "images",
+            &format!("image-{}", index + 1),
+            "image",
+        )?);
+    }
+    Ok(saved)
+}
+
 fn ensure_supported_space(
     state: &State<'_, AppState>,
     requested_space_id: Option<&str>,
@@ -901,7 +1071,8 @@ fn ingest_note_entry(
     }
 
     let stats = request.content.stats.clone().unwrap_or_default();
-    let images = normalize_vec(request.assets.image_urls.clone());
+    let image_sources = normalize_vec(request.assets.image_urls.clone());
+    let images = materialize_note_image_assets(&entry_dir, &image_sources)?;
     let tag_source_text = [
         request.content.text.clone(),
         request.content.excerpt.clone(),
@@ -913,8 +1084,26 @@ fn ingest_note_entry(
     .collect::<Vec<_>>()
     .join("\n");
     let merged_tags = merge_tags_with_text(request.content.tags.clone(), &tag_source_text);
-    let cover_url =
-        normalize_string(request.assets.cover_url.clone()).or_else(|| images.first().cloned());
+    let cover_source = normalize_string(request.assets.cover_url.clone());
+    let cover_url = if let Some(source) = cover_source.clone() {
+        Some(
+            image_sources
+                .iter()
+                .position(|item| item == &source)
+                .and_then(|index| images.get(index).cloned())
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    materialize_note_asset_source(&entry_dir, &source, "images", "cover", "image")
+                })?,
+        )
+    } else {
+        images.first().cloned()
+    };
+    let video_source = normalize_string(request.assets.video_url.clone());
+    let video_asset = video_source
+        .as_ref()
+        .map(|source| materialize_note_asset_source(&entry_dir, source, ".", "video", "video"))
+        .transpose()?;
     let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
     let meta = json!({
         "id": entry_id,
@@ -935,8 +1124,8 @@ fn ingest_note_entry(
         "tags": merged_tags,
         "images": images,
         "cover": cover_url,
-        "videoUrl": normalize_string(request.assets.video_url.clone()),
-        "video": normalize_string(request.assets.video_url.clone()),
+        "videoUrl": video_source,
+        "video": video_asset,
         "htmlFile": if normalize_string(request.content.html.clone()).is_some() { Some("content.html") } else { None },
         "transcriptFile": if normalize_string(request.content.transcript.clone()).is_some() { Some("transcript.md") } else { None },
         "transcriptionStatus": if normalize_string(request.content.transcript.clone()).is_some() { Some("completed") } else { None },
