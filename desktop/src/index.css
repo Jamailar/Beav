@@ -128,6 +128,22 @@ select {
   cursor: text;
 }
 
+.manuscript-editor-shell .cm-editor,
+.manuscript-editor-shell .cm-scroller,
+.manuscript-editor-shell .cm-content,
+.manuscript-editor-shell .cm-gutters {
+  background-color: rgb(var(--color-surface-primary) / 1) !important;
+  color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+.manuscript-editor-shell .cm-activeLine {
+  background-color: rgb(var(--color-surface-secondary) / 0.55) !important;
+}
+
+.manuscript-editor-shell .cm-placeholder {
+  color: rgb(var(--color-text-tertiary) / 1) !important;
+}
+
 .app-sidebar-shell {
   background:
     linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.96) 100%);

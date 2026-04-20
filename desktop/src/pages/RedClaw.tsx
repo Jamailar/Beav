@@ -1018,6 +1018,7 @@ export function RedClaw({
                                 fixedSessionContextIndicatorMode={sidebarCollapsed ? 'corner-ring' : 'none'}
                                 shortcuts={REDCLAW_SHORTCUTS}
                                 welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
+                                embeddedTheme="dark"
                                 welcomeTitle="RedClaw 自媒体AI工作台"
                                 welcomeSubtitle=""
                                 welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}

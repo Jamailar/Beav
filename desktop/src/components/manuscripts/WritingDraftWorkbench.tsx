@@ -253,13 +253,13 @@ function RichpostThemePreviewFrame({
         active ? 'ring-1 ring-accent-primary/35' : ''
       )}
     >
-      <div className="pointer-events-none aspect-[3/4] w-full bg-white">
+      <div className="pointer-events-none aspect-[3/4] w-full bg-surface-elevated">
         {html ? (
           <iframe
             title={PRESET_PREVIEW_TITLE}
             srcDoc={html}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="pointer-events-none h-full w-full border-0 bg-white"
+            className="pointer-events-none h-full w-full border-0 bg-surface-elevated"
             tabIndex={-1}
           />
         ) : (
@@ -616,7 +616,7 @@ function RichpostZoneFrameOverlay({
           className="flex h-full w-full cursor-move items-center justify-center px-3 text-center"
           onPointerDown={(event) => beginDrag('move', event)}
         >
-          <div className="text-[22px] font-black tracking-[0.22em] text-black/28">文字区域</div>
+          <div className="text-[22px] font-black tracking-[0.22em] text-text-secondary/70">文字区域</div>
         </div>
         {([
           ['nw', 'cursor-nwse-resize', '-left-2 -top-2'],
@@ -724,23 +724,28 @@ function RichpostThemeEditorOverlay({
   const typographyEditor = richpostTypographyPreviewEditorState(themeDraft, selectedTypographyTarget);
 
   return (
-    <div className="fixed inset-0 z-[120] isolate overflow-hidden bg-[#ece6df] text-text-primary">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,#fbefdf_0%,#f4ede5_34%,#efebe5_68%,#e8e5e1_100%)]" />
-      <div className="absolute inset-0 bg-[linear-gradient(135deg,#fffaf4_0%,#f4ede5_42%,#ece6df_100%)] opacity-90" />
+    <div className="fixed inset-0 z-[120] isolate overflow-hidden bg-background text-text-primary">
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(circle at top left, rgb(var(--color-accent-primary) / 0.14) 0%, transparent 36%), linear-gradient(180deg, rgb(var(--color-background) / 1) 0%, rgb(var(--color-surface-secondary) / 0.78) 100%)',
+        }}
+      />
       <div className="relative flex h-full min-h-0 flex-col">
-        <header className="flex items-center justify-between border-b border-black/10 bg-white/72 px-6 py-4 backdrop-blur-xl">
+        <header className="flex items-center justify-between border-b border-border/70 bg-surface-primary/90 px-6 py-4 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-black/10 bg-white/92 text-black/70 transition hover:bg-white hover:text-black"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-elevated text-text-secondary transition hover:bg-surface-secondary hover:text-text-primary"
               aria-label="返回主题抽屉"
               title="返回"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-black/45">图文主题编辑</div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">图文主题编辑</div>
               {isEditingThemeLabel ? (
                 <input
                   value={themeLabelInput}
@@ -758,14 +763,14 @@ function RichpostThemeEditorOverlay({
                   }}
                   autoFocus
                   maxLength={32}
-                  className="mt-1 h-9 min-w-[240px] rounded-xl border border-black/12 bg-white px-3 text-[20px] font-semibold text-black shadow-sm outline-none ring-0 placeholder:text-black/28 focus:border-black/22"
+                  className="mt-1 h-9 min-w-[240px] rounded-xl border border-border bg-surface-elevated px-3 text-[20px] font-semibold text-text-primary shadow-sm outline-none ring-0 placeholder:text-text-tertiary focus:border-accent-primary/35"
                   placeholder="输入主题名称"
                 />
               ) : (
                 <button
                   type="button"
                   onClick={() => setIsEditingThemeLabel(true)}
-                  className="mt-1 inline-flex items-center rounded-xl px-2 py-1 -ml-2 text-left text-[20px] font-semibold text-black transition hover:bg-black/5"
+                  className="mt-1 -ml-2 inline-flex items-center rounded-xl px-2 py-1 text-left text-[20px] font-semibold text-text-primary transition hover:bg-surface-secondary/70"
                   title="点击重命名主题"
                 >
                   {themeDraft.label || DEFAULT_RICHPOST_THEME_DRAFT.label}
@@ -774,12 +779,12 @@ function RichpostThemeEditorOverlay({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="rounded-full border border-black/10 bg-white/92 px-3 py-1.5 text-[12px] font-medium text-black/65">编辑首页、内容页和尾页风格</div>
+            <div className="rounded-full border border-border bg-surface-elevated px-3 py-1.5 text-[12px] font-medium text-text-secondary">编辑首页、内容页和尾页风格</div>
             <button
               type="button"
               onClick={onSave}
               disabled={isSaving || !canSave}
-              className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-black/88 disabled:cursor-not-allowed disabled:bg-black/28 disabled:text-white/72"
+              className="inline-flex items-center gap-2 rounded-full border border-transparent bg-accent-primary px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
             >
               {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               {isSaving ? '保存中' : '保存主题'}
@@ -796,16 +801,15 @@ function RichpostThemeEditorOverlay({
           <section
             className={clsx(
               'min-h-0 overflow-y-auto px-6 py-6',
-              SHOW_RICHPOST_THEME_EDITOR_CHAT && 'border-r border-black/6'
+              SHOW_RICHPOST_THEME_EDITOR_CHAT && 'border-r border-border/70'
             )}
           >
             <div className="mx-auto max-w-[1100px]">
               <div
-                className="mb-5 max-w-[720px] rounded-[22px] px-5 py-5"
+                className="mb-5 max-w-[720px] rounded-[22px] border border-border/70 px-5 py-5 shadow-[var(--ui-shadow-1)]"
                 style={{
-                  background: themeDraft.pageBg || '#ffffff',
+                  background: themeDraft.pageBg || 'rgb(var(--color-surface-elevated) / 1)',
                   color: themeDraft.bodyColor || themeDraft.textColor || '#111111',
-                  boxShadow: '0 12px 30px rgba(15,23,42,0.06)',
                 }}
               >
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start">
@@ -822,7 +826,7 @@ function RichpostThemeEditorOverlay({
                     }}
                     className={clsx(
                       'cursor-pointer rounded-xl px-2 py-1 text-[28px] font-black leading-[1.08] outline-none transition',
-                      selectedTypographyTarget === 'heading-primary' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                      selectedTypographyTarget === 'heading-primary' ? 'bg-surface-secondary/80 ring-1 ring-accent-primary/25' : 'hover:bg-surface-secondary/55'
                     )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
@@ -843,7 +847,7 @@ function RichpostThemeEditorOverlay({
                     }}
                     className={clsx(
                       'cursor-pointer rounded-xl px-2 py-1 text-[21px] font-bold leading-[1.16] outline-none transition',
-                      selectedTypographyTarget === 'heading-accent' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                      selectedTypographyTarget === 'heading-accent' ? 'bg-surface-secondary/80 ring-1 ring-accent-primary/25' : 'hover:bg-surface-secondary/55'
                     )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
@@ -864,7 +868,7 @@ function RichpostThemeEditorOverlay({
                     }}
                     className={clsx(
                       'cursor-pointer rounded-xl px-2 py-1 text-[16px] font-semibold leading-[1.22] outline-none transition',
-                      selectedTypographyTarget === 'heading-muted' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'hover:bg-black/[0.03]'
+                      selectedTypographyTarget === 'heading-muted' ? 'bg-surface-secondary/80 ring-1 ring-accent-primary/25' : 'hover:bg-surface-secondary/55'
                     )}
                     style={{
                       fontFamily: themeDraft.headingFont || 'inherit',
@@ -885,7 +889,7 @@ function RichpostThemeEditorOverlay({
                     }}
                     className={clsx(
                       'space-y-2 rounded-xl px-2 py-2 text-[15px] leading-[1.85] outline-none transition',
-                      selectedTypographyTarget === 'body-primary' ? 'bg-black/[0.05] ring-1 ring-black/10' : 'cursor-pointer hover:bg-black/[0.03]'
+                      selectedTypographyTarget === 'body-primary' ? 'bg-surface-secondary/80 ring-1 ring-accent-primary/25' : 'cursor-pointer hover:bg-surface-secondary/55'
                     )}
                     style={{
                       fontFamily: themeDraft.bodyFont || 'inherit',
@@ -911,7 +915,7 @@ function RichpostThemeEditorOverlay({
                         }}
                         className={clsx(
                           'rounded px-1 outline-none transition',
-                          selectedTypographyTarget === 'body-accent' ? 'bg-black/[0.08] ring-1 ring-black/10' : 'hover:bg-black/[0.04]'
+                          selectedTypographyTarget === 'body-accent' ? 'bg-surface-tertiary/80 ring-1 ring-accent-primary/25' : 'hover:bg-surface-secondary/70'
                         )}
                         style={{
                           color: themeDraft.accentColor || themeDraft.textColor || '#111111',
@@ -924,11 +928,11 @@ function RichpostThemeEditorOverlay({
                     </p>
                   </div>
                   </div>
-                  <div className="w-full rounded-[18px] border border-black/8 bg-white/94 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl lg:sticky lg:top-0">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/42">文字样式</div>
-                    <div className="mt-1 text-[13px] font-semibold text-black">{typographyEditor.label}</div>
+                  <div className="w-full rounded-[18px] border border-border bg-surface-elevated/95 p-3 shadow-[var(--ui-shadow-1)] backdrop-blur-xl lg:sticky lg:top-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">文字样式</div>
+                    <div className="mt-1 text-[13px] font-semibold text-text-primary">{typographyEditor.label}</div>
                     <label className="mt-3 block">
-                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-black/42">颜色</div>
+                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-tertiary">颜色</div>
                       <div className="flex items-center gap-2">
                         <input
                           type="color"
@@ -940,15 +944,15 @@ function RichpostThemeEditorOverlay({
                               { color: event.target.value }
                             ));
                           }}
-                          className="h-9 w-10 cursor-pointer rounded border border-black/10 bg-transparent p-0"
+                          className="h-9 w-10 cursor-pointer rounded border border-border bg-transparent p-0"
                         />
-                        <div className="rounded-lg border border-black/8 bg-black/[0.03] px-2.5 py-1.5 text-[11px] font-medium text-black/62">
+                        <div className="rounded-lg border border-border bg-surface-secondary/80 px-2.5 py-1.5 text-[11px] font-medium text-text-secondary">
                           {typographyEditor.color}
                         </div>
                       </div>
                     </label>
                     <label className="mt-3 block">
-                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-black/42">字体</div>
+                      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-tertiary">字体</div>
                       <select
                         value={typographyEditor.fontFamily}
                         onChange={(event) => {
@@ -958,7 +962,7 @@ function RichpostThemeEditorOverlay({
                             { fontFamily: event.target.value }
                           ));
                         }}
-                        className="h-9 w-full rounded-xl border border-black/10 bg-white px-3 text-[12px] text-black outline-none focus:border-black/25"
+                        className="h-9 w-full rounded-xl border border-border bg-surface-primary px-3 text-[12px] text-text-primary outline-none focus:border-accent-primary/35"
                       >
                         {systemFontOptions.map((font) => (
                           <option key={font} value={font}>
@@ -994,8 +998,8 @@ function RichpostThemeEditorOverlay({
                         }}
                       />
                       {isPreviewLoading ? (
-                        <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-white/45 backdrop-blur-[2px]">
-                          <div className="inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/88 px-3 py-1.5 text-[12px] text-text-secondary shadow-sm">
+                        <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-background/55 backdrop-blur-[2px]">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-elevated/92 px-3 py-1.5 text-[12px] text-text-secondary shadow-sm">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             更新中
                           </div>
@@ -1014,7 +1018,7 @@ function RichpostThemeEditorOverlay({
                       <button
                         type="button"
                         onClick={() => onUploadBackground(preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body')}
-                        className="inline-flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-text-primary transition hover:bg-white"
+                        className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-elevated px-3 py-1.5 text-[12px] font-medium text-text-primary transition hover:bg-surface-secondary"
                       >
                         {uploadingBackgroundRole === (preview.id === 'cover' ? 'cover' : preview.id === 'ending' ? 'ending' : 'body') ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1031,9 +1035,9 @@ function RichpostThemeEditorOverlay({
           </section>
 
           {SHOW_RICHPOST_THEME_EDITOR_CHAT ? (
-            <aside className="min-h-0 border-l border-black/6 bg-white/72 backdrop-blur-xl">
+            <aside className="min-h-0 border-l border-border/70 bg-surface-primary/90 backdrop-blur-xl">
               <div className="flex h-full min-h-0 flex-col">
-                <div className="border-b border-black/6 px-5 py-4">
+                <div className="border-b border-border/70 px-5 py-4">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">对话修改</div>
                   <div className="mt-2 text-[18px] font-semibold text-text-primary">直接描述你想要的主题风格</div>
                 </div>
@@ -1053,6 +1057,7 @@ function RichpostThemeEditorOverlay({
                         messageWorkflowPlacement="bottom"
                         messageWorkflowVariant="compact"
                         messageWorkflowEmphasis="default"
+                        embeddedTheme="dark"
                         welcomeTitle="图文排版"
                         welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
                         shortcuts={shortcuts}
@@ -1233,12 +1238,12 @@ function RichPostPreview({
                       title={page.title || page.label}
                       src={frameUrl}
                       sandbox={RICHPOST_PREVIEW_SANDBOX}
-                      className="block border border-border bg-white"
+                      className="block border border-border bg-surface-elevated"
                       style={{ width: previewWidth, height: previewHeight }}
                     />
                   ) : (
                     <div
-                      className="flex items-center justify-center border border-dashed border-border bg-white text-sm text-text-tertiary"
+                      className="flex items-center justify-center border border-dashed border-border bg-surface-elevated text-sm text-text-tertiary"
                       style={{ width: previewWidth, height: previewHeight }}
                     >
                       页面尚未渲染
@@ -1261,7 +1266,7 @@ function RichPostPreview({
             title="图文预览"
             src={previewFrameUrl}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="block border border-border bg-white"
+            className="block border border-border bg-surface-elevated"
             style={{ width: previewWidth, height: previewHeight }}
           />
         ) : !hasRenderedPages && previewHtml?.trim() ? (
@@ -1269,7 +1274,7 @@ function RichPostPreview({
             title="图文预览"
             srcDoc={previewHtml}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="block border border-border bg-white"
+            className="block border border-border bg-surface-elevated"
             style={{ width: previewWidth, height: previewHeight }}
           />
         ) : !hasRenderedPages ? (
@@ -1341,7 +1346,7 @@ function LongformPreview({
             title={`${previewLabel || '长文'}预览`}
             src={previewFrameUrl}
             sandbox="allow-popups allow-popups-to-escape-sandbox"
-            className="w-full rounded-2xl border border-border bg-white"
+            className="w-full rounded-2xl border border-border bg-surface-elevated"
             style={{ height: iframeHeight }}
           />
         ) : previewHtml?.trim() ? (
@@ -1349,7 +1354,7 @@ function LongformPreview({
             title={`${previewLabel || '长文'}预览`}
             srcDoc={previewHtml}
             sandbox="allow-popups allow-popups-to-escape-sandbox"
-            className="w-full rounded-2xl border border-border bg-white"
+            className="w-full rounded-2xl border border-border bg-surface-elevated"
             style={{ height: iframeHeight }}
           />
         ) : (
@@ -1406,7 +1411,7 @@ function ManuscriptEditor({
         <CodeMirrorEditor
           value={editorBody}
           onChange={onEditorBodyChange}
-          className="h-full min-h-0 bg-transparent"
+          className="manuscript-editor-shell h-full min-h-0 bg-transparent"
         />
       </div>
     </div>
@@ -2360,7 +2365,7 @@ export function WritingDraftWorkbench({
             {richpostThemeContextMenu.visible && richpostThemeContextMenu.theme ? (
               <div
                 ref={richpostThemeContextMenuRef}
-                className="fixed z-[120] min-w-[172px] overflow-hidden rounded-2xl border border-border bg-white/96 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                className="fixed z-[120] min-w-[172px] overflow-hidden rounded-2xl border border-border bg-surface-elevated/96 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
                 style={{
                   left: Math.min(richpostThemeContextMenu.x, window.innerWidth - 188),
                   top: Math.min(richpostThemeContextMenu.y, window.innerHeight - 160),
@@ -2476,9 +2481,9 @@ export function WritingDraftWorkbench({
                           <div className="mt-1.5 text-xs leading-5 text-text-tertiary">{preset.description}</div>
                         ) : null}
                         <div className="mt-3 flex items-center gap-2">
-                          <span className="h-6 w-6 rounded-full border border-black/5" style={{ background: preset.surfaceColor || '#ffffff' }} />
-                          <span className="h-6 w-6 rounded-full border border-black/5" style={{ background: preset.accentColor || '#111111' }} />
-                          <span className="h-6 w-6 rounded-full border border-black/5" style={{ background: preset.textColor || '#111111' }} />
+                          <span className="h-6 w-6 rounded-full border border-border/70" style={{ background: preset.surfaceColor || '#ffffff' }} />
+                          <span className="h-6 w-6 rounded-full border border-border/70" style={{ background: preset.accentColor || '#111111' }} />
+                          <span className="h-6 w-6 rounded-full border border-border/70" style={{ background: preset.textColor || '#111111' }} />
                         </div>
                       </button>
                     );
@@ -2737,6 +2742,7 @@ export function WritingDraftWorkbench({
                   messageWorkflowPlacement="bottom"
                   messageWorkflowVariant="compact"
                   messageWorkflowEmphasis="default"
+                  embeddedTheme="dark"
                   welcomeTitle={aiWorkspaceMode.label}
                   welcomeSubtitle={isRichPost ? '围绕当前图文稿继续改标题、压缩段落、强化发布感。' : '围绕当前长文继续改结构、润色正文、生成发布版本。'}
                   shortcuts={shortcuts}

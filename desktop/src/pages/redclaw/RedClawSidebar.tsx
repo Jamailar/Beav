@@ -51,8 +51,8 @@ export function RedClawSidebar({
     return (
         <aside
             className={clsx(
-                'relative shrink-0 bg-white/85 backdrop-blur-[40px] overflow-hidden',
-                collapsed ? 'border-l-0' : 'border-l border-black/[0.04]',
+                'relative shrink-0 overflow-hidden bg-surface-primary/96 backdrop-blur-[40px]',
+                collapsed ? 'border-l-0' : 'border-l border-border/80',
                 !isSidebarResizing && 'transition-[width] duration-200 ease-out'
             )}
             style={{ width: collapsed ? 0 : sidebarWidth }}
@@ -72,7 +72,7 @@ export function RedClawSidebar({
                             <h2 className="text-[15px] font-extrabold tracking-tight text-text-primary">能力面板</h2>
                             <button
                                 onClick={onCollapse}
-                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary active:scale-90"
+                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-secondary/80 text-text-tertiary transition-all hover:bg-surface-tertiary hover:text-text-primary active:scale-90"
                                 title="关闭"
                             >
                                 <X className="w-3.5 h-3.5" />
@@ -88,7 +88,7 @@ export function RedClawSidebar({
 
                     <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 custom-scrollbar space-y-4">
                         {/* 快速安装 - 精密卡片 */}
-                        <div className="rounded-xl border border-black/[0.04] bg-white/40 p-3 space-y-2 text-text-primary">
+                        <div className="space-y-2 rounded-xl border border-border/70 bg-surface-elevated/80 p-3 text-text-primary">
                             <div className="text-[10px] text-text-tertiary font-bold uppercase tracking-wider">安装新技能</div>
                             <div className="relative">
                                 <input
@@ -97,13 +97,13 @@ export function RedClawSidebar({
                                     onChange={(event) => onInstallSourceChange(event.target.value)}
                                     onKeyDown={(event) => (event.key === 'Enter') && void onInstallSkill()}
                                     placeholder="输入技能标识或链接..."
-                                    className="w-full pl-3 pr-3 py-2 rounded-lg border border-black/[0.06] bg-white/60 text-[11px] font-medium text-text-primary placeholder:text-text-tertiary/60 focus:outline-none focus:ring-1 focus:ring-accent-primary/30 transition-all"
+                                    className="w-full rounded-lg border border-border bg-surface-primary px-3 py-2 text-[11px] font-medium text-text-primary placeholder:text-text-tertiary/60 focus:outline-none focus:ring-1 focus:ring-accent-primary/30 transition-all"
                                 />
                             </div>
                             <button
                                 onClick={() => void onInstallSkill()}
                                 disabled={isInstallingSkill || !installSource.trim()}
-                                className="w-full px-3 py-2 rounded-lg text-[11px] font-bold bg-text-primary text-white hover:bg-text-primary/90 transition-all active:scale-[0.98] disabled:opacity-30 flex items-center justify-center gap-2"
+                                className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent-primary px-3 py-2 text-[11px] font-bold text-white transition-all hover:bg-accent-hover active:scale-[0.98] disabled:opacity-30"
                             >
                                 {isInstallingSkill ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                                 <span>{isInstallingSkill ? '正在安装...' : '安装技能'}</span>
@@ -120,7 +120,7 @@ export function RedClawSidebar({
                             </div>
 
                             {skills.length === 0 && !isSkillsLoading ? (
-                                <div className="text-[11px] text-text-tertiary/60 font-medium border border-dashed border-black/[0.08] rounded-xl p-6 text-center">
+                                <div className="rounded-xl border border-dashed border-border/80 p-6 text-center text-[11px] font-medium text-text-tertiary/60">
                                     当前空间尚未安装技能
                                 </div>
                             ) : (
@@ -130,8 +130,8 @@ export function RedClawSidebar({
                                         className={clsx(
                                             "rounded-xl border p-3 transition-all duration-200",
                                             skill.disabled 
-                                                ? "border-black/[0.03] bg-white/30 grayscale-[0.2] opacity-90" 
-                                                : "border-black/[0.04] bg-white shadow-sm ring-1 ring-black/[0.01]"
+                                                ? "border-border/60 bg-surface-secondary/70 grayscale-[0.2] opacity-90" 
+                                                : "border-border/70 bg-surface-elevated shadow-sm ring-1 ring-border/40"
                                         )}
                                     >
                                         <div className="flex items-start justify-between gap-3">
@@ -151,8 +151,8 @@ export function RedClawSidebar({
                                                 className={clsx(
                                                     'px-2 py-1 rounded-md text-[9px] font-bold border transition-all shrink-0 active:scale-90',
                                                     skill.disabled
-                                                        ? 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
-                                                        : 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
+                                                        ? 'border-rose-400/25 bg-rose-500/10 text-rose-300 hover:bg-rose-500/15'
+                                                        : 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15'
                                                 )}
                                             >
                                                 {skill.disabled ? '已禁用' : '已启用'}

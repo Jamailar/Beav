@@ -34,10 +34,10 @@ export function RedClawHistoryDrawer({
                     type="button"
                     onClick={onToggleOpen}
                     className={clsx(
-                        'flex items-center gap-2 rounded-xl border border-white/40 px-3.5 py-1.5 text-[12px] font-bold shadow-sm backdrop-blur-xl transition-all active:scale-95',
+                        'flex items-center gap-2 rounded-xl border px-3.5 py-1.5 text-[12px] font-bold shadow-sm backdrop-blur-xl transition-all active:scale-95',
                         open
-                            ? 'bg-accent-primary text-white border-transparent'
-                            : 'bg-white/70 text-text-secondary hover:bg-white/90 hover:text-text-primary'
+                            ? 'border-transparent bg-accent-primary text-white'
+                            : 'border-border/80 bg-surface-elevated/92 text-text-secondary hover:bg-surface-primary hover:text-text-primary'
                     )}
                     title="查看历史对话"
                     aria-label="查看历史对话"
@@ -51,12 +51,12 @@ export function RedClawHistoryDrawer({
                 <div className="absolute inset-0 z-40">
                     <button
                         type="button"
-                        className="absolute inset-0 bg-black/[0.02] backdrop-blur-[2px] transition-opacity"
+                        className="absolute inset-0 bg-black/25 backdrop-blur-[2px] transition-opacity"
                         aria-label="关闭历史对话抽屉"
                         onClick={onClose}
                     />
                     
-                    <div className="absolute left-4 top-4 bottom-4 w-[320px] max-w-[calc(100%-2rem)] rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.12)] backdrop-blur-[40px] overflow-hidden flex flex-col animate-slide-in-left-refined">
+                    <div className="absolute left-4 top-4 bottom-4 flex w-[320px] max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/96 shadow-[var(--ui-shadow-2)] backdrop-blur-[40px] animate-slide-in-left-refined">
                         <div className="relative flex h-full flex-col">
                             {/* Header - 移除空间名，更紧凑 */}
                             <div className="px-5 pt-5 pb-2">
@@ -67,7 +67,7 @@ export function RedClawHistoryDrawer({
                                             type="button"
                                             onClick={() => void onCreateSession()}
                                             disabled={historyLoading}
-                                            className="flex h-7 items-center gap-1 rounded-lg bg-text-primary px-2.5 text-[11px] font-bold text-white transition-all hover:bg-text-primary/90 active:scale-95 disabled:opacity-40"
+                                            className="flex h-7 items-center gap-1 rounded-lg bg-accent-primary px-2.5 text-[11px] font-bold text-white transition-all hover:bg-accent-hover active:scale-95 disabled:opacity-40"
                                         >
                                             <Plus className="w-3.5 h-3.5" />
                                             新会话
@@ -75,7 +75,7 @@ export function RedClawHistoryDrawer({
                                         <button
                                             type="button"
                                             onClick={onClose}
-                                            className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-text-tertiary transition-all hover:bg-black/[0.08] hover:text-text-primary"
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg bg-surface-secondary/80 text-text-tertiary transition-all hover:bg-surface-tertiary hover:text-text-primary"
                                         >
                                             <X className="w-3.5 h-3.5" />
                                         </button>
@@ -112,8 +112,8 @@ export function RedClawHistoryDrawer({
                                                     className={clsx(
                                                         'group relative w-full rounded-lg px-3 py-2.5 text-left transition-all duration-200 active:scale-[0.98]',
                                                         isActive
-                                                            ? 'bg-white shadow-sm ring-1 ring-black/[0.03]'
-                                                            : 'hover:bg-white/40'
+                                                            ? 'bg-surface-elevated shadow-sm ring-1 ring-accent-primary/20'
+                                                            : 'hover:bg-surface-secondary/70'
                                                     )}
                                                 >
                                                     {isActive && (
@@ -149,7 +149,7 @@ export function RedClawHistoryDrawer({
                                                                 e.stopPropagation();
                                                                 void onDeleteSession(session.id);
                                                             }}
-                                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                                                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-all hover:bg-red-500/12 hover:text-red-400 group-hover:opacity-100"
                                                             title="移除"
                                                         >
                                                             <Trash2 className="w-3 h-3" />
@@ -163,7 +163,7 @@ export function RedClawHistoryDrawer({
                             </div>
                             
                             {/* Footer hint */}
-                            <div className="px-5 py-3 border-t border-black/[0.02]">
+                            <div className="border-t border-border/70 px-5 py-3">
                                 <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
                                     RedBox Engine
                                 </p>
@@ -175,5 +175,4 @@ export function RedClawHistoryDrawer({
         </>
     );
 }
-
 

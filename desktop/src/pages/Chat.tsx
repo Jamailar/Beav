@@ -2336,7 +2336,10 @@ export function Chat({
           )}>
             {action.icon || <Sparkles className="w-4 h-4" />}
           </div>
-          <span className="opacity-0 max-w-0 overflow-hidden text-[13px] font-bold text-text-secondary group-hover:opacity-100 group-hover:max-w-[150px] transition-all duration-500 ease-in-out">
+          <span className={clsx(
+            'opacity-0 max-w-0 overflow-hidden text-[13px] font-bold group-hover:opacity-100 group-hover:max-w-[150px] transition-all duration-500 ease-in-out',
+            darkEmbedded ? 'text-white/72' : 'text-text-secondary',
+          )}>
             {action.label}
           </span>
         </button>
