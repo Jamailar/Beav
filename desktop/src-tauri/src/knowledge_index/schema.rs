@@ -3,7 +3,7 @@ use std::fs;
 use rusqlite::Connection;
 use tauri::State;
 
-use crate::{AppState, knowledge_index::catalog_db_path};
+use crate::{knowledge_index::catalog_db_path, AppState};
 
 pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), String> {
     let db_path = catalog_db_path(state)?;

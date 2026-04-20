@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, AlertCircle, ChevronDown, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, AlertCircle, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -160,6 +160,52 @@ type AssistantDaemonStatus = {
         availableAccountIds: string[];
     };
 };
+
+const copyTextWithClipboard = async (text: string): Promise<boolean> => {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+};
+
+function DiagnosticCopyButton({ text, label = '复制' }: { text: string; label?: string }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        if (!String(text || '').trim()) return;
+        const ok = await copyTextWithClipboard(text);
+        if (!ok) return;
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1400);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={() => void handleCopy()}
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-surface-primary/92 px-2 py-1 text-[11px] text-text-tertiary shadow-sm transition-colors hover:border-border hover:bg-surface-primary hover:text-text-primary"
+            title={label}
+        >
+            {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied ? '已复制' : label}</span>
+        </button>
+    );
+}
 
 type AssistantDaemonDraft = {
     enabled: boolean;
@@ -1658,6 +1704,12 @@ interface ToolsSettingsSectionProps {
     runtimeDiagnosticsSummary: RuntimeDiagnosticsSummary | null;
     runtimeSessions: Array<{
         id: string;
+        runtimeMode?: string;
+        contextBinding?: {
+            contextType?: string;
+            contextId?: string;
+            isContextBound?: boolean;
+        } | null;
         transcriptCount: number;
         checkpointCount: number;
         chatSession?: { id: string; title?: string; updatedAt?: string } | null;
@@ -1788,6 +1840,7 @@ export function ToolsSettingsSection({
     handleCancelRuntimeTask,
     handleCancelBackgroundTask,
 }: ToolsSettingsSectionProps) {
+    const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -1795,6 +1848,49 @@ export function ToolsSettingsSection({
             ) as Record<string, McpSessionState | null>,
         [mcpRuntimeItems],
     );
+
+    const runtimeSessionSourceLabel = (session: {
+        id: string;
+        runtimeMode?: string;
+        contextBinding?: { contextType?: string | null } | null;
+    }) => {
+        const runtimeMode = String(session.runtimeMode || '').trim();
+        const contextType = String(session.contextBinding?.contextType || '').trim();
+        if (runtimeMode === 'wander' || contextType === 'wander' || session.id.startsWith('session_wander_')) {
+            return 'wander';
+        }
+        if (runtimeMode === 'chatroom' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
+            return 'chatroom';
+        }
+        if (runtimeMode === 'video-editor') {
+            return 'video';
+        }
+        if (runtimeMode === 'audio-editor') {
+            return 'audio';
+        }
+        if (contextType === 'file' || contextType === 'theme' || contextType === 'project') {
+            return contextType;
+        }
+        return runtimeMode || contextType || 'chat';
+    };
+
+    const filteredRuntimeSessions = useMemo(() => {
+        const keyword = runtimeSessionQuery.trim().toLowerCase();
+        if (!keyword) return runtimeSessions;
+        return runtimeSessions.filter((session) => {
+            const haystack = [
+                session.id,
+                session.chatSession?.title,
+                session.runtimeMode,
+                session.contextBinding?.contextType,
+                runtimeSessionSourceLabel(session),
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+            return haystack.includes(keyword);
+        });
+    }, [runtimeSessionQuery, runtimeSessions]);
 
     const formatMcpTime = (value?: number) => {
         if (!value) return '未使用';
@@ -1820,6 +1916,85 @@ export function ToolsSettingsSection({
     const selectedRuntimeTask = runtimeTasks.find((task) => task.id === selectedRuntimeTaskId) || null;
     const selectedRuntimeSession = runtimeSessions.find((session) => session.id === selectedRuntimeSessionId) || null;
     const selectedBackgroundTask = backgroundTasks.find((task) => task.id === selectedBackgroundTaskId) || null;
+
+    const runtimeSessionMetaText = useMemo(() => {
+        if (!selectedRuntimeSession) return '';
+        return [
+            `session: ${selectedRuntimeSession.id}`,
+            `title: ${selectedRuntimeSession.chatSession?.title || selectedRuntimeSession.id}`,
+            `source: ${runtimeSessionSourceLabel(selectedRuntimeSession)}`,
+            selectedRuntimeSession.runtimeMode ? `runtimeMode: ${selectedRuntimeSession.runtimeMode}` : '',
+            selectedRuntimeSession.contextBinding?.contextType ? `contextType: ${selectedRuntimeSession.contextBinding.contextType}` : '',
+            selectedRuntimeSession.contextBinding?.contextId ? `contextId: ${selectedRuntimeSession.contextBinding.contextId}` : '',
+            selectedRuntimeSession.chatSession?.updatedAt ? `updatedAt: ${new Date(selectedRuntimeSession.chatSession.updatedAt).toLocaleString()}` : '',
+            `transcriptCount: ${selectedRuntimeSession.transcriptCount}`,
+            `checkpointCount: ${selectedRuntimeSession.checkpointCount}`,
+            `toolResultCount: ${runtimeSessionToolResults.length}`,
+        ].filter(Boolean).join('\n');
+    }, [runtimeSessionToolResults.length, selectedRuntimeSession]);
+
+    const runtimeSessionCheckpointsText = useMemo(() => {
+        if (runtimeSessionCheckpoints.length === 0) return '暂无 checkpoint。';
+        return runtimeSessionCheckpoints.map((checkpoint, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(checkpoint.createdAt).toLocaleString()}`,
+            `type: ${checkpoint.checkpointType}`,
+            `summary: ${checkpoint.summary || '(empty)'}`,
+            checkpoint.payload ? `payload:\n${JSON.stringify(checkpoint.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionCheckpoints]);
+
+    const runtimeSessionTranscriptText = useMemo(() => {
+        if (runtimeSessionTranscript.length === 0) return '暂无 transcript。';
+        return runtimeSessionTranscript.map((item, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(item.createdAt).toLocaleString()}`,
+            `recordType: ${item.recordType}`,
+            `role: ${item.role}`,
+            `content:\n${item.content || '(empty)'}`,
+            item.payload ? `payload:\n${JSON.stringify(item.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionTranscript]);
+
+    const runtimeSessionToolResultsText = useMemo(() => {
+        if (runtimeSessionToolResults.length === 0) return '暂无完整 tool result 记录。';
+        return runtimeSessionToolResults.map((item, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(item.createdAt).toLocaleString()}`,
+            `tool: ${item.toolName}`,
+            `status: ${item.success ? 'success' : 'error'}`,
+            `callId: ${item.callId}`,
+            item.command ? `command: ${item.command}` : '',
+            item.truncated ? `budget: ${item.originalChars ?? 0} -> ${item.promptChars ?? 0}` : 'budget: full',
+            item.promptText ? `promptText:\n${item.promptText}` : '',
+            item.summaryText ? `summaryText:\n${item.summaryText}` : '',
+            item.resultText ? `resultText:\n${item.resultText}` : '',
+            item.payload ? `payload:\n${JSON.stringify(item.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionToolResults]);
+
+    const runtimeSessionFullLogText = useMemo(() => {
+        if (!selectedRuntimeSession) return '';
+        return [
+            '[Session]',
+            runtimeSessionMetaText,
+            '',
+            '[Checkpoints]',
+            runtimeSessionCheckpointsText,
+            '',
+            '[Transcript]',
+            runtimeSessionTranscriptText,
+            '',
+            '[Tool Results]',
+            runtimeSessionToolResultsText,
+        ].join('\n');
+    }, [
+        runtimeSessionCheckpointsText,
+        runtimeSessionMetaText,
+        runtimeSessionToolResultsText,
+        runtimeSessionTranscriptText,
+        selectedRuntimeSession,
+    ]);
 
     const availabilityLabel = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
@@ -2438,7 +2613,7 @@ export function ToolsSettingsSection({
                             </button>
                         </div>
 
-                        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+                        <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-4">
                             <div className="space-y-4">
                                 <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
                                     <div className="text-xs font-medium text-text-primary">角色注册表</div>
@@ -2910,17 +3085,24 @@ export function ToolsSettingsSection({
                                         <div className="text-xs font-medium text-text-primary">运行时会话</div>
                                         <span className="text-[11px] text-text-tertiary">共 {runtimeSessions.length} 条</span>
                                     </div>
-                                    {runtimeSessions.length === 0 ? (
+                                    <input
+                                        type="text"
+                                        value={runtimeSessionQuery}
+                                        onChange={(event) => setRuntimeSessionQuery(event.target.value)}
+                                        placeholder="搜索 session / wander / chatroom / video..."
+                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                    />
+                                    {filteredRuntimeSessions.length === 0 ? (
                                         <div className="text-[11px] text-text-tertiary">暂无 runtime session。</div>
                                     ) : (
                                         <div className="space-y-2 max-h-80 overflow-auto pr-1">
-                                            {runtimeSessions.map((session) => (
+                                            {filteredRuntimeSessions.map((session) => (
                                                 <button
                                                     key={session.id}
                                                     type="button"
                                                     onClick={() => setSelectedRuntimeSessionId(session.id)}
                                                     className={clsx(
-                                                        'w-full text-left rounded border p-3 transition-colors',
+                                                        'w-full text-left rounded border px-2.5 py-2 transition-colors',
                                                         selectedRuntimeSessionId === session.id
                                                             ? 'border-accent-primary bg-accent-primary/5'
                                                             : 'border-border bg-surface-secondary/20 hover:bg-surface-secondary/30'
@@ -2929,10 +3111,23 @@ export function ToolsSettingsSection({
                                                     <div className="text-xs font-medium text-text-primary truncate">
                                                         {session.chatSession?.title || session.id}
                                                     </div>
-                                                    <div className="text-[11px] text-text-tertiary mt-1 font-mono truncate">
+                                                    <div className="text-[10px] text-text-tertiary mt-1 font-mono truncate">
                                                         {session.id}
                                                     </div>
-                                                    <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-text-tertiary">
+                                                    <div className="flex flex-wrap gap-1.5 mt-2 text-[10px] text-text-tertiary">
+                                                        <span className="px-1.5 py-0.5 rounded bg-surface-secondary border border-border text-text-secondary">
+                                                            {runtimeSessionSourceLabel(session)}
+                                                        </span>
+                                                        {session.runtimeMode ? (
+                                                            <span className="px-1.5 py-0.5 rounded bg-surface-secondary/60 border border-border text-text-tertiary">
+                                                                mode: {session.runtimeMode}
+                                                            </span>
+                                                        ) : null}
+                                                        {session.contextBinding?.contextType ? (
+                                                            <span className="px-1.5 py-0.5 rounded bg-surface-secondary/60 border border-border text-text-tertiary">
+                                                                ctx: {session.contextBinding.contextType}
+                                                            </span>
+                                                        ) : null}
                                                         <span>transcript: {session.transcriptCount}</span>
                                                         <span>checkpoint: {session.checkpointCount}</span>
                                                     </div>
@@ -2974,10 +3169,13 @@ export function ToolsSettingsSection({
                             <div className="space-y-4">
                                 <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
                                     <div className="flex items-center justify-between gap-2">
-                                        <div className="text-xs font-medium text-text-primary">Session Transcript / Checkpoints</div>
-                                        {selectedRuntimeSession ? (
-                                            <span className="text-[11px] text-text-tertiary font-mono truncate">{selectedRuntimeSession.id}</span>
-                                        ) : null}
+                                        <div className="text-xs font-medium text-text-primary">Session Logs</div>
+                                        <div className="flex items-center gap-2">
+                                            {selectedRuntimeSession ? (
+                                                <span className="text-[11px] text-text-tertiary font-mono truncate">{selectedRuntimeSession.id}</span>
+                                            ) : null}
+                                            {selectedRuntimeSession ? <DiagnosticCopyButton text={runtimeSessionFullLogText} label="复制全部" /> : null}
+                                        </div>
                                     </div>
                                     {!selectedRuntimeSession ? (
                                         <div className="text-[11px] text-text-tertiary">请选择左侧一条 runtime session。</div>
@@ -2986,90 +3184,43 @@ export function ToolsSettingsSection({
                                     ) : (
                                         <div className="space-y-3">
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">最近 Checkpoints</div>
-                                                <div className="mt-2 space-y-2">
-                                                    {runtimeSessionCheckpoints.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无 checkpoint。</div>
-                                                    ) : runtimeSessionCheckpoints.map((checkpoint) => (
-                                                        <div key={checkpoint.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <span className="text-[11px] font-medium text-text-primary">{checkpoint.summary}</span>
-                                                                <span className="text-[10px] text-text-tertiary">{checkpoint.checkpointType}</span>
-                                                            </div>
-                                                            <div className="text-[10px] text-text-tertiary mt-1">
-                                                                {new Date(checkpoint.createdAt).toLocaleString()}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Session Meta</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionMetaText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionMetaText || '暂无 session 元数据。'}
+                                                </pre>
                                             </div>
 
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">最近 Transcript</div>
-                                                <div className="mt-2 max-h-[32rem] overflow-auto space-y-2 pr-1">
-                                                    {runtimeSessionTranscript.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无 transcript。</div>
-                                                    ) : runtimeSessionTranscript.map((item) => (
-                                                        <details key={item.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
-                                                                <span className="font-medium text-text-primary">
-                                                                    {item.recordType} · {item.role}
-                                                                </span>
-                                                                <span className="text-text-tertiary">{new Date(item.createdAt).toLocaleString()}</span>
-                                                            </summary>
-                                                            <pre className="mt-2 whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
-                                                                {item.content || '(empty)'}
-                                                            </pre>
-                                                        </details>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Checkpoints</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionCheckpointsText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionCheckpointsText}
+                                                </pre>
                                             </div>
 
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">Tool Result Store</div>
-                                                <div className="mt-2 max-h-[24rem] overflow-auto space-y-2 pr-1">
-                                                    {runtimeSessionToolResults.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无完整 tool result 记录。</div>
-                                                    ) : runtimeSessionToolResults.map((item) => (
-                                                        <details key={item.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
-                                                                <span className="font-medium text-text-primary">
-                                                                    {item.toolName} · {item.success ? 'success' : 'error'}
-                                                                </span>
-                                                                <span className="text-text-tertiary">{new Date(item.createdAt).toLocaleString()}</span>
-                                                            </summary>
-                                                            <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
-                                                                <div className="flex flex-wrap gap-2 text-text-tertiary">
-                                                                    <span className="font-mono break-all">call: {item.callId}</span>
-                                                                    {item.command ? <span className="font-mono break-all">cmd: {item.command}</span> : null}
-                                                                    {item.truncated ? (
-                                                                        <span>budget: {item.originalChars ?? 0} → {item.promptChars ?? 0}</span>
-                                                                    ) : (
-                                                                        <span>budget: full</span>
-                                                                    )}
-                                                                </div>
-                                                                {item.promptText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">Prompt 注入文本</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.promptText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                                {item.summaryText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">摘要</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.summaryText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                                {item.resultText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">完整结果</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.resultText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                            </div>
-                                                        </details>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Transcript</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionTranscriptText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionTranscriptText}
+                                                </pre>
+                                            </div>
+
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-3">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Tool Result Store</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionToolResultsText} />
+                                                </div>
+                                                <pre className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionToolResultsText}
+                                                </pre>
                                             </div>
                                         </div>
                                     )}

@@ -1,7 +1,7 @@
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
@@ -154,6 +154,34 @@ fn refresh_advisor_videos(
     })
 }
 
+fn import_advisor_knowledge_files(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    selected: &[std::path::PathBuf],
+) -> Result<Value, String> {
+    if selected.is_empty() {
+        return Ok(json!({ "success": false, "error": "未选择文件" }));
+    }
+
+    let target_dir = advisor_knowledge_dir(state, advisor_id)?;
+    with_store_mut(state, |store| {
+        let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) else {
+            return Ok(json!({ "success": false, "error": "成员不存在" }));
+        };
+
+        let mut imported_files = Vec::new();
+        for file in selected {
+            let (relative_name, _) = copy_file_into_dir(file, &target_dir)?;
+            if !advisor.knowledge_files.contains(&relative_name) {
+                advisor.knowledge_files.push(relative_name.clone());
+            }
+            imported_files.push(relative_name);
+        }
+        advisor.updated_at = now_iso();
+        Ok(json!({ "success": true, "files": imported_files }))
+    })
+}
+
 pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_advisors(state);
     with_store(state, |store| {
@@ -216,6 +244,7 @@ pub fn handle_advisor_channel(
             | "advisors:create"
             | "advisors:update"
             | "advisors:delete"
+            | "advisors:pick-knowledge-files"
             | "advisors:upload-knowledge"
             | "advisors:delete-knowledge"
             | "advisors:optimize-prompt"
@@ -319,31 +348,38 @@ pub fn handle_advisor_channel(
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
+            "advisors:pick-knowledge-files" => {
+                let selected = pick_files_native("选择要导入该成员知识库的文件", false, true)?;
+                let files = selected
+                    .into_iter()
+                    .map(|path| {
+                        json!({
+                            "path": path,
+                            "name": path.file_name().and_then(|value| value.to_str()).unwrap_or_default()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({ "success": true, "files": files }))
+            }
             "advisors:upload-knowledge" => {
                 let started_at = now_ms();
-                let advisor_id = payload_value_as_string(payload).unwrap_or_default();
-                let selected = pick_files_native("选择要导入该成员知识库的文件", false, true)?;
-                if selected.is_empty() {
-                    return Ok(json!({ "success": false, "error": "未选择文件" }));
-                }
-                let target_dir = advisor_knowledge_dir(state, &advisor_id)?;
-                let imported = with_store_mut(state, |store| {
-                    let Some(advisor) =
-                        store.advisors.iter_mut().find(|item| item.id == advisor_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "成员不存在" }));
-                    };
-                    let mut imported_files = Vec::new();
-                    for file in &selected {
-                        let (relative_name, _) = copy_file_into_dir(file, &target_dir)?;
-                        if !advisor.knowledge_files.contains(&relative_name) {
-                            advisor.knowledge_files.push(relative_name.clone());
-                        }
-                        imported_files.push(relative_name);
-                    }
-                    advisor.updated_at = now_iso();
-                    Ok(json!({ "success": true, "files": imported_files }))
-                })?;
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_value_as_string(payload))
+                    .unwrap_or_default();
+                let selected = payload_field(payload, "filePaths")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .map(std::path::PathBuf::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        pick_files_native("选择要导入该成员知识库的文件", false, true)
+                    })?;
+                let imported = import_advisor_knowledge_files(state, &advisor_id, &selected)?;
                 let imported_file_count = imported
                     .get("files")
                     .and_then(Value::as_array)

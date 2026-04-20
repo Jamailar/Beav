@@ -1,9 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::{
-    AppState, AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
-    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path,
+    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path, AppState,
+    AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
 };
 
 pub const DIAGNOSTICS_CONTEXT_TYPE: &str = "diagnostics";

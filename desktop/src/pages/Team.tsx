@@ -222,7 +222,7 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
                         <Users className="w-4 h-4" />
                       </div>
-                      <div className="text-sm font-medium text-text-primary">添加成员</div>
+                      <div className="text-sm font-medium text-text-primary">从资料蒸馏</div>
                     </button>
 
                     <div className="mx-4 h-px bg-border" />
@@ -235,7 +235,7 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
                         <BookCopy className="w-4 h-4" />
                       </div>
-                      <div className="text-sm font-medium text-text-primary">从模板添加成员</div>
+                      <div className="text-sm font-medium text-text-primary">从模板创建</div>
                     </button>
                   </div>
                 </div>

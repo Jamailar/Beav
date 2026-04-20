@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::{make_id, now_i64};
 

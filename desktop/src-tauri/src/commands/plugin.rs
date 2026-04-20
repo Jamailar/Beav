@@ -1,13 +1,28 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::{
-    AppState, browser_plugin_bundled_root, browser_plugin_export_root, copy_dir_recursive,
-    log_timing_event, now_ms,
+    browser_plugin_bundled_candidates, browser_plugin_bundled_root, browser_plugin_export_root,
+    copy_dir_recursive, log_timing_event, now_ms, AppState,
 };
 
+fn missing_browser_plugin_error(app: &AppHandle) -> String {
+    let checked_paths = browser_plugin_bundled_candidates(app);
+    if checked_paths.is_empty() {
+        return "未找到仓库内置浏览器插件资源。".to_string();
+    }
+    format!(
+        "未找到仓库内置浏览器插件资源。已检查：{}",
+        checked_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("；")
+    )
+}
+
 pub fn handle_plugin_channel(
-    _app: &AppHandle,
+    app: &AppHandle,
     state: &State<'_, AppState>,
     channel: &str,
     _payload: &Value,
@@ -26,10 +41,11 @@ pub fn handle_plugin_channel(
             "plugin:browser-extension-status" => {
                 let started_at = now_ms();
                 let request_id = format!("plugin:browser-extension-status:{}", started_at);
-                let bundled_path = browser_plugin_bundled_root();
+                let bundled_path = browser_plugin_bundled_root(app);
                 let export_path = browser_plugin_export_root(state)?;
-                let bundled = bundled_path.join("manifest.json").exists();
+                let bundled = bundled_path.is_some();
                 let exported = export_path.join("manifest.json").exists();
+                let checked_paths = browser_plugin_bundled_candidates(app);
                 log_timing_event(
                     state,
                     "settings",
@@ -43,17 +59,28 @@ pub fn handle_plugin_channel(
                     "bundled": bundled,
                     "exported": exported,
                     "exportPath": export_path.display().to_string(),
-                    "bundledPath": bundled_path.display().to_string(),
-                    "error": if bundled { Value::Null } else { json!("Plugin/manifest.json not found") }
+                    "bundledPath": bundled_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default(),
+                    "checkedPaths": checked_paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>(),
+                    "error": if bundled {
+                        Value::Null
+                    } else {
+                        json!(missing_browser_plugin_error(app))
+                    }
                 }))
             }
             "plugin:prepare-browser-extension" => {
-                let bundled_path = browser_plugin_bundled_root();
-                if !bundled_path.join("manifest.json").exists() {
-                    return Ok(
-                        json!({ "success": false, "error": "未找到仓库内置浏览器插件资源。" }),
-                    );
-                }
+                let Some(bundled_path) = browser_plugin_bundled_root(app) else {
+                    return Ok(json!({
+                        "success": false,
+                        "error": missing_browser_plugin_error(app),
+                    }));
+                };
                 let export_path = browser_plugin_export_root(state)?;
                 if !export_path.join("manifest.json").exists() {
                     copy_dir_recursive(&bundled_path, &export_path)?;
@@ -67,8 +94,7 @@ pub fn handle_plugin_channel(
             "plugin:open-browser-extension-dir" => {
                 let export_path = browser_plugin_export_root(state)?;
                 if !export_path.join("manifest.json").exists() {
-                    let bundled_path = browser_plugin_bundled_root();
-                    if bundled_path.join("manifest.json").exists() {
+                    if let Some(bundled_path) = browser_plugin_bundled_root(app) {
                         copy_dir_recursive(&bundled_path, &export_path)?;
                     }
                 }

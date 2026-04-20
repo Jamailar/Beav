@@ -3,8 +3,8 @@ use std::thread;
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
-    AppState,
     knowledge_index::{index_status, indexer::rebuild_catalog, schema::ensure_catalog_ready},
+    AppState,
 };
 
 fn mark_pending(state: &State<'_, AppState>) -> Result<bool, String> {

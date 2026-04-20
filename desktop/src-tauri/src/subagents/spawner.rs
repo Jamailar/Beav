@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::thread;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent::{
-    PreparedSessionAgentTurn, build_runtime_query_turn, execute_prepared_session_agent_turn,
+    build_runtime_query_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::events::{
     emit_runtime_subagent_finished, emit_runtime_subagent_spawned,
@@ -13,16 +13,16 @@ use crate::events::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord, append_runtime_task_trace_scoped,
-    append_session_checkpoint_scoped, create_runtime_task, record_runtime_node,
+    append_runtime_task_trace_scoped, append_session_checkpoint_scoped, create_runtime_task,
+    record_runtime_node, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::subagents::{
-    SubAgentConfig, SubAgentOutput, SubAgentSpawnResult, build_orchestration_value,
-    build_subagent_configs,
+    build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
+    SubAgentSpawnResult,
 };
 use crate::{
-    AppState, AppStore, ChatSessionRecord, append_debug_log_state, make_id, now_i64, now_iso,
-    parse_json_value_from_text, payload_string,
+    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
+    AppState, AppStore, ChatSessionRecord,
 };
 
 fn snippet(value: &str, limit: usize) -> String {

@@ -1,16 +1,16 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::events::emit_runtime_subagent_spawned;
 use crate::runtime::{
-    RuntimeArtifact, RuntimeRouteRecord, build_runtime_task_artifact_content,
-    runtime_subagent_role_spec,
+    build_runtime_task_artifact_content, runtime_subagent_role_spec, RuntimeArtifact,
+    RuntimeRouteRecord,
 };
 use crate::subagents::{real_subagents_enabled, run_real_subagent_orchestration_for_task};
 use crate::{
-    AppState, generate_structured_response_with_settings, load_redbox_prompt,
-    parse_json_value_from_text, payload_string, render_redbox_prompt, role_sequence_for_route,
-    slug_from_relative_path, workspace_root, write_text_file,
+    generate_structured_response_with_settings, load_redbox_prompt, parse_json_value_from_text,
+    payload_string, render_redbox_prompt, role_sequence_for_route, slug_from_relative_path,
+    workspace_root, write_text_file, AppState,
 };
 
 fn run_prompt_subagent_orchestration_for_task(

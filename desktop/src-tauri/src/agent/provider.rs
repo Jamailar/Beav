@@ -3,9 +3,9 @@ use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
 use crate::{
-    AppState, append_debug_log_state, generate_chat_response, resolve_chat_config,
+    append_debug_log_state, generate_chat_response, resolve_chat_config,
     run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
-    run_openai_interactive_chat_runtime, run_openai_prompted_streaming_fallback,
+    run_openai_interactive_chat_runtime, run_openai_prompted_streaming_fallback, AppState,
 };
 
 pub fn resolve_chat_exchange_response_stage(

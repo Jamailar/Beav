@@ -1,9 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::agent::{
-    PreparedSessionAgentTurn, build_runtime_query_turn, emit_session_agent_completion,
-    execute_prepared_session_agent_turn,
+    build_runtime_query_turn, emit_session_agent_completion, execute_prepared_session_agent_turn,
+    PreparedSessionAgentTurn,
 };
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
@@ -13,8 +13,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::skills::active_skill_activation_items;
 use crate::{
-    AppState, RuntimeQueryMetric, log_timing_event, now_i64, now_ms, payload_field, payload_string,
-    record_runtime_query_metric, resolve_runtime_mode_for_session,
+    log_timing_event, now_i64, now_ms, payload_field, payload_string, record_runtime_query_metric,
+    resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
 };
 
 pub fn handle_runtime_query(

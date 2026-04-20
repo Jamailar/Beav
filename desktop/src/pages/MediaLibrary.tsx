@@ -3,7 +3,9 @@ import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, 
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
+import { MediaAssetPreviewOverlay } from './media-library/MediaAssetPreviewOverlay';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
 
@@ -227,6 +229,57 @@ function toSortableTime(value?: string): number {
     return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function compareMediaAssetsByCreatedAtDesc(a: MediaAsset, b: MediaAsset): number {
+    const createdDelta = toSortableTime(b.createdAt) - toSortableTime(a.createdAt);
+    if (createdDelta !== 0) return createdDelta;
+    const updatedDelta = toSortableTime(b.updatedAt) - toSortableTime(a.updatedAt);
+    if (updatedDelta !== 0) return updatedDelta;
+    return b.id.localeCompare(a.id);
+}
+
+function parseAspectRatio(value?: string): number | null {
+    const matched = String(value || '').trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (!matched) return null;
+    const width = Number(matched[1]);
+    const height = Number(matched[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+    }
+    return width / height;
+}
+
+function inferMediaAspectRatio(asset: MediaAsset): number {
+    const sizeMatched = String(asset.size || '').trim().match(/^(\d{2,5})x(\d{2,5})$/i);
+    if (sizeMatched) {
+        const width = Number(sizeMatched[1]);
+        const height = Number(sizeMatched[2]);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+            return width / height;
+        }
+    }
+    const explicitAspectRatio = parseAspectRatio(asset.aspectRatio);
+    if (explicitAspectRatio && Number.isFinite(explicitAspectRatio) && explicitAspectRatio > 0) {
+        return explicitAspectRatio;
+    }
+    return isVideoAsset(asset) ? 16 / 9 : 3 / 4;
+}
+
+function estimateMediaCardHeight(asset: MediaAsset, columnWidth: number): number {
+    const mediaAspectRatio = inferMediaAspectRatio(asset);
+    const mediaHeight = columnWidth / mediaAspectRatio;
+    const textBlockHeight = 152;
+    const headerHeight = 52;
+    return Math.round(mediaHeight + textBlockHeight + headerHeight);
+}
+
+function getMasonryColumnCount(width: number): number {
+    if (width >= 1536) return 5;
+    if (width >= 1280) return 4;
+    if (width >= 1024) return 3;
+    if (width >= 640) return 2;
+    return 1;
+}
+
 export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [assets, setAssets] = useState<MediaAsset[]>([]);
     const [manuscripts, setManuscripts] = useState<string[]>([]);
@@ -280,9 +333,12 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [previewAsset, setPreviewAsset] = useState<MediaAssetPreviewState | null>(null);
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+    const [masonryColumnCount, setMasonryColumnCount] = useState(() => getMasonryColumnCount(typeof window === 'undefined' ? 1440 : window.innerWidth));
+    const [measuredCardHeights, setMeasuredCardHeights] = useState<Record<string, number>>({});
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const loadSettingsRequestRef = useRef(0);
+    const assetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
     const loadData = useCallback(async () => {
         const requestId = loadDataRequestRef.current + 1;
@@ -301,7 +357,9 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             if (!mediaResult?.success) {
                 setError(mediaResult?.error || '加载媒体库失败');
             } else {
-                const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : []).map(normalizeMediaAsset);
+                const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
+                    .map(normalizeMediaAsset)
+                    .sort(compareMediaAssetsByCreatedAtDesc);
                 setAssets(nextAssets);
                 setDrafts((prev) => Object.fromEntries(
                     Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
@@ -355,6 +413,15 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     }, [isActive, loadSettings]);
 
     useEffect(() => {
+        const updateColumnCount = () => {
+            setMasonryColumnCount(getMasonryColumnCount(window.innerWidth));
+        };
+        updateColumnCount();
+        window.addEventListener('resize', updateColumnCount);
+        return () => window.removeEventListener('resize', updateColumnCount);
+    }, []);
+
+    useEffect(() => {
         if (!contextMenu.visible) return;
         const close = () => setContextMenu((prev) => ({ ...prev, visible: false, asset: null }));
         window.addEventListener('click', close);
@@ -400,12 +467,59 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 asset.id,
             ].join('\n').toLowerCase();
             return text.includes(keyword);
-        }).sort((a, b) => {
-            const createdDelta = toSortableTime(b.createdAt) - toSortableTime(a.createdAt);
-            if (createdDelta !== 0) return createdDelta;
-            return toSortableTime(b.updatedAt) - toSortableTime(a.updatedAt);
-        });
+        }).sort(compareMediaAssetsByCreatedAtDesc);
     }, [assets, projectFilter, query, sourceFilter]);
+
+    const measureAssetCard = useCallback((assetId: string) => {
+        const node = assetCardRefs.current[assetId];
+        if (!node) return;
+        const nextHeight = Math.round(node.getBoundingClientRect().height);
+        if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+        setMeasuredCardHeights((prev) => {
+            if (prev[assetId] === nextHeight) return prev;
+            return {
+                ...prev,
+                [assetId]: nextHeight,
+            };
+        });
+    }, []);
+
+    useEffect(() => {
+        setMeasuredCardHeights((prev) => Object.fromEntries(
+            Object.entries(prev).filter(([assetId]) => filteredAssets.some((asset) => asset.id === assetId))
+        ));
+    }, [filteredAssets]);
+
+    useEffect(() => {
+        if (filteredAssets.length === 0) return;
+        const frame = window.requestAnimationFrame(() => {
+            for (const asset of filteredAssets) {
+                measureAssetCard(asset.id);
+            }
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [filteredAssets, masonryColumnCount, measureAssetCard]);
+
+    const masonryColumns = useMemo(() => {
+        const columns = Array.from({ length: masonryColumnCount }, () => [] as MediaAsset[]);
+        const columnHeights = Array.from({ length: masonryColumnCount }, () => 0);
+        const horizontalGap = 16;
+        const shellWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
+        const contentWidth = Math.max(320, shellWidth - 48);
+        const columnWidth = Math.max(220, (contentWidth - horizontalGap * (masonryColumnCount - 1)) / masonryColumnCount);
+
+        for (const asset of filteredAssets) {
+            let targetColumnIndex = 0;
+            for (let index = 1; index < columnHeights.length; index += 1) {
+                if (columnHeights[index] < columnHeights[targetColumnIndex]) {
+                    targetColumnIndex = index;
+                }
+            }
+            columns[targetColumnIndex].push(asset);
+            columnHeights[targetColumnIndex] += (measuredCardHeights[asset.id] ?? estimateMediaCardHeight(asset, columnWidth)) + 16;
+        }
+        return columns;
+    }, [filteredAssets, masonryColumnCount, measuredCardHeights]);
 
     const sourceStats = useMemo(() => {
         return assets.reduce<Record<'all' | MediaAssetSource, number>>((acc, asset) => {
@@ -891,73 +1005,85 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 ) : filteredAssets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">暂无媒体资产</div>
                 ) : (
-                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-4 [column-fill:_balance]">
-                        {filteredAssets.map((asset) => {
-                            const draft = getDraft(asset);
-                            const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
-                            return (
-                                <div
-                                    key={asset.id}
-                                    onClick={() => openAssetPreview(asset)}
-                                    onContextMenu={(event) => openAssetContextMenu(event, asset)}
-                                    className="group mb-4 block w-full break-inside-avoid cursor-pointer overflow-hidden rounded-2xl border border-border bg-surface-primary text-left shadow-sm transition-shadow hover:shadow-md"
-                                >
-                                    <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
-                                        <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border', sourceMeta.badgeClass)}>
-                                            {sourceMeta.label}
-                                        </span>
-                                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-secondary/70 text-text-secondary">
-                                            {new Date(asset.createdAt).toLocaleDateString()}
-                                        </span>
-                                    </div>
-
-                                    <div className="bg-surface-secondary">
-                                        {asset.previewUrl && asset.exists ? (
-                                            isVideoAsset(asset) ? (
-                                                <video
-                                                    src={resolveAssetUrl(asset.previewUrl)}
-                                                    className="block w-full h-auto max-h-[520px] bg-black"
-                                                    controls
-                                                    preload="metadata"
-                                                    onClick={(event) => event.stopPropagation()}
-                                                />
-                                            ) : (
-                                                <img
-                                                    src={resolveAssetUrl(asset.previewUrl)}
-                                                    alt={asset.title || asset.id}
-                                                    className="block w-full h-auto"
-                                                />
-                                            )
-                                        ) : (
-                                            <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
-                                                {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
+                    <div className="flex items-start gap-4">
+                        {masonryColumns.map((columnAssets, columnIndex) => (
+                            <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
+                                {columnAssets.map((asset) => {
+                                    const draft = getDraft(asset);
+                                    const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
+                                    return (
+                                        <div
+                                            key={asset.id}
+                                            ref={(node) => {
+                                                assetCardRefs.current[asset.id] = node;
+                                                if (node) {
+                                                    window.requestAnimationFrame(() => measureAssetCard(asset.id));
+                                                }
+                                            }}
+                                            onClick={() => openAssetPreview(asset)}
+                                            onContextMenu={(event) => openAssetContextMenu(event, asset)}
+                                            className="group block w-full cursor-pointer overflow-hidden rounded-2xl border border-border bg-surface-primary text-left shadow-sm transition-shadow hover:shadow-md"
+                                        >
+                                            <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
+                                                <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border', sourceMeta.badgeClass)}>
+                                                    {sourceMeta.label}
+                                                </span>
+                                                <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-secondary/70 text-text-secondary">
+                                                    {new Date(asset.createdAt).toLocaleDateString()}
+                                                </span>
                                             </div>
-                                        )}
-                                    </div>
 
-                                    <div className="p-3 space-y-2">
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
-                                            <div className="text-[11px] text-text-tertiary truncate">
-                                                {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                            <div className="bg-surface-secondary">
+                                                {asset.previewUrl && asset.exists ? (
+                                                    isVideoAsset(asset) ? (
+                                                        <video
+                                                            src={resolveAssetUrl(asset.previewUrl)}
+                                                            className="block w-full h-auto bg-black"
+                                                            controls
+                                                            preload="metadata"
+                                                            onClick={(event) => event.stopPropagation()}
+                                                            onLoadedMetadata={() => measureAssetCard(asset.id)}
+                                                        />
+                                                    ) : (
+                                                        <img
+                                                            src={resolveAssetUrl(asset.previewUrl)}
+                                                            alt={asset.title || asset.id}
+                                                            className="block w-full h-auto"
+                                                            onLoad={() => measureAssetCard(asset.id)}
+                                                        />
+                                                    )
+                                                ) : (
+                                                    <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
+                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="p-3 space-y-2">
+                                                <div>
+                                                    <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
+                                                    <div className="text-[11px] text-text-tertiary truncate">
+                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                                    </div>
+                                                </div>
+                                                <div className="text-[11px] text-text-tertiary truncate">
+                                                    提示词：{(draft.prompt || asset.prompt || '暂无提示词').replace(/\s+/g, ' ')}
+                                                </div>
+                                                <div className="text-[11px] text-text-tertiary truncate">
+                                                    稿件：{asset.boundManuscriptPath || '(未绑定)'}
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="text-[11px] text-text-tertiary truncate">
-                                            提示词：{(draft.prompt || asset.prompt || '暂无提示词').replace(/\s+/g, ' ')}
-                                        </div>
-                                        <div className="text-[11px] text-text-tertiary truncate">
-                                            稿件：{asset.boundManuscriptPath || '(未绑定)'}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
+                                    );
+                                })}
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
             {contextMenu.visible && contextMenu.asset && (
-                <div
-                    className="fixed z-50 min-w-[148px] overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                <LiquidGlassMenuPanel
+                    className="fixed z-50 min-w-[148px]"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onClick={(event) => event.stopPropagation()}
                 >
@@ -967,7 +1093,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             setExpandedAssetId(contextMenu.asset!.id);
                             setContextMenu({ visible: false, x: 0, y: 0, asset: null });
                         }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                        className={getLiquidGlassMenuItemClassName()}
                     >
                         编辑
                     </button>
@@ -980,65 +1106,13 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                 void handleDeleteAsset(asset);
                             }
                         }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
                         删除
                     </button>
-                </div>
+                </LiquidGlassMenuPanel>
             )}
-            {previewAsset && (
-                <div
-                    className="fixed inset-0 z-[60] bg-black/72"
-                    onClick={() => setPreviewAsset(null)}
-                >
-                    <div className="flex h-full w-full items-center justify-center p-6 md:p-8">
-                        <div
-                            className="flex h-full w-full items-center justify-center"
-                            onClick={(event) => event.stopPropagation()}
-                        >
-                            <div className="relative inline-flex max-h-[90vh] max-w-[90vw] overflow-hidden">
-                                {isVideoAsset(previewAsset.asset) ? (
-                                    <video
-                                        src={previewAsset.src}
-                                        className="block max-h-[90vh] max-w-[90vw] object-contain shadow-2xl"
-                                        controls
-                                        autoPlay
-                                    />
-                                ) : (
-                                    <img
-                                        src={previewAsset.src}
-                                        alt={previewAsset.asset.title || previewAsset.asset.id}
-                                        className="block max-h-[90vh] max-w-[90vw] object-contain shadow-2xl"
-                                    />
-                                )}
-                                <div className="pointer-events-none absolute inset-x-0 bottom-0">
-                                    <div className="bg-gradient-to-t from-black/88 via-black/50 to-transparent px-5 pb-5 pt-16 md:px-8 md:pb-7">
-                                        <div className="space-y-1.5">
-                                            <div className="text-[11px] uppercase tracking-[0.12em] text-white/60">
-                                                {SOURCE_META[previewAsset.asset.source]?.label || '素材'}
-                                            </div>
-                                            <div className="text-sm leading-6 text-white/95 break-words">
-                                                {previewAsset.asset.title || previewAsset.asset.id}
-                                            </div>
-                                            <div className="text-[12px] leading-5 text-white/72">
-                                                {previewAsset.asset.projectId || '未设置项目ID'} · {previewAsset.asset.aspectRatio || previewAsset.asset.size || '原始比例'}
-                                            </div>
-                                            <div className="text-[12px] leading-5 text-white/72">
-                                                {new Date(previewAsset.asset.createdAt).toLocaleString()}
-                                            </div>
-                                            {previewAsset.asset.relativePath && (
-                                                <div className="text-[11px] leading-5 text-white/52 break-all">
-                                                    {previewAsset.asset.relativePath}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <MediaAssetPreviewOverlay preview={previewAsset} onClose={() => setPreviewAsset(null)} />
             {expandedAssetId && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
                     <div className="w-full max-w-2xl rounded-2xl border border-border bg-surface-primary shadow-2xl">
@@ -1149,9 +1223,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                         </div>
 
                         <div className="p-5 space-y-4">
-                            <div className="text-xs text-text-secondary">
-                                当前生图配置：provider=<span className="font-mono">{settings.image_provider || 'openai-compatible'}</span> · template=<span className="font-mono">{settings.image_provider_template || 'openai-images'}</span> · endpoint=<span className="font-mono">{resolvedEndpoint || '(未设置)'}</span>
-                            </div>
                             {!hasImageConfig && (
                                 <div className="text-xs text-status-error">
                                     未检测到生图配置。请先到“设置 → AI 模型”填写生图 Endpoint 和 API Key。
@@ -1347,9 +1418,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                         </div>
 
                         <div className="p-5 space-y-4">
-                            <div className="text-xs text-text-secondary">
-                                当前生视频配置：source=<span className="font-mono">RedBox 官方</span> · model=<span className="font-mono">{effectiveVideoModel}</span> · endpoint=<span className="font-mono">{resolvedVideoEndpoint || '(未设置)'}</span>
-                            </div>
                             {!hasVideoConfig && (
                                 <div className="text-xs text-status-error">
                                     未检测到可用的 RedBox 官方视频配置。请先登录或配置 RedBox 官方 AI 源。
@@ -1556,9 +1624,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                                 <input value={videoTitle} onChange={(event) => setVideoTitle(event.target.value)} placeholder="视频标题（可选）" className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary" />
                                 <input value={videoProjectId} onChange={(event) => setVideoProjectId(event.target.value)} placeholder="项目ID（可选）" className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary" />
-                                <div className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary/70 text-text-secondary">
-                                    当前模式模型：<span className="font-mono text-text-primary">{effectiveVideoModel}</span>
-                                </div>
                                 <select value={videoAspectRatio} onChange={(event) => setVideoAspectRatio(event.target.value as '16:9' | '9:16')} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
                                     {VIDEO_ASPECT_RATIO_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>

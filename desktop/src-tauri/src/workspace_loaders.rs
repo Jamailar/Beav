@@ -4,19 +4,28 @@ use std::path::Path;
 use url::Url;
 
 use crate::{
-    AdvisorRecord, ChatRoomMessageRecord, ChatRoomRecord, CoverAssetRecord,
-    DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord,
-    MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
-    RedclawStateRecord, SubjectAttribute, SubjectCategory, SubjectRecord, UserMemoryRecord,
-    WorkItemRecord, WorkRefsRecord, WorkScheduleRecord, YoutubeVideoRecord, extract_tags_from_text,
-    file_url_for_path, normalize_legacy_workspace_path, now_iso, optional_asset_url_from_note_path,
-    read_text_file_or_empty, slug_from_relative_path,
+    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path,
+    normalize_timestamp_string, now_iso, optional_asset_url_from_note_path,
+    read_text_file_or_empty, slug_from_relative_path, AdvisorRecord, ChatRoomMessageRecord,
+    ChatRoomRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
+    KnowledgeNoteStatsRecord, MediaAssetRecord, MemoryHistoryRecord, RedclawLongCycleTaskRecord,
+    RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
+    SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord,
+    YoutubeVideoRecord,
 };
 
 pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
     fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+}
+
+fn normalized_timestamp_value(raw: Option<&Value>) -> String {
+    match raw {
+        Some(Value::String(value)) => normalize_timestamp_string(value),
+        Some(Value::Number(value)) => normalize_timestamp_string(&value.to_string()),
+        _ => String::new(),
+    }
 }
 
 fn meta_string(meta: &Value, keys: &[&str]) -> Option<String> {
@@ -635,18 +644,12 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                     .or_else(|| item.get("bound_manuscript_path"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
-                created_at: item
-                    .get("createdAt")
-                    .or_else(|| item.get("created_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
-                updated_at: item
-                    .get("updatedAt")
-                    .or_else(|| item.get("updated_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
+                created_at: normalized_timestamp_value(
+                    item.get("createdAt").or_else(|| item.get("created_at")),
+                ),
+                updated_at: normalized_timestamp_value(
+                    item.get("updatedAt").or_else(|| item.get("updated_at")),
+                ),
                 absolute_path: absolute_path.clone(),
                 preview_url: absolute_path
                     .as_ref()

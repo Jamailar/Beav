@@ -1,10 +1,10 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::AppStore;
 use crate::skills::build_skill_runtime_state;
-use crate::tools::catalog::{ToolDescriptor, descriptor_by_name, schema_for_tool};
+use crate::tools::catalog::{descriptor_by_name, schema_for_tool, ToolDescriptor};
 use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::tool_names_for_runtime_mode;
+use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {

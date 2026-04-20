@@ -1,9 +1,10 @@
+use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
 use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    SessionTranscriptFileMeta, append_compact_boundary_entry, list_transcript_sessions,
-    session_context_usage_value, tool_results_value_for_session, trace_value_for_session,
-    transcript_resume_messages, transcript_session_meta_by_id, update_session_context_record,
+    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
+    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
+    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
@@ -11,11 +12,13 @@ use crate::session_manager::{
     session_list_item_value, session_resume_value, update_metadata,
 };
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
+
+const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 
 fn xorshift64(mut seed: u64) -> u64 {
     if seed == 0 {
@@ -523,6 +526,154 @@ fn parse_wander_session_timestamp(raw: &str) -> i64 {
     raw.trim().parse::<i64>().unwrap_or(0)
 }
 
+fn parse_observability_timestamp(raw: &str) -> i64 {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    if let Ok(value) = trimmed.parse::<i64>() {
+        return value;
+    }
+    time::OffsetDateTime::parse(trimmed, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .and_then(|parsed| i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok())
+        .unwrap_or(0)
+}
+
+fn synthetic_chatroom_session_id(room_id: &str) -> String {
+    format!("{CHATROOM_SYNTHETIC_SESSION_PREFIX}{room_id}")
+}
+
+fn room_id_from_synthetic_session_id(session_id: &str) -> Option<&str> {
+    session_id.strip_prefix(CHATROOM_SYNTHETIC_SESSION_PREFIX)
+}
+
+fn take_recent_json_items(mut items: Vec<Value>, limit: Option<usize>) -> Vec<Value> {
+    let Some(limit) = limit.filter(|value| *value > 0) else {
+        return items;
+    };
+    if items.len() <= limit {
+        return items;
+    }
+    let split_at = items.len().saturating_sub(limit);
+    items.drain(..split_at);
+    items
+}
+
+fn synthetic_chatroom_session_items(store: &AppStore) -> Vec<Value> {
+    let mut items = store
+        .chat_rooms
+        .iter()
+        .filter_map(|room| {
+            let session_id = synthetic_chatroom_session_id(&room.id);
+            let transcript_count = store
+                .chatroom_messages
+                .iter()
+                .filter(|item| item.room_id == room.id)
+                .count();
+            let checkpoint_count = store
+                .session_checkpoints
+                .iter()
+                .filter(|item| item.session_id == session_id)
+                .count();
+            if transcript_count == 0 && checkpoint_count == 0 {
+                return None;
+            }
+            let latest_message_at = store
+                .chatroom_messages
+                .iter()
+                .filter(|item| item.room_id == room.id)
+                .max_by_key(|item| parse_observability_timestamp(&item.timestamp))
+                .map(|item| item.timestamp.clone());
+            let latest_checkpoint_at = store
+                .session_checkpoints
+                .iter()
+                .filter(|item| item.session_id == session_id)
+                .max_by_key(|item| item.created_at)
+                .map(|item| item.created_at.to_string());
+            let updated_at = latest_message_at
+                .or(latest_checkpoint_at)
+                .unwrap_or_else(|| room.created_at.clone());
+            Some(json!({
+                "id": session_id,
+                "runtimeMode": "chatroom",
+                "contextBinding": {
+                    "contextType": "chatroom",
+                    "contextId": room.id,
+                    "isContextBound": true,
+                },
+                "transcriptCount": transcript_count,
+                "checkpointCount": checkpoint_count,
+                "chatSession": {
+                    "id": synthetic_chatroom_session_id(&room.id),
+                    "title": if room.name.trim().is_empty() { "Creative Chat" } else { room.name.as_str() },
+                    "updatedAt": updated_at,
+                    "createdAt": room.created_at,
+                }
+            }))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| {
+        let left = a
+            .get("chatSession")
+            .and_then(|item| item.get("updatedAt"))
+            .and_then(Value::as_str)
+            .map(parse_observability_timestamp)
+            .unwrap_or(0);
+        let right = b
+            .get("chatSession")
+            .and_then(|item| item.get("updatedAt"))
+            .and_then(Value::as_str)
+            .map(parse_observability_timestamp)
+            .unwrap_or(0);
+        right.cmp(&left)
+    });
+    items
+}
+
+fn synthetic_chatroom_transcript_value(
+    store: &AppStore,
+    room_id: &str,
+    limit: Option<usize>,
+) -> Value {
+    let mut items = store
+        .chatroom_messages
+        .iter()
+        .filter(|item| item.room_id == room_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        parse_observability_timestamp(&left.timestamp)
+            .cmp(&parse_observability_timestamp(&right.timestamp))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let transcript = items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let created_at = parse_observability_timestamp(&item.timestamp);
+            json!({
+                "id": created_at.saturating_mul(1000).saturating_add(index as i64),
+                "sessionId": synthetic_chatroom_session_id(room_id),
+                "recordType": "message",
+                "role": item.role,
+                "content": item.content,
+                "payload": {
+                    "roomId": item.room_id,
+                    "advisorId": item.advisor_id,
+                    "advisorName": item.advisor_name,
+                    "advisorAvatar": item.advisor_avatar,
+                    "phase": item.phase,
+                    "isStreaming": item.is_streaming,
+                    "timestamp": item.timestamp,
+                },
+                "createdAt": created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!(take_recent_json_items(transcript, limit))
+}
+
 fn parse_legacy_wander_items_from_context_text(context_text: &str) -> Vec<Value> {
     let normalized = context_text.replace("\r\n", "\n").replace('\r', "\n");
     let mut blocks = Vec::new();
@@ -682,6 +833,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:compact-context"
             | "chat:get-context-usage"
             | "chat:update-session-metadata"
+            | "chat:bind-editor-session"
             | "chat:pick-attachment"
             | "chat:transcribe-audio"
             | "wander:list-history"
@@ -744,16 +896,13 @@ pub fn handle_chat_sessions_wander_channel(
                         })
                         .collect();
                 with_store(state, |store| {
-                    Ok(json!(
-                        items
-                            .iter()
-                            .map(|session| {
-                                let transcript_meta =
-                                    transcript_meta_by_session_id.get(&session.id);
-                                session_list_item_value(&store, session, transcript_meta)
-                            })
-                            .collect::<Vec<_>>()
-                    ))
+                    Ok(json!(items
+                        .iter()
+                        .map(|session| {
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, session, transcript_meta)
+                        })
+                        .collect::<Vec<_>>()))
                 })
             }
             "chat:create-context-session" => {
@@ -810,7 +959,7 @@ pub fn handle_chat_sessions_wander_channel(
                     .map(crate::runtime::transcript_session_meta_value)
                     .collect();
                 let items = with_store(state, |store| {
-                    let items: Vec<Value> = if transcript_items.is_empty() {
+                    let mut items: Vec<Value> = if transcript_items.is_empty() {
                         list_sessions(&store)
                             .into_iter()
                             .map(|session| {
@@ -852,6 +1001,36 @@ pub fn handle_chat_sessions_wander_channel(
                         });
                         merged
                     };
+                    let known_ids = items
+                        .iter()
+                        .filter_map(|item| item.get("id").and_then(Value::as_str))
+                        .map(ToString::to_string)
+                        .collect::<HashSet<_>>();
+                    let mut synthetic_items = synthetic_chatroom_session_items(&store)
+                        .into_iter()
+                        .filter(|item| {
+                            item.get("id")
+                                .and_then(Value::as_str)
+                                .map(|id| !known_ids.contains(id))
+                                .unwrap_or(false)
+                        })
+                        .collect::<Vec<_>>();
+                    items.append(&mut synthetic_items);
+                    items.sort_by(|a, b| {
+                        let left = a
+                            .get("chatSession")
+                            .and_then(|item| item.get("updatedAt"))
+                            .and_then(Value::as_str)
+                            .map(parse_observability_timestamp)
+                            .unwrap_or(0);
+                        let right = b
+                            .get("chatSession")
+                            .and_then(|item| item.get("updatedAt"))
+                            .and_then(Value::as_str)
+                            .map(parse_observability_timestamp)
+                            .unwrap_or(0);
+                        right.cmp(&left)
+                    });
                     Ok(items)
                 })?;
                 log_timing_event(
@@ -959,6 +1138,12 @@ pub fn handle_chat_sessions_wander_channel(
                     .and_then(Value::as_u64)
                     .map(|value| value as usize);
                 with_store(state, |store| {
+                    if let Some(room_id) = requested_session_id
+                        .as_deref()
+                        .and_then(room_id_from_synthetic_session_id)
+                    {
+                        return Ok(synthetic_chatroom_transcript_value(&store, room_id, limit));
+                    }
                     let Some(session_id) =
                         resolve_resume_target_session_id(&store, requested_session_id.as_deref())
                     else {
@@ -1125,6 +1310,13 @@ pub fn handle_chat_sessions_wander_channel(
                     let _ = update_metadata(store, &session_id, metadata);
                     Ok(json!({ "success": true }))
                 })
+            }
+            "chat:bind-editor-session" => {
+                let request =
+                    serde_json::from_value::<EditorChatBindingRequest>(payload.clone())
+                        .map_err(|error| format!("invalid editor chat binding payload: {error}"))?;
+                let session = with_store_mut(state, |store| bind_editor_session(store, request))?;
+                Ok(json!(session))
             }
             "chat:pick-attachment" => {
                 let files = pick_files_native("选择要发送给 AI 的文件", false, false)?;

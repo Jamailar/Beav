@@ -1,7 +1,7 @@
 use crate::knowledge;
 use crate::persistence::{ensure_store_hydrated_for_work, with_store, with_store_mut};
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 pub fn handle_workspace_data_channel(
@@ -360,11 +360,9 @@ pub fn handle_workspace_data_channel(
                 let fallback_status = with_store(state, |store| {
                     Ok(memory_maintenance_status_from_settings(&store.settings))
                 })?;
-                let response = json!(
-                    workspace_status
-                        .or(fallback_status)
-                        .unwrap_or_else(default_memory_maintenance_status)
-                );
+                let response = json!(workspace_status
+                    .or(fallback_status)
+                    .unwrap_or_else(default_memory_maintenance_status));
                 log_timing_event(
                     state,
                     "settings",

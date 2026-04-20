@@ -5,6 +5,11 @@ import * as ContextMenuPrimitive from "@radix-ui/react-context-menu"
 import { ChevronRight } from "lucide-react"
 
 import { cn } from "@/shared/ui/cn"
+import {
+  getLiquidGlassMenuItemClassName,
+  liquidGlassMenuSeparatorClassName,
+  LiquidGlassSurface,
+} from "@/components/ui/liquid-glass-menu"
 
 const ContextMenu = ContextMenuPrimitive.Root
 
@@ -21,8 +26,11 @@ const ContextMenuSubTrigger = React.forwardRef<
   <ContextMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent data-[state=open]:bg-accent [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
-      inset && "pl-8",
+      getLiquidGlassMenuItemClassName({
+        inset,
+        className:
+          "pr-2 data-[state=open]:bg-black/[0.06] dark:data-[state=open]:bg-white/[0.1] [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      }),
       className
     )}
     {...props}
@@ -36,31 +44,48 @@ ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName
 const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
->(({ className, ...props }, ref) => (
+>(({ className, children, ...props }, ref) => (
   <ContextMenuPrimitive.SubContent
     ref={ref}
     className={cn(
-      "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+      "z-50 min-w-[10rem] overflow-visible rounded-[22px] border-0 bg-transparent p-0 text-text-primary shadow-none outline-none",
+      "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+      "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
       className
     )}
     {...props}
-  />
+  >
+    <LiquidGlassSurface className="min-w-full">
+      <div className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overflow-x-hidden p-1.5">
+        {children}
+      </div>
+    </LiquidGlassSurface>
+  </ContextMenuPrimitive.SubContent>
 ))
 ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName
 
 const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
->(({ className, ...props }, ref) => (
+>(({ className, children, ...props }, ref) => (
   <ContextMenuPrimitive.Portal>
     <ContextMenuPrimitive.Content
       ref={ref}
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        "z-50 min-w-[10rem] overflow-visible rounded-[22px] border-0 bg-transparent p-0 text-text-primary shadow-none outline-none",
+        "animate-in fade-in-80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+        "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         className
       )}
       {...props}
-    />
+    >
+      <LiquidGlassSurface className="min-w-full">
+        <div className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overflow-x-hidden p-1.5">
+          {children}
+        </div>
+      </LiquidGlassSurface>
+    </ContextMenuPrimitive.Content>
   </ContextMenuPrimitive.Portal>
 ))
 ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName
@@ -74,8 +99,10 @@ const ContextMenuItem = React.forwardRef<
   <ContextMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0",
-      inset && "pl-8",
+      getLiquidGlassMenuItemClassName({
+        inset,
+        className: "[&>svg]:size-4 [&>svg]:shrink-0",
+      }),
       className
     )}
     {...props}
@@ -89,7 +116,7 @@ const ContextMenuSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <ContextMenuPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 my-1 h-px bg-border", className)}
+    className={cn(liquidGlassMenuSeparatorClassName, className)}
     {...props}
   />
 ))
@@ -102,7 +129,7 @@ const ContextMenuShortcut = ({
   return (
     <span
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground",
+        "ml-auto pl-4 text-[11px] font-medium tracking-[0.16em] text-text-tertiary dark:text-white/45",
         className
       )}
       {...props}
@@ -122,4 +149,3 @@ export {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 }
-

@@ -1,4 +1,4 @@
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
@@ -8,16 +8,16 @@ use crate::events::{
     emit_runtime_tool_result,
 };
 use crate::helpers::{
-    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
     extract_markdown_frontmatter_block, get_draft_type_from_file_name, normalize_relative_path,
-    strip_markdown_frontmatter,
+    strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION,
+    POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
 use crate::runtime::{McpServerRecord, SkillRecord};
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
-use crate::{AppState, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path};
+use crate::{make_id, now_iso, payload_field, payload_string, resolve_manuscript_path, AppState};
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
@@ -180,11 +180,10 @@ impl<'a> AppCliExecutor<'a> {
             "update" => self.call_channel("advisors:update", merge_payload(&args.options, payload)),
             "delete" => self.call_channel(
                 "advisors:delete",
-                json!(
-                    args.string(&["id", "advisor-id"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "advisors delete requires --id".to_string())?
-                ),
+                json!(args
+                    .string(&["id", "advisor-id"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "advisors delete requires --id".to_string())?),
             ),
             _ => Err(format!("unsupported advisors action: {action}")),
         }
@@ -392,11 +391,10 @@ impl<'a> AppCliExecutor<'a> {
             "list" => self.call_channel("manuscripts:list", json!({})),
             "read" => self.call_channel(
                 "manuscripts:read",
-                json!(
-                    args.string(&["path"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "manuscripts read requires --path".to_string())?
-                ),
+                json!(args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts read requires --path".to_string())?),
             ),
             "write" | "save" => {
                 let path = args
@@ -487,11 +485,10 @@ impl<'a> AppCliExecutor<'a> {
             }
             "delete" => self.call_channel(
                 "manuscripts:delete",
-                json!(
-                    args.string(&["path"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "manuscripts delete requires --path".to_string())?
-                ),
+                json!(args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts delete requires --path".to_string())?),
             ),
             _ => Err(format!("unsupported manuscripts action: {action}")),
         }
@@ -877,11 +874,10 @@ impl<'a> AppCliExecutor<'a> {
             "add" => self.call_channel("memory:add", merge_payload(&args.options, payload)),
             "delete" => self.call_channel(
                 "memory:delete",
-                json!(
-                    args.string(&["id"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "memory delete requires --id".to_string())?
-                ),
+                json!(args
+                    .string(&["id"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "memory delete requires --id".to_string())?),
             ),
             _ => Err(format!("unsupported memory action: {action}")),
         }
@@ -2066,7 +2062,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             let Some(metadata) = metadata else {
                 return Ok(None);
             };
-            let file_path = payload_string(metadata, "associatedFilePath").unwrap_or_default();
+            let file_path = payload_string(metadata, "associatedPackageFilePath")
+                .or_else(|| payload_string(metadata, "associatedFilePath"))
+                .unwrap_or_default();
             let draft_type = payload_string(metadata, "associatedPackageKind")
                 .or_else(|| payload_string(metadata, "draftType"))
                 .unwrap_or_else(|| get_draft_type_from_file_name(&file_path).to_string());
@@ -3315,12 +3313,11 @@ mod tests {
 
         assert!(path.starts_with("video/"));
         assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
-        assert!(
-            path.trim_start_matches("video/")
-                .trim_end_matches(VIDEO_DRAFT_EXTENSION)
-                .chars()
-                .all(|ch| ch.is_ascii_digit())
-        );
+        assert!(path
+            .trim_start_matches("video/")
+            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
     }
 
     #[test]
@@ -3331,12 +3328,11 @@ mod tests {
 
         assert!(path.starts_with("video/custom/"));
         assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
-        assert!(
-            path.trim_start_matches("video/custom/")
-                .trim_end_matches(VIDEO_DRAFT_EXTENSION)
-                .chars()
-                .all(|ch| ch.is_ascii_digit())
-        );
+        assert!(path
+            .trim_start_matches("video/custom/")
+            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
     }
 
     #[test]
@@ -3447,10 +3443,8 @@ mod tests {
         .expect("storyboard prompt should compile");
 
         assert!(prompt.contains("Image 1: Jamba 人物主体参考"));
-        assert!(
-            prompt
-                .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。")
-        );
+        assert!(prompt
+            .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。"));
         assert!(prompt.contains("Follow the beat order exactly; do not collapse the storyboard into one generic summary."));
         assert!(
             prompt.contains("Align body rhythm, lip-sync feel, and timing accents with Audio 1.")

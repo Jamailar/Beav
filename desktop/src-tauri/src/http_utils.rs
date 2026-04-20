@@ -1,5 +1,5 @@
 use base64::Engine;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::Write;
 
 use crate::configure_background_command;

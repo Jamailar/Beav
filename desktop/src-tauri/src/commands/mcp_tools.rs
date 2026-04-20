@@ -2,7 +2,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::session_lineage_fields;
 use crate::tools::registry::diagnostics_tool_items;
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {

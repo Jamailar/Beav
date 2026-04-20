@@ -5,6 +5,7 @@ mod agent;
 mod app_shared;
 mod assistant_core;
 mod auth;
+mod chat_binding;
 mod chat_helpers;
 mod chat_title;
 mod commands;
@@ -34,7 +35,7 @@ mod subagents;
 mod tools;
 mod workspace_loaders;
 
-use agent::{PreparedWanderTurn, execute_prepared_wander_turn};
+use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
     resolve_runtime_mode_for_session, update_chat_runtime_state,
@@ -49,26 +50,27 @@ use persistence::{
     load_store, persist_store, with_store, with_store_mut,
 };
 use runtime::{
+    append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
+    resolve_runtime_mode_from_context_type, role_sequence_for_route,
+    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord,
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
     RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig,
     RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry,
     RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
-    SkillRecord, append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms,
-    resolve_chat_config, resolve_runtime_mode_from_context_type, role_sequence_for_route,
-    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
+    SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -799,6 +801,46 @@ fn now_ms() -> u128 {
 
 fn now_iso() -> String {
     now_ms().to_string()
+}
+
+pub(crate) fn parse_timestamp_ms(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = trimmed.parse::<i64>() {
+        if parsed.abs() >= 1_000_000_000_000 {
+            return Some(parsed);
+        }
+        if parsed.abs() >= 1_000_000_000 {
+            return parsed.checked_mul(1000);
+        }
+    }
+    time::OffsetDateTime::parse(trimmed, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .and_then(|parsed| i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok())
+}
+
+pub(crate) fn format_timestamp_rfc3339_from_ms(timestamp_ms: i64) -> Option<String> {
+    let timestamp_ns = i128::from(timestamp_ms).checked_mul(1_000_000)?;
+    let parsed = time::OffsetDateTime::from_unix_timestamp_nanos(timestamp_ns).ok()?;
+    parsed
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
+pub(crate) fn normalize_timestamp_string(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    parse_timestamp_ms(trimmed)
+        .and_then(format_timestamp_rfc3339_from_ms)
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+pub(crate) fn now_rfc3339() -> String {
+    format_timestamp_rfc3339_from_ms(now_ms() as i64).unwrap_or_else(now_iso)
 }
 
 fn make_id(prefix: &str) -> String {
@@ -1619,10 +1661,37 @@ fn load_work_items_from_fs(redclaw_root: &Path) -> Vec<WorkItemRecord> {
     workspace_loaders::load_work_items_from_fs(redclaw_root)
 }
 
-fn browser_plugin_bundled_root() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("Plugin")
+fn browser_plugin_bundled_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            candidates.push(path);
+        }
+    };
+
+    push(cwd.join("Plugin"));
+    push(cwd.join("../Plugin"));
+    push(cwd.join("../../Plugin"));
+    push(manifest_dir.join("../Plugin"));
+    push(manifest_dir.join("../../Plugin"));
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push(resource_dir.join("Plugin"));
+        push(resource_dir.join("browser-extension"));
+    }
+
+    candidates
+}
+
+fn browser_plugin_bundled_root(app: &AppHandle) -> Option<PathBuf> {
+    browser_plugin_bundled_candidates(app)
+        .into_iter()
+        .find(|path| path.join("manifest.json").exists())
 }
 
 fn browser_plugin_export_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -3108,10 +3177,6 @@ fn editor_session_prompt_context(
             payload_string(&metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
         let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
         if workspace_mode == "richpost-theme-editing" && package_kind == "richpost" {
-            let file_path = payload_string(&metadata, "associatedFilePath")
-                .or_else(|| payload_string(&metadata, "contextId"))
-                .unwrap_or_default();
-            let title = payload_string(&metadata, "associatedPackageTitle").unwrap_or_default();
             let theme_id =
                 payload_string(&metadata, "associatedPackageThemeEditingId").unwrap_or_default();
             let theme_label =
@@ -3134,6 +3199,8 @@ fn editor_session_prompt_context(
             let theme_root = target_files
                 .get("themeRoot")
                 .and_then(|value| value.as_str().map(ToString::to_string))
+                .or_else(|| payload_string(&metadata, "associatedPackageThemeEditingRoot"))
+                .or_else(|| payload_string(&metadata, "associatedPackageThemeRoot"))
                 .unwrap_or_default();
             let master_files = target_files
                 .get("masterFiles")
@@ -3183,8 +3250,6 @@ fn editor_session_prompt_context(
                     &[
                         ("runtime_mode", runtime_mode.to_string()),
                         ("workspace_mode", workspace_mode.clone()),
-                        ("package_file", file_path.clone()),
-                        ("title", title.clone()),
                         ("theme_root", theme_root.clone()),
                         ("theme_id", theme_id.clone()),
                         ("theme_label", theme_label.clone()),
@@ -3210,8 +3275,6 @@ fn editor_session_prompt_context(
                 "\n\n## 当前图文主题编辑上下文\n\
 runtime_mode: {runtime_mode}\n\
 workspaceMode: {workspace_mode}\n\
-packageFile: {file_path}\n\
-title: {title}\n\
 themeId: {theme_id}\n\
 themeLabel: {theme_label}\n\
 \n\
@@ -3224,14 +3287,14 @@ masterFiles: {}\n\
 themeAssetsDir: {theme_assets_dir}\n\
 \n\
 ## 理解规则\n\
-- 当前主题有自己的 theme root，当前正在编辑的是 `themes/<themeId>/` 下这一整套文件。\n\
-- 当前会话只允许处理当前稿件包内的主题文件；不要改全局 `~/.redbox/themes/...` 之类的共享主题目录。\n\
-- 如果 `themeRecordFile` 为空，先为当前稿件包创建或保存 package-local custom theme，再继续编辑。\n\
-- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `theme.json`、layout tokens、母版 HTML 还是 page plan。\n\
-- 添加渐变背景、背景图、容器、颜色、圆角、阴影、文字区域时，优先修改当前 theme root 里的 `theme.json`、`layout.tokens.json` 和 `masters/*.master.html`。\n\
+- 当前主题有自己的 theme root，当前正在编辑的是工作区 `themes/<themeId>/` 下这一整套文件。\n\
+- 当前会话只允许处理当前绑定主题 root；不要顺手改其他 theme root。\n\
+- 如果 `themeRecordFile` 为空，先创建或保存当前工作区主题，再继续编辑。\n\
+- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `<themeId>.json`、layout tokens、母版 HTML 还是 page plan。\n\
+- 添加渐变背景、背景图、容器、颜色、圆角、阴影、文字区域时，优先修改当前 theme root 里的 `<themeId>.json`、`layout.tokens.json` 和 `masters/*.master.html`。\n\
 - 不要扫描其他 richpost 工程来猜当前模板；以上这些文件就是当前主题编辑页绑定的真实目标。\n\
-- 不要改 `content.md` 正文，不要手改 `pages/page-xxx.html` 作为最终来源。\n\
-- 工具调用失败就表示这次修改没有完成；在读回 package-local tokens 或预览前，不要宣称成功。\n\
+- 不要改正文，不要手改渲染产物作为最终来源。\n\
+- 工具调用失败就表示这次修改没有完成；在读回当前 theme root 的 tokens 或预览前，不要宣称成功。\n\
 \n\
 ## 当前规则\n\
 {style_rule}\n\
@@ -3384,6 +3447,10 @@ fn canonical_assistant_message(content: String, tool_calls: &[InteractiveToolCal
         }).collect::<Vec<_>>()
     })
 }
+
+const INTERACTIVE_MAX_TOOL_TURNS: usize = 100;
+const TOOL_BUDGET_EXHAUSTED_MESSAGE: &str =
+    "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。";
 
 fn canonical_tool_result_message(
     call_id: &str,
@@ -4204,17 +4271,17 @@ fn run_anthropic_interactive_chat_runtime(
         interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
     let mut messages = canonical_messages_to_anthropic_messages(&prompt_messages);
     let is_wander = runtime_mode == "wander";
-    let max_tool_turns = if is_wander { 25 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut tool_turn = 0usize;
 
-    while tool_turn < max_tool_turns || loop_guard.has_pending_toolless_turn() {
+    while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
         let forced_toolless_instruction = loop_guard.take_toolless_turn_message();
         let forcing_toolless_turn = forced_toolless_instruction.is_some();
-        if !forcing_toolless_turn {
+        let tool_turn_limit_reached = tool_turn >= INTERACTIVE_MAX_TOOL_TURNS;
+        if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
@@ -4244,9 +4311,16 @@ fn run_anthropic_interactive_chat_runtime(
                 instruction,
                 canonical_messages_to_anthropic_messages,
             );
+        } else if tool_turn_limit_reached {
+            append_internal_runtime_user_message(
+                &mut canonical_messages,
+                &mut messages,
+                TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
+                canonical_messages_to_anthropic_messages,
+            );
         }
 
-        let tools = if forcing_toolless_turn {
+        let tools = if forcing_toolless_turn || tool_turn_limit_reached {
             Vec::new()
         } else {
             anthropic_tools_for_session(state, runtime_mode, session_id)
@@ -4274,8 +4348,6 @@ fn run_anthropic_interactive_chat_runtime(
             .arg("-X")
             .arg("POST")
             .arg(format!("{}/messages", normalize_base_url(&config.base_url)))
-            .arg("--max-time")
-            .arg(if is_wander { "120" } else { "90" })
             .arg("-H")
             .arg("Content-Type: application/json")
             .arg("-H")
@@ -4760,7 +4832,7 @@ fn run_anthropic_interactive_chat_runtime(
         }
     }
 
-    Err("interactive runtime exceeded max turns".to_string())
+    Err("interactive runtime terminated unexpectedly".to_string())
 }
 
 fn run_gemini_interactive_chat_runtime(
@@ -4777,17 +4849,17 @@ fn run_gemini_interactive_chat_runtime(
         interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
     let mut contents = canonical_messages_to_gemini_contents(&prompt_messages);
     let is_wander = runtime_mode == "wander";
-    let max_tool_turns = if is_wander { 25 } else { 6 };
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut tool_turn = 0usize;
 
-    while tool_turn < max_tool_turns || loop_guard.has_pending_toolless_turn() {
+    while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
         let forced_toolless_instruction = loop_guard.take_toolless_turn_message();
         let forcing_toolless_turn = forced_toolless_instruction.is_some();
-        if !forcing_toolless_turn {
+        let tool_turn_limit_reached = tool_turn >= INTERACTIVE_MAX_TOOL_TURNS;
+        if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
@@ -4817,9 +4889,16 @@ fn run_gemini_interactive_chat_runtime(
                 instruction,
                 canonical_messages_to_gemini_contents,
             );
+        } else if tool_turn_limit_reached {
+            append_internal_runtime_user_message(
+                &mut canonical_messages,
+                &mut contents,
+                TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
+                canonical_messages_to_gemini_contents,
+            );
         }
 
-        let tools = if forcing_toolless_turn {
+        let tools = if forcing_toolless_turn || tool_turn_limit_reached {
             Vec::new()
         } else {
             gemini_tools_for_session(state, runtime_mode, session_id)
@@ -4858,8 +4937,6 @@ fn run_gemini_interactive_chat_runtime(
             .arg("-X")
             .arg("POST")
             .arg(endpoint)
-            .arg("--max-time")
-            .arg(if is_wander { "120" } else { "90" })
             .arg("-H")
             .arg("Content-Type: application/json")
             .arg("-d")
@@ -5330,7 +5407,7 @@ fn run_gemini_interactive_chat_runtime(
         }
     }
 
-    Err("interactive runtime exceeded max turns".to_string())
+    Err("interactive runtime terminated unexpectedly".to_string())
 }
 
 fn run_openai_interactive_chat_runtime(
@@ -5353,7 +5430,6 @@ fn run_openai_interactive_chat_runtime(
     );
 
     let is_wander = runtime_mode == "wander";
-    let max_tool_turns = if is_wander { 25 } else { 6 };
     let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
     let disable_qwen_thinking =
         is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
@@ -5364,10 +5440,11 @@ fn run_openai_interactive_chat_runtime(
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut tool_turn = 0usize;
 
-    while tool_turn < max_tool_turns || loop_guard.has_pending_toolless_turn() {
+    while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
         let forced_toolless_instruction = loop_guard.take_toolless_turn_message();
         let forcing_toolless_turn = forced_toolless_instruction.is_some();
-        if !forcing_toolless_turn {
+        let tool_turn_limit_reached = tool_turn >= INTERACTIVE_MAX_TOOL_TURNS;
+        if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
@@ -5392,7 +5469,7 @@ fn run_openai_interactive_chat_runtime(
                     "none"
                 } else if is_wander && tool_turn == 1 {
                     "required"
-                } else if is_wander && wander_saw_tool_call && tool_turn == max_tool_turns {
+                } else if tool_turn_limit_reached {
                     "none"
                 } else {
                     "auto"
@@ -5407,12 +5484,19 @@ fn run_openai_interactive_chat_runtime(
                 instruction,
                 canonical_messages_to_openai_messages,
             );
+        } else if tool_turn_limit_reached {
+            append_internal_runtime_user_message(
+                &mut canonical_messages,
+                &mut messages,
+                TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
+                canonical_messages_to_openai_messages,
+            );
         }
         let tool_choice = if forcing_toolless_turn {
             json!("none")
         } else if is_wander && tool_turn == 1 {
             json!("required")
-        } else if is_wander && wander_saw_tool_call && tool_turn == max_tool_turns {
+        } else if tool_turn_limit_reached {
             json!("none")
         } else {
             json!("auto")
@@ -5444,7 +5528,7 @@ fn run_openai_interactive_chat_runtime(
                 runtime_mode,
                 config,
                 &body,
-                Some(if is_wander { 120 } else { 90 }),
+                None,
             ) {
                 Ok(value) => value,
                 Err(error) => {
@@ -5460,7 +5544,7 @@ fn run_openai_interactive_chat_runtime(
                 config.api_key.as_deref(),
                 &[],
                 Some(body),
-                Some(if is_wander { 120 } else { 90 }),
+                None,
             )?;
             let choice = response
                 .get("choices")
@@ -5528,7 +5612,7 @@ fn run_openai_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
-            if is_wander && !wander_saw_tool_call && tool_turn < max_tool_turns {
+            if is_wander && !wander_saw_tool_call && tool_turn < INTERACTIVE_MAX_TOOL_TURNS {
                 let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 append_internal_runtime_user_message(
                     &mut canonical_messages,
@@ -5871,9 +5955,9 @@ fn run_openai_interactive_chat_runtime(
         }
     }
     Err(if is_wander {
-        "wander interactive runtime exceeded max tool turns".to_string()
+        "wander interactive runtime terminated unexpectedly".to_string()
     } else {
-        "interactive runtime exceeded max tool turns".to_string()
+        "interactive runtime terminated unexpectedly".to_string()
     })
 }
 
@@ -6473,14 +6557,12 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
 const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
-    thread::spawn(move || {
-        loop {
-            let state = app.state::<AppState>();
-            if auth::should_run_background_refresh(&state) {
-                let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
-            }
-            thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
+    thread::spawn(move || loop {
+        let state = app.state::<AppState>();
+        if auth::should_run_background_refresh(&state) {
+            let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
         }
+        thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
     })
 }
 

@@ -5,7 +5,7 @@ use crate::persistence::{
 use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};

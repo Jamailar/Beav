@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Columns,
   Download,
-  FileText,
   Image as ImageIcon,
   Loader2,
   MessageSquare,
@@ -24,7 +23,7 @@ const ChatWorkspace = lazy(async () => ({
 }));
 
 type WritingDraftType = 'longform' | 'richpost' | 'unknown';
-type WritingWorkbenchTab = 'manuscript' | 'layout' | 'wechat' | 'richpost' | 'article-card';
+type WritingWorkbenchTab = 'manuscript' | 'layout' | 'wechat' | 'richpost';
 
 type HtmlPreviewSource = {
   filePath?: string | null;
@@ -176,6 +175,8 @@ export interface WritingDraftWorkbenchProps {
   richpostFontScale?: number | null;
   richpostLineHeightScale?: number | null;
   richpostThemePresets?: RichpostThemePreset[];
+  richpostThemesDir?: string | null;
+  richpostThemeTemplateFile?: string | null;
   isApplyingRichpostTheme?: boolean;
   longformLayoutPresetId?: string | null;
   longformLayoutPresets?: LongformLayoutPreset[];
@@ -210,6 +211,7 @@ const RICHPOST_SHORTCUTS = [
 const RICHPOST_LAYOUT_SKILL_NAME = 'richpost-layout-designer';
 const RICHPOST_THEME_EDITOR_SKILL_NAME = 'richpost-theme-editor';
 const LONGFORM_LAYOUT_SKILL_NAME = 'longform-layout-designer';
+const SHOW_RICHPOST_THEME_EDITOR_CHAT = false;
 const PRESET_PREVIEW_TITLE = 'RedBox';
 const RICHPOST_FONT_SCALE_MIN = 0.8;
 const RICHPOST_FONT_SCALE_MAX = 1.6;
@@ -772,7 +774,7 @@ function RichpostThemeEditorOverlay({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="rounded-full border border-black/10 bg-white/92 px-3 py-1.5 text-[12px] font-medium text-black/65">通过对话修改首页、内容页和尾页风格</div>
+            <div className="rounded-full border border-black/10 bg-white/92 px-3 py-1.5 text-[12px] font-medium text-black/65">编辑首页、内容页和尾页风格</div>
             <button
               type="button"
               onClick={onSave}
@@ -785,8 +787,18 @@ function RichpostThemeEditorOverlay({
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px]">
-          <section className="min-h-0 overflow-y-auto border-r border-black/6 px-6 py-6">
+        <div
+          className={clsx(
+            'grid min-h-0 flex-1',
+            SHOW_RICHPOST_THEME_EDITOR_CHAT ? 'grid-cols-[minmax(0,1fr)_420px]' : 'grid-cols-1'
+          )}
+        >
+          <section
+            className={clsx(
+              'min-h-0 overflow-y-auto px-6 py-6',
+              SHOW_RICHPOST_THEME_EDITOR_CHAT && 'border-r border-black/6'
+            )}
+          >
             <div className="mx-auto max-w-[1100px]">
               <div
                 className="mb-5 max-w-[720px] rounded-[22px] px-5 py-5"
@@ -1018,48 +1030,50 @@ function RichpostThemeEditorOverlay({
             </div>
           </section>
 
-          <aside className="min-h-0 border-l border-black/6 bg-white/72 backdrop-blur-xl">
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-black/6 px-5 py-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">对话修改</div>
-                <div className="mt-2 text-[18px] font-semibold text-text-primary">直接描述你想要的主题风格</div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-hidden">
-                {editorChatSessionId && editorChatReady ? (
-                  <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
-                    <ChatWorkspace
-                      isActive={isActive}
-                      fixedSessionId={editorChatSessionId}
-                      showClearButton={false}
-                      showWelcomeShortcuts={false}
-                      showComposerShortcuts
-                      fixedSessionContextIndicatorMode="corner-ring"
-                      contentLayout="wide"
-                      contentWidthPreset="default"
-                      allowFileUpload
-                      messageWorkflowPlacement="bottom"
-                      messageWorkflowVariant="compact"
-                      messageWorkflowEmphasis="default"
-                      welcomeTitle="图文排版"
-                      welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
-                      shortcuts={shortcuts}
-                      welcomeShortcuts={shortcuts}
-                      fixedSessionBannerText={`图文主题编辑 · ${themeDraft.label || '当前主题'}`}
-                    />
-                  </Suspense>
-                ) : (
-                  <div className="flex h-full items-center justify-center px-6 text-center">
-                    <div>
-                      <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
-                      <div className="mt-3 text-sm text-text-secondary">
-                        {editorChatSessionId ? '正在同步当前主题上下文...' : '正在初始化 AI 会话...'}
+          {SHOW_RICHPOST_THEME_EDITOR_CHAT ? (
+            <aside className="min-h-0 border-l border-black/6 bg-white/72 backdrop-blur-xl">
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="border-b border-black/6 px-5 py-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">对话修改</div>
+                  <div className="mt-2 text-[18px] font-semibold text-text-primary">直接描述你想要的主题风格</div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {editorChatSessionId && editorChatReady ? (
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
+                      <ChatWorkspace
+                        isActive={isActive}
+                        fixedSessionId={editorChatSessionId}
+                        showClearButton={false}
+                        showWelcomeShortcuts={false}
+                        showComposerShortcuts
+                        fixedSessionContextIndicatorMode="corner-ring"
+                        contentLayout="wide"
+                        contentWidthPreset="default"
+                        allowFileUpload
+                        messageWorkflowPlacement="bottom"
+                        messageWorkflowVariant="compact"
+                        messageWorkflowEmphasis="default"
+                        welcomeTitle="图文排版"
+                        welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
+                        shortcuts={shortcuts}
+                        welcomeShortcuts={shortcuts}
+                        fixedSessionBannerText={`图文主题编辑 · ${themeDraft.label || '当前主题'}`}
+                      />
+                    </Suspense>
+                  ) : (
+                    <div className="flex h-full items-center justify-center px-6 text-center">
+                      <div>
+                        <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
+                        <div className="mt-3 text-sm text-text-secondary">
+                          {editorChatSessionId ? '正在同步当前主题上下文...' : '正在初始化 AI 会话...'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          </aside>
+            </aside>
+          ) : null}
         </div>
       </div>
     </div>
@@ -1079,7 +1093,7 @@ function buildRichpostExportImagePath(basePath: string, pageIndex: number): stri
 }
 
 function buildRichpostExportPageReadPath(packageFilePath: string, pageId: string): string {
-  const normalizedPackagePath = String(packageFilePath || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const normalizedPackagePath = String(packageFilePath || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
   return `${normalizedPackagePath}/pages/${pageId}.html`;
 }
 
@@ -1420,6 +1434,8 @@ export function WritingDraftWorkbench({
   richpostFontScale: richpostFontScaleProp = 1,
   richpostLineHeightScale: richpostLineHeightScaleProp = 1,
   richpostThemePresets = [],
+  richpostThemesDir = null,
+  richpostThemeTemplateFile = null,
   isApplyingRichpostTheme = false,
   longformLayoutPresetId = null,
   longformLayoutPresets = [],
@@ -1538,8 +1554,7 @@ export function WritingDraftWorkbench({
     if (isRichPost) {
       return [
         { id: 'manuscript' as const, label: '稿件' },
-        { id: 'richpost' as const, label: '图文' },
-        { id: 'article-card' as const, label: '长文卡片' },
+        { id: 'richpost' as const, label: '卡片' },
       ];
     }
 
@@ -1562,10 +1577,7 @@ export function WritingDraftWorkbench({
 
   const splitPreviewOptions = useMemo(() => {
     if (isRichPost) {
-      return [
-        { id: 'richpost' as const, label: '图文排版' },
-        { id: 'article-card' as const, label: '长文排版' },
-      ];
+      return [{ id: 'richpost' as const, label: '卡片排版' }];
     }
 
     return [{ id: 'layout' as const, label: '长文排版' }];
@@ -1599,7 +1611,7 @@ export function WritingDraftWorkbench({
     if (isRichpostLayoutMode) {
       return {
         id: 'richpost-layout',
-        label: '图文排版',
+        label: '卡片排版',
         activeSkills: [RICHPOST_LAYOUT_SKILL_NAME],
       };
     }
@@ -1616,7 +1628,7 @@ export function WritingDraftWorkbench({
         activeSkills: [LONGFORM_LAYOUT_SKILL_NAME],
       };
     }
-    if (activeTab === 'layout' || activeTab === 'wechat' || activeTab === 'article-card' || (activeTab === 'manuscript' && isSplitCompareEnabled)) {
+    if (activeTab === 'layout' || activeTab === 'wechat' || (activeTab === 'manuscript' && isSplitCompareEnabled)) {
       return { id: 'article-layout', label: '长文排版', activeSkills: [] };
     }
     return { id: 'manuscript-editing', label: '稿件编辑', activeSkills: [] };
@@ -1790,15 +1802,21 @@ export function WritingDraftWorkbench({
         ? baseTheme.id
         : null;
     if (targetTheme?.source === 'custom' && baseThemeId) {
+      const normalizedThemesDir = typeof richpostThemesDir === 'string' && richpostThemesDir.trim()
+        ? richpostThemesDir.replace(/\\/g, '/').replace(/\/+$/, '')
+        : null;
+      const normalizedThemeTemplateFile = typeof richpostThemeTemplateFile === 'string' && richpostThemeTemplateFile.trim()
+        ? richpostThemeTemplateFile.replace(/\\/g, '/')
+        : null;
       const normalizedDraft = normalizeRichpostThemeDraft(baseTheme);
       setRichpostThemeEditorDraft(normalizedDraft);
       richpostThemeEditorLastSavedSignatureRef.current = richpostThemeDraftSignature(normalizedDraft);
       setRichpostThemeEditorBaseThemeId(baseThemeId);
       setRichpostThemeEditorThemeId(baseThemeId);
       setRichpostThemeEditorThemeLabel(typeof baseTheme.label === 'string' ? baseTheme.label : normalizedDraft.label);
-      setRichpostThemeEditorThemeRoot(`${filePath.replace(/\\/g, '/')}/themes/${baseThemeId}`);
-      setRichpostThemeEditorThemeFile(`${filePath.replace(/\\/g, '/')}/themes/${baseThemeId}/theme.json`);
-      setRichpostThemeEditorThemeTemplateFile(`${filePath.replace(/\\/g, '/')}/themes/richpost-theme-template.md`);
+      setRichpostThemeEditorThemeRoot(normalizedThemesDir ? `${normalizedThemesDir}/${baseThemeId}` : null);
+      setRichpostThemeEditorThemeFile(normalizedThemesDir ? `${normalizedThemesDir}/${baseThemeId}/${baseThemeId}.json` : null);
+      setRichpostThemeEditorThemeTemplateFile(normalizedThemeTemplateFile);
       setRichpostThemeEditorPreviewPages([]);
       setRichpostThemeContextMenu({ visible: false, x: 0, y: 0, theme: null });
       setIsRichpostThemeDrawerOpen(false);
@@ -2244,14 +2262,14 @@ export function WritingDraftWorkbench({
               onClick={() => setIsRichpostThemeDrawerOpen((current) => !current)}
               className={clsx(
                 compact
-                  ? 'absolute right-2 top-2 z-20 rounded-full border border-border bg-surface-primary/92 p-2 text-text-tertiary shadow-sm backdrop-blur transition hover:text-text-primary'
-                  : 'absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-border bg-surface-primary/92 p-2 text-text-tertiary shadow-sm backdrop-blur transition hover:text-text-primary',
+                  ? 'absolute right-2 top-2 z-20 inline-flex items-center rounded-full border border-border bg-surface-primary/92 px-3 py-1.5 text-[12px] font-medium text-text-secondary shadow-sm backdrop-blur transition hover:text-text-primary'
+                  : 'absolute right-3 top-3 z-20 inline-flex items-center rounded-full border border-border bg-surface-primary/92 px-3.5 py-1.5 text-[13px] font-medium text-text-secondary shadow-sm backdrop-blur transition hover:text-text-primary',
                 isRichpostThemeDrawerOpen && 'pointer-events-none opacity-0'
               )}
               aria-label="打开图文主题抽屉"
               title="图文主题"
             >
-              <Sparkles className="h-4 w-4" />
+              主题
             </button>
             <div
               className={clsx(
@@ -2740,37 +2758,6 @@ export function WritingDraftWorkbench({
                 </div>
               </div>
             )}
-          </div>
-          <div className="border-t border-border px-5 py-4">
-            <div className="grid grid-cols-3 gap-2 text-left text-[11px] text-text-tertiary">
-              <div className="rounded-2xl border border-border bg-surface-primary/85 px-3 py-2">
-                <div className="flex items-center gap-2 text-text-secondary">
-                  {isRichPost ? <ImageIcon className="h-3.5 w-3.5 text-amber-500" /> : <FileText className="h-3.5 w-3.5 text-accent-primary" />}
-                  当前类型
-                </div>
-                <div className="mt-2 text-xs font-medium text-text-primary">{isRichPost ? '图文稿' : '长文稿'}</div>
-              </div>
-              <div className="rounded-2xl border border-border bg-surface-primary/85 px-3 py-2">
-                <div className="flex items-center gap-2 text-text-secondary">
-                  <Sparkles className="h-3.5 w-3.5 text-fuchsia-500" />
-                  预览模式
-                </div>
-                <div className="mt-2 text-xs font-medium text-text-primary">
-                  {activeTab === 'manuscript' && isSplitCompareEnabled
-                    ? `分栏 / ${activeSplitPreviewLabel}`
-                    : tabs.find((tab) => tab.id === activeTab)?.label || '稿件'}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-border bg-surface-primary/85 px-3 py-2">
-                <div className="flex items-center gap-2 text-text-secondary">
-                  <MessageSquare className="h-3.5 w-3.5 text-emerald-500" />
-                  会话状态
-                </div>
-                <div className="mt-2 text-xs font-medium text-text-primary">
-                  {editorChatSessionId && editorChatReady ? '已绑定文件' : '初始化中'}
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </aside>

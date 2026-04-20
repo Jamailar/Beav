@@ -1,8 +1,8 @@
 use tauri::State;
 
-use crate::AppState;
 use crate::persistence::with_store;
 use crate::tools::registry::{descriptor_by_name_for_runtime_mode, descriptor_by_name_for_session};
+use crate::AppState;
 
 pub fn ensure_tool_allowed_for_runtime_mode(
     runtime_mode: &str,

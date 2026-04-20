@@ -5,7 +5,7 @@ use crate::skills::{
     skill_allows_runtime_mode, skill_catalog_changed, skills_catalog_list_value,
 };
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 fn is_likely_image_model_id(model_id: &str) -> bool {

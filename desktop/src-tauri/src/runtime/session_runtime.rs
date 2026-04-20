@@ -1,16 +1,16 @@
-#[cfg(test)]
-use crate::ChatSessionRecord;
 use crate::persistence::with_store;
 use crate::runtime::{
-    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
-    append_session_checkpoint,
+    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
+    SessionTranscriptRecord,
 };
+#[cfg(test)]
+use crate::ChatSessionRecord;
 use crate::{
-    AppState, AppStore, ChatMessageRecord, ChatSessionContextRecord, make_id, now_iso,
-    slug_from_relative_path, store_root,
+    make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
+    ChatSessionContextRecord,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
@@ -1864,18 +1864,19 @@ mod tests {
             ));
         }
 
-        assert!(
-            update_session_context_record(&mut store, "session-compact-threshold", "auto", false,)
-                .is_none()
-        );
-
-        let manual = update_session_context_record(
+        assert!(update_session_context_record(
             &mut store,
             "session-compact-threshold",
-            "manual",
-            true,
+            "auto",
+            false,
         )
-        .expect("manual compaction should archive history once there are more than tail messages");
+        .is_none());
+
+        let manual =
+            update_session_context_record(&mut store, "session-compact-threshold", "manual", true)
+                .expect(
+                "manual compaction should archive history once there are more than tail messages",
+            );
         assert_eq!(manual.compacted_message_count, 6);
     }
 

@@ -31,6 +31,11 @@ interface AdvisorTemplate {
     knowledgeLanguage?: string;
 }
 
+interface PendingKnowledgeFile {
+    path: string;
+    name: string;
+}
+
 const AVATAR_OPTIONS = ['🧠', '💡', '📊', '🎨', '📝', '🔍', '💼', '🎯', '🌟', '🚀'];
 const AVATAR_COLORS = [
     'bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-orange-500',
@@ -453,7 +458,8 @@ export function Advisors({
 
     const handleSaveAdvisor = async (
         data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
-        youtubeParams?: { url: string; count: number; channelId?: string }
+        youtubeParams?: { url: string; count: number; channelId?: string },
+        knowledgeFilePaths?: string[],
     ) => {
         try {
             let newId: string | undefined;
@@ -473,6 +479,31 @@ export function Advisors({
                 if (res.success) newId = res.id;
             }
 
+            if (newId && !editingAdvisor && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+                await window.ipcRenderer.advisors.uploadKnowledge({
+                    advisorId: newId,
+                    filePaths: knowledgeFilePaths,
+                });
+            }
+
+            if (newId && !editingAdvisor && !youtubeParams && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+                const personaResult = await window.ipcRenderer.advisors.generatePersona({
+                    advisorId: newId,
+                    channelName: data.name,
+                    channelDescription: data.personality || '',
+                    videoTitles: [],
+                    knowledgeLanguage: data.knowledgeLanguage || '中文',
+                }) as { success: boolean; systemPrompt?: string; personality?: string; error?: string };
+                if (!personaResult.success || !personaResult.systemPrompt) {
+                    throw new Error(personaResult.error || '角色创建失败');
+                }
+                await window.ipcRenderer.advisors.update({
+                    id: newId,
+                    systemPrompt: personaResult.systemPrompt,
+                    personality: personaResult.personality || data.personality,
+                });
+            }
+
             if (newId && youtubeParams && youtubeParams.count > 0) {
                 // Trigger background download
                 window.ipcRenderer.downloadYoutubeSubtitles({
@@ -488,9 +519,13 @@ export function Advisors({
                 const nextSelectedAdvisor = list.find((advisor) => advisor.id === newId) || null;
                 setSelectedAdvisor(nextSelectedAdvisor);
                 onSelectedAdvisorIdChange?.(nextSelectedAdvisor?.id || null);
+                if (!editingAdvisor) {
+                    void appAlert('角色创建成功');
+                }
             }
         } catch (e) {
             console.error('Failed to save advisor:', e);
+            void appAlert(`创建成员失败：${e instanceof Error ? e.message : '未知错误'}`);
         }
     };
 
@@ -1513,7 +1548,11 @@ function AdvisorModal({
 }: {
     advisor: Advisor | null;
     defaultMode?: AdvisorCreateMode;
-    onSave: (data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>, youtubeParams?: { url: string; count: number; channelId?: string }) => void;
+    onSave: (
+        data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
+        youtubeParams?: { url: string; count: number; channelId?: string },
+        knowledgeFilePaths?: string[],
+    ) => Promise<void>;
     onClose: () => void;
 }) {
     const [mode, setMode] = useState<AdvisorCreateMode>(advisor ? 'manual' : (defaultMode || 'manual'));
@@ -1526,6 +1565,7 @@ function AdvisorModal({
     const [selectedTemplateId, setSelectedTemplateId] = useState('');
     const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
     const [templateLoadError, setTemplateLoadError] = useState('');
+    const [pendingKnowledgeFiles, setPendingKnowledgeFiles] = useState<PendingKnowledgeFile[]>([]);
 
     // yt-dlp 状态检查
     const [ytdlpStatus, setYtdlpStatus] = useState<{ installed: boolean; version?: string } | null>(null);
@@ -1540,6 +1580,7 @@ function AdvisorModal({
     const [youtubeInfo, setYoutubeInfo] = useState<{ channelId: string; channelName: string; channelDescription: string; avatarUrl: string; recentVideos?: Array<{ id: string; title: string }> } | null>(null);
 
     const [isOptimizing, setIsOptimizing] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || null;
 
     const applyTemplate = useCallback((template: AdvisorTemplate) => {
@@ -1640,20 +1681,30 @@ function AdvisorModal({
         }
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
+        if (isSubmitting) return;
         if (mode === 'template') {
             if (!selectedTemplate) return;
-            onSave({
+            setIsSubmitting(true);
+            try {
+                await onSave({
                 name: selectedTemplate.name || '',
                 avatar: selectedTemplate.avatar || AVATAR_OPTIONS[0],
                 personality: selectedTemplate.personality || '',
                 systemPrompt: selectedTemplate.systemPrompt || '',
                 knowledgeLanguage: selectedTemplate.knowledgeLanguage || '中文',
-            });
+                }, undefined, pendingKnowledgeFiles.map((file) => file.path));
+            } finally {
+                setIsSubmitting(false);
+            }
             return;
         }
 
         if (!name.trim()) return;
+        if (mode === 'manual' && pendingKnowledgeFiles.length === 0) {
+            void appAlert('手动创建成员时必须导入至少一个知识库文件');
+            return;
+        }
 
         let ytParams = undefined;
         if (mode === 'youtube' && youtubeUrl) {
@@ -1664,7 +1715,16 @@ function AdvisorModal({
             };
         }
 
-        onSave({ name, avatar, personality, systemPrompt, knowledgeLanguage }, ytParams);
+        setIsSubmitting(true);
+        try {
+            await onSave(
+                { name, avatar, personality, systemPrompt, knowledgeLanguage },
+                ytParams,
+                pendingKnowledgeFiles.map((file) => file.path),
+            );
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const handleOptimize = async () => {
@@ -1738,6 +1798,36 @@ function AdvisorModal({
         }
     };
 
+    const handlePickKnowledgeFiles = async () => {
+        try {
+            const result = await window.ipcRenderer.advisors.pickKnowledgeFiles<{
+                success?: boolean;
+                files?: Array<{ path?: string; name?: string }>;
+            }>();
+            const nextFiles = Array.isArray(result?.files)
+                ? result.files
+                    .map((file) => ({
+                        path: String(file?.path || '').trim(),
+                        name: String(file?.name || '').trim() || String(file?.path || '').split('/').pop() || '未命名文件',
+                    }))
+                    .filter((file) => file.path)
+                : [];
+            if (nextFiles.length === 0) return;
+            setPendingKnowledgeFiles((prev) => {
+                const merged = [...prev];
+                nextFiles.forEach((file) => {
+                    if (!merged.some((item) => item.path === file.path)) {
+                        merged.push(file);
+                    }
+                });
+                return merged;
+            });
+        } catch (error) {
+            console.error('Failed to pick knowledge files:', error);
+            void appAlert('选择知识库文件失败，请稍后重试');
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="w-full max-w-lg mx-4 bg-surface-primary rounded-xl border border-border shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
@@ -1760,7 +1850,7 @@ function AdvisorModal({
                                     mode === 'manual' ? "bg-surface-primary shadow-sm text-text-primary" : "text-text-tertiary hover:text-text-secondary"
                                 )}
                             >
-                                手动创建
+                                从资料蒸馏
                             </button>
                             <button
                                 onClick={() => setMode('template')}
@@ -1769,7 +1859,7 @@ function AdvisorModal({
                                     mode === 'template' ? "bg-surface-primary shadow-sm text-text-primary" : "text-text-tertiary hover:text-text-secondary"
                                 )}
                             >
-                                模板创建
+                                从模板创建
                             </button>
                             <button
                                 onClick={() => setMode('youtube')}
@@ -1778,7 +1868,7 @@ function AdvisorModal({
                                     mode === 'youtube' ? "bg-surface-primary shadow-sm text-text-primary" : "text-text-tertiary hover:text-text-secondary"
                                 )}
                             >
-                                从 YouTube 导入
+                                从YouTube导入
                             </button>
                         </div>
                     </div>
@@ -2061,38 +2151,96 @@ function AdvisorModal({
                                 </p>
                             </div>
 
-                            {/* System Prompt */}
-                            <div>
-                                <div className="flex items-center justify-between mb-1.5">
-                                    <label className="block text-xs font-medium text-text-secondary">角色设定（系统提示词）</label>
-                                    {mode === 'youtube' ? (
+                            {!advisor && (
+                                <div className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <label className="block text-xs font-medium text-text-secondary">知识库文件</label>
+                                            <p className="mt-1 text-[11px] text-text-tertiary">
+                                                创建成员时可直接导入资料，创建完成后会自动写入该成员的专属知识库。
+                                            </p>
+                                        </div>
                                         <button
-                                            onClick={handleGeneratePersona}
-                                            disabled={isOptimizing || !youtubeInfo}
-                                            className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            type="button"
+                                            onClick={() => void handlePickKnowledgeFiles()}
+                                            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
                                         >
-                                            <Sparkles className={clsx("w-3 h-3", isOptimizing && "animate-pulse")} />
-                                            {isOptimizing ? '生成中...' : '🤖 AI 生成人设'}
+                                            <Upload className="w-3 h-3" />
+                                            选择文件
                                         </button>
+                                    </div>
+
+                                    {pendingKnowledgeFiles.length === 0 ? (
+                                        <div className="mt-3 rounded-lg border border-dashed border-border bg-surface-primary px-3 py-4 text-center text-xs text-text-tertiary">
+                                            暂未选择知识库文件
+                                        </div>
                                     ) : (
-                                        <button
-                                            onClick={handleOptimize}
-                                            disabled={isOptimizing || (!name && !personality)}
-                                            className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            <Sparkles className={clsx("w-3 h-3", isOptimizing && "animate-pulse")} />
-                                            {isOptimizing ? '优化中...' : '✨ AI 智能优化'}
-                                        </button>
+                                        <div className="mt-3 max-h-36 space-y-2 overflow-auto">
+                                            {pendingKnowledgeFiles.map((file) => (
+                                                <div key={file.path} className="flex items-center justify-between rounded-lg border border-border bg-surface-primary px-3 py-2">
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="truncate text-sm text-text-primary">{file.name}</div>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPendingKnowledgeFiles((prev) => prev.filter((item) => item.path !== file.path))}
+                                                        className="ml-3 text-text-tertiary transition-colors hover:text-red-500"
+                                                        aria-label={`移除 ${file.name}`}
+                                                    >
+                                                        <X className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     )}
                                 </div>
-                                <textarea
-                                    value={systemPrompt}
-                                    onChange={(e) => setSystemPrompt(e.target.value)}
-                                    placeholder="描述这个角色的背景、专业领域、说话风格等...&#10;&#10;💡 提示：填写名称和描述后，点击「AI 智能优化」自动生成专业提示词"
-                                    rows={8}
-                                    className="w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                />
-                            </div>
+                            )}
+
+                            {mode === 'manual' ? (
+                                <div className="rounded-lg border border-accent-primary/20 bg-accent-primary/5 p-4">
+                                    <div className="flex items-start gap-2">
+                                        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-accent-primary" />
+                                        <div>
+                                            <div className="text-sm font-medium text-text-primary">系统会自动生成角色设定</div>
+                                            <p className="mt-1 text-[11px] text-text-tertiary">
+                                                你只需要填写名称、描述并导入知识库文件。点击创建后，后台会调用角色创建技能自动产出系统提示词。
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <label className="block text-xs font-medium text-text-secondary">角色设定（系统提示词）</label>
+                                        {mode === 'youtube' ? (
+                                            <button
+                                                onClick={handleGeneratePersona}
+                                                disabled={isOptimizing || !youtubeInfo}
+                                                className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Sparkles className={clsx("w-3 h-3", isOptimizing && "animate-pulse")} />
+                                                {isOptimizing ? '生成中...' : '🤖 AI 生成人设'}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={handleOptimize}
+                                                disabled={isOptimizing || (!name && !personality)}
+                                                className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Sparkles className={clsx("w-3 h-3", isOptimizing && "animate-pulse")} />
+                                                {isOptimizing ? '优化中...' : '✨ AI 智能优化'}
+                                            </button>
+                                        )}
+                                    </div>
+                                    <textarea
+                                        value={systemPrompt}
+                                        onChange={(e) => setSystemPrompt(e.target.value)}
+                                        placeholder="描述这个角色的背景、专业领域、说话风格等...&#10;&#10;💡 提示：填写名称和描述后，点击「AI 智能优化」自动生成专业提示词"
+                                        rows={8}
+                                        className="w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                    />
+                                </div>
+                            )}
                         </>
                     )}
                 </div>
@@ -2102,15 +2250,26 @@ function AdvisorModal({
                         取消
                     </button>
                     <button
-                        onClick={handleSubmit}
-                        disabled={mode === 'template' ? !selectedTemplate : !name.trim()}
+                        onClick={() => void handleSubmit()}
+                        disabled={isSubmitting || (mode === 'template' ? !selectedTemplate : !name.trim() || (mode === 'manual' && pendingKnowledgeFiles.length === 0))}
                         className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-accent-primary rounded-lg disabled:opacity-50"
                     >
-                        <Check className="w-4 h-4" />
-                        {advisor ? '保存' : mode === 'template' ? '按模板创建' : '创建'}
+                        {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                        {isSubmitting ? '创建中...' : advisor ? '保存' : mode === 'template' ? '按模板创建' : '创建'}
                     </button>
                 </div>
             </div>
+            {isSubmitting && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-sm">
+                    <div className="mx-6 w-full max-w-sm rounded-2xl border border-white/10 bg-surface-primary px-6 py-6 text-center shadow-2xl">
+                        <Loader2 className="mx-auto h-7 w-7 animate-spin text-accent-primary" />
+                        <div className="mt-4 text-base font-semibold text-text-primary">角色正在创建中</div>
+                        <p className="mt-2 text-sm text-text-tertiary">
+                            系统正在导入知识库并调用角色创建技能生成系统提示词，请稍后。
+                        </p>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

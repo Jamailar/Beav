@@ -1,11 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store};
 use crate::{
-    AppState, SubjectRecord, handle_subject_category_create, handle_subject_category_delete,
-    handle_subject_category_update, handle_subject_create, handle_subject_delete,
-    handle_subject_update, payload_string,
+    handle_subject_category_create, handle_subject_category_delete, handle_subject_category_update,
+    handle_subject_create, handle_subject_delete, handle_subject_update, payload_string, AppState,
+    SubjectRecord,
 };
 
 pub fn handle_subjects_channel(

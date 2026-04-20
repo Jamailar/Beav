@@ -206,6 +206,12 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
 
 type RuntimeSessionListItem = {
   id: string;
+  runtimeMode?: string;
+  contextBinding?: {
+    contextType?: string;
+    contextId?: string;
+    isContextBound?: boolean;
+  } | null;
   transcriptCount: number;
   checkpointCount: number;
   chatSession?: {
@@ -367,6 +373,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
   const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
+  const hasSelectedRuntimeSession = useMemo(
+    () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
+    [runtimeSessions, selectedRuntimeSessionId],
+  );
 
   const buildWeixinQrImageUrl = useCallback(async (rawUrl?: string): Promise<string | undefined> => {
     const text = String(rawUrl || '').trim();
@@ -392,6 +402,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const runtimeSessionsLoadRequestRef = useRef(0);
   const runtimeTaskTracesLoadRequestRef = useRef(0);
   const runtimeSessionDetailsLoadRequestRef = useRef(0);
+  const runtimeObservabilityRefreshTimerRef = useRef<number | null>(null);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
@@ -928,9 +939,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
-    if (!selectedRuntimeSessionId || !runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)) return;
+    if (!selectedRuntimeSessionId || !hasSelectedRuntimeSession) return;
     void loadRuntimeSessionDetails(selectedRuntimeSessionId);
-  }, [activeTab, formData.developer_mode_enabled, runtimeSessions, selectedRuntimeSessionId]);
+  }, [activeTab, formData.developer_mode_enabled, hasSelectedRuntimeSession, selectedRuntimeSessionId]);
 
   useEffect(() => {
     setTestStatus('idle');
@@ -1632,7 +1643,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
-  const loadRuntimeSessionDetails = useCallback(async (sessionId: string) => {
+  const loadRuntimeSessionDetails = useCallback(async (sessionId: string, options?: { background?: boolean }) => {
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedSessionId) {
       setRuntimeSessionTranscript([]);
@@ -1641,7 +1652,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     const requestId = ++runtimeSessionDetailsLoadRequestRef.current;
-    setIsRuntimeSessionLoading(true);
+    if (!options?.background) {
+      setIsRuntimeSessionLoading(true);
+    }
     try {
       const [transcript, checkpoints, toolResults] = await Promise.all([
         window.ipcRenderer.sessions.getTranscript(normalizedSessionId, 120),
@@ -1655,11 +1668,40 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (e) {
       console.error('Failed to load runtime session details', e);
     } finally {
-      if (requestId === runtimeSessionDetailsLoadRequestRef.current) {
+      if (!options?.background && requestId === runtimeSessionDetailsLoadRequestRef.current) {
         setIsRuntimeSessionLoading(false);
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    const scheduleRefresh = () => {
+      if (runtimeObservabilityRefreshTimerRef.current != null) {
+        window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
+      }
+      runtimeObservabilityRefreshTimerRef.current = window.setTimeout(() => {
+        runtimeObservabilityRefreshTimerRef.current = null;
+        void loadRuntimeSessions();
+        if (selectedRuntimeSessionId) {
+          void loadRuntimeSessionDetails(selectedRuntimeSessionId, { background: true });
+        }
+      }, 450);
+    };
+    const onRuntimeEvent = () => scheduleRefresh();
+    const onWanderProgress = () => scheduleRefresh();
+    window.ipcRenderer.on('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.on('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.off('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+      if (runtimeObservabilityRefreshTimerRef.current != null) {
+        window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
+        runtimeObservabilityRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeTab, formData.developer_mode_enabled, isActive, loadRuntimeSessionDetails, loadRuntimeSessions, selectedRuntimeSessionId]);
 
   const loadRuntimeHooks = useCallback(async () => {
     try {

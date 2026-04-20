@@ -271,7 +271,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
   const [models, setModels] = useState<ModelsResponseItem[]>(() => initialPanelSnapshot?.models || []);
   const [callRecords, setCallRecords] = useState<RedboxCallRecordItem[]>(() => initialPanelSnapshot?.callRecords || []);
-  const [rechargeAmount, setRechargeAmount] = useState('9.90');
+  const [rechargeAmount, setRechargeAmount] = useState('50');
   const [rechargeOrderNo, setRechargeOrderNo] = useState('');
   const [rechargeStatusText, setRechargeStatusText] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -1024,7 +1024,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               用户：{userName || '未命名用户'} · 模型 {models.length} 个 · 余额单位为积分（1 元 = {pointsPerYuan} 积分）
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              {[10, 20, 50, 100].map((amount) => (
+              {[20, 50, 100].map((amount) => (
                 <button
                   key={amount}
                   type="button"

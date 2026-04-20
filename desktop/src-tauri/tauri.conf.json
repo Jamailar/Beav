@@ -39,7 +39,8 @@
     "targets": ["app", "dmg", "nsis"],
     "resources": [
       "resources/knowledge-api-guide.html",
-      "../builtin-skills"
+      "../builtin-skills",
+      "../Plugin"
     ],
     "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
   }

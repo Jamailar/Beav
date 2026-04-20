@@ -27,7 +27,7 @@ import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
-import { loadRichpostPreviewHtml, renderRichpostHtmlToPng } from '../components/manuscripts/richpostPreviewImage';
+import { loadRichpostPreviewHtml, renderRichpostHtmlToPng, renderRichpostPageUrlToPng } from '../components/manuscripts/richpostPreviewImage';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -37,6 +37,8 @@ import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import type { EditorProjectFile } from '../components/manuscripts/editorProject';
 import { WritingDraftWorkbench } from '../components/manuscripts/WritingDraftWorkbench';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
+import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../features/chat/editorSessionBinding';
 import {
     ARTICLE_DRAFT_EXTENSION,
     AUDIO_DRAFT_EXTENSION,
@@ -56,17 +58,6 @@ const AudioDraftWorkbench = lazy(async () => ({
 type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
 type DraftLayout = 'gallery' | 'list';
 type CreateKind = 'folder' | 'longform' | 'richpost' | 'video' | 'audio';
-type EditorAiWorkspaceMode = {
-    id: string;
-    label: string;
-    activeSkills: string[];
-    themeEditingId?: string | null;
-    themeEditingLabel?: string | null;
-    themeEditingRoot?: string | null;
-    themeEditingFile?: string | null;
-    themeEditingTemplateFile?: string | null;
-};
-
 type FileNode = {
     name: string;
     path: string;
@@ -401,8 +392,8 @@ type PackageState = {
 type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
-const RICHPOST_CARD_PREVIEW_WIDTH = 540;
-const RICHPOST_CARD_PREVIEW_HEIGHT = 720;
+const RICHPOST_CARD_PREVIEW_WIDTH = 1080;
+const RICHPOST_CARD_PREVIEW_HEIGHT = 1440;
 const RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH = 1080;
 const RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT = 1440;
 const RICHPOST_CARD_PREVIEW_DEBOUNCE_MS = 700;
@@ -466,11 +457,16 @@ interface ManuscriptsProps {
 }
 
 const CREATE_KIND_OPTIONS: Array<{ id: CreateKind; label: string; icon: typeof FileText; accentClass: string; available: boolean; unavailableHint?: string }> = [
-    { id: 'longform', label: '长文', icon: FileText, accentClass: 'from-[#E8D9FF] via-[#F6EEFF] to-white text-[#7C57C8]', available: true },
+    { id: 'longform', label: '长文', icon: FileText, accentClass: 'from-[#E8D9FF] via-[#F6EEFF] to-white text-[#7C57C8]', available: false, unavailableHint: '暂未开放' },
     { id: 'richpost', label: '图文', icon: FileImage, accentClass: 'from-[#FFD9C7] via-[#FFF1E9] to-white text-[#C56B3D]', available: true },
     { id: 'video', label: '视频', icon: Clapperboard, accentClass: 'from-[#D6E7FF] via-[#EEF5FF] to-white text-[#4C76D8]', available: false, unavailableHint: '正在开发中' },
     { id: 'audio', label: '音频', icon: AudioLines, accentClass: 'from-[#D8F6E8] via-[#EFFCF5] to-white text-[#2E8B65]', available: false, unavailableHint: '正在开发中' },
 ];
+
+const CREATE_KIND_OPTION_MAP: Record<CreateKind, (typeof CREATE_KIND_OPTIONS)[number]> = CREATE_KIND_OPTIONS.reduce((acc, option) => {
+    acc[option.id] = option;
+    return acc;
+}, {} as Record<CreateKind, (typeof CREATE_KIND_OPTIONS)[number]>);
 
 const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
     { id: 'drafts', label: '稿件' },
@@ -1369,6 +1365,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     const handleCreateDraft = useCallback(async (kind: CreateKind = createKind) => {
         if (kind === 'folder') return;
+        const createOption = CREATE_KIND_OPTION_MAP[kind];
+        if (!createOption?.available) {
+            void appAlert(createOption?.unavailableHint || `${createOption?.label || '该类型'}暂不可创建`);
+            return;
+        }
         setCreateKind(kind);
         setIsCreating(true);
         try {
@@ -1615,42 +1616,42 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, [fileMetaMap]);
 
-    const refreshPackageState = useCallback(async (targetPath: string) => {
-        const isPackage = targetPath.endsWith(ARTICLE_DRAFT_EXTENSION)
-            || targetPath.endsWith(POST_DRAFT_EXTENSION)
-            || targetPath.endsWith(VIDEO_DRAFT_EXTENSION)
-            || targetPath.endsWith(AUDIO_DRAFT_EXTENSION);
-        if (!isPackage) {
-            setPackageState(null);
-            return;
-        }
-        const result = await window.ipcRenderer.invoke('manuscripts:get-package-state', targetPath) as {
-            success?: boolean;
-            state?: PackageState;
-        };
-        if (result?.success && result.state) {
-            setPackageState(result.state);
-        } else {
-            setPackageState(null);
-        }
-    }, []);
-
     const generateRichpostCardPreview = useCallback(async (
         targetFilePath: string,
+        pageFileUrl: string,
         pageFilePath: string,
         pageUpdatedAt: number,
     ) => {
-        if (!targetFilePath || !pageFilePath || !pageUpdatedAt) return;
+        if (!targetFilePath || !pageUpdatedAt) return;
+        const normalizedPageFileUrl = String(pageFileUrl || '').trim();
+        const normalizedPageFilePath = String(pageFilePath || '').trim();
+        if (!normalizedPageFileUrl && !normalizedPageFilePath) return;
         if (richpostPreviewGenerationRef.current.has(targetFilePath)) return;
         richpostPreviewGenerationRef.current.add(targetFilePath);
         try {
-            const html = await loadRichpostPreviewHtml(pageFilePath);
-            const dataUrl = await renderRichpostHtmlToPng(html, targetFilePath, {
+            const renderOptions = {
                 width: RICHPOST_CARD_PREVIEW_WIDTH,
                 height: RICHPOST_CARD_PREVIEW_HEIGHT,
                 viewportWidth: RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH,
                 viewportHeight: RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT,
-            });
+            };
+            let dataUrl = '';
+            if (normalizedPageFileUrl) {
+                try {
+                    dataUrl = await renderRichpostPageUrlToPng(normalizedPageFileUrl, targetFilePath, renderOptions);
+                } catch (renderByUrlError) {
+                    console.warn('Failed to render richpost preview by URL, falling back to HTML snapshot:', renderByUrlError);
+                }
+            }
+            if (!dataUrl) {
+                const html = await loadRichpostPreviewHtml(normalizedPageFilePath);
+                try {
+                    dataUrl = await renderRichpostHtmlToPng(html, targetFilePath, renderOptions);
+                } catch (renderByHtmlError) {
+                    console.warn('Failed to render richpost preview with scaled options, retrying legacy size:', renderByHtmlError);
+                    dataUrl = await renderRichpostHtmlToPng(html, targetFilePath);
+                }
+            }
             const dataBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
             const saved = await window.ipcRenderer.invoke('manuscripts:save-richpost-card-preview', {
                 filePath: targetFilePath,
@@ -1681,19 +1682,52 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         delayMs: number = RICHPOST_CARD_PREVIEW_DEBOUNCE_MS,
     ) => {
         if (!targetFilePath) return;
-        const firstPage = state?.richpostPages?.find((page) => page?.exists && page.file);
+        const firstPage = state?.richpostPages?.find((page) => page?.exists && (page.fileUrl || page.file));
+        const pageFileUrl = String(firstPage?.fileUrl || '').trim();
         const pageFilePath = String(firstPage?.file || '').trim();
         const pageUpdatedAt = Number(firstPage?.updatedAt || 0) || 0;
-        if (!pageFilePath || !pageUpdatedAt) return;
+        if ((!pageFileUrl && !pageFilePath) || !pageUpdatedAt) return;
         if ((richpostCardPreviewRenderedAtRef.current[targetFilePath] || 0) >= pageUpdatedAt) return;
         if (richpostCardPreviewTimerRef.current != null) {
             window.clearTimeout(richpostCardPreviewTimerRef.current);
         }
         richpostCardPreviewTimerRef.current = window.setTimeout(() => {
             richpostCardPreviewTimerRef.current = null;
-            void generateRichpostCardPreview(targetFilePath, pageFilePath, pageUpdatedAt);
+            void generateRichpostCardPreview(targetFilePath, pageFileUrl, pageFilePath, pageUpdatedAt);
         }, delayMs);
     }, [generateRichpostCardPreview]);
+
+    const applyPackageState = useCallback((
+        targetPath: string,
+        nextState?: PackageState | null,
+        delayMs: number = 120,
+    ) => {
+        setPackageState(nextState || null);
+        if (!targetPath || !nextState || (nextState.richpostPages?.length || 0) === 0) {
+            return;
+        }
+        scheduleRichpostCardPreviewFromState(targetPath, nextState, delayMs);
+    }, [scheduleRichpostCardPreviewFromState]);
+
+    const refreshPackageState = useCallback(async (targetPath: string) => {
+        const isPackage = targetPath.endsWith(ARTICLE_DRAFT_EXTENSION)
+            || targetPath.endsWith(POST_DRAFT_EXTENSION)
+            || targetPath.endsWith(VIDEO_DRAFT_EXTENSION)
+            || targetPath.endsWith(AUDIO_DRAFT_EXTENSION);
+        if (!isPackage) {
+            setPackageState(null);
+            return;
+        }
+        const result = await window.ipcRenderer.invoke('manuscripts:get-package-state', targetPath) as {
+            success?: boolean;
+            state?: PackageState;
+        };
+        if (result?.success && result.state) {
+            applyPackageState(targetPath, result.state, 120);
+        } else {
+            setPackageState(null);
+        }
+    }, [applyPackageState]);
 
     const runEditorSave = useCallback(async (options?: { alertOnError?: boolean }) => {
         const snapshotFile = editorFileRef.current;
@@ -1716,10 +1750,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 throw new Error(result?.error || '保存失败');
             }
             if (result.state) {
-                setPackageState(result.state);
-                if ((result.state.richpostPages?.length || 0) > 0) {
-                    scheduleRichpostCardPreviewFromState(snapshotFile, result.state, 120);
-                }
+                applyPackageState(snapshotFile, result.state, 120);
             }
             if (typeof result.title === 'string' && result.title.trim()) {
                 const nextTitle = result.title.trim();
@@ -1757,7 +1788,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         } finally {
             setIsSavingEditorBody(false);
         }
-    }, [loadData, scheduleRichpostCardPreviewFromState]);
+    }, [applyPackageState, loadData]);
 
     const ensureLatestEditorContentSaved = useCallback(async () => {
         if (!editorFileRef.current) return true;
@@ -1826,12 +1857,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 throw new Error(result?.error || '生成分页方案失败');
             }
             setPackageState(result.state);
+            if ((result.state.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(editorFile, result.state, 120);
+            }
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '生成分页方案失败');
         } finally {
             setWorkingId((current) => current === workingKey ? null : current);
         }
-    }, [editorFile, ensureLatestEditorContentSaved]);
+    }, [editorFile, ensureLatestEditorContentSaved, scheduleRichpostCardPreviewFromState]);
 
     const handleSelectRichpostTheme = useCallback(async (themeId: string) => {
         if (!editorFile || !themeId.trim()) return;
@@ -1849,12 +1883,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 throw new Error(result?.error || '切换图文主题失败');
             }
             setPackageState(result.state);
+            if ((result.state.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(editorFile, result.state, 120);
+            }
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '切换图文主题失败');
         } finally {
             setWorkingId((current) => current === workingKey ? null : current);
         }
-    }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId]);
+    }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId, scheduleRichpostCardPreviewFromState]);
 
     const handleUpdateRichpostTypography = useCallback(async (settings: {
         fontScale: number;
@@ -1878,6 +1915,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 return;
             }
             setPackageState(result.state);
+            if ((result.state.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(requestFile, result.state, 120);
+            }
         } catch (error) {
             if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
                 return;
@@ -1885,7 +1925,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             console.error('Failed to update richpost typography:', error);
             void appAlert(error instanceof Error ? error.message : '更新图文排版失败');
         }
-    }, [editorFile, ensureLatestEditorContentSaved]);
+    }, [editorFile, ensureLatestEditorContentSaved, scheduleRichpostCardPreviewFromState]);
 
     const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
         if (!editorFile || !presetId.trim()) return;
@@ -1930,7 +1970,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 throw new Error(result?.error || '导入素材失败');
             }
             if (result.state) {
-                setPackageState(result.state);
+                applyPackageState(editorFile, result.state);
             } else {
                 await refreshPackageState(editorFile);
             }
@@ -1939,7 +1979,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         } finally {
             setWorkingId(null);
         }
-    }, [editorFile, refreshPackageState]);
+    }, [applyPackageState, editorFile, refreshPackageState]);
 
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
         if (!editorFile || editorDescriptor?.draftType !== 'video') return;
@@ -2232,338 +2272,54 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         runEditorSave,
     ]);
 
-    useEffect(() => {
-        if (!editorFile) {
-            setEditorChatSessionId(null);
-            setEditorChatSessionReady(false);
-            return;
-        }
-        setEditorChatSessionReady(false);
-        const draftType = editorDescriptor?.draftType || 'unknown';
-        const isRichpostThemeEditingSession =
-            draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing';
-        const themeSessionId = String(editorAiWorkspaceMode.themeEditingId || '').trim()
-            || String(editorAiWorkspaceMode.themeEditingLabel || '').trim()
-            || 'draft';
-        const themeSessionTitle = String(editorAiWorkspaceMode.themeEditingLabel || '').trim() || '当前主题';
-        let cancelled = false;
-        void (async () => {
-            try {
-                const session = await window.ipcRenderer.invoke(
-                    isRichpostThemeEditingSession ? 'chat:getOrCreateContextSession' : 'chat:getOrCreateFileSession',
-                    isRichpostThemeEditingSession
-                        ? {
-                            contextType: 'richpost-theme-editing',
-                            contextId: `${editorFile}::${themeSessionId}`,
-                            title: `主题编辑 · ${themeSessionTitle}`,
-                            initialContext: `当前会话绑定到 richpost 主题编辑：${themeSessionTitle}`,
-                        }
-                        : { filePath: editorFile }
-                ) as { id?: string } | null;
-                if (cancelled || !session?.id) return;
-                setEditorChatSessionId(session.id);
-            } catch (error) {
-                console.error('Failed to prepare editor chat session:', error);
-                if (!cancelled) {
-                    setEditorChatSessionId(null);
-                    setEditorChatSessionReady(false);
-                }
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [
-        editorAiWorkspaceMode.id,
-        editorAiWorkspaceMode.themeEditingId,
-        editorAiWorkspaceMode.themeEditingLabel,
-        editorDescriptor?.draftType,
+    const editorChatBinding = useMemo(() => buildEditorSessionBinding({
         editorFile,
-    ]);
-
-    useEffect(() => {
-        if (!editorChatSessionId || !editorFile) {
-            setEditorChatSessionReady(false);
-            return;
-        }
-        setEditorChatSessionReady(false);
-        const draftType = editorDescriptor?.draftType || 'unknown';
-        const isMediaDraft = draftType === 'video' || draftType === 'audio';
-
-        const packageAssets = Array.isArray(packageState?.assets?.items) ? packageState?.assets?.items : [];
-        const timelineClips = Array.isArray(packageState?.timelineSummary?.clips) ? packageState?.timelineSummary?.clips : [];
-        const timelineSummary = packageState?.timelineSummary as ({ trackNames?: string[] } & Record<string, unknown>) | undefined;
-        const timelineTrackNames = Array.isArray(timelineSummary?.trackNames)
-            ? timelineSummary.trackNames
-            : Array.from(new Set(timelineClips.map((item) => String(item?.track || '').trim()).filter(Boolean)));
-
-        const isRichpostThemeEditingSession =
-            draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing';
-        const themeSessionId = String(editorAiWorkspaceMode.themeEditingId || '').trim()
-            || String(editorAiWorkspaceMode.themeEditingLabel || '').trim()
-            || 'draft';
-        const themeEditingFile = isRichpostThemeEditingSession
-            ? packageState?.richpostThemeConfigFile || editorAiWorkspaceMode.themeEditingFile || null
-            : null;
-        const themeEditingRoot = (() => {
-            const explicitRoot = isRichpostThemeEditingSession
-                ? packageState?.richpostThemeRoot || editorAiWorkspaceMode.themeEditingRoot || null
-                : null;
-            if (explicitRoot) return explicitRoot;
-            if (!themeEditingFile) return null;
-            const normalized = String(themeEditingFile).replace(/\\/g, '/');
-            if (normalized.endsWith('/theme.json')) {
-                return normalized.slice(0, -'/theme.json'.length);
-            }
-            return null;
-        })();
-
-        void window.ipcRenderer.invoke('chat:update-session-metadata', {
-            sessionId: editorChatSessionId,
-            metadata: {
-                contextType: isRichpostThemeEditingSession ? 'richpost-theme-editing' : 'file',
-                contextId: isRichpostThemeEditingSession ? `${editorFile}::${themeSessionId}` : editorFile,
-                isContextBound: true,
-                allowedTools: isRichpostThemeEditingSession ? ['app_cli', 'redbox_fs'] : undefined,
-                associatedFilePath: editorFile,
-                associatedPackageKind: draftType,
-                agentProfile: draftType === 'video' ? 'video-editor' : draftType === 'audio' ? 'audio-editor' : 'default',
-                associatedPackageTitle: editorDescriptor?.title || fileMetaMap[editorFile]?.title || '未命名',
-                associatedPackageWorkspaceMode: editorAiWorkspaceMode.id,
-                associatedPackageWorkspaceModeLabel: editorAiWorkspaceMode.label,
-                associatedPackagePromptProfile:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? 'richpost-theme-editor'
-                        : editorAiWorkspaceMode.id,
-                associatedPackageRequiredSkills: editorAiWorkspaceMode.activeSkills,
-                activeSkills: editorAiWorkspaceMode.activeSkills,
-                associatedPackageThemeId:
-                    draftType === 'richpost'
-                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? editorAiWorkspaceMode.themeEditingId || null
-                            : packageState?.richpostThemeId || null
-                        : draftType === 'longform'
-                            ? packageState?.longformLayoutPresetId || null
-                            : null,
-                associatedPackageThemeLabel:
-                    draftType === 'richpost'
-                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? editorAiWorkspaceMode.themeEditingLabel || null
-                            : packageState?.richpostThemeLabel || null
-                        : draftType === 'longform'
-                            ? packageState?.longformLayoutPresetLabel || null
-                            : null,
-                associatedPackageAppliedThemeId:
-                    draftType === 'richpost'
-                        ? packageState?.richpostThemeId || null
-                        : draftType === 'longform'
-                            ? packageState?.longformLayoutPresetId || null
-                            : null,
-                associatedPackageAppliedThemeLabel:
-                    draftType === 'richpost'
-                        ? packageState?.richpostThemeLabel || null
-                        : draftType === 'longform'
-                            ? packageState?.longformLayoutPresetLabel || null
-                            : null,
-                associatedPackageThemeEditingId:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? editorAiWorkspaceMode.themeEditingId || null
-                        : null,
-                associatedPackageThemeEditingLabel:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? editorAiWorkspaceMode.themeEditingLabel || null
-                        : null,
-                associatedPackageThemeEditingFile:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? themeEditingFile
-                        : null,
-                associatedPackageThemeEditingTemplateFile:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || null
-                        : null,
-                associatedPackageThemeEditingTargetFiles:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? {
-                            themeRoot: themeEditingRoot,
-                            themeIndexFile: packageState?.richpostThemesFile || null,
-                            themeFile: themeEditingFile,
-                            templateGuideFile: packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || null,
-                            layoutTokensFile: packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || null,
-                            pagePlanFile: packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || null,
-                            assetsDir: packageState?.richpostThemeAssetsDir || (themeEditingRoot ? `${themeEditingRoot}/assets` : null),
-                            masterFiles: Array.isArray(packageState?.richpostThemeMasters)
-                                ? packageState.richpostThemeMasters
-                                    .map((item) => String(item?.file || '').trim())
-                                    .filter(Boolean)
-                                : Array.isArray(packageState?.richpostMasters)
-                                    ? packageState.richpostMasters
-                                        .map((item) => String(item?.file || '').trim())
-                                        .filter(Boolean)
-                                    : [],
-                            packageRenderTargets: {
-                                layoutTokensFile: packageState?.layoutTokensFile || null,
-                                pagePlanFile: packageState?.richpostPagePlanFile || null,
-                                masterFiles: Array.isArray(packageState?.richpostMasters)
-                                    ? packageState.richpostMasters
-                                        .map((item) => String(item?.file || '').trim())
-                                        .filter(Boolean)
-                                    : [],
-                            },
-                        }
-                        : null,
-                associatedPackageThemeRoot:
-                    draftType === 'richpost' && editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                        ? themeEditingRoot
-                        : null,
-                associatedPackageContentSource:
-                    (draftType === 'richpost' || draftType === 'longform')
-                        ? String(packageState?.manifest?.entry || 'content.md')
-                        : editorFile,
-                associatedPackageStyleTargets:
-                    draftType === 'richpost'
-                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? [
-                                String(packageState?.richpostThemeRoot || 'themes/<theme-id>/'),
-                                String(packageState?.richpostThemeConfigFile || packageState?.richpostThemesFile || 'themes/<theme-id>/theme.json'),
-                                String(packageState?.richpostThemeTemplateFile || 'themes/richpost-theme-template.md'),
-                                String(packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || 'themes/<theme-id>/layout.tokens.json'),
-                                ...(Array.isArray(packageState?.richpostThemeMasters)
-                                    ? packageState.richpostThemeMasters
-                                        .map((item) => String(item?.file || '').trim())
-                                        .filter(Boolean)
-                                    : Array.isArray(packageState?.richpostMasters)
-                                        ? packageState.richpostMasters
-                                            .map((item) => String(item?.file || '').trim())
-                                            .filter(Boolean)
-                                        : [
-                                            'themes/<theme-id>/masters/cover.master.html',
-                                            'themes/<theme-id>/masters/body.master.html',
-                                            'themes/<theme-id>/masters/ending.master.html',
-                                        ]),
-                                String(packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || 'themes/<theme-id>/page-plan.json'),
-                                String(packageState?.richpostThemeAssetsDir || 'themes/<theme-id>/assets'),
-                                'layout.html',
-                                'pages/page-xxx.html',
-                            ]
-                            : [
-                                'manifest.richpostThemeId',
-                                'layout.tokens.json',
-                                'masters/*.master.html',
-                                'richpost-page-plan.json',
-                                'pages/page-xxx.html',
-                                'layout.html',
-                            ]
-                        : draftType === 'longform'
-                            ? ['manifest.longformLayoutPresetId', 'layout.html', 'wechat.html']
-                            : [],
-                associatedPackageStyleEditRule:
-                    draftType === 'richpost'
-                        ? editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                            ? '当前处于图文主题编辑模式。先阅读 richpost-theme-template.md 里的规则，再修改当前主题 root 里的 theme.json。优先修改 themes/<theme-id>/theme.json、layout.tokens.json 与首页、内容页、尾页母版；只有在母版、tokens 和 frame 不足以达成目标时，才调整 page-plan.json。不能改 content.md 正文，也不要把正文直接手写进 pages/page-xxx.html。'
-                            : '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
-                        : draftType === 'longform'
-                            ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
-                            : null,
-                associatedPackageStructure:
-                    draftType === 'richpost'
-                        ? {
-                            contentSource: String(packageState?.manifest?.entry || 'content.md'),
-                            contentMap: packageState?.contentMapFile || 'content-map.json',
-                            themeCatalogFile: packageState?.richpostThemesFile || 'themes/index.json',
-                            themeTemplateGuideFile: packageState?.richpostThemeTemplateFile || editorAiWorkspaceMode.themeEditingTemplateFile || 'themes/richpost-theme-template.md',
-                            themeRoot: packageState?.richpostThemeRoot || 'themes/<theme-id>/',
-                            themeConfig: packageState?.richpostThemeConfigFile || packageState?.richpostThemesFile || 'themes/<theme-id>/theme.json',
-                            themeAssetsDir: packageState?.richpostThemeAssetsDir || 'themes/<theme-id>/assets',
-                            layoutTokens: packageState?.richpostThemeTokensFile || packageState?.layoutTokensFile || 'themes/<theme-id>/layout.tokens.json',
-                            mastersDir: packageState?.richpostThemeMastersDir || packageState?.richpostMastersDir || 'themes/<theme-id>/masters/*.master.html',
-                            coverMaster: Array.isArray(packageState?.richpostThemeMasters)
-                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'cover')?.file || 'themes/<theme-id>/masters/cover.master.html'
-                                : Array.isArray(packageState?.richpostMasters)
-                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'cover')?.file || 'masters/cover.master.html'
-                                    : 'themes/<theme-id>/masters/cover.master.html',
-                            bodyMaster: Array.isArray(packageState?.richpostThemeMasters)
-                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'body')?.file || 'themes/<theme-id>/masters/body.master.html'
-                                : Array.isArray(packageState?.richpostMasters)
-                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'body')?.file || 'masters/body.master.html'
-                                    : 'themes/<theme-id>/masters/body.master.html',
-                            endingMaster: Array.isArray(packageState?.richpostThemeMasters)
-                                ? packageState.richpostThemeMasters.find((item) => String(item?.id || '') === 'ending')?.file || 'themes/<theme-id>/masters/ending.master.html'
-                                : Array.isArray(packageState?.richpostMasters)
-                                    ? packageState.richpostMasters.find((item) => String(item?.id || '') === 'ending')?.file || 'masters/ending.master.html'
-                                    : 'themes/<theme-id>/masters/ending.master.html',
-                            pagePlan: packageState?.richpostThemePagePlanFile || packageState?.richpostPagePlanFile || 'themes/<theme-id>/page-plan.json',
-                            previewShell: 'layout.html',
-                            pagesDir: packageState?.richpostPagesDir || 'pages/page-xxx.html',
-                            themeSource: 'manifest.richpostThemeId',
-                            themeEditableFrames: [
-                                'coverFrame',
-                                'bodyFrame',
-                                'endingFrame',
-                            ],
-                            templateEditingFocus: editorAiWorkspaceMode.id === 'richpost-theme-editing'
-                                ? ['cover', 'body', 'ending']
-                                : [],
-                            currentMasters: Array.isArray(packageState?.richpostThemeMasters)
-                                ? packageState.richpostThemeMasters
-                                    .map((item) => String(item?.id || '').trim())
-                                    .filter(Boolean)
-                                : [],
-                        }
-                        : draftType === 'longform'
-                            ? {
-                                contentSource: String(packageState?.manifest?.entry || 'content.md'),
-                                masterSource: 'manifest.longformLayoutPresetId',
-                                layoutTarget: 'layout.html',
-                                wechatTarget: 'wechat.html',
-                            }
-                            : null,
-                associatedPackageAssetCount: packageAssets.length,
-                associatedPackageClipCount: isMediaDraft ? Number(packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
-                associatedPackageScriptApprovalStatus:
-                    (isMediaDraft
-                        ? packageState?.videoProject?.scriptApproval?.status
-                            || packageState?.editorProject?.ai?.scriptApproval?.status
-                            || 'pending'
-                        : editorBodyDirty
-                            ? 'pending'
-                            : 'draft'),
-                associatedPackageTrackNames: isMediaDraft ? timelineTrackNames : [],
-                associatedPackageClips: isMediaDraft
-                    ? timelineClips.slice(0, 12).map((item) => ({
-                        assetId: item?.assetId,
-                        name: item?.name,
-                        track: item?.track,
-                        order: item?.order,
-                        durationMs: item?.durationMs,
-                        trimInMs: item?.trimInMs,
-                        trimOutMs: item?.trimOutMs,
-                        enabled: item?.enabled,
-                    }))
-                    : [],
-            },
-        }).then(() => {
-            setEditorChatSessionReady(true);
-        }).catch((error) => {
-            console.error('Failed to sync editor chat metadata:', error);
-            setEditorChatSessionReady(false);
-        });
-    }, [
-        editorAiWorkspaceMode.activeSkills,
-        editorAiWorkspaceMode.id,
-        editorAiWorkspaceMode.label,
-        editorAiWorkspaceMode.themeEditingRoot,
-        editorAiWorkspaceMode.themeEditingFile,
-        editorAiWorkspaceMode.themeEditingId,
-        editorAiWorkspaceMode.themeEditingLabel,
-        editorAiWorkspaceMode.themeEditingTemplateFile,
+        draftType: editorDescriptor?.draftType,
+        editorTitle: editorDescriptor?.title,
+        fileFallbackTitle: editorFile ? fileMetaMap[editorFile]?.title || null : null,
+        editorAiWorkspaceMode,
+        packageState,
         editorBodyDirty,
-        editorChatSessionId,
+    }), [
+        editorAiWorkspaceMode,
+        editorBodyDirty,
         editorDescriptor?.draftType,
         editorDescriptor?.title,
         editorFile,
         fileMetaMap,
         packageState,
     ]);
+    const editorChatBindingFingerprint = useMemo(
+        () => (editorChatBinding ? JSON.stringify(editorChatBinding) : ''),
+        [editorChatBinding],
+    );
+
+    useEffect(() => {
+        if (!editorChatBinding || !editorFile) {
+            setEditorChatSessionId(null);
+            setEditorChatSessionReady(false);
+            return;
+        }
+        setEditorChatSessionReady(false);
+        let cancelled = false;
+        void window.ipcRenderer.invoke('chat:bind-editor-session', editorChatBinding)
+            .then((session) => {
+                const sessionRecord = session as { id?: string } | null;
+                if (cancelled || !sessionRecord?.id) return;
+                setEditorChatSessionId(sessionRecord.id);
+                setEditorChatSessionReady(true);
+            })
+            .catch((error) => {
+                console.error('Failed to bind editor chat session:', error);
+                if (!cancelled) {
+                    setEditorChatSessionId(null);
+                    setEditorChatSessionReady(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [editorChatBinding, editorChatBindingFingerprint, editorFile]);
 
     const handleAcceptEditorWriteProposal = useCallback(async () => {
         if (!editorFile || !editorWriteProposal) return;
@@ -2595,14 +2351,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setEditorBodyDirty(false);
             setEditorWriteProposal(null);
             if (result.state) {
-                setPackageState(result.state);
+                applyPackageState(editorFile, result.state);
             }
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '接受 AI 修改失败');
         } finally {
             setIsApplyingWriteProposal(false);
         }
-    }, [currentEditorContent, editorBodyDirty, editorDescriptor?.draftType, editorFile, editorWriteProposal, isSavingEditorBody]);
+    }, [applyPackageState, currentEditorContent, editorBodyDirty, editorDescriptor?.draftType, editorFile, editorWriteProposal, isSavingEditorBody]);
 
     const handleRejectEditorWriteProposal = useCallback(async () => {
         if (!editorFile || !editorWriteProposal) return;
@@ -2664,7 +2420,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             }
             await loadData();
             if (result.state) {
-                setPackageState(result.state);
+                applyPackageState(editorFile, result.state);
             } else {
                 await refreshPackageState(editorFile);
             }
@@ -2672,7 +2428,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         } catch (bindError) {
             void appAlert(bindError instanceof Error ? bindError.message : '绑定素材失败');
         }
-    }, [bindAssetRole, editorFile, loadData, refreshPackageState]);
+    }, [applyPackageState, bindAssetRole, editorFile, loadData, refreshPackageState]);
 
     const pushToRedClaw = useCallback((filePath: string) => {
         const meta = fileMetaMap[filePath];
@@ -2906,15 +2662,21 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (mode !== 'gallery' || filter !== 'drafts') return;
         const pendingCards = contentCards.filter((card): card is DraftCard => {
-            if (card.kind !== 'draft' || card.draftType !== 'richpost' || !card.richpostPreviewPageFileUrl) {
+            if (card.kind !== 'draft' || card.draftType !== 'richpost') {
                 return false;
             }
+            const hasPreviewSource = Boolean(card.richpostPreviewPageFileUrl || card.richpostPreviewPageFile);
+            if (!hasPreviewSource) return false;
             const override = richpostPreviewOverrides[card.file.path];
             const overrideIsFresh = Boolean(
                 override?.fileUrl
                 && Number(override.updatedAt || 0) >= Number(card.richpostPreviewPageUpdatedAt || 0)
             );
-            return !card.richpostPreviewFileUrl
+            const persistedPreviewIsFresh = Boolean(
+                card.richpostPreviewFileUrl
+                && Number(card.richpostPreviewUpdatedAt || 0) >= Number(card.richpostPreviewPageUpdatedAt || 0)
+            );
+            return !persistedPreviewIsFresh
                 && !overrideIsFresh
                 && !richpostPreviewGenerationRef.current.has(card.file.path);
         });
@@ -2927,6 +2689,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 try {
                     await generateRichpostCardPreview(
                         card.file.path,
+                        card.richpostPreviewPageFileUrl || '',
                         card.richpostPreviewPageFile || '',
                         Number(card.richpostPreviewPageUpdatedAt || 0) || Date.now(),
                     );
@@ -2943,7 +2706,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [contentCards, filter, generateRichpostCardPreview, mode, richpostPreviewOverrides]);
 
     useEffect(() => {
-        if (!editorFile || editorDescriptor?.draftType !== 'richpost') return;
+        if (!editorFile) return;
+        if ((packageState?.richpostPages?.length || 0) === 0) return;
         scheduleRichpostCardPreviewFromState(editorFile, packageState);
         return () => {
             if (richpostCardPreviewTimerRef.current != null) {
@@ -2951,7 +2715,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 richpostCardPreviewTimerRef.current = null;
             }
         };
-    }, [editorDescriptor?.draftType, editorFile, packageState, scheduleRichpostCardPreviewFromState]);
+    }, [editorFile, packageState, scheduleRichpostCardPreviewFromState]);
 
     const bindableImageAssets = useMemo(
         () => assets.filter((asset) => inferAssetKind(asset) === 'image'),
@@ -3112,11 +2876,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         ]));
 
         return (
-            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-[#0f0f0f] text-white' : 'bg-surface-primary')}>
+            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-background text-text-primary' : 'bg-surface-primary')}>
                 <div className={clsx(
                     'flex items-center justify-between gap-3 px-6 py-3.5 backdrop-blur-md z-30',
                     isImmersiveWorkbench
-                        ? 'border-b border-white/10 bg-[#111111]/90'
+                        ? 'border-b border-border bg-background/86 backdrop-blur-[32px]'
                         : 'border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px]'
                 )}>
                     <div className="flex items-center gap-4 min-w-0">
@@ -3126,7 +2890,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             className={clsx(
                                 'group inline-flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-[13px] font-bold transition-all active:scale-95',
                                 isImmersiveWorkbench
-                                    ? 'bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 hover:text-white'
+                                    ? 'bg-surface-secondary/50 border border-border text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
                                     : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:bg-black/[0.06] hover:text-text-primary'
                             )}
                         >
@@ -3135,17 +2899,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         </button>
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2.5">
-                                <div className={clsx('text-[15px] font-extrabold tracking-tight truncate', isImmersiveWorkbench ? 'text-white' : 'text-text-primary')}>{currentDescriptor.title}</div>
+                                <div className={clsx('text-[15px] font-extrabold tracking-tight truncate', isImmersiveWorkbench ? 'text-text-primary' : 'text-text-primary')}>{currentDescriptor.title}</div>
                                 <span className={clsx('rounded-lg px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest', draftTheme.chip)}>
                                     {resolveDraftTypeLabel(draftType)}
                                 </span>
                             </div>
-                            <div className={clsx('mt-0.5 text-[10px] font-bold uppercase tracking-tighter truncate opacity-40', isImmersiveWorkbench ? 'text-white' : 'text-text-tertiary')}>{editorFile}</div>
+                            <div className={clsx('mt-0.5 text-[10px] font-bold uppercase tracking-tighter truncate opacity-60', isImmersiveWorkbench ? 'text-text-tertiary' : 'text-text-tertiary')}>{editorFile}</div>
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5">
                         {isAudioDraft && (
-                            <div className="flex items-center gap-1 mr-2 px-1 py-1 rounded-xl bg-black/[0.03] border border-black/[0.02]">
+                            <div className="mr-2 flex items-center gap-1 rounded-xl border border-border bg-surface-secondary/50 px-1 py-1">
                                 <EditorLayoutToggleButton
                                     kind="timeline"
                                     collapsed={immersiveTimelineCollapsed}
@@ -3203,7 +2967,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     className={clsx(
                                         'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
                                             : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
@@ -3217,7 +2981,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     className={clsx(
                                         'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
                                             : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
@@ -3227,24 +2991,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             </div>
                         )}
 
-                        {isPostPackage && (
-                            <button
-                                type="button"
-                                onClick={() => void handleGenerateRichpostPagePlan()}
-                                disabled={isGeneratingRichpostPagePlan}
-                                className={clsx(
-                                    'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
-                                    isImmersiveWorkbench
-                                        ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
-                                        : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
-                                )}
-                            >
-                                {isGeneratingRichpostPagePlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                {packageState?.richpostPagePlanExists ? '重做分页方案' : '生成分页方案'}
-                            </button>
-                        )}
-
-                        {(isArticlePackage || isPostPackage) && (
+                        {isArticlePackage && (
                             <div className="flex items-center gap-1">
                                 <button
                                     type="button"
@@ -3255,12 +3002,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     className={clsx(
                                         'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
                                             : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
                                     <ImageIcon className="h-3.5 w-3.5" />
-                                    {isPostPackage ? '封面' : '绑定封面'}
+                                    绑定封面
                                 </button>
                                 <button
                                     type="button"
@@ -3271,12 +3018,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     className={clsx(
                                         'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
                                         isImmersiveWorkbench
-                                            ? 'bg-white/5 border border-white/10 text-white/80 hover:bg-white/10'
+                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
                                             : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
                                     )}
                                 >
                                     <FileImage className="h-3.5 w-3.5" />
-                                    {isPostPackage ? '配图' : '插入配图'}
+                                    插入配图
                                 </button>
                             </div>
                         )}
@@ -3310,7 +3057,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     </div>
                 </div>
                 {isVideoDraft ? (
-                    <Suspense fallback={<div className="h-full flex items-center justify-center text-white/45">视频工作台加载中...</div>}>
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">视频工作台加载中...</div>}>
                         <VideoDraftWorkbench
                             isActive={isActive}
                             title={currentDescriptor.title}
@@ -3339,7 +3086,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             onOpenBindAssets={() => {
                                 void handleImportAndBindAssetsToPackage();
                             }}
-                            onPackageStateChange={(state) => setPackageState(state as PackageState)}
+                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                             onConfirmScript={() => {
                                 void handleConfirmEditorScript();
                             }}
@@ -3358,7 +3105,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         />
                     </Suspense>
                 ) : isAudioDraft ? (
-                    <Suspense fallback={<div className="h-full flex items-center justify-center text-white/45">音频工作台加载中...</div>}>
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">音频工作台加载中...</div>}>
                         <AudioDraftWorkbench
                             editorFile={editorFile}
                             packageAssets={packageAssets}
@@ -3380,7 +3127,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             onOpenBindAssets={() => {
                                 void handleImportAndBindAssetsToPackage();
                             }}
-                            onPackageStateChange={(state) => setPackageState(state as PackageState)}
+                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                         />
                     </Suspense>
                 ) : (
@@ -3404,6 +3151,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
                         richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
                         richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
+                        richpostThemesDir={typeof packageState?.richpostThemesDir === 'string' ? packageState.richpostThemesDir : null}
+                        richpostThemeTemplateFile={typeof packageState?.richpostThemeTemplateFile === 'string' ? packageState.richpostThemeTemplateFile : null}
                         isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
                         longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
                         longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
@@ -3428,7 +3177,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             void handleSelectLongformLayoutPreset(presetId, target);
                         }}
                             onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                            onPackageStateChange={(state) => setPackageState(state as PackageState)}
+                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                             onRejectWriteProposal={() => {
                                 void handleRejectEditorWriteProposal();
                             }}
@@ -3762,7 +3511,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                                             ? `${previewOverride?.fileUrl || ''}${String(previewOverride?.fileUrl || '').includes('?') ? '&' : '?'}v=${previewOverride?.updatedAt || card.updatedAt || 0}`
                                                             : card.richpostPreviewFileUrl
                                                                 ? `${card.richpostPreviewFileUrl}${card.richpostPreviewFileUrl.includes('?') ? '&' : '?'}v=${card.richpostPreviewUpdatedAt || card.updatedAt || 0}`
-                                                            : ''
+                                                                : ''
                                                     )
                                                     : '';
                                                 const showRichpostPreview = card.draftType === 'richpost'
@@ -4625,9 +4374,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             )}
 
             {folderContextMenu.visible && (
-                <div
+                <LiquidGlassMenuPanel
                     ref={folderContextMenuRef}
-                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    className="fixed z-[1100] min-w-[160px]"
                     style={{
                         left: Math.min(folderContextMenu.x, window.innerWidth - 176),
                         top: Math.min(folderContextMenu.y, window.innerHeight - 132),
@@ -4641,24 +4390,24 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             setFolderRenameTitle(folderContextMenu.folderName);
                             setFolderRenameOpen(true);
                         }}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                        className={getLiquidGlassMenuItemClassName()}
                     >
                         重命名
                     </button>
                     <button
                         type="button"
                         onClick={() => void handleDeleteFolder(folderContextMenu.folderPath)}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
                         删除
                     </button>
-                </div>
+                </LiquidGlassMenuPanel>
             )}
 
             {assetContextMenu.visible && (
-                <div
+                <LiquidGlassMenuPanel
                     ref={assetContextMenuRef}
-                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    className="fixed z-[1100] min-w-[160px]"
                     style={{
                         left: Math.min(assetContextMenu.x, window.innerWidth - 176),
                         top: Math.min(assetContextMenu.y, window.innerHeight - 132),
@@ -4672,24 +4421,24 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             setAssetRenameTitle(assetContextMenu.assetTitle);
                             setAssetRenameOpen(true);
                         }}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                        className={getLiquidGlassMenuItemClassName()}
                     >
                         重命名
                     </button>
                     <button
                         type="button"
                         onClick={() => void handleDeleteAsset(assetContextMenu.assetId)}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
                         删除
                     </button>
-                </div>
+                </LiquidGlassMenuPanel>
             )}
 
             {draftContextMenu.visible && (
-                <div
+                <LiquidGlassMenuPanel
                     ref={draftContextMenuRef}
-                    className="fixed z-[1100] min-w-[160px] overflow-hidden rounded-2xl border border-border bg-white/95 p-1.5 shadow-[0_20px_48px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+                    className="fixed z-[1100] min-w-[160px]"
                     style={{
                         left: Math.min(draftContextMenu.x, window.innerWidth - 176),
                         top: Math.min(draftContextMenu.y, window.innerHeight - 132),
@@ -4703,7 +4452,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             setDraftRenameTitle(draftContextMenu.title);
                             setDraftRenameOpen(true);
                         }}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-text-primary hover:bg-surface-secondary"
+                        className={getLiquidGlassMenuItemClassName()}
                     >
                         重命名
                     </button>
@@ -4713,11 +4462,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             setDraftContextMenu((prev) => ({ ...prev, visible: false }));
                             setPendingDeleteDraftPath(draftContextMenu.filePath);
                         }}
-                        className="flex w-full items-center rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
                         删除
                     </button>
-                </div>
+                </LiquidGlassMenuPanel>
             )}
 
             {isExportVideoModalOpen && (

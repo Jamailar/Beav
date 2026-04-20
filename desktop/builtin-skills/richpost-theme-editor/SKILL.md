@@ -4,9 +4,9 @@ allowedTools: [app_cli, redbox_fs]
 hookMode: inline
 autoActivate: false
 activationScope: session
-contextNote: 当前文件会话处于 richpost 图文主题编辑模式。目标不是改正文，而是调整当前稿件包内当前 theme root 的 theme.json、tokens、母版和真实文字区域 frame，让主题编辑页左侧三张预览反映真实模板结果。
-promptPrefix: 你当前必须遵守 richpost-theme-editor。当前任务是修改当前稿件包内的 richpost 模板层，而不是改正文内容。先把页面理解成首页、内容页、尾页三类母版；当前主题还包含 coverFrame、bodyFrame、endingFrame 三个真实文字区域。优先修改当前 theme root 里的 theme.json、layout.tokens.json 和 masters/*.master.html，只有在母版、tokens 和 frame 不足以达成目标时，才调整 page-plan.json 的 master、zones 或 styleOverrides。
-promptSuffix: 不要改 content.md，不要改 content-map.json，不要直接在 pages/page-xxx.html 里手写正文，也不要补写额外文案。模板调整完成后，结果必须仍然由当前工程的 tokens、masters 和 page-plan 渲染出来；未读回当前稿件包内的 tokens 或预览前，不要宣称修改已经成功。
+contextNote: 当前文件会话处于 richpost 图文主题编辑模式。目标不是改正文，而是调整当前工作区 themes 目录下当前 theme root 的 `<theme-id>.json`、tokens、母版和真实文字区域 frame，让主题编辑页左侧三张预览反映真实模板结果。
+promptPrefix: 你当前必须遵守 richpost-theme-editor。当前任务是修改当前工作区 themes 目录下当前绑定主题的 richpost 模板层，而不是改正文内容。先把页面理解成首页、内容页、尾页三类母版；当前主题还包含 coverFrame、bodyFrame、endingFrame 三个真实文字区域。优先修改当前 theme root 里的 `<theme-id>.json`、layout.tokens.json 和 masters/*.master.html，只有在母版、tokens 和 frame 不足以达成目标时，才调整 page-plan.json 的 master、zones 或 styleOverrides。
+promptSuffix: 不要改 content.md，不要改 content-map.json，不要直接在 pages/page-xxx.html 里手写正文，也不要补写额外文案。模板调整完成后，结果必须仍然由当前工程的 tokens、masters 和 page-plan 渲染出来；未读回当前主题 root 的 tokens 或预览前，不要宣称修改已经成功。
 maxPromptChars: 3200
 ---
 # Richpost Theme Editor
@@ -26,8 +26,8 @@ maxPromptChars: 3200
 
 - `content.md`：正文唯一真相层
 - `content-map.json`：正文块映射，宿主自动生成
-- `themes/index.json`：当前稿件包的主题目录索引，只用于列出主题摘要
-- `themes/<theme-id>/theme.json`：当前主题主配置文件，`coverFrame / bodyFrame / endingFrame` 与 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath` 保存在这里
+- `themes/index.json`：当前工作区的主题目录索引，只用于列出主题摘要
+- `themes/<theme-id>/<theme-id>.json`：当前主题主配置文件，`coverFrame / bodyFrame / endingFrame` 与 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath` 保存在这里
 - `themes/<theme-id>/layout.tokens.json`：当前主题自己的 token 真相层
 - `themes/<theme-id>/masters/*.master.html`：当前主题自己的母版真相层
 - `themes/<theme-id>/page-plan.json`：当前主题自己的分页方案真相层
@@ -44,13 +44,13 @@ maxPromptChars: 3200
 ## 工作顺序
 
 1. 先判断需求属于哪一层：
-   - 真实文字区域：改 `themes/<theme-id>/theme.json` 里的 `coverFrame / bodyFrame / endingFrame`
+   - 真实文字区域：改 `themes/<theme-id>/<theme-id>.json` 里的 `coverFrame / bodyFrame / endingFrame`
    - 视觉风格：改 `themes/<theme-id>/layout.tokens.json`
    - 页面结构：改 `themes/<theme-id>/masters/*.master.html`
    - 页面内容分配或 zone 绑定：改 `themes/<theme-id>/page-plan.json`
 2. 默认优先级固定为：
    - `richpost-theme-template.md`
-   - `themes/<theme-id>/theme.json`
+   - `themes/<theme-id>/<theme-id>.json`
    - `themes/<theme-id>/layout.tokens.json`
    - `themes/<theme-id>/masters/*.master.html`
    - `themes/<theme-id>/page-plan.json`
@@ -86,7 +86,7 @@ maxPromptChars: 3200
   - `coverBackgroundPath`
   - `bodyBackgroundPath`
   - `endingBackgroundPath`
-  它们都指向当前主题 root 里的 `assets/` 图片资产。
+  它们都指向当前工作区 theme root 里的 `assets/` 图片资产。
 - 可以让首页、内容页、尾页使用完全不同的布局。
 
 ## 强制限制
@@ -94,7 +94,8 @@ maxPromptChars: 3200
 - 不要使用 `bash` / 终端命令直接改主题文件。
 - 不要通过 `/tmp`、临时文件、`cat | sed | mv` 这类 shell 流水线改写工作区文件。
 - 读取主题文件时优先使用 `redbox_fs`；保存主题修改时优先使用 `app_cli(command="manuscripts theme ...")`。
-- 不要改全局主题目录，例如 `~/.redbox/themes/richpost-themes.json`。当前会话只能处理当前稿件包内的主题文件。
+- 当会话已经绑定到当前 `themeRoot` 时，`redbox_fs` / `bash` 的相对路径要从该 `themeRoot` 开始写，只写 `<theme-id>.json`、`layout.tokens.json`、`masters/*.master.html`、`page-plan.json` 这类相对路径；不要再重复写 `themes/<theme-id>/...`。
+- 不要改无关的全局主题目录或其他 theme root。当前会话只能处理当前绑定的工作区主题文件。
 - 不要改写、删减、扩写或重组 `content.md` 正文。
 - 不要手改 `content-map.json`。
 - 不要在模板里硬编码正文文字。
@@ -103,8 +104,8 @@ maxPromptChars: 3200
 - 如需换字体，只能用系统字体栈或宿主已有 preset。
 - 如果工具调用失败，必须明确报告失败，不能继续宣称“已完成”。
 - 宣称主题修改完成前，必须至少满足其一：
-  - 读回当前稿件包内当前 theme root 的 `theme.json` / `layout.tokens.json` 看到了目标变更
-  - 或拿到当前稿件包的预览/状态返回，确认主题已经应用到当前稿件
+  - 读回当前绑定 theme root 的 `<theme-id>.json` / `layout.tokens.json` 看到了目标变更
+  - 或拿到当前稿件的预览/状态返回，确认主题已经应用到当前稿件
 
 ## 默认取舍
 

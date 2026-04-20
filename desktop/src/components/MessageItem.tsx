@@ -7,6 +7,7 @@ import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
 import { SkillActivatedBadge, ThinkingIndicator } from './ThinkingBubble';
 import { TodoList, PlanStep } from './TodoList';
 import { resolveAssetUrl, isLocalAssetUrl } from '../utils/pathManager';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import './chat-message.css';
 
 const copyTextWithClipboard = async (text: string): Promise<boolean> => {
@@ -702,28 +703,31 @@ export const MessageItem = memo(({
       )}
 
       {imageMenu.visible && (
-        <div
-          className="fixed z-[9999] min-w-[170px] overflow-hidden rounded-lg border border-border bg-surface-primary shadow-xl"
+        <LiquidGlassMenuPanel
+          className="fixed z-[9999] min-w-[170px]"
           style={{ left: imageMenu.x, top: imageMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
           <button
             type="button"
-            className="w-full px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-surface-secondary"
+            className={getLiquidGlassMenuItemClassName()}
             onClick={() => void handleCopyImage()}
           >
             复制图片
           </button>
           {menuSupportsReveal && (
-            <button
-              type="button"
-              className="w-full border-t border-border px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-surface-secondary"
-              onClick={() => void handleShowInFolder()}
-            >
-              在文件夹中打开
-            </button>
+            <>
+              <LiquidGlassMenuSeparator />
+              <button
+                type="button"
+                className={getLiquidGlassMenuItemClassName()}
+                onClick={() => void handleShowInFolder()}
+              >
+                在文件夹中打开
+              </button>
+            </>
           )}
-        </div>
+        </LiquidGlassMenuPanel>
       )}
 
       {previewImage && (

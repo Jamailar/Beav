@@ -1,14 +1,14 @@
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    AppState, AppStore, REDBOX_OFFICIAL_BASE_URL, append_debug_trace_state, now_iso, now_ms,
-    payload_field, payload_string,
+    append_debug_trace_state, now_iso, now_ms, payload_field, payload_string, AppState, AppStore,
+    REDBOX_OFFICIAL_BASE_URL,
 };
 
 pub(crate) const AUTH_STATE_CHANGED_EVENT: &str = "auth:state-changed";

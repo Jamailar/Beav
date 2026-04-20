@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -9,7 +9,6 @@ use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    AppState,
     commands::manuscripts::{
         ensure_richpost_theme_template_file, longform_layout_preset_catalog_value,
         longform_layout_preset_state_value, richpost_theme_catalog_value_for_manifest,
@@ -25,12 +24,12 @@ use crate::{
     package_richpost_pages_dir, package_richpost_theme_assets_dir,
     package_richpost_theme_config_path, package_richpost_theme_master_path,
     package_richpost_theme_masters_dir, package_richpost_theme_page_plan_path,
-    package_richpost_theme_root_dir, package_richpost_theme_template_path,
-    package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
-    package_timeline_path, package_track_ui_path, package_wechat_html_path,
-    package_wechat_template_path, parse_json_value_from_text, read_json_value_or,
-    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
-    write_text_file,
+    package_richpost_theme_root_dir, package_richpost_theme_store_dir,
+    package_richpost_theme_template_path, package_richpost_theme_tokens_path,
+    package_richpost_themes_path, package_scene_ui_path, package_timeline_path,
+    package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
+    parse_json_value_from_text, read_json_value_or, redbox_project_root, resolve_manuscript_path,
+    title_from_relative_path, write_json_value, write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -3229,7 +3228,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             Value::Null
         },
         "richpostThemesDir": if package_kind == Some("post") {
-            json!(package_path.join("themes").display().to_string())
+            json!(package_richpost_theme_store_dir(package_path).display().to_string())
         } else {
             Value::Null
         },

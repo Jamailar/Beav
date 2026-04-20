@@ -1,11 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use url::Url;
 
-use crate::{AppState, FileNode, ensure_parent_dir, manuscripts_root, payload_string};
+use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
 
 pub(crate) fn normalize_relative_path(value: &str) -> String {
     value
@@ -188,6 +188,14 @@ pub(crate) fn legacy_package_richpost_themes_path(package_path: &Path) -> PathBu
     package_path.join("richpost-themes.json")
 }
 
+pub(crate) fn legacy_package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    package_path.join("themes")
+}
+
+pub(crate) fn legacy_package_richpost_theme_template_path(package_path: &Path) -> PathBuf {
+    legacy_package_richpost_theme_store_dir(package_path).join("richpost-theme-template.md")
+}
+
 pub(crate) fn workspace_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
     package_workspace_root_path(package_path).join("themes")
 }
@@ -197,7 +205,7 @@ pub(crate) fn workspace_richpost_themes_path(package_path: &Path) -> PathBuf {
 }
 
 pub(crate) fn package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
-    package_path.join("themes")
+    workspace_richpost_theme_store_dir(package_path)
 }
 
 pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
@@ -212,8 +220,13 @@ pub(crate) fn package_richpost_theme_root_dir(package_path: &Path, theme_id: &st
     package_richpost_theme_store_dir(package_path).join(theme_id)
 }
 
+pub(crate) fn package_richpost_theme_config_file_name(theme_id: &str) -> String {
+    format!("{theme_id}.json")
+}
+
 pub(crate) fn package_richpost_theme_config_path(package_path: &Path, theme_id: &str) -> PathBuf {
-    package_richpost_theme_root_dir(package_path, theme_id).join("theme.json")
+    package_richpost_theme_root_dir(package_path, theme_id)
+        .join(package_richpost_theme_config_file_name(theme_id))
 }
 
 pub(crate) fn package_richpost_theme_tokens_path(package_path: &Path, theme_id: &str) -> PathBuf {
@@ -664,6 +677,13 @@ pub(crate) fn resolve_manuscript_path(
     relative: &str,
 ) -> Result<PathBuf, String> {
     let root = manuscripts_root(state)?;
+    let direct_path = PathBuf::from(relative);
+    if direct_path.is_absolute() {
+        if direct_path.starts_with(&root) {
+            return Ok(direct_path);
+        }
+        return Err("Path is outside manuscripts root".to_string());
+    }
     let cleaned = normalize_relative_path(relative);
     Ok(if cleaned.is_empty() {
         root

@@ -2,11 +2,11 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::skills::{
-    SkillBundleSections, load_skill_bundle_sections_from_root,
-    load_skill_bundle_sections_from_sources, split_skill_body,
+    load_skill_bundle_sections_from_root, load_skill_bundle_sections_from_sources,
+    split_skill_body, SkillBundleSections,
 };
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Manager, State};
 
@@ -398,6 +398,12 @@ fn video_generation_asset_label(index: i64, count: i64) -> String {
     }
 }
 
+fn allow_placeholder_fallback(payload: &Value) -> bool {
+    payload_field(payload, "allowPlaceholderFallback")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn handle_generation_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -429,12 +435,13 @@ pub fn handle_generation_channel(
             Some("image/png".to_string())
         };
         let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-        let auth_runtime = state
-            .auth_runtime
-            .lock()
-            .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-        let settings_snapshot =
-            crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime);
+        let settings_snapshot = {
+            let auth_runtime = state
+                .auth_runtime
+                .lock()
+                .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+            crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
+        };
         let real_image_config = if channel == "image-gen:generate" {
             resolve_image_generation_settings(&settings_snapshot)
         } else {
@@ -473,6 +480,7 @@ pub fn handle_generation_channel(
         } else {
             None
         };
+        let placeholder_fallback_allowed = allow_placeholder_fallback(payload);
         let media_root_path = media_root(state)?;
         let mut created = Vec::new();
         for index in 0..count {
@@ -648,57 +656,198 @@ pub fn handle_generation_channel(
                     );
                 }
                 Some(file_url_for_path(&absolute_path))
-            } else {
-                let mut wrote_real_asset = false;
-                if let Some((
-                    endpoint,
-                    api_key,
-                    default_model,
-                    default_provider,
-                    default_template,
-                )) = &real_image_config
-                {
-                    let mut effective_payload = payload.clone();
-                    if let Some(object) = effective_payload.as_object_mut() {
-                        object.insert(
-                            "prompt".to_string(),
-                            json!(effective_image_prompt.clone().unwrap_or_default()),
-                        );
-                    }
-                    if let Ok(response) = run_image_generation_request(
+            } else if let Some((
+                endpoint,
+                api_key,
+                default_model,
+                default_provider,
+                default_template,
+            )) = &real_image_config
+            {
+                let effective_model = model.clone().unwrap_or_else(|| default_model.clone());
+                let effective_provider = provider
+                    .as_deref()
+                    .unwrap_or(default_provider.as_str())
+                    .to_string();
+                let effective_template = provider_template
+                    .as_deref()
+                    .unwrap_or(default_template.as_str())
+                    .to_string();
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[image-gen] request:start endpoint={} provider={} template={} model={} mode={} refs={}",
                         endpoint,
-                        api_key.as_deref(),
-                        model
-                            .clone()
-                            .unwrap_or_else(|| default_model.clone())
-                            .as_str(),
-                        provider.as_deref().unwrap_or(default_provider.as_str()),
-                        provider_template
-                            .as_deref()
-                            .unwrap_or(default_template.as_str()),
-                        &effective_payload,
-                    ) {
-                        if let Some(item) = extract_first_media_result(&response) {
-                            if write_generated_image_asset(&absolute_path, item).is_ok() {
-                                wrote_real_asset = true;
-                            }
+                        effective_provider,
+                        effective_template,
+                        effective_model,
+                        payload_string(payload, "generationMode")
+                            .unwrap_or_else(|| "text-to-image".to_string()),
+                        payload_field(payload, "referenceImages")
+                            .and_then(Value::as_array)
+                            .map(|items| items.len())
+                            .unwrap_or(0),
+                    ),
+                );
+                let mut effective_payload = payload.clone();
+                if let Some(object) = effective_payload.as_object_mut() {
+                    object.insert(
+                        "prompt".to_string(),
+                        json!(effective_image_prompt.clone().unwrap_or_default()),
+                    );
+                }
+                let response = match run_image_generation_request(
+                    endpoint,
+                    api_key.as_deref(),
+                    effective_model.as_str(),
+                    effective_provider.as_str(),
+                    effective_template.as_str(),
+                    &effective_payload,
+                ) {
+                    Ok(response) => Some(response),
+                    Err(error) => {
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[image-gen] request:error endpoint={} provider={} template={} model={} error={error}",
+                                endpoint, effective_provider, effective_template, effective_model
+                            ),
+                        );
+                        if placeholder_fallback_allowed {
+                            write_placeholder_svg(
+                                &absolute_path,
+                                &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                                &effective_image_prompt
+                                    .clone()
+                                    .unwrap_or_default()
+                                    .chars()
+                                    .take(48)
+                                    .collect::<String>(),
+                                "#E76F51",
+                            )?;
+                            None
+                        } else {
+                            return Err(format!("图片生成请求失败：{error}"));
                         }
                     }
-                }
-                if !wrote_real_asset {
-                    write_placeholder_svg(
-                        &absolute_path,
-                        &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
-                        &effective_image_prompt
-                            .clone()
-                            .unwrap_or_default()
-                            .chars()
-                            .take(48)
-                            .collect::<String>(),
-                        "#E76F51",
-                    )?;
+                };
+                if let Some(response) = response {
+                    if let Some(item) = extract_first_media_result(&response) {
+                        if let Err(error) = write_generated_image_asset(&absolute_path, item) {
+                            append_debug_log_state(
+                                state,
+                                format!(
+                                    "[image-gen] asset:write-error path={} error={error}",
+                                    absolute_path.display()
+                                ),
+                            );
+                            append_debug_log_state(
+                                state,
+                                format!(
+                                    "[image-gen] asset:write-error response={}",
+                                    summarize_json_for_log(&response)
+                                ),
+                            );
+                            append_debug_log_state(
+                                state,
+                                format!(
+                                    "[image-gen] asset:write-error first-item={}",
+                                    summarize_json_for_log(item)
+                                ),
+                            );
+                            if placeholder_fallback_allowed {
+                                write_placeholder_svg(
+                                    &absolute_path,
+                                    &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                                    &effective_image_prompt
+                                        .clone()
+                                        .unwrap_or_default()
+                                        .chars()
+                                        .take(48)
+                                        .collect::<String>(),
+                                    "#E76F51",
+                                )?;
+                            } else {
+                                return Err(format!("图片生成结果写入失败：{error}"));
+                            }
+                        } else {
+                            append_debug_log_state(
+                                state,
+                                format!(
+                                    "[image-gen] request:ok path={} provider={} template={} model={}",
+                                    absolute_path.display(),
+                                    effective_provider,
+                                    effective_template,
+                                    effective_model
+                                ),
+                            );
+                        }
+                    } else if placeholder_fallback_allowed {
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[image-gen] response:empty fallback response={}",
+                                summarize_json_for_log(&response)
+                            ),
+                        );
+                        write_placeholder_svg(
+                            &absolute_path,
+                            &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                            &effective_image_prompt
+                                .clone()
+                                .unwrap_or_default()
+                                .chars()
+                                .take(48)
+                                .collect::<String>(),
+                            "#E76F51",
+                        )?;
+                    } else {
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[image-gen] response:empty endpoint={} provider={} template={} model={}",
+                                endpoint, effective_provider, effective_template, effective_model
+                            ),
+                        );
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[image-gen] response:empty body={}",
+                                summarize_json_for_log(&response)
+                            ),
+                        );
+                        return Err(
+                            "图片生成请求已发出，但 provider 返回里没有可用图片结果。".to_string()
+                        );
+                    }
                 }
                 Some(file_url_for_path(&absolute_path))
+            } else if placeholder_fallback_allowed {
+                write_placeholder_svg(
+                    &absolute_path,
+                    &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                    &effective_image_prompt
+                        .clone()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(48)
+                        .collect::<String>(),
+                    "#E76F51",
+                )?;
+                Some(file_url_for_path(&absolute_path))
+            } else {
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[image-gen] missing provider config channel={channel} mode={} title={}",
+                        payload_string(payload, "generationMode")
+                            .unwrap_or_else(|| "text-to-image".to_string()),
+                        title.clone().unwrap_or_default(),
+                    ),
+                );
+                return Err(
+                    "图片生成未执行：请先在设置中配置生图 Endpoint、API Key 和模型。".to_string(),
+                );
             };
             let asset = MediaAssetRecord {
                 id: make_id("media"),
@@ -761,9 +910,9 @@ pub fn handle_generation_channel(
                     .to_string()
                 }),
                 normalize_optional_string(Some(if used_configured_endpoint {
-                    "RedBox 已尝试通过已配置 endpoint 执行真实生成。".to_string()
+                    "RedBox 已通过已配置 endpoint 执行真实生成。".to_string()
                 } else {
-                    "RedBox 已保存生成请求；当前缺少可用 provider 配置，已生成本地可追踪产物。"
+                    "RedBox 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。"
                         .to_string()
                 })),
                 if channel == "image-gen:generate" {

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::persistence::with_store;
 use crate::runtime::{RuntimeWarmEntry, SessionToolResultRecord};
-use crate::{AppState, now_i64, payload_string};
+use crate::{now_i64, payload_string, AppState};
 
 const DIAGNOSTIC_HISTORY_LIMIT: usize = 100;
 const RECENT_PREVIEW_LIMIT: usize = 12;
@@ -87,7 +87,11 @@ where
         total += value as f64;
         count += 1.0;
     }
-    if count <= 0.0 { 0.0 } else { total / count }
+    if count <= 0.0 {
+        0.0
+    } else {
+        total / count
+    }
 }
 
 fn session_advisor_id_from_metadata(metadata: Option<&Value>) -> Option<String> {

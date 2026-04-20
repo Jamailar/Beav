@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,9 +13,9 @@ use crate::tools::registry::{
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
 };
 use crate::{
-    AppState, load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
+    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
     redbox_project_root, render_redbox_prompt, slug_from_relative_path, truncate_chars,
-    workspace_root,
+    workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(
@@ -510,9 +510,17 @@ pub(crate) fn session_workspace_root_override(
                 if !is_theme_editing {
                     return None;
                 }
-                payload_string(metadata, "associatedFilePath")
-                    .filter(|value| !value.trim().is_empty())
+                payload_string(metadata, "associatedPackageThemeEditingRoot")
                     .map(PathBuf::from)
+                    .or_else(|| {
+                        payload_string(metadata, "associatedPackageThemeEditingFile").and_then(
+                            |value| {
+                                let path = PathBuf::from(&value);
+                                path.parent().map(|parent| parent.to_path_buf())
+                            },
+                        )
+                    })
+                    .or_else(|| payload_string(metadata, "associatedFilePath").map(PathBuf::from))
             }))
     })
     .ok()
@@ -531,10 +539,37 @@ pub(crate) fn resolve_workspace_tool_path_for_session(
     let Some(root) = session_workspace_root_override(state, session_id) else {
         return resolve_workspace_tool_path(state, raw_path);
     };
-    let candidate = if Path::new(trimmed).is_absolute() {
-        PathBuf::from(trimmed)
+    let normalized_trimmed = if Path::new(trimmed).is_absolute() {
+        trimmed.to_string()
     } else {
-        root.join(trimmed)
+        let slash_trimmed = trimmed.replace('\\', "/");
+        let root_name = root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let duplicated_theme_prefix = if root_name.is_empty() {
+            None
+        } else {
+            Some(format!("themes/{root_name}/"))
+        };
+        if let Some(prefix) = duplicated_theme_prefix.as_deref() {
+            if slash_trimmed.starts_with(prefix) {
+                slash_trimmed[prefix.len()..].to_string()
+            } else if !root_name.is_empty() && slash_trimmed.starts_with(&format!("{root_name}/")) {
+                slash_trimmed[root_name.len() + 1..].to_string()
+            } else {
+                slash_trimmed
+            }
+        } else {
+            slash_trimmed
+        }
+    };
+    let candidate = if Path::new(&normalized_trimmed).is_absolute() {
+        PathBuf::from(&normalized_trimmed)
+    } else {
+        root.join(&normalized_trimmed)
     };
     let normalized = candidate.canonicalize().unwrap_or(candidate.clone());
     let root_normalized = root.canonicalize().unwrap_or(root);

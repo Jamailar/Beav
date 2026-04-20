@@ -27,7 +27,7 @@ pub use types::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::path::Path;
 
     #[test]

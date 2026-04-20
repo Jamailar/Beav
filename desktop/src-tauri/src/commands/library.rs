@@ -7,7 +7,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1519,101 +1519,197 @@ pub fn handle_library_channel(
                     .unwrap_or_default();
                 let prompt = build_cover_generation_prompt(payload, &titles);
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                let auth_runtime = state
-                    .auth_runtime
-                    .lock()
-                    .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                let settings_snapshot =
-                    crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime);
+                let settings_snapshot = {
+                    let auth_runtime = state
+                        .auth_runtime
+                        .lock()
+                        .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
+                    crate::auth::project_settings_for_runtime(&settings_snapshot, &auth_runtime)
+                };
                 let real_image_config = resolve_image_generation_settings(&settings_snapshot);
-                let created = with_store_mut(state, |store| {
-                    let mut assets = Vec::new();
-                    for index in 0..count {
-                        let file_name = format!("cover-{}-{}.png", now_ms(), index + 1);
-                        let relative_path = format!("generated/{}", file_name);
-                        let absolute_path = cover_root(state)?.join(&relative_path);
-                        let base_title = template_name
-                            .clone()
-                            .unwrap_or_else(|| "RedBox Cover".to_string());
-                        let asset_title = if count > 1 {
-                            format!("{base_title} {}", index + 1)
-                        } else {
-                            base_title
-                        };
-                        let mut wrote_real_asset = false;
-                        if let Some((
+                let placeholder_fallback_allowed =
+                    payload_field(payload, "allowPlaceholderFallback")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                let mut created = Vec::new();
+                for index in 0..count {
+                    let file_name = format!("cover-{}-{}.png", now_ms(), index + 1);
+                    let relative_path = format!("generated/{}", file_name);
+                    let absolute_path = cover_root(state)?.join(&relative_path);
+                    let base_title = template_name
+                        .clone()
+                        .unwrap_or_else(|| "RedBox Cover".to_string());
+                    let asset_title = if count > 1 {
+                        format!("{base_title} {}", index + 1)
+                    } else {
+                        base_title
+                    };
+                    if let Some((
+                        endpoint,
+                        api_key,
+                        default_model,
+                        default_provider,
+                        default_template,
+                    )) = &real_image_config
+                    {
+                        let effective_model =
+                            model.clone().unwrap_or_else(|| default_model.clone());
+                        let effective_provider = provider
+                            .as_deref()
+                            .unwrap_or(default_provider.as_str())
+                            .to_string();
+                        let effective_template = provider_template
+                            .as_deref()
+                            .unwrap_or(default_template.as_str())
+                            .to_string();
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[cover-gen] request:start endpoint={} provider={} template={} model={} title={}",
+                                endpoint, effective_provider, effective_template, effective_model, asset_title
+                            ),
+                        );
+                        let request_payload = json!({
+                            "prompt": prompt,
+                            "count": 1,
+                            "quality": quality,
+                        });
+                        let response = match run_image_generation_request(
                             endpoint,
-                            api_key,
-                            default_model,
-                            default_provider,
-                            default_template,
-                        )) = &real_image_config
-                        {
-                            let request_payload = json!({
-                                "prompt": prompt,
-                                "count": 1,
-                                "quality": quality,
-                            });
-                            if let Ok(response) = run_image_generation_request(
-                                endpoint,
-                                api_key.as_deref(),
-                                model
-                                    .clone()
-                                    .unwrap_or_else(|| default_model.clone())
-                                    .as_str(),
-                                provider.as_deref().unwrap_or(default_provider.as_str()),
-                                provider_template
-                                    .as_deref()
-                                    .unwrap_or(default_template.as_str()),
-                                &request_payload,
-                            ) {
-                                if let Some(item) = extract_first_media_result(&response) {
-                                    if write_generated_image_asset(&absolute_path, item).is_ok() {
-                                        wrote_real_asset = true;
-                                    }
+                            api_key.as_deref(),
+                            effective_model.as_str(),
+                            effective_provider.as_str(),
+                            effective_template.as_str(),
+                            &request_payload,
+                        ) {
+                            Ok(response) => Some(response),
+                            Err(error) => {
+                                append_debug_log_state(
+                                    state,
+                                    format!(
+                                        "[cover-gen] request:error endpoint={} provider={} template={} model={} error={error}",
+                                        endpoint, effective_provider, effective_template, effective_model
+                                    ),
+                                );
+                                if placeholder_fallback_allowed {
+                                    write_placeholder_svg(
+                                        &absolute_path,
+                                        &asset_title,
+                                        &prompt.chars().take(48).collect::<String>(),
+                                        "#F2B544",
+                                    )?;
+                                    None
+                                } else {
+                                    return Err(format!("封面生成请求失败：{error}"));
                                 }
                             }
-                        }
-                        if !wrote_real_asset {
-                            write_placeholder_svg(
-                                &absolute_path,
-                                &asset_title,
-                                &prompt.chars().take(48).collect::<String>(),
-                                "#F2B544",
-                            )?;
-                        }
-                        let asset = CoverAssetRecord {
-                            id: make_id("cover"),
-                            title: Some(asset_title),
-                            template_name: template_name.clone(),
-                            prompt: normalize_optional_string(Some(prompt.clone())),
-                            provider: provider.clone(),
-                            provider_template: provider_template.clone(),
-                            model: model.clone(),
-                            aspect_ratio: Some("3:4".to_string()),
-                            size: None,
-                            quality: quality.clone(),
-                            relative_path: Some(relative_path),
-                            preview_url: Some(file_url_for_path(&absolute_path)),
-                            exists: true,
-                            updated_at: now_iso(),
                         };
+                        if let Some(response) = response {
+                            if let Some(item) = extract_first_media_result(&response) {
+                                if let Err(error) =
+                                    write_generated_image_asset(&absolute_path, item)
+                                {
+                                    append_debug_log_state(
+                                        state,
+                                        format!(
+                                            "[cover-gen] asset:write-error path={} error={error}",
+                                            absolute_path.display()
+                                        ),
+                                    );
+                                    if placeholder_fallback_allowed {
+                                        write_placeholder_svg(
+                                            &absolute_path,
+                                            &asset_title,
+                                            &prompt.chars().take(48).collect::<String>(),
+                                            "#F2B544",
+                                        )?;
+                                    } else {
+                                        return Err(format!("封面生成结果写入失败：{error}"));
+                                    }
+                                } else {
+                                    append_debug_log_state(
+                                        state,
+                                        format!(
+                                            "[cover-gen] request:ok path={} provider={} template={} model={}",
+                                            absolute_path.display(),
+                                            effective_provider,
+                                            effective_template,
+                                            effective_model
+                                        ),
+                                    );
+                                }
+                            } else if placeholder_fallback_allowed {
+                                write_placeholder_svg(
+                                    &absolute_path,
+                                    &asset_title,
+                                    &prompt.chars().take(48).collect::<String>(),
+                                    "#F2B544",
+                                )?;
+                            } else {
+                                append_debug_log_state(
+                                    state,
+                                    format!(
+                                        "[cover-gen] response:empty endpoint={} provider={} template={} model={}",
+                                        endpoint, effective_provider, effective_template, effective_model
+                                    ),
+                                );
+                                return Err(
+                                    "封面生成请求已发出，但 provider 返回里没有可用图片结果。"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    } else if placeholder_fallback_allowed {
+                        write_placeholder_svg(
+                            &absolute_path,
+                            &asset_title,
+                            &prompt.chars().take(48).collect::<String>(),
+                            "#F2B544",
+                        )?;
+                    } else {
+                        append_debug_log_state(
+                            state,
+                            format!("[cover-gen] missing provider config title={asset_title}"),
+                        );
+                        return Err(
+                            "封面生成未执行：请先在设置中配置生图 Endpoint、API Key 和模型。"
+                                .to_string(),
+                        );
+                    }
+                    created.push(CoverAssetRecord {
+                        id: make_id("cover"),
+                        title: Some(asset_title),
+                        template_name: template_name.clone(),
+                        prompt: normalize_optional_string(Some(prompt.clone())),
+                        provider: provider.clone(),
+                        provider_template: provider_template.clone(),
+                        model: model.clone(),
+                        aspect_ratio: Some("3:4".to_string()),
+                        size: None,
+                        quality: quality.clone(),
+                        relative_path: Some(relative_path),
+                        preview_url: Some(file_url_for_path(&absolute_path)),
+                        exists: true,
+                        updated_at: now_iso(),
+                    });
+                }
+                with_store_mut(state, |store| {
+                    for asset in &created {
                         store.cover_assets.push(asset.clone());
-                        assets.push(asset);
                     }
                     store.work_items.push(create_work_item(
-                    "cover-generation",
-                    template_name.clone().unwrap_or_else(|| "封面生成".to_string()),
-                    normalize_optional_string(Some(if real_image_config.is_some() {
-                        "RedBox 已尝试通过已配置图片 endpoint 生成封面。".to_string()
-                    } else {
-                        "RedBox 已保存封面生成请求；当前缺少图片 endpoint 配置，已生成可预览的本地 SVG 方案。".to_string()
-                    })),
-                    normalize_optional_string(Some(prompt.clone())),
-                    None,
-                    2,
-                ));
-                    Ok(assets)
+                        "cover-generation",
+                        template_name.clone().unwrap_or_else(|| "封面生成".to_string()),
+                        normalize_optional_string(Some(if real_image_config.is_some() {
+                            "RedBox 已通过已配置图片 endpoint 生成封面。".to_string()
+                        } else {
+                            "RedBox 已保存封面生成请求；当前缺少图片 endpoint 配置，仅生成了本地占位方案。".to_string()
+                        })),
+                        normalize_optional_string(Some(prompt.clone())),
+                        None,
+                        2,
+                    ));
+                    Ok(())
                 })?;
                 persist_cover_workspace_catalog(state)?;
                 Ok(json!({ "success": true, "assets": created }))
