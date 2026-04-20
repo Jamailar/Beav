@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check, Radio } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
@@ -67,7 +67,6 @@ import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProp
 import {
   ExperimentalSettingsSection,
   GeneralSettingsSection,
-  RemoteConnectionSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
@@ -2805,7 +2804,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'remote', label: '远程连接', icon: Radio },
     { id: 'tools', label: '工具管理', icon: Wrench },
     { id: 'experimental', label: '实验性功能', icon: FlaskConical },
   ] as const;
@@ -2854,23 +2852,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
               />
             )}
 
-            {activeTab === 'remote' && (
-              <RemoteConnectionSettingsSection
-                assistantDaemonStatus={assistantDaemonStatus}
-                assistantDaemonDraft={assistantDaemonDraft}
-                setAssistantDaemonDraft={setAssistantDaemonDraft}
-                assistantDaemonLogs={assistantDaemonLogs}
-                assistantDaemonBusy={assistantDaemonBusy}
-                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
-                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
-                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
-                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
-                handleStartAssistantDaemon={handleStartAssistantDaemon}
-                handleStopAssistantDaemon={handleStopAssistantDaemon}
-                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
-                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
-                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
-              />
             )}
 
             {/* AI Tab */}
