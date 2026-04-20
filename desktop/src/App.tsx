@@ -4,6 +4,7 @@ import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
+import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -43,6 +44,11 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'workboard',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
+const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
+const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
+  'redbox-auth:display-session',
+  'redbox-auth:panel-display',
+] as const;
 
 // 待发送的聊天消息（用于跨页面传递）
 export interface PendingChatMessage {
@@ -192,7 +198,23 @@ function shouldRenderView(
   return mountedViews.has(view);
 }
 
+function clearStaleOfficialAuthSnapshots(): boolean {
+  let cleared = false;
+  try {
+    for (const key of OFFICIAL_AUTH_SNAPSHOT_KEYS) {
+      if (window.localStorage.getItem(key) == null) continue;
+      window.localStorage.removeItem(key);
+      cleared = true;
+    }
+  } catch {
+    return cleared;
+  }
+  return cleared;
+}
+
 function App() {
+  useOfficialAuthLifecycle();
+
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
@@ -237,10 +259,19 @@ function App() {
         return;
       }
       if (nextStatus === 'reauthRequired') {
-        setGlobalAuthNotice('当前账号登陆失效，请重新登陆。');
+        clearStaleOfficialAuthSnapshots();
+        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_TEXT);
+        return;
+      }
+      if (nextStatus === 'anonymous') {
+        const cleared = clearStaleOfficialAuthSnapshots();
+        setGlobalAuthNotice(cleared ? OFFICIAL_AUTH_NOTICE_TEXT : null);
         return;
       }
       if (prevStatus === 'reauthRequired') {
+        setGlobalAuthNotice(null);
+      }
+      if (prevStatus === 'anonymous') {
         setGlobalAuthNotice(null);
       }
     };
@@ -250,7 +281,17 @@ function App() {
         if (!mounted) return;
         const nextStatus = String((snapshot as { status?: string } | null | undefined)?.status || '');
         lastAuthStatusRef.current = nextStatus;
-        setGlobalAuthNotice(nextStatus === 'reauthRequired' ? '当前账号登陆失效，请重新登陆。' : null);
+        if (nextStatus === 'reauthRequired') {
+          clearStaleOfficialAuthSnapshots();
+          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_TEXT);
+          return;
+        }
+        if (nextStatus === 'anonymous') {
+          const cleared = clearStaleOfficialAuthSnapshots();
+          setGlobalAuthNotice(cleared ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          return;
+        }
+        setGlobalAuthNotice(null);
       })
       .catch(() => {});
 

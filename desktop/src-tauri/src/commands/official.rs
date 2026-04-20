@@ -526,9 +526,102 @@ fn sync_official_route_credentials(settings: &mut Value) {
     }
 }
 
+fn clear_official_source_binding(settings: &mut Value, previous_official_token: &str) {
+    let official_base_url = official_base_url_from_settings(settings);
+    let normalized_official_base_url = normalize_base_url(&official_base_url);
+    let mut fallback_source_id = String::new();
+    let mut fallback_base_url = String::new();
+    let mut fallback_api_key = String::new();
+    let mut fallback_model = String::new();
+    let mut sources = payload_string(settings, "ai_sources_json")
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default();
+    let mut changed = false;
+
+    for source in &mut sources {
+        let source_id = source
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if source_id == "redbox_official_auto" {
+            if let Some(object) = source.as_object_mut() {
+                object.insert("name".to_string(), json!("RedBox Official"));
+                object.insert("presetId".to_string(), json!("redbox-official"));
+                object.insert("baseURL".to_string(), json!(official_base_url.clone()));
+                object.insert("apiKey".to_string(), json!(""));
+                object.insert("models".to_string(), json!(Vec::<String>::new()));
+                object.insert("modelsMeta".to_string(), json!(Vec::<Value>::new()));
+                object.insert("model".to_string(), json!(""));
+                object.insert("protocol".to_string(), json!("openai"));
+                changed = true;
+            }
+            continue;
+        }
+
+        if fallback_source_id.is_empty() {
+            fallback_source_id = source_id;
+            fallback_base_url = payload_string(source, "baseURL").unwrap_or_default();
+            fallback_api_key = payload_string(source, "apiKey").unwrap_or_default();
+            fallback_model = payload_string(source, "model").unwrap_or_default();
+        }
+    }
+
+    let current_default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let current_api_endpoint = normalize_base_url(&payload_string(settings, "api_endpoint").unwrap_or_default());
+    let current_api_key = payload_string(settings, "api_key").unwrap_or_default();
+    let current_video_api_key = payload_string(settings, "video_api_key").unwrap_or_default();
+    let should_reset_default_source = current_default_source_id == "redbox_official_auto";
+    let should_reset_root_route = should_reset_default_source
+        || (!current_api_endpoint.is_empty() && current_api_endpoint == normalized_official_base_url)
+        || (!previous_official_token.trim().is_empty() && current_api_key == previous_official_token);
+    let should_clear_video_api_key = !current_video_api_key.is_empty()
+        && (should_reset_root_route
+            || (!previous_official_token.trim().is_empty()
+                && current_video_api_key == previous_official_token));
+
+    if let Some(object) = settings.as_object_mut() {
+        if changed {
+            object.insert(
+                "ai_sources_json".to_string(),
+                json!(serde_json::to_string(&sources).unwrap_or_else(|_| "[]".to_string())),
+            );
+        }
+
+        if should_reset_default_source {
+            object.insert(
+                "default_ai_source_id".to_string(),
+                json!(if fallback_source_id.is_empty() {
+                    "redbox_official_auto".to_string()
+                } else {
+                    fallback_source_id.clone()
+                }),
+            );
+        }
+
+        if should_reset_root_route {
+            if fallback_source_id.is_empty() {
+                object.insert("api_endpoint".to_string(), json!(""));
+                object.insert("api_key".to_string(), json!(""));
+                object.insert("model_name".to_string(), json!(""));
+            } else {
+                object.insert("api_endpoint".to_string(), json!(fallback_base_url));
+                object.insert("api_key".to_string(), json!(fallback_api_key));
+                object.insert("model_name".to_string(), json!(fallback_model));
+            }
+        }
+
+        if should_clear_video_api_key || should_reset_root_route {
+            object.insert("video_api_key".to_string(), json!(""));
+        }
+    }
+}
+
 fn clear_official_auth_state(settings: &mut Value) {
+    let previous_official_token = official_auth_token_from_settings(settings).unwrap_or_default();
     upsert_official_settings_session(settings, None);
-    sync_official_route_credentials(settings);
+    clear_official_source_binding(settings, &previous_official_token);
     if let Some(object) = settings.as_object_mut() {
         object.insert("redbox_auth_points_json".to_string(), json!(""));
         object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
@@ -2644,6 +2737,95 @@ mod tests {
                 .and_then(|item| payload_string(item, "baseURL"))
                 .as_deref(),
             Some("https://api.ziz.hk/redbox/v1")
+        );
+    }
+
+    #[test]
+    fn clear_official_auth_state_resets_official_source_and_falls_back_default_source() {
+        let mut settings = json!({
+            "redbox_official_base_url": "https://api.ziz.hk",
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1",
+                "apiKey": "official-token",
+            }))
+            .unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![
+                json!({
+                    "id": "redbox_official_auto",
+                    "name": "RedBox Official",
+                    "presetId": "redbox-official",
+                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "apiKey": "official-token",
+                    "models": ["qwen3.5-plus"],
+                    "modelsMeta": [{ "id": "qwen3.5-plus" }],
+                    "model": "qwen3.5-plus",
+                    "protocol": "openai",
+                }),
+                json!({
+                    "id": "openai-main",
+                    "name": "OpenAI",
+                    "presetId": "openai",
+                    "baseURL": "https://api.openai.com/v1",
+                    "apiKey": "sk-test",
+                    "models": ["gpt-5.3-codex"],
+                    "model": "gpt-5.3-codex",
+                    "protocol": "openai",
+                }),
+            ])
+            .unwrap(),
+            "default_ai_source_id": "redbox_official_auto",
+            "api_endpoint": "https://api.ziz.hk/redbox/v1",
+            "api_key": "official-token",
+            "model_name": "qwen3.5-plus",
+            "video_api_key": "official-token",
+        });
+
+        clear_official_auth_state(&mut settings);
+
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("openai-main")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_key").as_deref(),
+            Some("sk-test")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("gpt-5.3-codex")
+        );
+        assert_eq!(
+            payload_string(&settings, "video_api_key").as_deref(),
+            None
+        );
+
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        let official_source = sources
+            .iter()
+            .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        assert_eq!(payload_string(&official_source, "apiKey").as_deref(), None);
+        assert_eq!(payload_string(&official_source, "model").as_deref(), None);
+        assert_eq!(
+            official_source
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len()),
+            Some(0)
+        );
+        assert_eq!(
+            official_source
+                .get("modelsMeta")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len()),
+            Some(0)
         );
     }
 
