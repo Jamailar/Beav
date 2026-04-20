@@ -3,8 +3,9 @@ use std::fs;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    escape_html, normalize_base_url, now_ms, payload_field, payload_string, run_curl_json,
-    run_curl_json_with_timeout,
+    append_debug_trace_global, escape_html, format_http_error_message, http_error_debug_line,
+    http_error_details_from_value, normalize_base_url, now_ms, payload_field, payload_string,
+    run_curl_json, run_curl_json_response,
 };
 
 pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
@@ -12,6 +13,33 @@ const REDBOX_APP_SLUG: &str = "redbox";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
+
+fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
+    let details = http_error_details_from_value(status, body);
+    append_debug_trace_global(http_error_debug_line(scope, method, url, &details));
+}
+
+fn ensure_successful_ai_response(
+    protocol: &str,
+    operation: &str,
+    method: &str,
+    url: &str,
+    model_name: &str,
+    response: crate::HttpJsonResponse,
+) -> Result<Value, String> {
+    if (200..300).contains(&response.status) {
+        return Ok(response.body);
+    }
+    let details = http_error_details_from_value(response.status, &response.body);
+    append_debug_trace_global(format!(
+        "{} | model={} protocol={} operation={}",
+        http_error_debug_line("ai-http", method, url, &details),
+        model_name,
+        protocol,
+        operation,
+    ));
+    Err(format_http_error_message("AI request", &details))
+}
 
 pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> String {
     let base = normalize_base_url(base_url);
@@ -190,9 +218,10 @@ pub(crate) fn invoke_openai_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/chat/completions", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/chat/completions", normalize_base_url(base_url)),
+        &endpoint,
         api_key,
         &[],
         Some(json!({
@@ -204,6 +233,8 @@ pub(crate) fn invoke_openai_chat(
         })),
         Some(45),
     )?;
+    let response =
+        ensure_successful_ai_response("openai", "text", "POST", &endpoint, model_name, response)?;
     let content = response
         .get("choices")
         .and_then(|value| value.as_array())
@@ -238,13 +269,15 @@ pub(crate) fn invoke_openai_structured_chat(
     if require_json {
         body["response_format"] = json!({ "type": "json_object" });
     }
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/chat/completions", normalize_base_url(base_url));
+    let response = run_curl_json_response("POST", &endpoint, api_key, &[], Some(body), Some(45))?;
+    let response = ensure_successful_ai_response(
+        "openai",
+        "structured",
         "POST",
-        &format!("{}/chat/completions", normalize_base_url(base_url)),
-        api_key,
-        &[],
-        Some(body),
-        Some(45),
+        &endpoint,
+        model_name,
+        response,
     )?;
     let content = response
         .get("choices")
@@ -267,9 +300,10 @@ pub(crate) fn invoke_anthropic_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/messages", normalize_base_url(base_url)),
+        &endpoint,
         None,
         &[
             ("x-api-key", api_key.unwrap_or_default().to_string()),
@@ -283,6 +317,14 @@ pub(crate) fn invoke_anthropic_chat(
             ]
         })),
         Some(45),
+    )?;
+    let response = ensure_successful_ai_response(
+        "anthropic",
+        "text",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("content")
@@ -306,9 +348,10 @@ pub(crate) fn invoke_anthropic_structured_chat(
     user_prompt: &str,
     _require_json: bool,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/messages", normalize_base_url(base_url)),
+        &endpoint,
         None,
         &[
             ("x-api-key", api_key.unwrap_or_default().to_string()),
@@ -323,6 +366,14 @@ pub(crate) fn invoke_anthropic_structured_chat(
             ]
         })),
         Some(45),
+    )?;
+    let response = ensure_successful_ai_response(
+        "anthropic",
+        "structured",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("content")
@@ -344,13 +395,14 @@ pub(crate) fn invoke_gemini_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = gemini_url(
+        base_url,
+        &format!("/models/{}:generateContent", model_name),
+        api_key,
+    );
+    let response = run_curl_json_response(
         "POST",
-        &gemini_url(
-            base_url,
-            &format!("/models/{}:generateContent", model_name),
-            api_key,
-        ),
+        &endpoint,
         None,
         &[],
         Some(json!({
@@ -363,6 +415,8 @@ pub(crate) fn invoke_gemini_chat(
         })),
         Some(45),
     )?;
+    let response =
+        ensure_successful_ai_response("gemini", "text", "POST", &endpoint, model_name, response)?;
     let text = response
         .get("candidates")
         .and_then(|value| value.as_array())
@@ -405,17 +459,19 @@ pub(crate) fn invoke_gemini_structured_chat(
             "responseMimeType": "application/json"
         });
     }
-    let response = run_curl_json_with_timeout(
+    let endpoint = gemini_url(
+        base_url,
+        &format!("/models/{}:generateContent", model_name),
+        api_key,
+    );
+    let response = run_curl_json_response("POST", &endpoint, None, &[], Some(body), Some(45))?;
+    let response = ensure_successful_ai_response(
+        "gemini",
+        "structured",
         "POST",
-        &gemini_url(
-            base_url,
-            &format!("/models/{}:generateContent", model_name),
-            api_key,
-        ),
-        None,
-        &[],
-        Some(body),
-        Some(45),
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("candidates")
@@ -598,14 +654,56 @@ pub(crate) fn run_official_json_request_response(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    crate::run_curl_json_response(
+    let response = crate::run_curl_json_response(
         method,
         &endpoint,
         api_key.as_deref(),
         &[],
         body,
         Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
-    )
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn run_official_public_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
+    let base_url = official_base_url_from_settings(settings);
+    let endpoint = format!(
+        "{}/{}",
+        normalize_base_url(&base_url),
+        path.trim_start_matches('/')
+    );
+    let response = crate::run_curl_json_response(
+        method,
+        &endpoint,
+        None,
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
 }
 
 pub(crate) fn run_official_public_json_request(
@@ -620,14 +718,24 @@ pub(crate) fn run_official_public_json_request(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    run_curl_json_with_timeout(
+    let response = run_curl_json_response(
         method,
         &endpoint,
         None,
         &[],
         body,
         Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
-    )
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response.body)
 }
 
 pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, String> {

@@ -7,13 +7,14 @@ use crate::{
     append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
     normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
-    official_auth_token_from_settings, official_fallback_products, official_points_snapshot,
-    official_response_items, official_settings_api_keys, official_settings_call_records_list,
-    official_settings_models, official_settings_orders, official_settings_points,
-    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
-    official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
-    run_official_public_json_request, upsert_official_settings_session, write_settings_json_array,
-    write_settings_json_value, AppState, REDBOX_OFFICIAL_BASE_URL,
+    official_auth_token_from_settings, official_base_url_from_settings, official_fallback_products,
+    official_points_snapshot, official_response_items, official_settings_api_keys,
+    official_settings_call_records_list, official_settings_models, official_settings_orders,
+    official_settings_points, official_settings_session, official_settings_wechat_login,
+    official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
+    payload_field, payload_string, run_official_public_json_request,
+    run_official_public_json_request_response, upsert_official_settings_session,
+    write_settings_json_array, write_settings_json_value, AppState, REDBOX_OFFICIAL_BASE_URL,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
@@ -475,9 +476,7 @@ fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
 
 fn sync_official_route_credentials(settings: &mut Value) {
     let token = official_auth_token_from_settings(settings).unwrap_or_default();
-    let base_url = payload_string(settings, "redbox_official_base_url")
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string());
+    let base_url = official_base_url_from_settings(settings);
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
@@ -572,17 +571,11 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
                 "refresh_token": refresh_token,
             }),
         ),
-        (
-            "/auth/token/refresh",
-            json!({
-                "refresh_token": refresh_token,
-            }),
-        ),
     ];
     let mut last_error = None;
 
     for (path, body) in request_candidates {
-        match crate::run_official_json_request_response(settings, "POST", path, Some(body.clone()))
+        match run_official_public_json_request_response(settings, "POST", path, Some(body.clone()))
         {
             Ok(response) => {
                 if !(200..300).contains(&response.status) {
@@ -2513,5 +2506,73 @@ mod tests {
         let cached = cached_official_points(&settings);
         assert_eq!(cached.get("balance").and_then(value_as_f64), Some(88.5));
         assert_eq!(cached.get("points").and_then(value_as_f64), Some(88.5));
+    }
+
+    #[test]
+    fn sync_official_route_credentials_uses_normalized_official_base_url() {
+        let mut settings = json!({
+            "redbox_official_base_url": "https://api.ziz.hk",
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1"
+            }))
+            .unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "baseURL": "",
+                "apiKey": ""
+            })])
+            .unwrap(),
+        });
+
+        sync_official_route_credentials(&mut settings);
+
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some("https://api.ziz.hk/redbox/v1")
+        );
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            sources
+                .first()
+                .and_then(|item| payload_string(item, "baseURL"))
+                .as_deref(),
+            Some("https://api.ziz.hk/redbox/v1")
+        );
+    }
+
+    #[test]
+    fn refresh_flow_prefers_public_refresh_route_shape() {
+        let refresh_token = "refresh-1";
+        let request_candidates = [
+            (
+                "/auth/refresh",
+                json!({
+                    "refresh_token": refresh_token,
+                }),
+            ),
+            (
+                "/auth/refresh",
+                json!({
+                    "refreshToken": refresh_token,
+                }),
+            ),
+            (
+                "/auth/refresh-token",
+                json!({
+                    "refresh_token": refresh_token,
+                }),
+            ),
+        ];
+
+        assert_eq!(request_candidates[0].0, "/auth/refresh");
+        assert_eq!(
+            payload_string(&request_candidates[0].1, "refresh_token").as_deref(),
+            Some("refresh-1")
+        );
+        assert!(request_candidates
+            .iter()
+            .all(|(path, _)| *path != "/auth/token/refresh"));
     }
 }

@@ -304,6 +304,7 @@ pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
         || normalized.contains("refresh token reuse")
         || normalized.contains("account disabled")
         || normalized.contains("账号已禁用")
+        || normalized.contains("invalid refresh token")
         || normalized.contains("refresh token invalid")
     {
         return AuthErrorKind::ReauthRequired;
@@ -908,6 +909,10 @@ mod tests {
     fn classify_auth_error_recognizes_reauth_required_cases() {
         assert_eq!(
             classify_auth_error("invalid_grant: refresh token revoked"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("Invalid refresh token"),
             AuthErrorKind::ReauthRequired
         );
         assert_eq!(

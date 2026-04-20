@@ -200,8 +200,34 @@ function parseMessageTimestampMs(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseEmbeddedHttpError(rawValue: string): Partial<ChatErrorEventPayload> {
+  const raw = String(rawValue || '').trim();
+  if (!raw) return {};
+
+  const rawMarker = '\nRaw response:';
+  const rawIndex = raw.indexOf(rawMarker);
+  const summary = (rawIndex >= 0 ? raw.slice(0, rawIndex) : raw).trim();
+  const detail = (rawIndex >= 0 ? raw.slice(rawIndex + rawMarker.length) : '').trim();
+  const statusMatch = summary.match(/\bHTTP\s+(\d{3})\b/i);
+  const errorCodeMatch = summary.match(/\[code=([^\]]+)\]/i);
+  const messageMatch = summary.match(/\bHTTP\s+\d{3}(?:\s+\[code=[^\]]+\])?\s+(.+)$/i);
+  const cleanedMessage = String(messageMatch?.[1] || summary)
+    .replace(/^[^:]+failed:\s*/i, '')
+    .trim();
+
+  return {
+    message: cleanedMessage || 'AI 请求失败',
+    raw: detail || raw,
+    statusCode: statusMatch ? Number(statusMatch[1]) : undefined,
+    errorCode: errorCodeMatch?.[1]?.trim() || undefined,
+  };
+}
+
 function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
-  const data = typeof payload === 'string' ? { message: payload } : (payload || {});
+  const embedded = parseEmbeddedHttpError(typeof payload === 'string'
+    ? payload
+    : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
+  const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
   const title = String(data.message || 'AI 请求失败').trim();
   const detail = String(data.raw || '').trim();
   const lower = `${title}\n${detail}`.toLowerCase();
@@ -278,16 +304,16 @@ function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | n
   }
 
   const notice = detectedInsufficientBalance
-    ? 'AI 源余额不足，请充值或切换有余额的 AI 源。'
+    ? `AI 源余额不足${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请充值或切换有余额的 AI 源。`
     : detectedInvalidKey
-      ? 'AI 源鉴权失败，请检查 API Key。'
+      ? `AI 源鉴权失败${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请检查 API Key。`
       : detectedRateLimit
-        ? 'AI 请求被限流，请稍后重试。'
+        ? `AI 请求被限流${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请稍后重试。`
         : isValidationError
           ? '执行校验未通过，请先修复 reviewer 指出的问题。'
           : isExecutionError
             ? '任务执行失败，请检查素材读取、工具调用和文件权限。'
-        : `AI 请求失败：${userFacingTitle}`;
+        : `AI 请求失败：${userFacingTitle}${metaParts.length > 0 ? `（${metaParts.join(' / ')}）` : ''}`;
 
   return {
     formatted: lines.join('\n'),
@@ -2543,7 +2569,10 @@ export function Chat({
                 ) : (
                   <>
                 {errorNotice && (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{errorNotice}</div>
+                  <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
+                    <div className="font-medium">本次 AI 请求失败</div>
+                    <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                  </div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">

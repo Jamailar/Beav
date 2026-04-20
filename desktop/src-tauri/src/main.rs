@@ -70,7 +70,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -680,7 +680,7 @@ struct EditorRuntimeStateRecord {
 
 struct AppState {
     store_path: PathBuf,
-    store: Mutex<AppStore>,
+    store: Arc<Mutex<AppStore>>,
     workspace_root_cache: Mutex<PathBuf>,
     startup_migration: Mutex<startup_migration::StartupMigrationStatus>,
     store_persist_version: Arc<AtomicU64>,
@@ -701,6 +701,8 @@ struct AppState {
     diagnostics: Mutex<DiagnosticsState>,
     knowledge_index_state: Mutex<knowledge_index::KnowledgeIndexRuntimeState>,
 }
+
+static GLOBAL_DEBUG_STORE: OnceLock<Arc<Mutex<AppStore>>> = OnceLock::new();
 
 struct AssistantRuntime {
     stop: Arc<AtomicBool>,
@@ -1870,27 +1872,37 @@ fn is_debug_log_enabled(store: &AppStore) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
-    let line = format!("{} | {}", now_iso(), line.into());
-    let Ok(mut store) = state.store.lock() else {
+fn write_debug_line_to_store(store: &Arc<Mutex<AppStore>>, line: &str) {
+    let Ok(mut store) = store.lock() else {
         return;
     };
     if !is_debug_log_enabled(&store) {
         return;
     }
-    append_debug_log(&mut store, line);
+    append_debug_log(&mut store, line.to_string());
+}
+
+fn register_global_debug_store(store: Arc<Mutex<AppStore>>) {
+    let _ = GLOBAL_DEBUG_STORE.set(store);
+}
+
+pub(crate) fn append_debug_trace_global(line: impl Into<String>) {
+    let line = format!("{} | {}", now_iso(), line.into());
+    eprintln!("{}", line);
+    if let Some(store) = GLOBAL_DEBUG_STORE.get() {
+        write_debug_line_to_store(store, &line);
+    }
+}
+
+pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
+    let line = format!("{} | {}", now_iso(), line.into());
+    write_debug_line_to_store(&state.store, &line);
 }
 
 pub(crate) fn append_debug_trace_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
     eprintln!("{}", line);
-    let Ok(mut store) = state.store.lock() else {
-        return;
-    };
-    if !is_debug_log_enabled(&store) {
-        return;
-    }
-    append_debug_log(&mut store, line);
+    write_debug_line_to_store(&state.store, &line);
 }
 
 fn log_timing_event(
@@ -3835,6 +3847,8 @@ fn run_openai_streaming_chat_completion(
     let mut saw_tool_calls = false;
     let mut responding_started = false;
     let mut thought_closed = false;
+    let mut http_status_code: Option<u16> = None;
+    let mut raw_response_lines = Vec::<String>::new();
 
     let finalize_thought_phase = |app: &AppHandle, session_id: &str| {
         emit_runtime_task_checkpoint_saved(
@@ -3975,6 +3989,10 @@ fn run_openai_streaming_chat_completion(
             break;
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(status_text) = trimmed.strip_prefix(HTTP_STATUS_MARKER) {
+            http_status_code = status_text.trim().parse::<u16>().ok();
+            continue;
+        }
         if trimmed.is_empty() {
             if !event_data_lines.is_empty() {
                 let should_stop = process_event(&event_data_lines.join("\n"))?;
@@ -3987,6 +4005,8 @@ fn run_openai_streaming_chat_completion(
         }
         if let Some(value) = trimmed.strip_prefix("data:") {
             event_data_lines.push(value.trim().to_string());
+        } else {
+            raw_response_lines.push(trimmed.to_string());
         }
     }
 
@@ -4017,6 +4037,26 @@ fn run_openai_streaming_chat_completion(
         } else {
             stderr_text
         });
+    }
+
+    if let Some(status_code) = http_status_code.filter(|code| !(200..300).contains(code)) {
+        let raw_body = raw_response_lines.join("\n");
+        let details = http_error_details_from_text(status_code, &raw_body);
+        append_debug_trace_state(
+            state,
+            format!(
+                "{} | runtimeMode={} model={}",
+                http_error_debug_line(
+                    "ai-http",
+                    "POST",
+                    &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+                    &details
+                ),
+                runtime_mode,
+                config.model_name,
+            ),
+        );
+        return Err(format_http_error_message("AI request", &details));
     }
 
     if saw_tool_calls && !thought_closed {
@@ -4371,6 +4411,8 @@ fn run_anthropic_interactive_chat_runtime(
             .arg("anthropic-version: 2023-06-01")
             .arg("-d")
             .arg(serde_json::to_string(&body).map_err(|error| error.to_string())?)
+            .arg("-w")
+            .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|error| error.to_string())?;
@@ -4402,6 +4444,8 @@ fn run_anthropic_interactive_chat_runtime(
         let mut tool_deltas = Vec::<StreamingToolDelta>::new();
         let mut saw_tool_calls = false;
         let mut responding_started = false;
+        let mut http_status_code: Option<u16> = None;
+        let mut raw_response_lines = Vec::<String>::new();
 
         loop {
             if session_id
@@ -4421,6 +4465,10 @@ fn run_anthropic_interactive_chat_runtime(
                 break;
             }
             let trimmed = line.trim_end_matches(['\r', '\n']);
+            if let Some(status_text) = trimmed.strip_prefix(HTTP_STATUS_MARKER) {
+                http_status_code = status_text.trim().parse::<u16>().ok();
+                continue;
+            }
             if trimmed.is_empty() {
                 if event_data_lines.is_empty() {
                     continue;
@@ -4541,6 +4589,8 @@ fn run_anthropic_interactive_chat_runtime(
             }
             if let Some(value) = trimmed.strip_prefix("data:") {
                 event_data_lines.push(value.trim().to_string());
+            } else {
+                raw_response_lines.push(trimmed.to_string());
             }
         }
 
@@ -4568,6 +4618,25 @@ fn run_anthropic_interactive_chat_runtime(
             } else {
                 stderr_text
             });
+        }
+        if let Some(status_code) = http_status_code.filter(|code| !(200..300).contains(code)) {
+            let raw_body = raw_response_lines.join("\n");
+            let details = http_error_details_from_text(status_code, &raw_body);
+            append_debug_trace_state(
+                state,
+                format!(
+                    "{} | runtimeMode={} model={}",
+                    http_error_debug_line(
+                        "ai-http",
+                        "POST",
+                        &format!("{}/messages", normalize_base_url(&config.base_url)),
+                        &details
+                    ),
+                    runtime_mode,
+                    config.model_name,
+                ),
+            );
+            return Err(format_http_error_message("AI request", &details));
         }
 
         let tool_calls = tool_deltas
@@ -4948,11 +5017,13 @@ fn run_gemini_interactive_chat_runtime(
             .arg("-N")
             .arg("-X")
             .arg("POST")
-            .arg(endpoint)
+            .arg(&endpoint)
             .arg("-H")
             .arg("Content-Type: application/json")
             .arg("-d")
             .arg(serde_json::to_string(&body).map_err(|error| error.to_string())?)
+            .arg("-w")
+            .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|error| error.to_string())?;
@@ -4987,6 +5058,8 @@ fn run_gemini_interactive_chat_runtime(
         let mut terminal_reason: Option<String> = None;
         let mut saw_done = false;
         let mut saw_eof = false;
+        let mut http_status_code: Option<u16> = None;
+        let mut raw_response_lines = Vec::<String>::new();
 
         loop {
             if session_id
@@ -5007,6 +5080,10 @@ fn run_gemini_interactive_chat_runtime(
                 break;
             }
             let trimmed = line.trim_end_matches(['\r', '\n']);
+            if let Some(status_text) = trimmed.strip_prefix(HTTP_STATUS_MARKER) {
+                http_status_code = status_text.trim().parse::<u16>().ok();
+                continue;
+            }
             if trimmed.is_empty() {
                 if event_data_lines.is_empty() {
                     continue;
@@ -5131,6 +5208,8 @@ fn run_gemini_interactive_chat_runtime(
             }
             if let Some(value) = trimmed.strip_prefix("data:") {
                 event_data_lines.push(value.trim().to_string());
+            } else {
+                raw_response_lines.push(trimmed.to_string());
             }
         }
 
@@ -5158,6 +5237,20 @@ fn run_gemini_interactive_chat_runtime(
             } else {
                 stderr_text
             });
+        }
+        if let Some(status_code) = http_status_code.filter(|code| !(200..300).contains(code)) {
+            let raw_body = raw_response_lines.join("\n");
+            let details = http_error_details_from_text(status_code, &raw_body);
+            append_debug_trace_state(
+                state,
+                format!(
+                    "{} | runtimeMode={} model={}",
+                    http_error_debug_line("ai-http", "POST", &endpoint, &details),
+                    runtime_mode,
+                    config.model_name,
+                ),
+            );
+            return Err(format_http_error_message("AI request", &details));
         }
         append_debug_trace_state(
             state,
@@ -6617,11 +6710,13 @@ fn main() {
     let initial_workspace_root =
         workspace_root_from_snapshot(&store.settings, &store.active_space_id, &store_path)
             .unwrap_or_else(|_| preferred_workspace_dir());
+    let shared_store = Arc::new(Mutex::new(store));
+    register_global_debug_store(Arc::clone(&shared_store));
 
     tauri::Builder::default()
         .manage(AppState {
             store_path,
-            store: Mutex::new(store),
+            store: shared_store,
             workspace_root_cache: Mutex::new(initial_workspace_root),
             startup_migration: Mutex::new(startup_migration_status),
             store_persist_version: Arc::new(AtomicU64::new(0)),

@@ -4,10 +4,20 @@ use std::io::Write;
 
 use crate::configure_background_command;
 
+pub(crate) const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
+
 #[derive(Debug, Clone)]
 pub(crate) struct HttpJsonResponse {
     pub status: u16,
     pub body: Value,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HttpErrorDetails {
+    pub status: u16,
+    pub error_code: Option<String>,
+    pub message: String,
+    pub raw: String,
 }
 
 pub(crate) fn normalize_base_url(value: &str) -> String {
@@ -47,13 +57,123 @@ fn build_curl_json_command(
     Ok(command)
 }
 
+fn payload_error_code(value: &Value) -> Option<String> {
+    ["errorCode", "error_code", "code", "statusCode", "status"]
+        .into_iter()
+        .find_map(|key| {
+            value.get(key).and_then(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(ToString::to_string)
+                    .or_else(|| item.as_i64().map(|number| number.to_string()))
+                    .or_else(|| item.as_u64().map(|number| number.to_string()))
+            })
+        })
+}
+
+fn payload_error_message(value: &Value) -> Option<String> {
+    [
+        "message",
+        "error",
+        "msg",
+        "detail",
+        "reason",
+        "error_description",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+pub(crate) fn http_error_details_from_value(status: u16, body: &Value) -> HttpErrorDetails {
+    let nested_error = body.get("error").filter(|value| value.is_object());
+    let nested_data = body.get("data").filter(|value| value.is_object());
+    let error_code = payload_error_code(body)
+        .or_else(|| nested_error.and_then(payload_error_code))
+        .or_else(|| nested_data.and_then(payload_error_code));
+    let message = payload_error_message(body)
+        .or_else(|| nested_error.and_then(payload_error_message))
+        .or_else(|| nested_data.and_then(payload_error_message))
+        .unwrap_or_else(|| format!("HTTP {status}"));
+    let raw = if body.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(body).unwrap_or_else(|_| body.to_string())
+    };
+    HttpErrorDetails {
+        status,
+        error_code,
+        message,
+        raw,
+    }
+}
+
+pub(crate) fn http_error_details_from_text(status: u16, raw: &str) -> HttpErrorDetails {
+    let normalized = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(normalized) {
+        return http_error_details_from_value(status, &value);
+    }
+    HttpErrorDetails {
+        status,
+        error_code: None,
+        message: if normalized.is_empty() {
+            format!("HTTP {status}")
+        } else {
+            normalized.to_string()
+        },
+        raw: normalized.to_string(),
+    }
+}
+
+pub(crate) fn format_http_error_message(context: &str, details: &HttpErrorDetails) -> String {
+    let code_segment = details
+        .error_code
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!(" [code={value}]"))
+        .unwrap_or_default();
+    let mut message = format!(
+        "{context} failed: HTTP {}{} {}",
+        details.status, code_segment, details.message
+    );
+    if !details.raw.trim().is_empty() {
+        message.push_str("\nRaw response: ");
+        message.push_str(details.raw.trim());
+    }
+    message
+}
+
+pub(crate) fn http_error_debug_line(
+    scope: &str,
+    method: &str,
+    url: &str,
+    details: &HttpErrorDetails,
+) -> String {
+    format!(
+        "[{scope}] method={} status={} code={} url={} message={} raw={}",
+        method,
+        details.status,
+        details.error_code.as_deref().unwrap_or("-"),
+        url,
+        details.message,
+        details.raw,
+    )
+}
+
 fn serialized_json_body(body: Option<&Value>) -> Result<Option<Vec<u8>>, String> {
     body.map(serde_json::to_vec)
         .transpose()
         .map_err(|error| error.to_string())
 }
 
-fn spawn_curl_json_child(
+pub(crate) fn spawn_curl_json_process(
     method: &str,
     url: &str,
     api_key: Option<&str>,
@@ -61,11 +181,7 @@ fn spawn_curl_json_child(
     body: Option<&Value>,
     max_time_seconds: Option<u64>,
     no_buffer: bool,
-    stdout_piped: bool,
-    stderr_piped: bool,
 ) -> Result<std::process::Child, String> {
-    use std::process::Stdio;
-
     let serialized_body = serialized_json_body(body)?;
     let mut command = build_curl_json_command(
         method,
@@ -76,16 +192,14 @@ fn spawn_curl_json_child(
         max_time_seconds,
         no_buffer,
     )?;
+    command
+        .arg("-w")
+        .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
     if serialized_body.is_some() {
-        command.stdin(Stdio::piped());
+        command.stdin(std::process::Stdio::piped());
     }
-    if stdout_piped {
-        command.stdout(Stdio::piped());
-    }
-    if stderr_piped {
-        command.stderr(Stdio::piped());
-    }
-
     let mut child = command.spawn().map_err(|error| error.to_string())?;
     if let Some(payload) = serialized_body {
         let mut stdin = child
@@ -98,28 +212,6 @@ fn spawn_curl_json_child(
         drop(stdin);
     }
     Ok(child)
-}
-
-pub(crate) fn spawn_curl_json_process(
-    method: &str,
-    url: &str,
-    api_key: Option<&str>,
-    extra_headers: &[(&str, String)],
-    body: Option<&Value>,
-    max_time_seconds: Option<u64>,
-    no_buffer: bool,
-) -> Result<std::process::Child, String> {
-    spawn_curl_json_child(
-        method,
-        url,
-        api_key,
-        extra_headers,
-        body,
-        max_time_seconds,
-        no_buffer,
-        true,
-        true,
-    )
 }
 
 pub(crate) fn run_curl_json_with_timeout(
@@ -142,8 +234,6 @@ pub(crate) fn run_curl_json_response(
     body: Option<Value>,
     max_time_seconds: Option<u64>,
 ) -> Result<HttpJsonResponse, String> {
-    const STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
-
     let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = build_curl_json_command(
         method,
@@ -156,7 +246,7 @@ pub(crate) fn run_curl_json_response(
     )?;
     command
         .arg("-w")
-        .arg(format!("\n{STATUS_MARKER}%{{http_code}}"));
+        .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     if serialized_body.is_some() {
@@ -187,7 +277,7 @@ pub(crate) fn run_curl_json_response(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let (body_text, status_text) = stdout
-        .rsplit_once(STATUS_MARKER)
+        .rsplit_once(HTTP_STATUS_MARKER)
         .ok_or_else(|| "Invalid HTTP response trailer".to_string())?;
     let status = status_text
         .trim()

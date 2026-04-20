@@ -35,10 +35,10 @@ function createSurfaceStyle(shadowMode: boolean): React.CSSProperties {
   if (shadowMode) {
     return {
       background:
-        "linear-gradient(180deg, rgba(255,255,255,0.36) 0%, rgba(255,244,224,0.28) 52%, rgba(255,214,140,0.2) 100%)",
-      border: "1px solid rgba(255,255,255,0.56)",
+        "linear-gradient(180deg, rgba(255,252,246,0.82) 0%, rgba(255,244,224,0.74) 52%, rgba(255,223,168,0.66) 100%)",
+      border: "1px solid rgba(255,255,255,0.84)",
       boxShadow:
-        "0 18px 44px rgba(92, 71, 35, 0.14), 0 4px 18px rgba(255, 196, 88, 0.12), inset 0 1px 0 rgba(255,255,255,0.72)",
+        "0 18px 44px rgba(92, 71, 35, 0.18), 0 4px 18px rgba(255, 196, 88, 0.14), inset 0 1px 0 rgba(255,255,255,0.88)",
     }
   }
 
@@ -103,7 +103,7 @@ export const LiquidGlassSurface = React.forwardRef<
             className="pointer-events-none absolute inset-0 rounded-[12px]"
             style={{
               background: shadowMode
-                ? "linear-gradient(180deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.14) 34%, rgba(255,196,84,0.1) 100%)"
+                ? "linear-gradient(180deg, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0.24) 34%, rgba(255,196,84,0.16) 100%)"
                 : "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 34%, rgba(100,170,255,0.1) 100%)",
             }}
           />
@@ -112,7 +112,7 @@ export const LiquidGlassSurface = React.forwardRef<
             className="pointer-events-none absolute inset-x-[8%] top-0 h-[44%] rounded-full blur-xl"
             style={{
               background: shadowMode
-                ? "radial-gradient(circle at 50% 0%, rgba(255,255,255,0.56), rgba(255,255,255,0) 72%)"
+                ? "radial-gradient(circle at 50% 0%, rgba(255,255,255,0.72), rgba(255,255,255,0) 72%)"
                 : "radial-gradient(circle at 50% 0%, rgba(255,255,255,0.22), rgba(255,255,255,0) 72%)",
             }}
           />
