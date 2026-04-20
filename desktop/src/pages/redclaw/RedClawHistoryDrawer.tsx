@@ -56,7 +56,7 @@ export function RedClawHistoryDrawer({
                         onClick={onClose}
                     />
                     
-                    <div className="absolute left-4 top-4 bottom-4 flex w-[320px] max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/96 shadow-[var(--ui-shadow-2)] backdrop-blur-[40px] animate-slide-in-left-refined">
+                    <div className="absolute left-4 top-4 bottom-4 flex w-[320px] max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-2xl border border-border bg-surface-primary shadow-[0_24px_64px_-16px_rgba(15,23,42,0.16)] animate-slide-in-left-refined">
                         <div className="relative flex h-full flex-col">
                             {/* Header - 移除空间名，更紧凑 */}
                             <div className="px-5 pt-5 pb-2">
@@ -175,4 +175,3 @@ export function RedClawHistoryDrawer({
         </>
     );
 }
-

@@ -1057,7 +1057,7 @@ function RichpostThemeEditorOverlay({
                         messageWorkflowPlacement="bottom"
                         messageWorkflowVariant="compact"
                         messageWorkflowEmphasis="default"
-                        embeddedTheme="dark"
+                        embeddedTheme="auto"
                         welcomeTitle="图文排版"
                         welcomeSubtitle="描述你希望的首页、内容页和尾页风格，让 AI 来改主题。"
                         shortcuts={shortcuts}
@@ -2742,7 +2742,7 @@ export function WritingDraftWorkbench({
                   messageWorkflowPlacement="bottom"
                   messageWorkflowVariant="compact"
                   messageWorkflowEmphasis="default"
-                  embeddedTheme="dark"
+                  embeddedTheme="auto"
                   welcomeTitle={aiWorkspaceMode.label}
                   welcomeSubtitle={isRichPost ? '围绕当前图文稿继续改标题、压缩段落、强化发布感。' : '围绕当前长文继续改结构、润色正文、生成发布版本。'}
                   shortcuts={shortcuts}

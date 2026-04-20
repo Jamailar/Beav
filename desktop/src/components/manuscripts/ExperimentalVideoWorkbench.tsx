@@ -785,7 +785,7 @@ export function ExperimentalVideoWorkbench({
                         showWelcomeShortcuts={false}
                         showComposerShortcuts
                         fixedSessionContextIndicatorMode="corner-ring"
-                        embeddedTheme="dark"
+                        embeddedTheme="auto"
                         contentLayout="wide"
                         contentWidthPreset="default"
                         allowFileUpload

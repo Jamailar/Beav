@@ -19,6 +19,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
+import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
 
 interface Session {
   id: string;
@@ -68,7 +69,7 @@ interface ChatProps {
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
-  embeddedTheme?: 'default' | 'dark';
+  embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
   emptyStateVerticalAlign?: 'center' | 'lower';
@@ -353,6 +354,7 @@ export function Chat({
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const documentThemeMode = useDocumentThemeMode();
 
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
@@ -2127,7 +2129,10 @@ export function Chat({
   const contextRingRadius = 17;
   const contextRingCircumference = 2 * Math.PI * contextRingRadius;
   const contextUsageRingOffset = contextRingCircumference * (1 - Math.max(0, Math.min(1, compactRatio)));
-  const darkEmbedded = embeddedTheme === 'dark';
+  const resolvedEmbeddedTheme = embeddedTheme === 'auto'
+    ? (documentThemeMode === 'dark' ? 'dark' : 'default')
+    : embeddedTheme;
+  const darkEmbedded = resolvedEmbeddedTheme === 'dark';
   const composerTheme = darkEmbedded ? 'dark' : 'default';
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
