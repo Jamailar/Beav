@@ -738,6 +738,22 @@ fn youtube_subtitle_file_from_meta(meta: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn note_transcript_file_from_meta(meta: &Value) -> Option<String> {
+    meta.get("transcriptFile")
+        .or_else(|| meta.get("transcript_file"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            meta.get("transcript")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|_| "transcript.md".to_string())
+        })
+}
+
 fn write_youtube_meta_status(
     entry_dir: &Path,
     status: &str,
@@ -791,6 +807,170 @@ fn emit_youtube_processing_event(
             }),
         )),
     )
+}
+
+fn write_note_transcription_meta_status(
+    entry_dir: &Path,
+    status: &str,
+    transcript_file: Option<&str>,
+    transcription_error: Option<&str>,
+) -> Result<(), String> {
+    let meta_path = entry_dir.join("meta.json");
+    let mut meta = read_json_value_or(&meta_path, json!({}));
+    if !meta.is_object() {
+        meta = json!({});
+    }
+    let object = meta
+        .as_object_mut()
+        .ok_or_else(|| "笔记元数据格式无效".to_string())?;
+    let existing_transcript_file = object.get("transcriptFile").cloned().unwrap_or(Value::Null);
+    object.insert("transcriptionStatus".to_string(), json!(status));
+    object.insert(
+        "transcriptFile".to_string(),
+        transcript_file
+            .map(|value| json!(value))
+            .unwrap_or(existing_transcript_file),
+    );
+    object.insert(
+        "transcriptionError".to_string(),
+        transcription_error
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    write_json_value(&meta_path, &meta)
+}
+
+fn emit_note_transcription_event(
+    app: &AppHandle,
+    note_id: &str,
+    status: &str,
+    has_transcript: bool,
+    transcription_error: Option<&str>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    refresh_knowledge_projection_and_emit(
+        Some(app),
+        &state,
+        Some((
+            "knowledge:note-updated",
+            json!({
+                "noteId": note_id,
+                "hasTranscript": has_transcript,
+                "transcriptionStatus": status,
+                "transcriptionError": transcription_error,
+            }),
+        )),
+    )
+}
+
+fn transcribe_note_media_source(
+    state: &State<'_, AppState>,
+    note_id: &str,
+    media_source: &str,
+) -> Result<String, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let (endpoint, api_key, model_name) = resolve_transcription_settings(&settings_snapshot)
+        .ok_or_else(|| "未配置音频转写接口，请先在设置中填写 transcription endpoint/model".to_string())?;
+    let media_source = media_source.trim();
+    if media_source.is_empty() {
+        return Err("缺少可转录的视频来源".to_string());
+    }
+
+    let extension = asset_extension_from_url_or_path(media_source).unwrap_or_else(|| "bin".to_string());
+    let mime_type = if matches!(extension.as_str(), "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac")
+    {
+        "audio/*"
+    } else {
+        "video/*"
+    };
+    let temp_dir = store_root(state)?.join("tmp");
+    fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
+    let temp_path = temp_dir.join(format!(
+        "knowledge-{}-media.{}",
+        slug_from_relative_path(note_id),
+        extension
+    ));
+    let source_path = resolve_local_path(media_source).filter(|path| path.exists());
+    let downloaded_to_temp = source_path.is_none();
+    let local_media_path = if let Some(path) = source_path {
+        path
+    } else {
+        let bytes = run_curl_bytes("GET", media_source, None, &[], None)?;
+        fs::write(&temp_path, bytes).map_err(|error| error.to_string())?;
+        temp_path.clone()
+    };
+    let transcript = run_curl_transcription(
+        &endpoint,
+        api_key.as_deref(),
+        &model_name,
+        &local_media_path,
+        mime_type,
+    )?;
+    if downloaded_to_temp {
+        let _ = fs::remove_file(&local_media_path);
+    }
+    Ok(transcript)
+}
+
+fn spawn_note_transcription_processing(
+    app: &AppHandle,
+    note_id: String,
+    title: String,
+    media_source: String,
+    entry_dir: PathBuf,
+) {
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        let state = app_handle.state::<AppState>();
+        append_debug_log_state(
+            &state,
+            format!(
+                "[RedBox note] background transcription start: noteId={} title={} source={}",
+                note_id, title, media_source
+            ),
+        );
+
+        let start_outcome = write_note_transcription_meta_status(
+            &entry_dir,
+            "processing",
+            None,
+            None,
+        )
+        .and_then(|_| emit_note_transcription_event(&app_handle, &note_id, "processing", false, None));
+        if let Err(error) = start_outcome {
+            append_debug_log_state(
+                &state,
+                format!(
+                    "[RedBox note] failed to write processing state: noteId={} error={}",
+                    note_id, error
+                ),
+            );
+        }
+
+        let outcome = (|| -> Result<(), String> {
+            let transcript = transcribe_note_media_source(&state, &note_id, &media_source)?;
+            persist_note_transcript(&app_handle, &state, &note_id, &transcript)?;
+            write_note_transcription_meta_status(
+                &entry_dir,
+                "completed",
+                Some("transcript.md"),
+                None,
+            )?;
+            Ok(())
+        })();
+
+        if let Err(error) = outcome {
+            let _ = write_note_transcription_meta_status(&entry_dir, "failed", None, Some(&error));
+            let _ = emit_note_transcription_event(&app_handle, &note_id, "failed", false, Some(&error));
+            append_debug_log_state(
+                &state,
+                format!(
+                    "[RedBox note] background transcription failed: noteId={} error={}",
+                    note_id, error
+                ),
+            );
+        }
+    });
 }
 
 fn transcribe_youtube_audio_fallback(
@@ -1302,6 +1482,7 @@ fn ingest_note_entry(
         .clone()
         .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
     let entry_dir = redbook_entry_dir(state, &entry_id)?;
+    let existing_meta = read_json_file(entry_dir.join("meta.json").as_path());
 
     let markdown = note_content_markdown(&request.content);
     if let Some(markdown) = markdown.as_ref() {
@@ -1349,6 +1530,37 @@ fn ingest_note_entry(
         .as_ref()
         .map(|source| materialize_note_asset_source(&entry_dir, source, ".", "video", "video"))
         .transpose()?;
+    let transcript = normalize_string(request.content.transcript.clone());
+    let existing_transcript_file = existing_meta
+        .as_ref()
+        .and_then(note_transcript_file_from_meta);
+    let existing_transcription_status = existing_meta
+        .as_ref()
+        .and_then(|meta| {
+            meta.get("transcriptionStatus")
+                .or_else(|| meta.get("transcription_status"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        });
+    let has_existing_transcript = existing_transcript_file.is_some();
+    let transcription_media_source = video_asset
+        .as_ref()
+        .map(|relative| entry_dir.join(relative).to_string_lossy().to_string())
+        .or_else(|| video_source.clone());
+    let should_process_transcription = request.options.transcribe
+        && transcript.is_none()
+        && transcription_media_source.is_some()
+        && !has_existing_transcript
+        && existing_transcription_status.as_deref() != Some("processing");
+    let transcription_status = if transcript.is_some() {
+        Some("completed".to_string())
+    } else if should_process_transcription {
+        Some("processing".to_string())
+    } else {
+        existing_transcription_status
+    };
     let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
     let meta = json!({
         "id": entry_id,
@@ -1372,8 +1584,9 @@ fn ingest_note_entry(
         "videoUrl": video_source,
         "video": video_asset,
         "htmlFile": if normalize_string(request.content.html.clone()).is_some() { Some("content.html") } else { None },
-        "transcriptFile": if normalize_string(request.content.transcript.clone()).is_some() { Some("transcript.md") } else { None },
-        "transcriptionStatus": if normalize_string(request.content.transcript.clone()).is_some() { Some("completed") } else { None },
+        "transcriptFile": if transcript.is_some() { Some("transcript.md") } else { existing_transcript_file.as_deref() },
+        "transcriptionStatus": transcription_status,
+        "transcriptionError": Value::Null,
         "stats": {
             "likes": stats.likes.unwrap_or(0),
             "collects": stats.collects
@@ -1394,6 +1607,19 @@ fn ingest_note_entry(
             }),
         )),
     )?;
+    if should_process_transcription {
+        if let Some(app) = app {
+            if let Some(media_source) = transcription_media_source {
+                spawn_note_transcription_processing(
+                    app,
+                    entry_id.clone(),
+                    title.clone(),
+                    media_source,
+                    entry_dir,
+                );
+            }
+        }
+    }
     Ok(json!({
         "success": true,
         "kind": normalized_kind,
@@ -1576,7 +1802,7 @@ pub(crate) fn ingest_entry(
     }
     match kind {
         "youtube-video" => ingest_youtube_entry(app, state, request),
-        "xhs-note" | "xhs-video" | "link-article" | "wechat-article" | "knowledge-note"
+        "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article" | "knowledge-note"
         | "webpage" | "article" | "text-note" => ingest_note_entry(app, state, request),
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
@@ -1715,6 +1941,7 @@ pub(crate) fn knowledge_http_health(
                     "youtube-video",
                     "xhs-note",
                     "xhs-video",
+                    "douyin-video",
                     "link-article",
                     "wechat-article",
                     "knowledge-note",
@@ -2129,8 +2356,10 @@ pub(crate) fn persist_note_transcript(
 mod tests {
     use super::{
         decode_embedded_js_string, extract_css_url_near, extract_html_attribute_near,
-        extract_json_string_values, maybe_backfill_xiaohongshu_assets, KnowledgeEntryAssetsInput,
+        extract_json_string_values, maybe_backfill_xiaohongshu_assets,
+        note_transcript_file_from_meta, KnowledgeEntryAssetsInput,
     };
+    use serde_json::json;
 
     #[test]
     fn extracts_xiaohongshu_embedded_urls() {
@@ -2185,5 +2414,17 @@ mod tests {
         assert_eq!(resolved.cover_url, assets.cover_url);
         assert_eq!(resolved.image_urls, assets.image_urls);
         assert_eq!(resolved.video_url, assets.video_url);
+    }
+
+    #[test]
+    fn reads_note_transcript_file_from_meta() {
+        assert_eq!(
+            note_transcript_file_from_meta(&json!({ "transcriptFile": "transcript.md" })),
+            Some("transcript.md".to_string())
+        );
+        assert_eq!(
+            note_transcript_file_from_meta(&json!({ "transcript": "hello" })),
+            Some("transcript.md".to_string())
+        );
     }
 }

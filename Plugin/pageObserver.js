@@ -53,7 +53,8 @@ function isInspectHost() {
         || hostname === 'youtu.be'
         || hostname === 'youtube.com'
         || hostname.endsWith('.youtube.com')
-        || /(^|\.)xiaohongshu\.com$/i.test(hostname);
+        || /(^|\.)xiaohongshu\.com$/i.test(hostname)
+        || /(^|\.)douyin\.com$/i.test(hostname);
 }
 
 function createLinkFallbackPageInfo(overrides = {}) {
@@ -486,6 +487,36 @@ function detectPageInfo() {
 
     if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
         return detectXhsNoteInfo();
+    }
+
+    if (/(^|\.)douyin\.com$/i.test(hostname)) {
+        const title = normalizeText(
+            document.querySelector('[data-e2e="video-desc"]')?.textContent
+            || document.querySelector('h1')?.textContent
+            || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+            || '',
+        ).replace(/\s*[-|_|]\s*抖音.*$/i, '').trim();
+        const videoEl = Array.from(document.querySelectorAll('video'))
+            .sort((a, b) => {
+                const ar = a.getBoundingClientRect();
+                const br = b.getBoundingClientRect();
+                return (br.width * br.height) - (ar.width * ar.height);
+            })
+            .find((item) => isNodeVisible(item) || normalizeText(item.currentSrc || item.src));
+        if (pathname.startsWith('/video/') || pathname.startsWith('/note/') || videoEl || title) {
+            return {
+                kind: 'douyin-video',
+                action: 'save-douyin',
+                label: '保存抖音视频到知识库',
+                description: '当前页面已识别为抖音视频页。',
+                primaryEnabled: true,
+                detected: true,
+            };
+        }
+        return createLinkFallbackPageInfo({
+            kind: 'douyin-pending',
+            description: '当前页面还没有稳定识别到有效的抖音视频内容。',
+        });
     }
 
     return createLinkFallbackPageInfo();

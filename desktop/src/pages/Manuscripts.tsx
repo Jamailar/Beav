@@ -3288,14 +3288,14 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     <Search className="h-4 w-4" />
                                 </button>
 
-                                <div className="ml-2 flex items-center gap-1 bg-text-primary p-1 rounded-xl shadow-lg shadow-text-primary/10">
+                                <div className="ml-2 flex items-center gap-1 rounded-xl border border-border bg-surface-elevated p-1 shadow-lg shadow-black/5">
                                     <button
                                         type="button"
                                         onClick={() => {
                                             setCreateKind('longform');
                                             setCreateOpen(true);
                                         }}
-                                        className="inline-flex items-center gap-1.5 rounded-[10px] bg-white/10 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-white/20 transition-all active:scale-95"
+                                        className="inline-flex items-center gap-1.5 rounded-[10px] bg-accent-primary px-3 py-1.5 text-[12px] font-bold text-white shadow-sm shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                     >
                                         <Plus className="h-3.5 w-3.5" />
                                         新建
@@ -3304,7 +3304,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                         type="button"
                                         onClick={() => void handleImportMediaFiles()}
                                         disabled={workingId === 'media-import'}
-                                        className="inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-bold text-white/90 hover:text-white hover:bg-white/10 transition-all active:scale-95 disabled:opacity-30"
+                                        className="inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-bold text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-all active:scale-95 disabled:opacity-30"
                                     >
                                         <Upload className="h-3.5 w-3.5" />
                                         {workingId === 'media-import' ? '导入中' : '上传'}

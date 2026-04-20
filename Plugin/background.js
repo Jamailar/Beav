@@ -187,6 +187,8 @@ async function handleMessage(message, sender) {
       return await inspectPage(tabId);
     case 'save-xhs':
       return await saveXhsNoteFromTab(tabId);
+    case 'save-douyin':
+      return await saveDouyinVideoFromTab(tabId);
     case 'save-youtube':
       return await saveYouTubeFromTab(tabId);
     case 'save-selection':
@@ -293,6 +295,13 @@ function detectCaptureTargetFromUrl(rawUrl) {
     return createLinkFallbackPageInfo({
       kind: 'xhs-pending',
       description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+    });
+  }
+
+  if (/(^|\.)douyin\.com$/i.test(hostname)) {
+    return createLinkFallbackPageInfo({
+      kind: 'douyin-pending',
+      description: '当前页面还没有稳定识别到有效的抖音视频内容。',
     });
   }
 
@@ -843,7 +852,75 @@ function buildXhsEntry(payload) {
       dedupeKey: stableNoteId,
       allowUpdate: true,
       summarize: false,
-      transcribe: false,
+      transcribe: kind === 'xhs-video',
+    },
+  };
+}
+
+function buildDouyinEntry(payload) {
+  function extractTagsFromText(value) {
+    const tags = [];
+    const seen = new Set();
+    for (const token of String(value || '').split('#').slice(1)) {
+      const candidate = String(token)
+        .split(/\r?\n/, 1)[0]
+        .split(/\s+/, 1)[0]
+        .replace(/^[#]+|[，,。.！!？?]+$/g, '')
+        .trim();
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      tags.push(candidate);
+    }
+    return tags;
+  }
+
+  const sourceUrl = normalizeText(payload?.source || payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.douyin.com';
+  const stableNoteId = normalizeText(payload?.noteId)
+    || `douyin-${hashString(sourceUrl || normalizeText(payload?.videoUrl) || normalizeText(payload?.title))}`;
+  const videoAssetUrl = normalizeText(payload?.videoDataUrl)
+    || normalizeText(payload?.videoUrl);
+  const coverUrl = normalizeText(payload?.coverDataUrl)
+    || normalizeText(payload?.coverUrl);
+  const text = normalizeText(payload?.text)
+    || normalizeText(payload?.content)
+    || normalizeText(payload?.description)
+    || normalizeText(payload?.title);
+  const tags = Array.from(new Set(['抖音', ...extractTagsFromText(text)]));
+
+  if (!sourceUrl || !videoAssetUrl) {
+    throw new Error('当前页面未识别到可保存的抖音视频');
+  }
+
+  return {
+    kind: 'douyin-video',
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      externalId: stableNoteId,
+      sourceDomain,
+    }),
+    content: {
+      title: normalizeText(payload?.title) || '抖音视频',
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(text, 180),
+      description: truncateText(text, 500),
+      siteName: sourceDomain,
+      tags,
+      stats: {
+        likes: Number(payload?.stats?.likes || 0),
+        collects: Number(payload?.stats?.collects || 0),
+      },
+    },
+    assets: {
+      coverUrl: coverUrl || undefined,
+      videoUrl: videoAssetUrl || undefined,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: true,
     },
   };
 }
@@ -880,6 +957,9 @@ async function saveCurrentPageFromTab(tabId) {
   const action = normalizeText(inspection?.pageInfo?.action) || 'save-page-link';
   if (action === 'save-xhs') {
     return await saveXhsNoteFromTab(tabId);
+  }
+  if (action === 'save-douyin') {
+    return await saveDouyinVideoFromTab(tabId);
   }
   if (action === 'save-youtube') {
     return await saveYouTubeFromTab(tabId);
@@ -928,6 +1008,23 @@ async function saveXhsNoteFromTab(tabId) {
   return {
     success: true,
     mode: 'xhs',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveDouyinVideoFromTab(tabId) {
+  const payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' });
+  console.log('[redbox-plugin][douyin] payload', {
+    title: payload?.title || '',
+    hasCoverUrl: Boolean(payload?.coverUrl || payload?.coverDataUrl),
+    videoUrl: String(payload?.videoUrl || ''),
+    hasVideoDataUrl: Boolean(payload?.videoDataUrl),
+  });
+  const response = await postKnowledgeEntry(buildDouyinEntry(payload));
+  return {
+    success: true,
+    mode: 'douyin',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
   };
@@ -1004,6 +1101,7 @@ async function saveVideoFromContext(tab, info) {
     /(^|\.)youtube\.com$/i.test(extractDomainFromUrl(tabUrl))
     || extractDomainFromUrl(tabUrl) === 'youtu.be'
     || /(^|\.)xiaohongshu\.com$/i.test(extractDomainFromUrl(tabUrl))
+    || /(^|\.)douyin\.com$/i.test(extractDomainFromUrl(tabUrl))
   ) {
     return await saveCurrentPageFromTab(tab.id);
   }
@@ -2220,10 +2318,12 @@ async function extractXhsNotePayload() {
 
   async function fetchBinaryAsDataUrl(url) {
     const target = String(url || '').trim();
-    if (!/^https?:\/\//i.test(target)) return '';
+    if (!target) return '';
+    if (/^data:/i.test(target)) return target;
+    if (!/^https?:\/\//i.test(target) && !/^blob:/i.test(target)) return '';
     try {
       const response = await fetch(target, {
-        credentials: 'omit',
+        credentials: /^https?:\/\//i.test(target) ? 'omit' : 'same-origin',
         cache: 'force-cache',
       });
       if (!response.ok) return '';
@@ -2284,6 +2384,323 @@ async function extractXhsNotePayload() {
     videoDataUrl: localizedVideoDataUrl || '',
     stats: getStats(),
     source: location.href,
+  };
+}
+
+async function extractDouyinVideoPayload() {
+  function normalizeText(value) {
+    return String(value || '').trim();
+  }
+
+  function normalizeTitle(value) {
+    return normalizeText(value).replace(/\s*[-|_|]\s*抖音.*$/i, '').trim();
+  }
+
+  function toAbsoluteUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  function pushUniqueUrl(list, value) {
+    const url = toAbsoluteUrl(value);
+    if (!url || list.includes(url)) return;
+    list.push(url);
+  }
+
+  function parseCountText(value) {
+    if (!value) return 0;
+    const text = String(value).trim();
+    const cleaned = text.replace(/[\s,]/g, '').replace(/[^0-9.\u4e00-\u9fa5]/g, '');
+    if (!cleaned) return 0;
+    if (cleaned.includes('亿')) {
+      const num = parseFloat(cleaned.replace('亿', ''));
+      return Number.isNaN(num) ? 0 : Math.round(num * 100000000);
+    }
+    if (cleaned.includes('万')) {
+      const num = parseFloat(cleaned.replace('万', ''));
+      return Number.isNaN(num) ? 0 : Math.round(num * 10000);
+    }
+    const num = parseFloat(cleaned);
+    return Number.isNaN(num) ? 0 : Math.round(num);
+  }
+
+  function isNodeVisible(el) {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 40 && rect.height > 40;
+  }
+
+  function getMainVideoElement() {
+    const candidates = Array.from(document.querySelectorAll('video'));
+    if (candidates.length === 0) return null;
+    const scored = candidates
+      .map((videoEl, index) => {
+        const rect = typeof videoEl.getBoundingClientRect === 'function'
+          ? videoEl.getBoundingClientRect()
+          : { width: 0, height: 0 };
+        let score = Math.max(0, rect.width * rect.height);
+        if (isNodeVisible(videoEl)) score += 1_000_000;
+        if (String(videoEl.currentSrc || videoEl.src || '').trim()) score += 10_000;
+        if (String(videoEl.getAttribute('poster') || '').trim()) score += 5_000;
+        score -= index;
+        return { videoEl, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    return scored[0]?.videoEl || null;
+  }
+
+  function collectDeepUrls(input, maxCount = 60) {
+    const urls = [];
+    const seenObjects = new WeakSet();
+    const seenUrls = new Set();
+
+    function walk(value) {
+      if (!value || urls.length >= maxCount) return;
+      if (typeof value === 'string') {
+        const trimmed = toAbsoluteUrl(value);
+        if (trimmed && !seenUrls.has(trimmed) && (/^https?:\/\//i.test(trimmed) || /^blob:/i.test(trimmed))) {
+          seenUrls.add(trimmed);
+          urls.push(trimmed);
+        }
+        return;
+      }
+      if (typeof value !== 'object') return;
+      if (seenObjects.has(value)) return;
+      seenObjects.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          walk(item);
+          if (urls.length >= maxCount) break;
+        }
+        return;
+      }
+      for (const key of Object.keys(value)) {
+        walk(value[key]);
+        if (urls.length >= maxCount) break;
+      }
+    }
+
+    walk(input);
+    return urls;
+  }
+
+  function scoreVideoCandidate(url) {
+    const normalized = String(url || '').toLowerCase();
+    let score = 0;
+    if (/^https?:\/\//.test(normalized)) score += 300;
+    if (/^blob:/.test(normalized)) score += 80;
+    if (/\.mp4(\?|$)/.test(normalized)) score += 220;
+    if (/\.m3u8(\?|$)/.test(normalized)) score += 160;
+    if (/playwm|play\/|aweme|video|stream|media/.test(normalized)) score += 60;
+    if (/douyin|douyinvod|bytecdn|bytetos|tos-cn/.test(normalized)) score += 30;
+    return score;
+  }
+
+  function getRenderData() {
+    const scripts = [
+      document.getElementById('RENDER_DATA'),
+      ...Array.from(document.querySelectorAll('script[type="application/json"]')),
+    ].filter(Boolean);
+    for (const script of scripts) {
+      const text = normalizeText(script.textContent || '');
+      if (!text) continue;
+      const candidates = [text];
+      try {
+        candidates.push(decodeURIComponent(text));
+      } catch {
+        // ignore decode failures
+      }
+      for (const candidate of candidates) {
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          // ignore parse failures
+        }
+      }
+    }
+    return null;
+  }
+
+  function getScriptVideoUrls() {
+    const urls = [];
+    const pattern = /https?:\/\/[^"'\\\s<>]+/g;
+    for (const script of Array.from(document.scripts)) {
+      const text = String(script.textContent || '');
+      if (!text || !/douyin|aweme|douyinvod|bytetos|bytecdn|playwm|video/i.test(text)) continue;
+      const matches = text.match(pattern) || [];
+      for (const match of matches) {
+        if (/(\.mp4|\.m3u8|playwm|play\/|aweme|video)/i.test(match)) {
+          pushUniqueUrl(urls, match);
+        }
+      }
+      if (urls.length >= 20) break;
+    }
+    return urls;
+  }
+
+  function getPerformanceMediaUrls() {
+    try {
+      return performance.getEntriesByType('resource')
+        .map((entry) => String(entry?.name || '').trim())
+        .filter((url) => /^https?:\/\//i.test(url))
+        .filter((url) => /(\.mp4|\.m3u8|playwm|video|aweme|stream)/i.test(url))
+        .slice(-30);
+    } catch {
+      return [];
+    }
+  }
+
+  function getTitle() {
+    const candidates = [
+      document.querySelector('[data-e2e="video-desc"]')?.textContent,
+      document.querySelector('[data-e2e="feed-active-video-desc"]')?.textContent,
+      document.querySelector('[data-e2e="note-desc"]')?.textContent,
+      document.querySelector('h1')?.textContent,
+      document.querySelector('[class*="title"]')?.textContent,
+      document.querySelector('[class*="desc"]')?.textContent,
+      document.querySelector('meta[property="og:title"]')?.getAttribute('content'),
+      document.querySelector('meta[name="description"]')?.getAttribute('content'),
+      document.title,
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeTitle(candidate);
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
+  function getAuthor() {
+    const candidates = [
+      document.querySelector('[data-e2e="user-info-name"]')?.textContent,
+      document.querySelector('[data-e2e="video-author-name"]')?.textContent,
+      document.querySelector('[data-e2e="video-author-nickname"]')?.textContent,
+      document.querySelector('[data-e2e="feed-author-name"]')?.textContent,
+      document.querySelector('a[href*="/user/"] span')?.textContent,
+      document.querySelector('meta[name="author"]')?.getAttribute('content'),
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeText(candidate).replace(/^@+/, '');
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
+  function getStats() {
+    const likeEl = document.querySelector('[data-e2e="like-count"], [data-e2e*="like"]');
+    const collectEl = document.querySelector('[data-e2e="collect-count"], [data-e2e*="collect"], [data-e2e*="favorite"]');
+    return {
+      likes: parseCountText(likeEl?.textContent || ''),
+      collects: parseCountText(collectEl?.textContent || ''),
+    };
+  }
+
+  function captureVideoCoverDataUrl(videoEl) {
+    try {
+      if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return '';
+      const canvas = document.createElement('canvas');
+      canvas.width = videoEl.videoWidth;
+      canvas.height = videoEl.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.92);
+    } catch {
+      return '';
+    }
+  }
+
+  async function blobToDataUrl(blob) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('Failed to read blob as data url'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function fetchBinaryAsDataUrl(url) {
+    const target = String(url || '').trim();
+    if (!target) return '';
+    if (/^data:/i.test(target)) return target;
+    if (!/^https?:\/\//i.test(target) && !/^blob:/i.test(target)) return '';
+    try {
+      const response = await fetch(target, {
+        credentials: /^https?:\/\//i.test(target) ? 'omit' : 'same-origin',
+        cache: 'force-cache',
+      });
+      if (!response.ok) return '';
+      const blob = await response.blob();
+      if (!blob || !blob.size) return '';
+      return await blobToDataUrl(blob);
+    } catch {
+      return '';
+    }
+  }
+
+  const sourceUrl = location.href;
+  const videoEl = getMainVideoElement();
+  const renderData = getRenderData();
+  const videoCandidates = [];
+  pushUniqueUrl(videoCandidates, videoEl?.currentSrc || videoEl?.src || '');
+  Array.from(videoEl?.querySelectorAll?.('source') || []).forEach((source) => {
+    pushUniqueUrl(videoCandidates, source?.src || '');
+  });
+  collectDeepUrls(renderData, 80).forEach((url) => {
+    if (/(\.mp4|\.m3u8|playwm|play\/|aweme|video)/i.test(url)) {
+      pushUniqueUrl(videoCandidates, url);
+    }
+  });
+  getPerformanceMediaUrls().forEach((url) => pushUniqueUrl(videoCandidates, url));
+  getScriptVideoUrls().forEach((url) => pushUniqueUrl(videoCandidates, url));
+  videoCandidates.sort((a, b) => scoreVideoCandidate(b) - scoreVideoCandidate(a));
+
+  const remoteVideoUrl = videoCandidates.find((url) => /^https?:\/\//i.test(url)) || '';
+  const blobVideoUrl = videoCandidates.find((url) => /^blob:/i.test(url)) || '';
+  const videoUrl = remoteVideoUrl || blobVideoUrl || '';
+
+  const rawCoverUrl = toAbsoluteUrl(
+    videoEl?.getAttribute('poster')
+    || document.querySelector('meta[property="og:image"]')?.getAttribute('content')
+    || '',
+  );
+  const coverDataUrl = rawCoverUrl
+    ? (await fetchBinaryAsDataUrl(rawCoverUrl)) || ''
+    : captureVideoCoverDataUrl(videoEl);
+  const videoDataUrl = !remoteVideoUrl && blobVideoUrl
+    ? (await fetchBinaryAsDataUrl(blobVideoUrl))
+    : '';
+
+  const pathnameSegments = String(location.pathname || '').split('/').filter(Boolean);
+  const pathId = pathnameSegments[pathnameSegments.length - 1] || '';
+  const videoId = normalizeText(pathId) || `douyin-${Date.now()}`;
+  const title = getTitle();
+  const description = normalizeText(
+    document.querySelector('meta[name="description"]')?.getAttribute('content')
+    || title,
+  );
+
+  return {
+    noteId: videoId,
+    title,
+    author: getAuthor(),
+    content: description,
+    text: description,
+    description,
+    coverUrl: rawCoverUrl || '',
+    coverDataUrl,
+    videoUrl,
+    videoDataUrl: videoDataUrl || '',
+    stats: getStats(),
+    source: sourceUrl,
   };
 }
 
@@ -2499,6 +2916,47 @@ function detectCaptureTarget() {
     return createLocalLinkFallbackPageInfo({
       kind: 'xhs-pending',
       description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+    });
+  }
+
+  if (/(^|\.)douyin\.com$/i.test(hostname)) {
+    function isNodeVisible(el) {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect();
+      return rect.width > 40 && rect.height > 40;
+    }
+
+    const pathname = String(location.pathname || '');
+    const title = String(
+      document.querySelector('[data-e2e="video-desc"]')?.textContent
+      || document.querySelector('h1')?.textContent
+      || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+      || '',
+    ).trim();
+    const videoEl = Array.from(document.querySelectorAll('video'))
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return (br.width * br.height) - (ar.width * ar.height);
+      })
+      .find((item) => isNodeVisible(item) || String(item.currentSrc || item.src || '').trim());
+    if (pathname.startsWith('/video/') || pathname.startsWith('/note/') || videoEl || title) {
+      return {
+        kind: 'douyin-video',
+        action: 'save-douyin',
+        label: '保存抖音视频到知识库',
+        description: '当前页面已识别为抖音视频页。',
+        detected: true,
+      };
+    }
+
+    return createLocalLinkFallbackPageInfo({
+      kind: 'douyin-pending',
+      description: '当前页面还没有稳定识别到有效的抖音视频内容。',
     });
   }
 

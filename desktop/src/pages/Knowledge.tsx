@@ -53,7 +53,7 @@ interface YouTubeVideo {
     folderPath?: string;
 }
 
-type KnowledgeTypeFilter = 'all' | 'xhs-image' | 'xhs-video' | 'link-article' | 'wechat-article' | 'youtube' | 'docs';
+type KnowledgeTypeFilter = 'all' | 'xhs-image' | 'xhs-video' | 'douyin-video' | 'link-article' | 'wechat-article' | 'youtube' | 'docs';
 
 interface DocumentKnowledgeSource {
     id: string;
@@ -841,7 +841,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 ? note.captureKind === 'wechat-article'
                     ? 'wechat-article'
                     : 'link-article'
-                : (note.captureKind === 'xhs-video' || note.video)
+                : note.captureKind === 'douyin-video'
+                    ? 'douyin-video'
+                    : (note.captureKind === 'xhs-video' || note.video)
                     ? 'xhs-video'
                     : 'xhs-image';
 
@@ -895,6 +897,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         const counts: Record<Exclude<KnowledgeTypeFilter, 'all'>, number> = {
             'xhs-image': 0,
             'xhs-video': 0,
+            'douyin-video': 0,
             'link-article': 0,
             'wechat-article': 0,
             'youtube': Number(kindCounts['youtube-video'] || 0),
@@ -910,6 +913,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
+            { key: 'douyin-video' as const, label: '抖音视频', count: counts['douyin-video'] },
             { key: 'link-article' as const, label: '链接文章', count: counts['link-article'] },
             ...(SHOW_WECHAT_KNOWLEDGE_ACTIONS ? [{ key: 'wechat-article' as const, label: '公众号文章', count: counts['wechat-article'] }] : []),
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
@@ -1272,6 +1276,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 return '小红书图文';
             case 'xhs-video':
                 return '小红书视频';
+            case 'douyin-video':
+                return '抖音视频';
             case 'link-article':
                 return '链接文章';
             case 'wechat-article':
@@ -1291,6 +1297,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 return 'bg-rose-500/90 text-white';
             case 'xhs-video':
                 return 'bg-red-500/90 text-white';
+            case 'douyin-video':
+                return 'bg-neutral-900 text-white';
             case 'link-article':
                 return 'bg-sky-500/90 text-white';
             case 'wechat-article':

@@ -95,6 +95,13 @@ function inferPageInfoFromUrl(rawUrl) {
     });
   }
 
+  if (/(^|\.)douyin\.com$/i.test(hostname)) {
+    return createLinkFallbackPageInfo({
+      kind: 'douyin-pending',
+      description: '当前页面还没有稳定识别到有效的抖音视频内容。',
+    });
+  }
+
   return createLinkFallbackPageInfo();
 }
 
