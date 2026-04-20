@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 use tauri::{AppHandle, Emitter, State};
 use url::Url;
 
@@ -319,6 +320,205 @@ fn refresh_knowledge_projection_and_emit(
     Ok(())
 }
 
+fn youtube_subtitle_file_from_meta(meta: &Value) -> Option<String> {
+    meta.get("subtitleFile")
+        .or_else(|| meta.get("subtitle_file"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn write_youtube_meta_status(
+    entry_dir: &Path,
+    status: &str,
+    has_subtitle: bool,
+    subtitle_file: Option<&str>,
+    subtitle_error: Option<&str>,
+) -> Result<(), String> {
+    let meta_path = entry_dir.join("meta.json");
+    let mut meta = read_json_value_or(&meta_path, json!({}));
+    if !meta.is_object() {
+        meta = json!({});
+    }
+    let object = meta
+        .as_object_mut()
+        .ok_or_else(|| "YouTube 元数据格式无效".to_string())?;
+    object.insert("status".to_string(), json!(status));
+    object.insert("hasSubtitle".to_string(), json!(has_subtitle));
+    object.insert(
+        "subtitleFile".to_string(),
+        subtitle_file
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    object.insert(
+        "subtitleError".to_string(),
+        subtitle_error
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    write_json_value(&meta_path, &meta)
+}
+
+fn emit_youtube_processing_event(
+    app: &AppHandle,
+    video_id: &str,
+    status: &str,
+    has_subtitle: bool,
+    subtitle_error: Option<&str>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    refresh_knowledge_projection_and_emit(
+        Some(app),
+        &state,
+        Some((
+            "knowledge:youtube-video-updated",
+            json!({
+                "noteId": video_id,
+                "status": status,
+                "hasSubtitle": has_subtitle,
+                "subtitleError": subtitle_error,
+            }),
+        )),
+    )
+}
+
+fn transcribe_youtube_audio_fallback(
+    state: &State<'_, AppState>,
+    entry_dir: &Path,
+    video_id: &str,
+    video_url: &str,
+    title: &str,
+) -> Result<String, String> {
+    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+    let (endpoint, api_key, model_name) = resolve_transcription_settings(&settings_snapshot)
+        .ok_or_else(|| "字幕下载失败，且当前未配置音频转写接口".to_string())?;
+    let audio_prefix = format!("{}-audio", slug_from_relative_path(video_id));
+    let audio_path = crate::desktop_io::download_ytdlp_audio(video_url, entry_dir, &audio_prefix)?;
+    let transcript = run_curl_transcription(
+        &endpoint,
+        api_key.as_deref(),
+        &model_name,
+        &audio_path,
+        "audio/*",
+    )?;
+    let _ = fs::remove_file(&audio_path);
+    let subtitle_file = entry_dir.join("subtitle.txt");
+    fs::write(&subtitle_file, &transcript).map_err(|error| error.to_string())?;
+    append_debug_log_state(
+        state,
+        format!(
+            "[RedBox yt-dlp] audio transcription fallback completed: videoId={} title={}",
+            video_id, title
+        ),
+    );
+    Ok("subtitle.txt".to_string())
+}
+
+fn spawn_youtube_subtitle_processing(
+    app: &AppHandle,
+    video_id: String,
+    title: String,
+    video_url: String,
+    entry_dir: PathBuf,
+) {
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        let state = app_handle.state::<AppState>();
+        append_debug_log_state(
+            &state,
+            format!(
+                "[RedBox yt-dlp] background processing start: videoId={} title={} url={}",
+                video_id, title, video_url
+            ),
+        );
+        let file_prefix = slug_from_relative_path(&video_id);
+        let subtitle_result =
+            crate::desktop_io::download_ytdlp_subtitle(&video_url, &entry_dir, &file_prefix);
+        let outcome = match subtitle_result {
+            Ok(path) => {
+                let subtitle_name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("subtitle.txt")
+                    .to_string();
+                write_youtube_meta_status(&entry_dir, "completed", true, Some(&subtitle_name), None)
+                    .and_then(|_| {
+                        emit_youtube_processing_event(
+                            &app_handle,
+                            &video_id,
+                            "completed",
+                            true,
+                            None,
+                        )
+                    })
+            }
+            Err(subtitle_error) => {
+                append_debug_log_state(
+                    &state,
+                    format!(
+                        "[RedBox yt-dlp] subtitle download failed: videoId={} error={}",
+                        video_id, subtitle_error
+                    ),
+                );
+                match transcribe_youtube_audio_fallback(
+                    &state, &entry_dir, &video_id, &video_url, &title,
+                ) {
+                    Ok(subtitle_name) => write_youtube_meta_status(
+                        &entry_dir,
+                        "completed",
+                        true,
+                        Some(&subtitle_name),
+                        None,
+                    )
+                    .and_then(|_| {
+                        emit_youtube_processing_event(
+                            &app_handle,
+                            &video_id,
+                            "completed",
+                            true,
+                            None,
+                        )
+                    }),
+                    Err(fallback_error) => {
+                        let final_error = format!(
+                            "字幕下载失败：{}；音频转写回退失败：{}",
+                            subtitle_error, fallback_error
+                        );
+                        write_youtube_meta_status(
+                            &entry_dir,
+                            "failed",
+                            false,
+                            None,
+                            Some(&final_error),
+                        )
+                        .and_then(|_| {
+                            emit_youtube_processing_event(
+                                &app_handle,
+                                &video_id,
+                                "failed",
+                                false,
+                                Some(&final_error),
+                            )
+                        })
+                    }
+                }
+            }
+        };
+
+        if let Err(error) = outcome {
+            append_debug_log_state(
+                &state,
+                format!(
+                    "[RedBox yt-dlp] background processing writeback failed: videoId={} error={}",
+                    video_id, error
+                ),
+            );
+        }
+    });
+}
+
 fn remove_dir_if_exists(path: &Path) -> Result<(), String> {
     if path.exists() {
         fs::remove_dir_all(path).map_err(|error| error.to_string())?;
@@ -569,42 +769,57 @@ fn ingest_youtube_entry(
     let summary = normalize_string(request.content.summary.clone())
         .or_else(|| existing.as_ref().and_then(|item| item.summary.clone()))
         .unwrap_or_else(|| "RedBox captured this video for later migration work.".to_string());
-    let subtitle_file = normalize_string(request.content.transcript.clone())
+    let entry_dir = youtube_entry_dir(state, &entry_id)?;
+    let transcript = normalize_string(request.content.transcript.clone());
+    let existing_meta = existing
+        .as_ref()
+        .and_then(|item| item.folder_path.as_ref())
+        .and_then(|folder| read_json_file(Path::new(folder).join("meta.json").as_path()));
+    let existing_subtitle_file = existing_meta
+        .as_ref()
+        .and_then(youtube_subtitle_file_from_meta)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|item| item.has_subtitle.then(|| "subtitle.txt".to_string()))
+        });
+    let existing_has_subtitle =
+        existing.as_ref().is_some_and(|item| item.has_subtitle) || existing_subtitle_file.is_some();
+    let should_process = transcript.is_none() && !existing_has_subtitle;
+    let subtitle_file = transcript
+        .as_ref()
         .map(|_| "subtitle.txt".to_string())
         .or_else(|| {
-            existing.as_ref().and_then(|item| {
-                item.folder_path
-                    .as_ref()
-                    .and_then(|folder| {
-                        read_json_file(Path::new(folder).join("meta.json").as_path())
-                    })
-                    .and_then(|meta| {
-                        meta.get("subtitleFile")
-                            .or_else(|| meta.get("subtitle_file"))
-                            .and_then(|value| value.as_str())
-                            .map(ToString::to_string)
-                    })
-            })
+            if existing_has_subtitle {
+                existing_subtitle_file.clone()
+            } else {
+                None
+            }
         });
-    let entry_dir = youtube_entry_dir(state, &entry_id)?;
-    if let Some(transcript) = normalize_string(request.content.transcript.clone()) {
+    if let Some(transcript) = transcript.as_ref() {
         fs::write(entry_dir.join("subtitle.txt"), transcript).map_err(|error| error.to_string())?;
     }
+    let status = if transcript.is_some() || existing_has_subtitle {
+        "completed"
+    } else {
+        "processing"
+    };
     let meta = json!({
-        "id": entry_id,
+        "id": entry_id.clone(),
         "videoId": video_id,
-        "videoUrl": video_url,
-        "title": title,
-        "originalTitle": title,
+        "videoUrl": video_url.clone(),
+        "title": title.clone(),
+        "originalTitle": title.clone(),
         "description": description,
         "summary": summary,
         "thumbnailUrl": normalize_string(request.assets.thumbnail_url.clone()).unwrap_or_default(),
         "hasSubtitle": subtitle_file.is_some(),
-        "status": "completed",
+        "status": status,
         "createdAt": created_at,
         "subtitleFile": subtitle_file,
+        "subtitleError": Value::Null,
         "sourceDomain": source_domain,
-        "sourceLink": video_url,
+        "sourceLink": video_url.clone(),
         "sourceAppId": normalize_string(request.source.app_id.clone()),
         "sourcePluginId": normalize_string(request.source.plugin_id.clone()),
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
@@ -616,12 +831,23 @@ fn ingest_youtube_entry(
         Some((
             "knowledge:new-youtube-video",
             json!({
-                "noteId": entry_id,
+                "noteId": entry_id.clone(),
                 "title": request.content.title,
-                "status": "completed",
+                "status": status,
             }),
         )),
     )?;
+    if should_process {
+        if let Some(app) = app {
+            spawn_youtube_subtitle_processing(
+                app,
+                entry_id.clone(),
+                title.clone(),
+                video_url.clone(),
+                entry_dir,
+            );
+        }
+    }
     Ok(json!({
         "success": true,
         "kind": "youtube-video",
@@ -1170,66 +1396,41 @@ pub(crate) fn retry_youtube_subtitle(
     let Some(video) = video else {
         return Ok(json!({ "success": false, "error": "视频记录不存在" }));
     };
-
-    let subtitle = video
-        .subtitle_content
-        .clone()
-        .filter(|item| !item.trim().is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "RedBox recovered subtitle placeholder\n\n标题：{}\n链接：{}\n\n{}",
-                video.title, video.video_url, video.description
-            )
-        });
-
-    if let Some(folder_path) = video.folder_path.as_deref() {
-        let folder = Path::new(folder_path);
-        let meta_path = folder.join("meta.json");
-        let mut meta = read_json_value_or(&meta_path, json!({}));
-        let subtitle_file = meta
-            .get("subtitleFile")
-            .or_else(|| meta.get("subtitle_file"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("subtitle.txt")
-            .to_string();
-        fs::write(folder.join(&subtitle_file), &subtitle).map_err(|error| error.to_string())?;
-        if let Some(object) = meta.as_object_mut() {
-            object.insert("hasSubtitle".to_string(), json!(true));
-            object.insert("status".to_string(), json!("completed"));
-            object.insert("subtitleFile".to_string(), json!(subtitle_file));
+    let Some(folder_path) = video.folder_path.as_deref() else {
+        return Ok(json!({ "success": false, "error": "缺少视频目录，无法重试字幕下载" }));
+    };
+    let folder = PathBuf::from(folder_path);
+    if !video.video_url.trim().is_empty() {
+        if let Some(existing_file) =
+            read_json_file(folder.join("meta.json").as_path()).and_then(|meta| {
+                youtube_subtitle_file_from_meta(&meta).map(|relative| folder.join(relative))
+            })
+        {
+            let _ = fs::remove_file(existing_file);
         }
-        write_json_value(&meta_path, &meta)?;
-        refresh_knowledge_projection_and_emit(
-            Some(app),
-            state,
-            Some((
-                "knowledge:youtube-video-updated",
-                json!({ "noteId": video_id, "status": "completed" }),
-            )),
-        )?;
-        return Ok(json!({ "success": true, "subtitleContent": subtitle }));
     }
-
-    with_store_mut(state, |store| {
-        let Some(target) = store
-            .youtube_videos
-            .iter_mut()
-            .find(|item| item.id == video_id)
-        else {
-            return Ok(());
-        };
-        target.subtitle_content = Some(subtitle.clone());
-        target.has_subtitle = true;
-        target.status = Some("completed".to_string());
-        Ok(())
-    })?;
-    let _ = app.emit(
-        "knowledge:youtube-video-updated",
-        json!({ "noteId": video_id, "status": "completed" }),
+    write_youtube_meta_status(&folder, "processing", false, None, None)?;
+    refresh_knowledge_projection_and_emit(
+        Some(app),
+        state,
+        Some((
+            "knowledge:youtube-video-updated",
+            json!({
+                "noteId": video_id,
+                "status": "processing",
+                "hasSubtitle": false,
+                "subtitleError": Value::Null,
+            }),
+        )),
+    )?;
+    spawn_youtube_subtitle_processing(
+        app,
+        video.id.clone(),
+        video.title.clone(),
+        video.video_url.clone(),
+        folder,
     );
-    let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
-    Ok(json!({ "success": true, "subtitleContent": subtitle, "legacyFallback": true }))
+    Ok(json!({ "success": true, "status": "processing" }))
 }
 
 pub(crate) fn save_youtube_summaries(

@@ -306,6 +306,7 @@ struct YoutubeVideoRecord {
     thumbnail_url: String,
     has_subtitle: bool,
     subtitle_content: Option<String>,
+    subtitle_error: Option<String>,
     status: Option<String>,
     created_at: String,
     folder_path: Option<String>,

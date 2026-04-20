@@ -82,11 +82,17 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
 }
 
 fn summarize_video(item: YoutubeVideoRecord) -> KnowledgeCatalogSummary {
-    let preview = item
-        .summary
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| preview_text(&item.description, 280));
+    let preview = if item.status.as_deref() == Some("failed") {
+        item.subtitle_error
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| preview_text(&item.description, 280))
+    } else {
+        item.summary
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| preview_text(&item.description, 280))
+    };
     KnowledgeCatalogSummary {
         item_id: item.id.clone(),
         kind: "youtube-video".to_string(),

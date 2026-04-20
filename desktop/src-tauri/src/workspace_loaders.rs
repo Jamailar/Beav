@@ -1021,6 +1021,11 @@ pub(crate) fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeV
                     .and_then(|v| v.as_bool())
                     .unwrap_or(subtitle_content.is_some()),
                 subtitle_content,
+                subtitle_error: meta
+                    .get("subtitleError")
+                    .or_else(|| meta.get("subtitle_error"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 status: meta
                     .get("status")
                     .and_then(|v| v.as_str())

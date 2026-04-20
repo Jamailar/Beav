@@ -47,6 +47,7 @@ interface YouTubeVideo {
     thumbnailUrl: string;
     hasSubtitle: boolean;
     subtitleContent?: string;
+    subtitleError?: string;
     status?: 'processing' | 'completed' | 'failed';
     createdAt: string;
     folderPath?: string;
@@ -180,6 +181,7 @@ const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => (
     thumbnailUrl: item.thumbnailUrl || '',
     hasSubtitle: item.hasTranscript,
     subtitleContent: undefined,
+    subtitleError: item.status === 'failed' ? item.previewText : undefined,
     status: item.status as YouTubeVideo['status'],
     createdAt: item.createdAt,
     folderPath: item.folderPath,
@@ -990,6 +992,35 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
     }, [selectedVideo]);
 
+    useEffect(() => {
+        if (!selectedVideo) return;
+        const latest = youtubeVideos.find(video => video.id === selectedVideo.id);
+        if (!latest) return;
+        setSelectedVideo(prev => {
+            if (!prev || prev.id !== latest.id) return prev;
+            const nextSubtitleContent = prev.subtitleContent || latest.subtitleContent;
+            if (
+                prev.title === latest.title &&
+                prev.description === latest.description &&
+                prev.summary === latest.summary &&
+                prev.thumbnailUrl === latest.thumbnailUrl &&
+                prev.hasSubtitle === latest.hasSubtitle &&
+                prev.subtitleError === latest.subtitleError &&
+                prev.status === latest.status &&
+                prev.createdAt === latest.createdAt &&
+                prev.folderPath === latest.folderPath &&
+                prev.subtitleContent === nextSubtitleContent
+            ) {
+                return prev;
+            }
+            return {
+                ...prev,
+                ...latest,
+                subtitleContent: nextSubtitleContent,
+            };
+        });
+    }, [selectedVideo, youtubeVideos]);
+
     const loadSelectedVideoSubtitle = useCallback(async (video: YouTubeVideo) => {
         if (!video?.id) return;
         setIsSubtitleLoading(true);
@@ -1151,10 +1182,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         try {
             // 更新本地状态为处理中
             setYoutubeVideos(prev => prev.map(v =>
-                v.id === videoId ? { ...v, status: 'processing' as const } : v
+                v.id === videoId ? { ...v, status: 'processing' as const, subtitleError: undefined } : v
             ));
             if (selectedVideo?.id === videoId) {
-                setSelectedVideo(prev => prev ? { ...prev, status: 'processing' } : null);
+                setSelectedVideo(prev => prev ? { ...prev, status: 'processing', subtitleError: undefined } : null);
             }
 
             await window.ipcRenderer.knowledge.retryYoutubeSubtitle(videoId);
@@ -2485,6 +2516,24 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed">
                                         {selectedVideo.description}
                                     </pre>
+                                </div>
+                            )}
+
+                            {selectedVideo.status === 'failed' && selectedVideo.subtitleError && (
+                                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-6 flex items-start justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <div className="text-[13px] font-bold text-rose-700">字幕处理失败</div>
+                                        <pre className="mt-2 text-[12px] text-rose-600 whitespace-pre-wrap font-sans leading-relaxed">
+                                            {selectedVideo.subtitleError}
+                                        </pre>
+                                    </div>
+                                    <button
+                                        onClick={() => handleRetrySubtitle(selectedVideo.id)}
+                                        className="shrink-0 flex items-center gap-2 px-4 py-2 text-[11px] font-bold text-rose-700 bg-white border border-rose-200 rounded-lg hover:bg-rose-50 transition-all active:scale-95"
+                                    >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        重新尝试
+                                    </button>
                                 </div>
                             )}
 

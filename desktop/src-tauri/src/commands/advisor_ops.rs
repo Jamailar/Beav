@@ -1065,6 +1065,7 @@ pub fn handle_advisor_channel(
                                 thumbnail_url: "".to_string(),
                                 has_subtitle: true,
                                 subtitle_content: Some(subtitle_content.clone()),
+                                subtitle_error: None,
                                 status: Some("completed".to_string()),
                                 created_at: now_iso(),
                                 folder_path: Some(knowledge_dir.display().to_string()),
@@ -1076,6 +1077,7 @@ pub fn handle_advisor_channel(
                         {
                             existing.subtitle_content = Some(subtitle_content.clone());
                             existing.has_subtitle = true;
+                            existing.subtitle_error = None;
                             existing.status = Some("completed".to_string());
                         }
                         Ok(())
@@ -1188,6 +1190,7 @@ pub fn handle_advisor_channel(
                     {
                         existing.subtitle_content = Some(subtitle_content);
                         existing.has_subtitle = true;
+                        existing.subtitle_error = None;
                         existing.status = Some("completed".to_string());
                     }
                     Ok(json!({ "success": true, "subtitleFile": subtitle_name }))
@@ -1322,6 +1325,9 @@ pub fn handle_advisor_channel(
                     );
                     Ok(json!({ "installed": true, "version": version, "path": path }))
                 } else {
+                    for line in crate::desktop_io::inspect_ytdlp_candidates() {
+                        append_debug_log_state(state, format!("yt-dlp candidate probe: {line}"));
+                    }
                     log_timing_event(
                         state,
                         "settings",
