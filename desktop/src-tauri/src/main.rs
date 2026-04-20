@@ -834,9 +834,13 @@ pub(crate) fn normalize_timestamp_string(value: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    parse_timestamp_ms(trimmed)
-        .and_then(format_timestamp_rfc3339_from_ms)
-        .unwrap_or_else(|| trimmed.to_string())
+    if let Some(parsed) = parse_timestamp_ms(trimmed) {
+        if parsed > 0 {
+            return format_timestamp_rfc3339_from_ms(parsed).unwrap_or_else(|| trimmed.to_string());
+        }
+        return String::new();
+    }
+    trimmed.to_string()
 }
 
 pub(crate) fn now_rfc3339() -> String {
@@ -2138,21 +2142,6 @@ fn write_placeholder_svg(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     fs::write(path, svg).map_err(|error| error.to_string())
-}
-
-fn generate_chat_response(settings: &Value, model_config: Option<&Value>, prompt: &str) -> String {
-    if let Some(config) = resolve_chat_config(settings, model_config) {
-        invoke_chat_by_protocol(
-            &config.protocol,
-            &config.base_url,
-            config.api_key.as_deref(),
-            &config.model_name,
-            prompt,
-        )
-        .unwrap_or_else(|_| build_placeholder_assistant_response(prompt))
-    } else {
-        build_placeholder_assistant_response(prompt)
-    }
 }
 
 fn interactive_runtime_system_prompt(
@@ -6048,17 +6037,6 @@ fn run_openai_prompted_streaming_fallback(
     Ok(final_content)
 }
 
-fn build_placeholder_assistant_response(message: &str) -> String {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return "RedClaw is active inside RedBox.".to_string();
-    }
-    format!(
-        "RedClaw is active inside RedBox。当前未配置可用模型，已返回本地兜底响应。\n\n你刚才输入的是：\n{}",
-        trimmed
-    )
-}
-
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     chat_helpers::ensure_parent_dir(path)
 }
@@ -6097,22 +6075,22 @@ fn upload_wechat_thumb_media(access_token: &str, image_path: &Path) -> Result<St
     chat_helpers::upload_wechat_thumb_media(access_token, image_path)
 }
 
-fn generate_response_with_settings(
+fn run_model_text_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     prompt: &str,
-) -> String {
-    chat_helpers::generate_response_with_settings(settings, model_config, prompt)
+) -> Result<String, String> {
+    chat_helpers::run_model_text_task_with_settings(settings, model_config, prompt)
 }
 
-fn generate_structured_response_with_settings(
+fn run_model_structured_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     system_prompt: &str,
     user_prompt: &str,
     require_json: bool,
 ) -> Result<String, String> {
-    chat_helpers::generate_structured_response_with_settings(
+    chat_helpers::run_model_structured_task_with_settings(
         settings,
         model_config,
         system_prompt,
@@ -6127,14 +6105,6 @@ fn find_advisor_name(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
 
 fn find_advisor_avatar(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
     chat_helpers::find_advisor_avatar(advisors, advisor_id)
-}
-
-fn build_advisor_prompt(
-    advisor: Option<&AdvisorRecord>,
-    message: &str,
-    context: Option<&Value>,
-) -> String {
-    chat_helpers::build_advisor_prompt(advisor, message, context)
 }
 
 fn chatroom_response_phase(index: usize, total: usize) -> String {

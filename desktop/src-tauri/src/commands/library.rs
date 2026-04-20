@@ -905,7 +905,7 @@ pub fn handle_library_channel(
                         title, subtitle
                     );
                     let summary =
-                        generate_response_with_settings(&settings_snapshot, None, &prompt);
+                        run_model_text_task_with_settings(&settings_snapshot, None, &prompt)?;
                     updates.push((video_id.clone(), summary));
                 }
                 let updated_count = updates.len();
@@ -1116,7 +1116,7 @@ pub fn handle_library_channel(
                     asset.project_id =
                         normalize_optional_string(payload_string(payload, "projectId"));
                     asset.prompt = normalize_optional_string(payload_string(payload, "prompt"));
-                    asset.updated_at = now_iso();
+                    asset.updated_at = now_rfc3339();
                     Ok(json!({ "success": true, "asset": asset.clone() }))
                 })?;
                 persist_media_workspace_catalog(state)?;
@@ -1138,7 +1138,7 @@ pub fn handle_library_channel(
                         return Ok(json!({ "success": false, "error": "媒体资产不存在" }));
                     };
                     asset.bound_manuscript_path = manuscript_path.clone();
-                    asset.updated_at = now_iso();
+                    asset.updated_at = now_rfc3339();
                     Ok(json!({ "success": true, "asset": asset.clone() }))
                 })?;
                 persist_media_workspace_catalog(state)?;
@@ -1252,8 +1252,8 @@ pub fn handle_library_channel(
                             mime_type: Some(mime_type),
                             relative_path: Some(format!("imports/{}", relative_name)),
                             bound_manuscript_path: None,
-                            created_at: now_iso(),
-                            updated_at: now_iso(),
+                            created_at: now_rfc3339(),
+                            updated_at: now_rfc3339(),
                             absolute_path: Some(target.display().to_string()),
                             preview_url: Some(file_url_for_path(&target)),
                             exists: true,

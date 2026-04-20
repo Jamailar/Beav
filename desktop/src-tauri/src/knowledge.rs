@@ -169,6 +169,16 @@ fn normalize_vec(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn merge_tags_with_text(tags: Vec<String>, text: &str) -> Vec<String> {
+    let mut merged = normalize_vec(tags);
+    for extracted in extract_tags_from_text(text) {
+        if !merged.iter().any(|item| item == &extracted) {
+            merged.push(extracted);
+        }
+    }
+    merged
+}
+
 fn source_link_from_input(source: &KnowledgeSourceInput) -> Option<String> {
     normalize_string(source.source_link.clone())
         .or_else(|| normalize_string(source.source_url.clone()))
@@ -666,6 +676,17 @@ fn ingest_note_entry(
 
     let stats = request.content.stats.clone().unwrap_or_default();
     let images = normalize_vec(request.assets.image_urls.clone());
+    let tag_source_text = [
+        request.content.text.clone(),
+        request.content.excerpt.clone(),
+        request.content.description.clone(),
+        request.content.transcript.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+    let merged_tags = merge_tags_with_text(request.content.tags.clone(), &tag_source_text);
     let cover_url =
         normalize_string(request.assets.cover_url.clone()).or_else(|| images.first().cloned());
     let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
@@ -685,7 +706,7 @@ fn ingest_note_entry(
         "excerpt": normalize_string(request.content.excerpt.clone()),
         "description": normalize_string(request.content.description.clone()),
         "siteName": normalize_string(request.content.site_name.clone()),
-        "tags": normalize_vec(request.content.tags.clone()),
+        "tags": merged_tags,
         "images": images,
         "cover": cover_url,
         "videoUrl": normalize_string(request.assets.video_url.clone()),
@@ -783,7 +804,7 @@ fn create_media_asset_record(
         .ok_or_else(|| "素材路径不在 workspace media 目录内".to_string())?;
     let title =
         normalize_string(item.title.clone()).or_else(|| title_from_media_source(&item.source));
-    let timestamp = now_iso();
+    let timestamp = now_rfc3339();
     Ok(MediaAssetRecord {
         id: make_id("media"),
         source: "knowledge-api".to_string(),

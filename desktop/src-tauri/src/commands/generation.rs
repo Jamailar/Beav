@@ -329,7 +329,7 @@ fn optimize_image_generation_prompt(
         size,
         quality,
     );
-    if let Ok(raw_response) = generate_structured_response_with_settings(
+    if let Ok(raw_response) = run_model_structured_task_with_settings(
         settings_snapshot,
         None,
         &system_prompt,
@@ -883,8 +883,8 @@ pub fn handle_generation_channel(
                 mime_type: effective_mime_type.clone(),
                 relative_path: Some(relative_path),
                 bound_manuscript_path: None,
-                created_at: now_iso(),
-                updated_at: now_iso(),
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
                 absolute_path: Some(absolute_path.display().to_string()),
                 preview_url: preview_url.clone(),
                 exists: true,

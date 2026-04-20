@@ -529,8 +529,11 @@ function createIpcRenderer() {
           fallback: {
             status: 'not-needed',
             needsDbImport: false,
+            needsProjectUpgrade: false,
             shouldShowModal: false,
             progress: 0,
+            legacyMarkdownCount: 0,
+            projectUpgradeCounts: null,
           } as T,
         },
       ),
@@ -542,8 +545,11 @@ function createIpcRenderer() {
           fallback: {
             status: 'failed',
             needsDbImport: true,
+            needsProjectUpgrade: false,
             shouldShowModal: true,
             progress: 0,
+            legacyMarkdownCount: 0,
+            projectUpgradeCounts: null,
             error: '启动迁移失败',
           } as T,
         },

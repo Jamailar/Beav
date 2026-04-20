@@ -36,6 +36,16 @@ fn meta_string(meta: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn merge_text_tags(base_tags: Vec<String>, content_text: &str) -> Vec<String> {
+    let mut tags = base_tags;
+    for extracted in extract_tags_from_text(content_text) {
+        if !tags.iter().any(|item| item == &extracted) {
+            tags.push(extracted);
+        }
+    }
+    tags
+}
+
 fn source_domain_from_link(link: Option<&str>) -> Option<String> {
     let raw = link?.trim();
     if raw.is_empty() {
@@ -805,15 +815,16 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                         .filter_map(|x| x.as_str().map(ToString::to_string))
                         .collect::<Vec<_>>()
                 })
-                .filter(|arr| !arr.is_empty())
+                .map(|arr| merge_text_tags(arr, &content_text))
                 .or_else(|| {
-                    let extracted = extract_tags_from_text(&content_text);
+                    let extracted = merge_text_tags(Vec::new(), &content_text);
                     if extracted.is_empty() {
                         None
                     } else {
                         Some(extracted)
                     }
-                });
+                })
+                .filter(|arr| !arr.is_empty());
             let note_type = meta
                 .get("type")
                 .and_then(|v| v.as_str())

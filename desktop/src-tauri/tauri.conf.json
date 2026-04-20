@@ -40,7 +40,7 @@
     "resources": [
       "resources/knowledge-api-guide.html",
       "../builtin-skills",
-      "../Plugin"
+      "../../Plugin"
     ],
     "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
   }

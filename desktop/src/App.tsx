@@ -79,6 +79,7 @@ interface YouTubeClipboardCandidate {
 type StartupMigrationState = {
   status?: string;
   needsDbImport?: boolean;
+  needsProjectUpgrade?: boolean;
   shouldShowModal?: boolean;
   legacyDbPath?: string | null;
   legacyWorkspacePath?: string | null;
@@ -87,7 +88,9 @@ type StartupMigrationState = {
   message?: string | null;
   error?: string | null;
   progress?: number;
+  legacyMarkdownCount?: number | null;
   importedCounts?: Record<string, number> | null;
+  projectUpgradeCounts?: Record<string, number> | null;
 };
 
 function parseYouTubeCandidateFromUrl(rawInput: string): YouTubeClipboardCandidate | null {

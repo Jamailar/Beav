@@ -1561,7 +1561,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         <div className="flex h-full flex-col bg-surface-primary">
             <div
                 className={clsx(
-                    'border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px] z-30',
+                    'z-30 border-b border-border/50 bg-surface-primary/90 backdrop-blur-[32px]',
                     isEmbedded ? 'px-3 py-2' : 'px-6 py-4'
                 )}
             >
@@ -1575,8 +1575,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     className={clsx(
                                         'shrink-0 px-3.5 py-1.5 text-[12px] font-bold rounded-xl border transition-all flex items-center gap-2 active:scale-95',
                                         selectedTypeFilter === item.key
-                                            ? 'bg-text-primary text-white border-transparent shadow-lg shadow-text-primary/10'
-                                            : 'bg-black/[0.03] text-text-tertiary border-transparent hover:bg-black/[0.06] hover:text-text-primary'
+                                            ? 'border-transparent bg-accent-primary text-white shadow-lg shadow-accent-primary/20'
+                                            : 'border-border/70 bg-surface-secondary/70 text-text-secondary hover:bg-surface-tertiary/70 hover:text-text-primary'
                                     )}
                                 >
                                     <span>{item.label}</span>
@@ -1584,7 +1584,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         'text-[10px] px-1.5 py-0.5 rounded-lg font-bold',
                                         selectedTypeFilter === item.key
                                             ? 'bg-white/20 text-white'
-                                            : 'bg-black/5 text-text-tertiary/60'
+                                            : 'bg-surface-primary/70 text-text-tertiary'
                                     )}>
                                         {item.count}
                                     </span>
@@ -1603,7 +1603,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         placeholder="搜索知识库..."
                                         autoFocus
-                                        className="w-full bg-black/[0.03] border border-transparent rounded-xl pl-9 pr-8 py-2 text-[13px] font-bold text-text-primary placeholder:text-text-tertiary/50 focus:outline-none focus:bg-white focus:ring-2 focus:ring-accent-primary/10 transition-all"
+                                        className="w-full rounded-xl border border-border/70 bg-surface-secondary/70 pl-9 pr-8 py-2 text-[13px] font-bold text-text-primary placeholder:text-text-tertiary/70 focus:bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-primary/10 transition-all"
                                     />
                                     {searchQuery && (
                                         <button
@@ -1619,7 +1619,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         setIsSearchOpen(false);
                                         setSearchQuery('');
                                     }}
-                                    className="px-3.5 py-2 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all"
+                                    className="rounded-xl px-3.5 py-2 text-[12px] font-bold text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all"
                                 >
                                     取消
                                 </button>
@@ -1628,14 +1628,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             <div className="flex items-center gap-1.5 shrink-0">
                                 <button
                                     onClick={() => setIsSearchOpen(true)}
-                                    className="inline-flex h-9 w-9 text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all items-center justify-center active:scale-90"
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all active:scale-90"
                                     title="搜索 (Cmd+F)"
                                 >
                                     <Search className="w-4 h-4" />
                                 </button>
                                 {!isEmbedded && (
                                     <>
-                                        <div className="w-[1px] h-4 bg-black/[0.06] mx-1" />
+                                        <div className="mx-1 h-4 w-[1px] bg-border/80" />
                                         
                                         {(selectedTypeFilter === 'all' || selectedTypeFilter === 'youtube') && youtubeSummaryPendingCount > 0 && (
                                             <button
@@ -1653,24 +1653,24 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                                         <button
                                             onClick={() => void window.ipcRenderer.knowledge.rebuildCatalog().then(() => refreshIndexStatus())}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3.5 text-[12px] font-bold rounded-xl bg-black/[0.04] text-text-primary hover:bg-black/[0.08] transition-all active:scale-95"
+                                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/70 bg-surface-secondary/75 px-3.5 text-[12px] font-bold text-text-primary hover:bg-surface-tertiary/80 transition-all active:scale-95"
                                             title="重建知识索引"
                                         >
                                             <RefreshCw className="w-3.5 h-3.5" />
                                             重建索引
                                         </button>
                                         
-                                        <div className="flex items-center gap-1 bg-text-primary p-1 rounded-xl shadow-lg shadow-text-primary/10">
+                                        <div className="flex items-center gap-1 rounded-xl border border-border/80 bg-surface-elevated p-1 shadow-lg shadow-black/10">
                                             <button
                                                 onClick={handleAddDocumentFiles}
-                                                className="inline-flex items-center gap-1.5 h-7 px-2.5 text-[11px] font-bold text-white hover:bg-white/10 rounded-lg transition-all active:scale-95"
+                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
                                             >
                                                 <Plus className="w-3.5 h-3.5" />
                                                 文件
                                             </button>
                                             <button
                                                 onClick={handleAddDocumentFolder}
-                                                className="inline-flex items-center gap-1.5 h-7 px-2.5 text-[11px] font-bold text-white hover:bg-white/10 rounded-lg transition-all active:scale-95"
+                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
                                             >
                                                 <FolderPlus className="w-3.5 h-3.5" />
                                                 文件夹

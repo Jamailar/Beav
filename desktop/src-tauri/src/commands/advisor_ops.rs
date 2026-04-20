@@ -442,16 +442,14 @@ pub fn handle_advisor_channel(
                     "runtime/advisors/optimize_system.txt",
                     include_str!("../../../prompts/library/runtime/advisors/optimize_system.txt"),
                 );
-                let optimized = generate_structured_response_with_settings(
+                let optimized = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &system_prompt,
                     &info,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &info)
-                });
+                .or_else(|_| run_model_text_task_with_settings(&settings_snapshot, None, &info))?;
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:optimize-prompt-deep" => {
@@ -481,16 +479,16 @@ pub fn handle_advisor_channel(
                         ("knowledge_summary", "".to_string()),
                     ],
                 );
-                let optimized = generate_structured_response_with_settings(
+                let optimized = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &system_prompt,
                     &user_prompt,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &user_prompt)
-                });
+                .or_else(|_| {
+                    run_model_text_task_with_settings(&settings_snapshot, None, &user_prompt)
+                })?;
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:generate-persona" => {
@@ -620,15 +618,15 @@ pub fn handle_advisor_channel(
                         ),
                     ],
                 );
-                let research_raw = generate_structured_response_with_settings(
+                let research_raw = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &research_system_prompt,
                     &research_user_prompt,
                     true,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(
+                .or_else(|_| {
+                    run_model_text_task_with_settings(
                         &settings_snapshot,
                         None,
                         &format!(
@@ -636,7 +634,7 @@ pub fn handle_advisor_channel(
                             channel_name, channel_description, video_titles
                         ),
                     )
-                });
+                })?;
                 let research =
                     parse_json_value_from_text(&research_raw).unwrap_or_else(|| json!({}));
                 let final_system_prompt =
@@ -688,16 +686,16 @@ pub fn handle_advisor_channel(
                         ),
                     ],
                 );
-                let final_markdown = generate_structured_response_with_settings(
+                let final_markdown = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &final_system_prompt,
                     &final_user_prompt,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &final_user_prompt)
-                });
+                .or_else(|_| {
+                    run_model_text_task_with_settings(&settings_snapshot, None, &final_user_prompt)
+                })?;
                 let prompt = research
                     .get("prompt")
                     .and_then(|value| value.as_str())

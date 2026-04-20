@@ -415,6 +415,7 @@ declare global {
         getStatus: () => Promise<{
           status?: string;
           needsDbImport?: boolean;
+          needsProjectUpgrade?: boolean;
           shouldShowModal?: boolean;
           legacyDbPath?: string | null;
           legacyWorkspacePath?: string | null;
@@ -423,11 +424,14 @@ declare global {
           message?: string | null;
           error?: string | null;
           progress?: number;
+          legacyMarkdownCount?: number | null;
           importedCounts?: Record<string, number> | null;
+          projectUpgradeCounts?: Record<string, number> | null;
         }>;
         start: () => Promise<{
           status?: string;
           needsDbImport?: boolean;
+          needsProjectUpgrade?: boolean;
           shouldShowModal?: boolean;
           legacyDbPath?: string | null;
           legacyWorkspacePath?: string | null;
@@ -436,7 +440,9 @@ declare global {
           message?: string | null;
           error?: string | null;
           progress?: number;
+          legacyMarkdownCount?: number | null;
           importedCounts?: Record<string, number> | null;
+          projectUpgradeCounts?: Record<string, number> | null;
         }>;
       };
       officialAuth: {

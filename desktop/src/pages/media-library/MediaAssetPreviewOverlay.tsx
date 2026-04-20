@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import { resolveAssetUrl } from '../../utils/pathManager';
+import { formatTimestampDateTime } from '../../utils/time';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
 
@@ -80,7 +81,7 @@ export function MediaAssetPreviewOverlay({
                                 {asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || '原始比例'}
                             </div>
                             <div className="text-[12px] leading-5 text-white/72">
-                                {new Date(asset.createdAt).toLocaleString()}
+                                {formatTimestampDateTime(asset.createdAt)}
                             </div>
                             {asset.relativePath && (
                                 <div className="text-[11px] leading-5 text-white/52 break-all">

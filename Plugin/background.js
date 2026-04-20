@@ -787,6 +787,22 @@ function buildYouTubeEntry(payload) {
 }
 
 function buildXhsEntry(payload) {
+  function extractTagsFromText(value) {
+    const tags = [];
+    const seen = new Set();
+    for (const token of String(value || '').split('#').slice(1)) {
+      const candidate = String(token)
+        .split(/\r?\n/, 1)[0]
+        .split(/\s+/, 1)[0]
+        .replace(/^[#]+|[，,。.！!？?]+$/g, '')
+        .trim();
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      tags.push(candidate);
+    }
+    return tags;
+  }
+
   const sourceUrl = normalizeText(payload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
   const stableNoteId = normalizeText(payload?.noteId)
@@ -796,6 +812,7 @@ function buildXhsEntry(payload) {
   const imageUrls = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
   const kind = videoAssetUrl && imageUrls.length === 0 ? 'xhs-video' : 'xhs-note';
   const text = normalizeText(payload?.text) || normalizeText(payload?.content);
+  const tags = Array.from(new Set(['小红书', ...extractTagsFromText(text)]));
 
   return {
     kind,
@@ -811,7 +828,7 @@ function buildXhsEntry(payload) {
       excerpt: truncateText(text, 180),
       description: truncateText(text, 500),
       siteName: sourceDomain,
-      tags: ['小红书'],
+      tags,
       stats: {
         likes: Number(payload?.stats?.likes || 0),
         collects: Number(payload?.stats?.collects || 0),

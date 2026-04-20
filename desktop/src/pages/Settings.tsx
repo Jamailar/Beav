@@ -689,6 +689,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     success: boolean;
     bundled: boolean;
     exportPath: string;
+    pluginPath?: string;
     exported: boolean;
     bundledPath?: string;
     error?: string;
@@ -2171,6 +2172,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         success: false,
         bundled: false,
         exportPath: '',
+        pluginPath: '',
         exported: false,
         bundledPath: '',
         error: String(error),
@@ -2617,7 +2619,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       await loadBrowserPluginStatus();
-      void appAlert(`插件已准备完成。\n\n目录：${result.path}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，选择“加载已解压的扩展程序”，并指向该目录。`);
+      void appAlert(`插件已准备完成。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
     } catch (error) {
       console.error('Failed to prepare browser plugin', error);
       void appAlert(`插件准备失败：${String(error)}`);
@@ -2637,33 +2639,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (error) {
       console.error('Failed to open browser plugin dir', error);
       void appAlert(`打开插件目录失败：${String(error)}`);
-    }
-  };
-
-  const copyTextToClipboard = async (text: string) => {
-    if (!navigator.clipboard?.writeText) {
-      throw new Error('当前环境不支持剪贴板写入');
-    }
-    await navigator.clipboard.writeText(text);
-  };
-
-  const handleCopyChromeExtensionsUrl = async () => {
-    try {
-      await copyTextToClipboard('chrome://extensions');
-      void appAlert('已复制 Chrome 扩展管理页地址。\n\n请粘贴到 Chrome 地址栏打开。');
-    } catch (error) {
-      console.error('Failed to copy Chrome extensions url', error);
-      void appAlert(`复制 Chrome 扩展管理页地址失败：${String(error)}`);
-    }
-  };
-
-  const handleCopyEdgeExtensionsUrl = async () => {
-    try {
-      await copyTextToClipboard('edge://extensions');
-      void appAlert('已复制 Edge 扩展管理页地址。\n\n请粘贴到 Edge 地址栏打开。');
-    } catch (error) {
-      console.error('Failed to copy Edge extensions url', error);
-      void appAlert(`复制 Edge 扩展管理页地址失败：${String(error)}`);
     }
   };
 
@@ -3680,8 +3655,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isPreparingBrowserPlugin={isPreparingBrowserPlugin}
                 handlePrepareBrowserPlugin={handlePrepareBrowserPlugin}
                 handleOpenBrowserPluginDir={handleOpenBrowserPluginDir}
-                handleCopyChromeExtensionsUrl={handleCopyChromeExtensionsUrl}
-                handleCopyEdgeExtensionsUrl={handleCopyEdgeExtensionsUrl}
                 isInstallingTool={isInstallingTool}
                 installProgress={installProgress}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}

@@ -1,10 +1,13 @@
 use serde_json::{json, Value};
+use std::{ffi::OsStr, fs, path::Path};
 use tauri::{AppHandle, State};
 
 use crate::{
     browser_plugin_bundled_candidates, browser_plugin_bundled_root, browser_plugin_export_root,
     copy_dir_recursive, log_timing_event, now_ms, AppState,
 };
+
+const EXPORTED_BROWSER_PLUGIN_DIR_NAME: &str = "RedBox Browser Extension";
 
 fn missing_browser_plugin_error(app: &AppHandle) -> String {
     let checked_paths = browser_plugin_bundled_candidates(app);
@@ -19,6 +22,32 @@ fn missing_browser_plugin_error(app: &AppHandle) -> String {
             .collect::<Vec<_>>()
             .join("；")
     )
+}
+
+fn browser_plugin_prepared_dir(export_root: &Path) -> std::path::PathBuf {
+    export_root.join(EXPORTED_BROWSER_PLUGIN_DIR_NAME)
+}
+
+fn migrate_flat_browser_plugin_layout(
+    export_root: &Path,
+    prepared_dir: &Path,
+) -> Result<(), String> {
+    if prepared_dir.join("manifest.json").exists() || !export_root.join("manifest.json").exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(prepared_dir).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(export_root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_name = entry.file_name();
+        if file_name == OsStr::new(EXPORTED_BROWSER_PLUGIN_DIR_NAME) {
+            continue;
+        }
+        let source = entry.path();
+        let target = prepared_dir.join(&file_name);
+        fs::rename(&source, &target).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn handle_plugin_channel(
@@ -43,8 +72,10 @@ pub fn handle_plugin_channel(
                 let request_id = format!("plugin:browser-extension-status:{}", started_at);
                 let bundled_path = browser_plugin_bundled_root(app);
                 let export_path = browser_plugin_export_root(state)?;
+                let prepared_path = browser_plugin_prepared_dir(&export_path);
+                migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
                 let bundled = bundled_path.is_some();
-                let exported = export_path.join("manifest.json").exists();
+                let exported = prepared_path.join("manifest.json").exists();
                 let checked_paths = browser_plugin_bundled_candidates(app);
                 log_timing_event(
                     state,
@@ -59,6 +90,7 @@ pub fn handle_plugin_channel(
                     "bundled": bundled,
                     "exported": exported,
                     "exportPath": export_path.display().to_string(),
+                    "pluginPath": prepared_path.display().to_string(),
                     "bundledPath": bundled_path
                         .as_ref()
                         .map(|path| path.display().to_string())
@@ -82,24 +114,33 @@ pub fn handle_plugin_channel(
                     }));
                 };
                 let export_path = browser_plugin_export_root(state)?;
-                if !export_path.join("manifest.json").exists() {
-                    copy_dir_recursive(&bundled_path, &export_path)?;
+                let prepared_path = browser_plugin_prepared_dir(&export_path);
+                migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
+                if !prepared_path.join("manifest.json").exists() {
+                    copy_dir_recursive(&bundled_path, &prepared_path)?;
                 }
                 Ok(json!({
                     "success": true,
                     "path": export_path.display().to_string(),
-                    "alreadyPrepared": export_path.join("manifest.json").exists()
+                    "pluginPath": prepared_path.display().to_string(),
+                    "alreadyPrepared": prepared_path.join("manifest.json").exists()
                 }))
             }
             "plugin:open-browser-extension-dir" => {
                 let export_path = browser_plugin_export_root(state)?;
-                if !export_path.join("manifest.json").exists() {
+                let prepared_path = browser_plugin_prepared_dir(&export_path);
+                migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
+                if !prepared_path.join("manifest.json").exists() {
                     if let Some(bundled_path) = browser_plugin_bundled_root(app) {
-                        copy_dir_recursive(&bundled_path, &export_path)?;
+                        copy_dir_recursive(&bundled_path, &prepared_path)?;
                     }
                 }
                 open::that(&export_path).map_err(|error| error.to_string())?;
-                Ok(json!({ "success": true, "path": export_path.display().to_string() }))
+                Ok(json!({
+                    "success": true,
+                    "path": export_path.display().to_string(),
+                    "pluginPath": prepared_path.display().to_string()
+                }))
             }
             _ => unreachable!(),
         }

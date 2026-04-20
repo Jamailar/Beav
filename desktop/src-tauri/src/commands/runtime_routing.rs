@@ -5,8 +5,8 @@ use crate::runtime::{
     RUNTIME_INTENT_NAMES, RUNTIME_ROLE_IDS,
 };
 use crate::{
-    generate_structured_response_with_settings, load_redbox_prompt, parse_json_value_from_text,
-    payload_field, render_redbox_prompt,
+    load_redbox_prompt, parse_json_value_from_text, payload_field, render_redbox_prompt,
+    run_model_structured_task_with_settings,
 };
 
 pub fn route_runtime_intent_with_settings(
@@ -58,7 +58,7 @@ pub fn route_runtime_intent_with_settings(
             ("role_ids", RUNTIME_ROLE_IDS.join(", ")),
         ],
     );
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         settings,
         None,
         &system_template,

@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::{
-    configure_background_command, decode_base64_bytes, generate_chat_response,
-    invoke_structured_chat_by_protocol, load_redbox_prompt_or_embedded, markdown_to_html, now_ms,
-    payload_field, payload_string, render_redbox_prompt, resolve_chat_config, resolve_local_path,
-    run_curl_bytes, run_curl_json, url_encode_component, AdvisorRecord,
-    WechatOfficialBindingRecord,
+    configure_background_command, decode_base64_bytes, invoke_chat_by_protocol,
+    invoke_structured_chat_by_protocol, markdown_to_html, now_ms, payload_field, payload_string,
+    resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json, url_encode_component,
+    AdvisorRecord, WechatOfficialBindingRecord,
 };
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -252,15 +251,23 @@ pub(crate) fn upload_wechat_thumb_media(
     Err(format!("WeChat media upload error {errcode}: {errmsg}"))
 }
 
-pub(crate) fn generate_response_with_settings(
+pub(crate) fn run_model_text_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     prompt: &str,
-) -> String {
-    generate_chat_response(settings, model_config, prompt)
+) -> Result<String, String> {
+    let config = resolve_chat_config(settings, model_config)
+        .ok_or_else(|| "当前未配置可用模型".to_string())?;
+    invoke_chat_by_protocol(
+        &config.protocol,
+        &config.base_url,
+        config.api_key.as_deref(),
+        &config.model_name,
+        prompt,
+    )
 }
 
-pub(crate) fn generate_structured_response_with_settings(
+pub(crate) fn run_model_structured_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     system_prompt: &str,
@@ -294,37 +301,4 @@ pub(crate) fn find_advisor_avatar(advisors: &[AdvisorRecord], advisor_id: &str) 
         .find(|item| item.id == advisor_id)
         .map(|item| item.avatar.clone())
         .unwrap_or_else(|| "🤖".to_string())
-}
-
-pub(crate) fn build_advisor_prompt(
-    advisor: Option<&AdvisorRecord>,
-    message: &str,
-    context: Option<&Value>,
-) -> String {
-    let template = load_redbox_prompt_or_embedded(
-        "runtime/advisors/reply_wrapper.txt",
-        include_str!("../../prompts/library/runtime/advisors/reply_wrapper.txt"),
-    );
-    let advisor_name = advisor
-        .map(|item| item.name.clone())
-        .unwrap_or_else(|| "智囊团成员".to_string());
-    let advisor_personality = advisor
-        .map(|item| item.personality.clone())
-        .unwrap_or_default();
-    let advisor_system_prompt = advisor
-        .map(|item| item.system_prompt.clone())
-        .unwrap_or_default();
-    let context_block = context
-        .map(|value| format!("补充上下文：\n{}\n\n", value))
-        .unwrap_or_default();
-    render_redbox_prompt(
-        &template,
-        &[
-            ("advisor_name", advisor_name),
-            ("advisor_personality", advisor_personality),
-            ("advisor_system_prompt", advisor_system_prompt),
-            ("context_block", context_block),
-            ("message", message.to_string()),
-        ],
-    )
 }

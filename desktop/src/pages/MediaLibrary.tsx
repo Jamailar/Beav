@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
@@ -224,9 +225,7 @@ function inferImageAspectFromSize(size: string): string {
 }
 
 function toSortableTime(value?: string): number {
-    if (!value) return 0;
-    const timestamp = Date.parse(value);
-    return Number.isFinite(timestamp) ? timestamp : 0;
+    return parseTimestampMs(value) ?? 0;
 }
 
 function compareMediaAssetsByCreatedAtDesc(a: MediaAsset, b: MediaAsset): number {
@@ -1029,7 +1028,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                                     {sourceMeta.label}
                                                 </span>
                                                 <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-secondary/70 text-text-secondary">
-                                                    {new Date(asset.createdAt).toLocaleDateString()}
+                                                    {formatTimestampDate(asset.createdAt)}
                                                 </span>
                                             </div>
 

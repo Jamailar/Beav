@@ -5497,7 +5497,7 @@ fn generate_package_html_template(
         ],
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
         "你是 RedBox 的工程排版模板生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 模板文档，不要附加解释。",
@@ -5571,7 +5571,7 @@ fn generate_richpost_page_plan(
         ],
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
         "你是 RedBox 的小红书图文分页规划器。只输出严格 JSON。不要解释。",
@@ -5644,7 +5644,7 @@ fn generate_package_html_document(
         ],
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
         "你是 RedBox 的 HTML 排版生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 文档，不要附加解释。",
@@ -6906,7 +6906,7 @@ fn generate_motion_items_for_project(
         serde_json::to_string(&media_items).map_err(|error| error.to_string())?
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
         "你是 RedClaw 的短视频动画导演。只输出严格 JSON。",
@@ -7040,7 +7040,7 @@ fn generate_editor_commands_for_project(
         instructions
     );
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
         "你是 RedClaw 的视频编辑命令规划器。只输出严格 JSON。",
@@ -10697,8 +10697,8 @@ pub fn handle_manuscripts_channel(
                         mime_type: Some(mime_type.clone()),
                         relative_path: Some(format!("imports/{}", relative_name)),
                         bound_manuscript_path: Some(file_path.clone()),
-                        created_at: now_iso(),
-                        updated_at: now_iso(),
+                        created_at: now_rfc3339(),
+                        updated_at: now_rfc3339(),
                         absolute_path: Some(target.display().to_string()),
                         preview_url: Some(file_url_for_path(&target)),
                         exists: true,
@@ -11099,8 +11099,8 @@ pub fn handle_manuscripts_channel(
                             mime_type: Some(mime_type.clone()),
                             relative_path: Some(format!("imports/{}", relative_name)),
                             bound_manuscript_path: Some(file_path.clone()),
-                            created_at: now_iso(),
-                            updated_at: now_iso(),
+                            created_at: now_rfc3339(),
+                            updated_at: now_rfc3339(),
                             absolute_path: Some(target.display().to_string()),
                             preview_url: Some(file_url_for_path(&target)),
                             exists: true,

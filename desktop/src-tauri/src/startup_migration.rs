@@ -7,9 +7,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
-    auth, compatible_workspace_base_dir, detect_best_legacy_db, emit_space_changed,
-    is_legacy_workspace_base, legacy_workspace_dir, maybe_import_legacy_store, now_iso,
-    persist_store, preferred_workspace_dir, AppState, AppStore,
+    auth, compatible_workspace_base_dir, create_manuscript_package, detect_best_legacy_db,
+    emit_space_changed, is_legacy_workspace_base, is_manuscript_package_name, join_relative,
+    legacy_workspace_dir, maybe_import_legacy_store, normalize_relative_path, now_iso,
+    persist_store, preferred_workspace_dir, title_from_relative_path, AppState, AppStore,
+    POST_DRAFT_EXTENSION,
 };
 
 pub(crate) const STARTUP_MIGRATION_EVENT: &str = "app:startup-migration-status";
@@ -159,10 +161,8 @@ fn collect_legacy_markdown_manuscripts(
         let relative = path
             .strip_prefix(manuscripts_root)
             .map_err(|error| error.to_string())?;
-        out.push((
-            path,
-            normalize_relative_path(relative.to_string_lossy().as_ref()),
-        ));
+        let relative_string = normalize_relative_path(relative.to_string_lossy().as_ref());
+        out.push((path, relative_string));
     }
 
     Ok(())
@@ -695,10 +695,12 @@ pub(crate) fn start_startup_migration(
             let _ = write_failed_receipt(&state.store_path, legacy_db_path, error.clone());
             let _ = set_status(&app_handle, &state, |status| {
                 status.status = "failed".to_string();
-                status.needs_db_import = needs_db_import_from_error_context(status);
                 status.should_show_modal = true;
                 status.current_step = Some("迁移失败".to_string());
-                status.message = Some("启动迁移失败，请重试。".to_string());
+                status.message = Some(startup_failed_message(
+                    status.needs_db_import,
+                    status.legacy_markdown_count.unwrap_or_default(),
+                ));
                 status.error = Some(error.clone());
                 status.progress = 0.0;
             });
@@ -706,10 +708,6 @@ pub(crate) fn start_startup_migration(
     });
 
     serde_json::to_value(snapshot).map_err(|error| error.to_string())
-}
-
-fn needs_db_import_from_error_context(status: &StartupMigrationStatus) -> bool {
-    status.needs_db_import
 }
 
 #[cfg(test)]

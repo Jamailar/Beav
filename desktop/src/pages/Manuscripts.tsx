@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
 import { loadRichpostPreviewHtml, renderRichpostHtmlToPng, renderRichpostPageUrlToPng } from '../components/manuscripts/richpostPreviewImage';
@@ -469,6 +470,7 @@ const CREATE_KIND_OPTION_MAP: Record<CreateKind, (typeof CREATE_KIND_OPTIONS)[nu
 }, {} as Record<CreateKind, (typeof CREATE_KIND_OPTIONS)[number]>);
 
 const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
+    { id: 'all', label: '全部' },
     { id: 'drafts', label: '稿件' },
     { id: 'media', label: '素材' },
     { id: 'image', label: '图片' },
@@ -742,10 +744,7 @@ function inferImageAspectFromSize(size: string): string {
 }
 
 function formatDateLabel(input?: string | number): string {
-    if (!input) return '';
-    const value = typeof input === 'number' ? input : Date.parse(String(input));
-    if (!Number.isFinite(value)) return '';
-    return new Date(value).toLocaleDateString();
+    return formatTimestampDate(input);
 }
 
 function resolveDraftTypeLabel(type: CreateKind | 'unknown'): string {
@@ -834,7 +833,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [mediaFolder, setMediaFolder] = useState('');
     const [query, setQuery] = useState('');
     const [isSearchOpen, setIsSearchOpen] = useState(false);
-    const [filter, setFilter] = useState<DraftFilter>('drafts');
+    const [filter, setFilter] = useState<DraftFilter>('all');
     const [layout, setLayout] = useState<DraftLayout>('gallery');
     const [createOpen, setCreateOpen] = useState(false);
     const [folderCreateOpen, setFolderCreateOpen] = useState(false);
@@ -955,7 +954,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const richpostCardPreviewTimerRef = useRef<number | null>(null);
     const richpostCardPreviewRenderedAtRef = useRef<Record<string, number>>({});
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
-    const isMediaScope = filter !== 'drafts';
+    const isMediaScope = filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
     const currentEditorContent = useMemo(
         () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
@@ -1323,7 +1322,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [currentFolders, normalizedQuery]);
 
     const visibleDrafts = useMemo(() => {
-        if (filter !== 'drafts') return [] as FileNode[];
+        if (filter !== 'all' && filter !== 'drafts') return [] as FileNode[];
         return currentNestedDraftFiles.filter((item) => {
             if (isInternalPackageFile(item.path)) return false;
             const meta = fileMetaMap[item.path];
@@ -1340,18 +1339,19 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     }, [currentNestedDraftFiles, fileMetaMap, filter, normalizedQuery]);
 
     const visibleAssets = useMemo(() => {
+        if (filter === 'all' && activeFolder) return [] as MediaAsset[];
         return assets.filter((asset) => {
             const assetKind = inferAssetKind(asset);
             if (filter === 'media' && !['image', 'video', 'audio'].includes(assetKind)) return false;
             if (filter === 'image' && assetKind !== 'image') return false;
             if (filter === 'video' && assetKind !== 'video') return false;
             if (filter === 'audio' && assetKind !== 'audio') return false;
-            if (filter === 'drafts') return false;
-            if (getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
+            if (filter === 'drafts' || filter === 'folders') return false;
+            if (isMediaScope && getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
             const haystack = `${asset.title || ''} ${asset.prompt || ''} ${asset.relativePath || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         });
-    }, [assets, filter, mediaFolder, normalizedQuery]);
+    }, [activeFolder, assets, filter, isMediaScope, mediaFolder, normalizedQuery]);
 
     const activeTrail = useMemo(() => getFolderTrail(isMediaScope ? mediaFolder : activeFolder), [activeFolder, isMediaScope, mediaFolder]);
     const currentFolderPath = isMediaScope ? mediaFolder : activeFolder;
@@ -2635,8 +2635,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         const assetCards = visibleAssets.map((asset) => ({
             id: `asset:${asset.id}`,
             kind: 'asset' as const,
-            updatedAt: Date.parse(asset.updatedAt || '') || 0,
-            createdAt: Date.parse(asset.createdAt || '') || 0,
+            updatedAt: parseTimestampMs(asset.updatedAt) || 0,
+            createdAt: parseTimestampMs(asset.createdAt) || 0,
             asset,
             title: asset.title || asset.relativePath || asset.id,
             summary: asset.prompt || asset.relativePath || '',
@@ -3196,6 +3196,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         <div className="flex flex-wrap items-center justify-between gap-6">
                             <div className="flex min-w-0 items-center gap-8">
                                 {[
+                                    { id: 'all', label: '全部' },
                                     { id: 'drafts', label: '我的稿件' },
                                     { id: 'media', label: '素材库' },
                                 ].map((item) => (
@@ -3486,6 +3487,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             )
                         ) : (
                             <div className="space-y-4">
+                                {activeFolder && filter === 'all' ? (
+                                    <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-text-tertiary">
+                                        当前目录优先展示稿件内容。素材库素材仍会在“全部”根目录和“素材库”筛选里显示。
+                                    </div>
+                                ) : null}
                                 {contentCards.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-border px-4 py-12 text-sm text-text-tertiary">当前没有符合筛选条件的内容。</div>
                                 ) : (

@@ -29,6 +29,12 @@
       "run_at": "document_end"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["pageRouteBridge.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_title": "RedBox Capture",
     "default_popup": "popup.html",

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookCopy, ChevronDown, MessageSquarePlus, Plus, Users } from 'lucide-react';
+import { ChevronDown, MessageSquarePlus, Plus, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import { CreativeChat, type CreativeChatRoom } from './CreativeChat';
 import { Advisors, type AdvisorCreateMode, type AdvisorProfile } from './Advisors';
@@ -198,45 +198,28 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
               </button>
 
               {isCreatePickerOpen && (
-                <div className="absolute right-0 top-[calc(100%+10px)] z-30 w-56">
-                  <div className="absolute -top-2 right-3 h-4 w-4 rotate-45 rounded-[3px] border-l border-t border-border bg-surface-primary" />
-                  <div className="overflow-hidden rounded-[20px] border border-border bg-surface-primary shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
+                <div className="absolute right-0 top-[calc(100%+8px)] z-30 w-48 overflow-hidden rounded-xl border border-border bg-surface-primary shadow-lg">
+                  <div className="py-1.5">
                     <button
                       type="button"
                       onClick={openRoomCreate}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-surface-secondary/70"
+                      className="flex h-10 w-full items-center gap-2.5 px-3 text-left text-sm text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
-                        <MessageSquarePlus className="w-4 h-4" />
-                      </div>
-                      <div className="text-sm font-medium text-text-primary">创建群聊</div>
+                      <MessageSquarePlus className="h-4 w-4 shrink-0 text-text-tertiary" />
+                      <div className="font-medium">创建群聊</div>
                     </button>
 
-                    <div className="mx-4 h-px bg-border" />
+                    <div className="mx-3 h-px bg-border" />
 
                     <button
                       type="button"
                       onClick={() => openAdvisorCreate('manual')}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-surface-secondary/70"
+                      className="flex h-10 w-full items-center gap-2.5 px-3 text-left text-sm text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
-                        <Users className="w-4 h-4" />
-                      </div>
-                      <div className="text-sm font-medium text-text-primary">从资料蒸馏</div>
+                      <Users className="h-4 w-4 shrink-0 text-text-tertiary" />
+                      <div className="font-medium">添加成员</div>
                     </button>
 
-                    <div className="mx-4 h-px bg-border" />
-
-                    <button
-                      type="button"
-                      onClick={() => openAdvisorCreate('template')}
-                      className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-surface-secondary/70"
-                    >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-accent-primary">
-                        <BookCopy className="w-4 h-4" />
-                      </div>
-                      <div className="text-sm font-medium text-text-primary">从模板创建</div>
-                    </button>
                   </div>
                 </div>
               )}

@@ -6,6 +6,7 @@ let fastPollUntil = 0;
 let urlWatchTimer = null;
 let observerStopped = false;
 let observer = null;
+let pageRouteBridgeInstalled = false;
 
 let dragOverlayHost = null;
 let dragZoneElement = null;
@@ -21,6 +22,7 @@ const FAST_POLL_DURATION_MS = 2500;
 const URL_WATCH_INTERVAL_MS = 150;
 const DRAG_HIDE_DELAY_MS = 140;
 const DRAG_RESULT_HIDE_DELAY_MS = 1800;
+const PAGE_ROUTE_EVENT_NAME = 'redbox:locationchange';
 
 function normalizeText(value) {
     return String(value || '').trim();
@@ -85,48 +87,351 @@ function getInitialState() {
     return null;
 }
 
-function detectXhsNoteInfo() {
-    function getCurrentStateNote() {
-        try {
-            const detailMap = getInitialState()?.note?.noteDetailMap || {};
-            const keys = Object.keys(detailMap);
-            if (keys.length === 0) return null;
-            const pathPart = location.pathname.split('/').filter(Boolean).pop() || '';
-            if (pathPart && detailMap[pathPart]) {
-                return detailMap[pathPart]?.note || detailMap[pathPart];
-            }
-            return detailMap[keys[0]]?.note || detailMap[keys[0]];
-        } catch {
-            return null;
-        }
+function isNodeVisible(el) {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+        return false;
     }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 24 && rect.height > 24;
+}
 
-    function isNodeVisible(el) {
-        if (!el || !(el instanceof Element)) return false;
-        const style = window.getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
-            return false;
-        }
-        const rect = el.getBoundingClientRect();
-        return rect.width > 24 && rect.height > 24;
-    }
+function normalizeCollapsedText(value) {
+    return String(value || '').replace(/\s+/g, '').trim();
+}
 
-    const noteRoot = document.querySelector('#noteContainer, .note-container, .note-content');
-    const articleRoot = document.querySelector('[class*="article"], .article-container, .content-container');
-    const stateNote = getCurrentStateNote();
-    const titleEl = document.querySelector('#detail-title, .note-content #detail-title, .note-content .title, .title');
-    const descEl = document.querySelector('#detail-desc, .desc, .note-content .desc, .note-content');
-    const imageEls = Array.from(document.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
-        .filter((el) => isNodeVisible(el));
-    const hasVideo = Boolean(document.querySelector('video, .xgplayer video'));
-    const hasStateContent = Boolean(stateNote && (stateNote.title || stateNote.desc || stateNote.video || stateNote.imageList || stateNote.images));
-    const hasDomContent = Boolean(
-        (titleEl && String(titleEl.textContent || '').trim())
-        || (descEl && String(descEl.textContent || '').replace(/\s+/g, ' ').trim().length > 20)
-        || imageEls.length > 0
-        || hasVideo
+function isCommentRelatedNode(el) {
+    if (!el || !el.closest) return false;
+    return Boolean(
+        el.closest('.comments-el')
+        || el.closest('.comment-list')
+        || el.closest('.comment-item')
+        || el.closest('.comment-container')
+        || el.closest('.comments-container')
+        || el.closest('[class*="comment"]')
+        || el.closest('[id*="comment"]')
     );
-    const hasValidNote = Boolean(noteRoot || articleRoot || hasStateContent || hasDomContent);
+}
+
+function getActiveXhsDetailMask() {
+    const strictMasks = Array.from(document.querySelectorAll('.note-detail-mask[note-id]'));
+    const looseMasks = Array.from(document.querySelectorAll('.note-detail-mask'));
+    const masks = strictMasks.length > 0 ? strictMasks : looseMasks;
+    if (masks.length === 0) return null;
+    const scored = masks
+        .filter((mask) => mask instanceof Element)
+        .map((mask, index) => {
+            const style = window.getComputedStyle(mask);
+            const rect = mask.getBoundingClientRect();
+            const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 80 && rect.height > 80;
+            const container = mask.querySelector('#noteContainer.note-container, #noteContainer, .note-container');
+            const titleEl = container?.querySelector?.('#detail-title, .note-content #detail-title, .note-content .title');
+            const titleText = normalizeText(titleEl?.textContent || '');
+            const area = Math.max(0, rect.width * rect.height);
+            let score = 0;
+            if (visible) score += 100000;
+            if (container) score += 10000;
+            if (titleText) score += 1000;
+            score += Math.floor(area / 100);
+            score += index;
+            return { mask, score };
+        })
+        .sort((a, b) => b.score - a.score);
+    return scored[0]?.mask || masks[masks.length - 1] || null;
+}
+
+function getCurrentOpenedXhsNoteId() {
+    const mask = getActiveXhsDetailMask();
+    if (!mask) return '';
+    return normalizeText(mask.getAttribute('note-id') || '');
+}
+
+function getCurrentXhsNoteRoot() {
+    const directRoot =
+        document.querySelector('#noteContainer.note-container[data-render-status]')
+        || document.querySelector('#noteContainer.note-container')
+        || document.querySelector('#noteContainer');
+    if (directRoot && isNodeVisible(directRoot)) {
+        return directRoot;
+    }
+
+    const mask = getActiveXhsDetailMask();
+    if (mask) {
+        const scoped =
+            mask.querySelector('#noteContainer.note-container')
+            || mask.querySelector('#noteContainer')
+            || mask.querySelector('.note-container')
+            || null;
+        if (scoped && isNodeVisible(scoped)) {
+            return scoped;
+        }
+    }
+
+    const anchor =
+        document.querySelector('#detail-desc')
+        || document.querySelector('#detail-title')
+        || document.querySelector('.note-content')
+        || null;
+    if (!anchor) return null;
+
+    const resolved =
+        anchor.closest('#noteContainer.note-container')
+        || anchor.closest('#noteContainer')
+        || anchor.closest('.note-container')
+        || anchor.closest('#detail-container')
+        || anchor.closest('.note-content')
+        || anchor.closest('[class*="note-container"]')
+        || anchor.closest('[class*="note-content"]')
+        || anchor.parentElement
+        || null;
+    return resolved && isNodeVisible(resolved) ? resolved : null;
+}
+
+function getXhsNoteTitle(root) {
+    return normalizeText(
+        document.querySelector('#detail-title')?.innerText
+        || root?.querySelector?.('#detail-title')?.innerText
+        || root?.querySelector?.('.note-title')?.innerText
+        || root?.querySelector?.('.title')?.innerText
+        || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+        || document.title
+    );
+}
+
+function getXhsTextContent(root) {
+    const textEls = Array.from(root?.querySelectorAll?.('#detail-desc .note-text, .desc .note-text, .note-content .note-text') || []);
+    const joined = textEls
+        .map((el) => normalizeText(el.innerText))
+        .filter(Boolean)
+        .join('\n\n');
+    if (joined) return joined;
+    return normalizeText(
+        document.querySelector('meta[property="og:description"]')?.getAttribute('content')
+        || document.querySelector('meta[name="description"]')?.getAttribute('content')
+    );
+}
+
+function getCurrentXhsStateEntry() {
+    try {
+        const detailMap = getInitialState()?.note?.noteDetailMap || {};
+        const keys = Object.keys(detailMap);
+        if (keys.length === 0) return null;
+
+        const candidates = [];
+        const openedNoteId = getCurrentOpenedXhsNoteId();
+        if (openedNoteId) candidates.push(openedNoteId);
+        const pathPart = location.pathname.split('/').filter(Boolean).pop() || '';
+        if (pathPart) candidates.push(pathPart);
+        const search = new URLSearchParams(location.search);
+        ['noteId', 'note_id', 'id', 'itemId'].forEach((name) => {
+            const value = search.get(name);
+            if (value) candidates.push(value);
+        });
+
+        const uniqCandidates = Array.from(new Set(candidates.filter(Boolean)));
+        for (const candidate of uniqCandidates) {
+            if (detailMap[candidate]) return detailMap[candidate];
+            const matchedKey = keys.find((key) => key === candidate || key.includes(candidate) || candidate.includes(key));
+            if (matchedKey) return detailMap[matchedKey];
+            const matchedByEntry = keys.find((key) => {
+                const entry = detailMap[key];
+                const note = entry?.note || entry;
+                const entryIds = [note?.noteId, note?.id, entry?.noteId, entry?.id]
+                    .filter(Boolean)
+                    .map((id) => String(id));
+                return entryIds.some((id) => id === candidate || id.includes(candidate) || candidate.includes(id));
+            });
+            if (matchedByEntry) return detailMap[matchedByEntry];
+        }
+
+        const domTitle = normalizeCollapsedText(getXhsNoteTitle(getCurrentXhsNoteRoot()));
+        if (domTitle) {
+            const titleMatchedKey = keys.find((key) => {
+                const entry = detailMap[key];
+                const note = entry?.note || entry;
+                const entryTitle = normalizeCollapsedText(note?.title || note?.noteTitle || '');
+                return entryTitle && (entryTitle === domTitle || entryTitle.includes(domTitle) || domTitle.includes(entryTitle));
+            });
+            if (titleMatchedKey) return detailMap[titleMatchedKey];
+        }
+
+        if (keys.length === 1) return detailMap[keys[0]];
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function getCurrentXhsStateNote() {
+    const entry = getCurrentXhsStateEntry();
+    return entry?.note || entry || null;
+}
+
+function isXhsStateAlignedWithDom(note, root) {
+    if (!note) return false;
+    const openedNoteId = getCurrentOpenedXhsNoteId();
+    const stateIds = [note?.noteId, note?.id, note?.note_id]
+        .filter(Boolean)
+        .map((id) => normalizeText(id));
+    if (openedNoteId && stateIds.length > 0) {
+        return stateIds.some((id) => id === openedNoteId || id.includes(openedNoteId) || openedNoteId.includes(id));
+    }
+    const domTitle = normalizeCollapsedText(getXhsNoteTitle(root));
+    const stateTitle = normalizeCollapsedText(note?.title || note?.noteTitle || '');
+    if (domTitle && stateTitle) {
+        return domTitle === stateTitle || domTitle.includes(stateTitle) || stateTitle.includes(domTitle);
+    }
+    if (domTitle && !stateTitle) return false;
+    return true;
+}
+
+function pushUniqueHttpUrl(list, value) {
+    const url = normalizeText(value);
+    if (!/^https?:\/\//i.test(url)) return;
+    if (!list.includes(url)) {
+        list.push(url);
+    }
+}
+
+function getCurrentXhsMainVideoElement(root) {
+    const scope = root || document;
+    const candidates = Array.from(scope.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+    const visible = candidates.find((el) => !isCommentRelatedNode(el) && isNodeVisible(el));
+    if (visible) return visible;
+    return candidates.find((el) => {
+        if (isCommentRelatedNode(el)) return false;
+        const src = normalizeText(el.getAttribute('src') || '');
+        return el.getAttribute('mediatype') === 'video'
+            || src.startsWith('blob:')
+            || /^https?:\/\//i.test(src)
+            || Boolean(el.querySelector('source[src^="blob:"], source[src^="http"]'));
+    }) || null;
+}
+
+function collectDeepHttpUrls(input, maxCount = 40) {
+    const urls = [];
+    const seenObjects = new WeakSet();
+    const seenUrls = new Set();
+
+    function walk(value) {
+        if (!value || urls.length >= maxCount) return;
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (/^https?:\/\//i.test(trimmed) && !seenUrls.has(trimmed)) {
+                seenUrls.add(trimmed);
+                urls.push(trimmed);
+            }
+            return;
+        }
+        if (typeof value !== 'object') return;
+        if (seenObjects.has(value)) return;
+        seenObjects.add(value);
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                walk(item);
+                if (urls.length >= maxCount) break;
+            }
+            return;
+        }
+
+        for (const key of Object.keys(value)) {
+            walk(value[key]);
+            if (urls.length >= maxCount) break;
+        }
+    }
+
+    walk(input);
+    return urls;
+}
+
+function getXhsImageUrls(root, stateNote) {
+    const urls = [];
+    if (stateNote) {
+        const imageList = Array.isArray(stateNote?.imageList)
+            ? stateNote.imageList
+            : Array.isArray(stateNote?.images)
+                ? stateNote.images
+                : [];
+        imageList.forEach((item) => {
+            if (typeof item === 'string') {
+                pushUniqueHttpUrl(urls, item);
+                return;
+            }
+            pushUniqueHttpUrl(urls, item?.urlDefault);
+            pushUniqueHttpUrl(urls, item?.urlPre);
+            pushUniqueHttpUrl(urls, item?.url);
+            pushUniqueHttpUrl(urls, item?.urlDefaultWebp);
+        });
+    }
+    if (urls.length > 0) return urls;
+
+    const imgEls = Array.from((root || document).querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'));
+    imgEls.forEach((img) => {
+        if (isCommentRelatedNode(img)) return;
+        if (!isNodeVisible(img)) return;
+        if (img.closest('.avatar,[class*="avatar"]')) return;
+        pushUniqueHttpUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || img.currentSrc || '');
+    });
+    return urls;
+}
+
+function getXhsVideoUrls(root, stateNote) {
+    const urls = [];
+    const h264 = stateNote?.video?.media?.stream?.h264 || [];
+    const h265 = stateNote?.video?.media?.stream?.h265 || [];
+    [...h264, ...h265].forEach((item) => {
+        pushUniqueHttpUrl(urls, item?.masterUrl);
+        if (Array.isArray(item?.backupUrls)) {
+            item.backupUrls.forEach((backup) => pushUniqueHttpUrl(urls, backup));
+        }
+    });
+    pushUniqueHttpUrl(urls, stateNote?.video?.media?.masterUrl);
+    pushUniqueHttpUrl(urls, stateNote?.video?.media?.url);
+    pushUniqueHttpUrl(urls, stateNote?.video?.url);
+    collectDeepHttpUrls(stateNote?.video || stateNote, 60).forEach((url) => pushUniqueHttpUrl(urls, url));
+
+    const videoEls = Array.from((root || document).querySelectorAll('video'));
+    videoEls.forEach((videoEl) => {
+        if (isCommentRelatedNode(videoEl)) return;
+        pushUniqueHttpUrl(urls, videoEl.src || '');
+        Array.from(videoEl.querySelectorAll('source')).forEach((source) => {
+            pushUniqueHttpUrl(urls, source.src || '');
+        });
+    });
+
+    if (urls.length === 0 && getCurrentXhsMainVideoElement(root)) {
+        try {
+            const entries = performance.getEntriesByType('resource') || [];
+            entries.forEach((entry) => {
+                const name = typeof entry?.name === 'string' ? entry.name : '';
+                if (/(\.mp4|\.m3u8|\/hls\/|\/video\/|sns-video|xhscdn)/i.test(name)) {
+                    pushUniqueHttpUrl(urls, name);
+                }
+            });
+        } catch {
+            // ignore performance access failures
+        }
+    }
+
+    return urls;
+}
+
+function detectXhsNoteInfo() {
+    const noteRoot = getCurrentXhsNoteRoot();
+    const articleRoot = document.querySelector('[class*="article"], .article-container, .content-container');
+    const rawStateNote = getCurrentXhsStateNote();
+    const stateNote = isXhsStateAlignedWithDom(rawStateNote, noteRoot) ? rawStateNote : null;
+    const effectiveRoot = noteRoot || articleRoot || document.body;
+    const title = getXhsNoteTitle(effectiveRoot);
+    const text = getXhsTextContent(effectiveRoot);
+    const imageUrls = getXhsImageUrls(noteRoot, stateNote);
+    const videoUrls = getXhsVideoUrls(noteRoot, stateNote);
+    const hasVideo = Boolean(getCurrentXhsMainVideoElement(noteRoot) || videoUrls.length > 0);
+    const hasStateContent = Boolean(stateNote && (stateNote.title || stateNote.desc || stateNote.video || stateNote.imageList || stateNote.images));
+    const hasDomContent = Boolean(title || text.length > 20 || imageUrls.length > 0 || hasVideo);
+    const hasValidNote = Boolean((noteRoot || articleRoot) && hasDomContent) || hasStateContent;
 
     if (!hasValidNote) {
         return createLinkFallbackPageInfo({
@@ -135,11 +440,12 @@ function detectXhsNoteInfo() {
         });
     }
 
+    const isVideoNote = hasVideo && imageUrls.length === 0;
     return {
-        kind: 'xhs-note',
+        kind: isVideoNote ? 'xhs-video' : 'xhs-image',
         action: 'save-xhs',
-        label: hasVideo && imageEls.length === 0 ? '保存小红书视频笔记到知识库' : '保存小红书图文到知识库',
-        description: '当前页面已识别为小红书内容页。',
+        label: isVideoNote ? '保存小红书视频笔记到知识库' : '保存小红书图文到知识库',
+        description: isVideoNote ? '当前页面已识别为小红书视频笔记。' : '当前页面已识别为小红书图文笔记。',
         primaryEnabled: true,
         detected: true,
     };
@@ -531,6 +837,36 @@ function handlePageHide() {
     hideDragZone(true);
 }
 
+function handleLikelyNavigation(duration = FAST_POLL_DURATION_MS) {
+    if (observerStopped) return;
+    latestUrl = location.href;
+    scheduleEmit(0);
+    startFastPolling(duration);
+}
+
+function handlePageRouteChange() {
+    handleLikelyNavigation(2200);
+}
+
+function installPageRouteBridge() {
+    if (pageRouteBridgeInstalled || !document.documentElement) return;
+    pageRouteBridgeInstalled = true;
+    const existing = document.getElementById('redbox-page-route-bridge');
+    if (existing) return;
+
+    const script = document.createElement('script');
+    script.id = 'redbox-page-route-bridge';
+    script.src = chrome.runtime.getURL('pageRouteBridge.js');
+    script.async = false;
+    script.onload = () => {
+        script.remove();
+    };
+    script.onerror = () => {
+        console.warn('[redbox-plugin][page-observer] failed to install page route bridge');
+    };
+    (document.head || document.documentElement).appendChild(script);
+}
+
 function stopObservers() {
     observerStopped = true;
     if (updateTimer) {
@@ -557,6 +893,10 @@ function stopObservers() {
     document.removeEventListener('drop', handleDocumentDrop, true);
     window.removeEventListener('blur', handleWindowBlur, true);
     window.removeEventListener('pagehide', handlePageHide, true);
+    window.removeEventListener(PAGE_ROUTE_EVENT_NAME, handlePageRouteChange, true);
+    window.removeEventListener('popstate', handlePageRouteChange, true);
+    window.removeEventListener('hashchange', handlePageRouteChange, true);
+    window.removeEventListener('pageshow', handlePageRouteChange, true);
     if (dragZoneElement) {
         dragZoneElement.removeEventListener('dragenter', handleZoneDragEnter);
         dragZoneElement.removeEventListener('dragover', handleZoneDragOver);
@@ -651,6 +991,7 @@ window.addEventListener('blur', handleWindowBlur, true);
 window.addEventListener('pagehide', handlePageHide, true);
 
 if (isInspectHost()) {
+    installPageRouteBridge();
     observer = new MutationObserver(() => {
         scheduleEmit();
     });
@@ -671,16 +1012,19 @@ if (isInspectHost()) {
     }, URL_WATCH_INTERVAL_MS);
 
     window.addEventListener('load', () => {
-        scheduleEmit(0);
-        startFastPolling();
+        handleLikelyNavigation();
     });
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-            scheduleEmit(0);
-            startFastPolling(1500);
+            handleLikelyNavigation(1500);
         }
     });
+
+    window.addEventListener(PAGE_ROUTE_EVENT_NAME, handlePageRouteChange, true);
+    window.addEventListener('popstate', handlePageRouteChange, true);
+    window.addEventListener('hashchange', handlePageRouteChange, true);
+    window.addEventListener('pageshow', handlePageRouteChange, true);
 
     scheduleEmit(0);
     startFastPolling();

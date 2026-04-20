@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::{
-    generate_structured_response_with_settings, load_redbox_prompt, make_id, normalize_base_url,
-    now_i64, now_iso, parse_json_value_from_text, payload_string, render_redbox_prompt,
-    run_curl_json, run_curl_text, truncate_chars, value_to_i64_string, with_store, with_store_mut,
-    workspace_root, write_json_value, AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord,
+    load_redbox_prompt, make_id, normalize_base_url, now_i64, now_iso, parse_json_value_from_text,
+    payload_string, render_redbox_prompt, run_curl_json, run_curl_text,
+    run_model_structured_task_with_settings, truncate_chars, value_to_i64_string, with_store,
+    with_store_mut, workspace_root, write_json_value, AppState, AppStore, MemoryHistoryRecord,
+    UserMemoryRecord,
 };
 
 pub(crate) fn memory_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -227,7 +228,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let prompt = with_store(state, |store| Ok(build_memory_maintenance_prompt(&store)))?;
     let system_prompt = "You are the background long-term memory maintenance manager for RedBox. Output strict JSON only.";
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         None,
         system_prompt,
