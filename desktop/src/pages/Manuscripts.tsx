@@ -38,7 +38,7 @@ import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import type { EditorProjectFile } from '../components/manuscripts/editorProject';
 import { WritingDraftWorkbench } from '../components/manuscripts/WritingDraftWorkbench';
-import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../features/chat/editorSessionBinding';
 import {
     ARTICLE_DRAFT_EXTENSION,
@@ -1453,6 +1453,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setWorkingId(null);
         }
     }, [activeFolder, isSameOrNestedPath, loadData]);
+
+    const handleShowInFolder = useCallback(async (source: string, fallbackMessage = '打开文件夹失败') => {
+        const normalized = String(source || '').trim();
+        if (!normalized) return;
+        const result = await window.ipcRenderer.files.showInFolder({ source: normalized }) as { success?: boolean; error?: string };
+        if (!result?.success) {
+            void appAlert(result?.error || fallbackMessage);
+        }
+    }, []);
 
     const handleRenameFolder = useCallback(async () => {
         const newName = normalizeDraftFileName(folderRenameTitle);
@@ -4385,9 +4394,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     className="fixed z-[1100] min-w-[160px]"
                     style={{
                         left: Math.min(folderContextMenu.x, window.innerWidth - 176),
-                        top: Math.min(folderContextMenu.y, window.innerHeight - 132),
+                        top: Math.min(folderContextMenu.y, window.innerHeight - 176),
                     }}
                 >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setFolderContextMenu((prev) => ({ ...prev, visible: false }));
+                            void handleShowInFolder(folderContextMenu.folderPath);
+                        }}
+                        className={getLiquidGlassMenuItemClassName()}
+                    >
+                        文件夹中打开
+                    </button>
+                    <LiquidGlassMenuSeparator />
                     <button
                         type="button"
                         onClick={() => {
@@ -4447,9 +4467,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     className="fixed z-[1100] min-w-[160px]"
                     style={{
                         left: Math.min(draftContextMenu.x, window.innerWidth - 176),
-                        top: Math.min(draftContextMenu.y, window.innerHeight - 132),
+                        top: Math.min(draftContextMenu.y, window.innerHeight - 176),
                     }}
                 >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setDraftContextMenu((prev) => ({ ...prev, visible: false }));
+                            void handleShowInFolder(draftContextMenu.filePath);
+                        }}
+                        className={getLiquidGlassMenuItemClassName()}
+                    >
+                        文件夹中打开
+                    </button>
+                    <LiquidGlassMenuSeparator />
                     <button
                         type="button"
                         onClick={() => {
