@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, AlertCircle, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -100,10 +100,6 @@ type RuntimeDiagnosticsSummary = {
             recent?: Array<Record<string, unknown>>;
         };
     };
-};
-
-type FeatureFlags = {
-    vectorRecommendation: boolean;
 };
 
 type AssistantDaemonStatus = {
@@ -3336,59 +3332,8 @@ export function ToolsSettingsSection({
     );
 }
 
-interface ExperimentalSettingsSectionProps {
-    flags: FeatureFlags;
-    updateFlag: (key: keyof FeatureFlags, value: boolean) => void;
-}
-
-export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalSettingsSectionProps) {
-    return (
-        <section className="space-y-6">
-            <div>
-                <h2 className="text-lg font-medium text-text-primary mb-2">实验性功能</h2>
-                <p className="text-xs text-text-tertiary">
-                    以下功能仍在开发和测试中，可能不稳定或影响性能。请谨慎开启。
-                </p>
-            </div>
-
-            <div className="space-y-4">
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-4">
-                            <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                                向量推荐
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600 font-medium">
-                                    Beta
-                                </span>
-                            </h3>
-                            <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
-                                在稿件编辑器的分栏视图中，根据当前稿件内容的向量相似度对知识库进行智能排序。
-                                开启后，与当前内容最相关的素材会优先显示。
-                            </p>
-                            <p className="text-[10px] text-text-tertiary mt-2 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                此功能会调用 Embedding API 计算向量，可能产生额外费用
-                            </p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => updateFlag('vectorRecommendation', !flags.vectorRecommendation)}
-                            className="ui-switch-track shrink-0"
-                            data-size="md"
-                            data-state={flags.vectorRecommendation ? 'on' : 'off'}
-                        >
-                            <div className="ui-switch-thumb" />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-        </section>
-    );
-}
-
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'memory' | 'experimental' | 'remote';
+    activeTab: 'general' | 'ai' | 'tools' | 'memory' | 'remote';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 

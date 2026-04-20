@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
 import clsx from 'clsx';
-import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
   AI_SOURCE_PRESETS,
   type AiSourcePreset,
@@ -65,7 +64,6 @@ import {
 } from '../../shared/redboxVideo';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
 import {
-  ExperimentalSettingsSection,
   GeneralSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
@@ -79,7 +77,7 @@ const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
 
-type SettingsTab = 'general' | 'ai' | 'tools' | 'experimental' | 'remote';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
@@ -276,7 +274,6 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
 
 export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const { flags, updateFlag } = useFeatureFlags();
   const [formData, setFormData] = useState({
     api_endpoint: '',
     api_key: '',
@@ -415,14 +412,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     general: false,
     ai: false,
     tools: false,
-    experimental: false,
     remote: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
     tools: false,
-    experimental: false,
     remote: false,
   });
 
@@ -2862,7 +2857,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
     { id: 'tools', label: '工具管理', icon: Wrench },
-    { id: 'experimental', label: '实验性功能', icon: FlaskConical },
   ] as const;
 
   return (
@@ -3775,14 +3769,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
-              />
-            )}
-
-            {/* Experimental Tab */}
-            {activeTab === 'experimental' && (
-              <ExperimentalSettingsSection
-                flags={flags}
-                updateFlag={updateFlag}
               />
             )}
 
