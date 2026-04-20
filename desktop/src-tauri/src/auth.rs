@@ -363,6 +363,27 @@ fn auth_state_snapshot_from_runtime(runtime: &AuthRuntimeState) -> AuthStateSnap
     }
 }
 
+fn points_refreshed_at_ms(points: Option<&Value>) -> Option<i64> {
+    points.and_then(|value| {
+        payload_field(value, "refreshedAtMs")
+            .and_then(parse_time_candidate_ms)
+            .or_else(|| payload_field(value, "refreshedAt").and_then(parse_time_candidate_ms))
+            .or_else(|| payload_field(value, "sourceUpdatedAt").and_then(parse_time_candidate_ms))
+    })
+}
+
+fn points_refresh_due(runtime: &AuthRuntimeState) -> bool {
+    const OFFICIAL_POINTS_BACKGROUND_REFRESH_INTERVAL_MS: i64 = 60_000;
+
+    match points_refreshed_at_ms(runtime.points.as_ref()) {
+        Some(refreshed_at) if refreshed_at > 0 => {
+            (now_ms() as i64).saturating_sub(refreshed_at)
+                >= OFFICIAL_POINTS_BACKGROUND_REFRESH_INTERVAL_MS
+        }
+        _ => runtime.session.is_some() || runtime.secrets.refresh_token.is_some(),
+    }
+}
+
 fn emit_auth_snapshot(app: &AppHandle, snapshot: &AuthStateSnapshot) {
     let _ = app.emit(AUTH_STATE_CHANGED_EVENT, snapshot.clone());
     let _ = app.emit(
@@ -757,20 +778,25 @@ pub(crate) fn mark_auth_logged_out(
 }
 
 pub(crate) fn should_run_background_refresh(state: &State<'_, AppState>) -> bool {
-    let Ok(snapshot) = auth_state_snapshot(state) else {
+    let Ok(should_refresh) = with_auth_runtime_mut(state, |runtime| {
+        let logged_in = runtime.session.is_some() || runtime.secrets.refresh_token.is_some();
+        if !logged_in || runtime.status == AuthStatus::ReauthRequired {
+            return false;
+        }
+        let now = now_ms() as i64;
+        if let Some(refresh_at) = runtime.next_refresh_at_ms {
+            if refresh_at <= now {
+                return true;
+            }
+        }
+        if runtime.status == AuthStatus::Restoring {
+            return true;
+        }
+        points_refresh_due(runtime)
+    }) else {
         return false;
     };
-    if !snapshot.logged_in {
-        return false;
-    }
-    let now = now_ms() as i64;
-    if let Some(refresh_at) = snapshot.next_refresh_at_ms {
-        return refresh_at <= now;
-    }
-    if snapshot.status == AuthStatus::Restoring {
-        return true;
-    }
-    false
+    should_refresh
 }
 
 pub(crate) fn initialize_auth_runtime(

@@ -5,7 +5,6 @@ import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
-import { appAlert } from './utils/appDialogs';
 import { uiTraceInteraction } from './utils/uiDebug';
 
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
@@ -208,6 +207,7 @@ function App() {
   const [startupMigration, setStartupMigration] = useState<StartupMigrationState | null>(null);
   const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
   const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
+  const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -233,19 +233,24 @@ function App() {
       const nextStatus = String((payload as { status?: string } | null | undefined)?.status || '');
       const prevStatus = lastAuthStatusRef.current;
       lastAuthStatusRef.current = nextStatus;
-      if (
-        mounted
-        && nextStatus === 'reauthRequired'
-        && prevStatus !== 'reauthRequired'
-      ) {
-        void appAlert('登录失效，请重新登录');
+      if (!mounted) {
+        return;
+      }
+      if (nextStatus === 'reauthRequired') {
+        setGlobalAuthNotice('当前账号登陆失效，请重新登陆。');
+        return;
+      }
+      if (prevStatus === 'reauthRequired') {
+        setGlobalAuthNotice(null);
       }
     };
 
     void window.ipcRenderer.auth.getState()
       .then((snapshot) => {
         if (!mounted) return;
-        lastAuthStatusRef.current = String((snapshot as { status?: string } | null | undefined)?.status || '');
+        const nextStatus = String((snapshot as { status?: string } | null | undefined)?.status || '');
+        lastAuthStatusRef.current = nextStatus;
+        setGlobalAuthNotice(nextStatus === 'reauthRequired' ? '当前账号登陆失效，请重新登陆。' : null);
       })
       .catch(() => {});
 
@@ -486,7 +491,12 @@ function App() {
 
   return (
     <>
-      <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={immersiveMode}>
+      <Layout
+        currentView={currentView}
+        onNavigate={setCurrentView}
+        immersiveMode={immersiveMode}
+        globalNotice={globalAuthNotice}
+      >
         {shouldRenderView(mountedViews, currentView, persistentViews, 'chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>

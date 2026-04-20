@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -14,6 +14,7 @@ interface LayoutProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
   immersiveMode?: ImmersiveMode;
+  globalNotice?: string | null;
 }
 
 const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
@@ -66,7 +67,7 @@ function readInitialSidebarCollapsed(): boolean {
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null }: LayoutProps) {
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -338,10 +339,19 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   return (
     <div
       className={clsx(
-        'flex h-screen w-full overflow-hidden text-text-primary',
+        'relative flex h-screen w-full overflow-hidden text-text-primary',
         immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
       )}
     >
+      {globalNotice && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-[80] -translate-x-1/2">
+          <div className="inline-flex items-center gap-2 rounded-full border border-red-200/80 bg-red-50/96 px-4 py-2 text-[12px] font-medium text-red-700 shadow-[0_12px_30px_-18px_rgba(220,38,38,0.55)] backdrop-blur">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+            <span className="whitespace-nowrap">{globalNotice}</span>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       {!immersiveMode && (
         <aside

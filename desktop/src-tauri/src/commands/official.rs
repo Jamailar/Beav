@@ -6,15 +6,16 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::{
     append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
-    normalize_base_url, normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
-    official_auth_token_from_settings, official_base_url_from_settings, official_fallback_products,
-    official_points_snapshot, official_response_items, official_settings_api_keys,
-    official_settings_call_records_list, official_settings_models, official_settings_orders,
-    official_settings_points, official_settings_session, official_settings_wechat_login,
-    official_sync_source_into_settings, official_unwrap_response_payload, open_payment_form,
-    payload_field, payload_string, run_official_public_json_request,
-    run_official_public_json_request_response, upsert_official_settings_session,
-    write_settings_json_array, write_settings_json_value, AppState, REDBOX_OFFICIAL_BASE_URL,
+    normalize_base_url, normalize_official_auth_session, now_iso, now_ms,
+    official_account_summary_local, official_auth_token_from_settings,
+    official_base_url_from_settings, official_fallback_products, official_points_snapshot,
+    official_response_items, official_settings_api_keys, official_settings_call_records_list,
+    official_settings_models, official_settings_orders, official_settings_points,
+    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
+    official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
+    run_official_public_json_request, run_official_public_json_request_response,
+    upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
+    AppState, REDBOX_OFFICIAL_BASE_URL,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
@@ -542,16 +543,11 @@ fn force_official_reauth(
     expected_generation: Option<u64>,
     source: &str,
 ) {
-    let mut settings = with_store(state, |store| Ok(store.settings.clone())).unwrap_or_else(|_| json!({}));
+    let mut settings =
+        with_store(state, |store| Ok(store.settings.clone())).unwrap_or_else(|_| json!({}));
     clear_official_auth_state(&mut settings);
-    let _ = apply_official_settings_update(
-        app,
-        state,
-        &settings,
-        source,
-        None,
-        expected_generation,
-    );
+    let _ =
+        apply_official_settings_update(app, state, &settings, source, None, expected_generation);
     let _ = auth::mark_auth_reauth_required(app, state, "登录失效，请重新登录");
 }
 
@@ -587,7 +583,11 @@ pub(crate) fn refresh_official_auth_for_ai_request(
             let refreshed_token = official_auth_token_from_settings(&latest_settings)
                 .filter(|value| !value.trim().is_empty());
             if refreshed_token.is_some() {
-                log_official_auth(state, "ai-401-refresh-success", format!("url={request_url}"));
+                log_official_auth(
+                    state,
+                    "ai-401-refresh-success",
+                    format!("url={request_url}"),
+                );
                 Ok(refreshed_token)
             } else {
                 log_official_auth(
@@ -1269,12 +1269,27 @@ pub(crate) fn bootstrap_official_auth_session(
     let refreshed = match refresh_official_cached_data(app, state) {
         Ok(payload) => payload,
         Err(error) if session.is_some() || snapshot.logged_in => {
-            let _ = auth::mark_auth_degraded(
-                app,
-                state,
-                error.clone(),
-                auth::classify_auth_error(&error),
-            );
+            let kind = auth::classify_auth_error(&error);
+            if kind == auth::AuthErrorKind::ReauthRequired {
+                let auth_state = auth::auth_state_snapshot(state).unwrap_or_default();
+                return Ok(json!({
+                    "success": true,
+                    "loggedIn": false,
+                    "session": Value::Null,
+                    "data": {
+                        "user": Value::Null,
+                        "points": Value::Null,
+                        "models": Vec::<Value>::new(),
+                        "records": Vec::<Value>::new(),
+                        "refreshedAt": now_iso(),
+                        "stale": true,
+                        "error": error,
+                    },
+                    "authState": auth_state,
+                    "reason": reason,
+                }));
+            }
+            let _ = auth::mark_auth_degraded(app, state, error.clone(), kind);
             json!({
                 "user": cached_official_user(&settings_snapshot),
                 "points": cached_official_points(&settings_snapshot),
