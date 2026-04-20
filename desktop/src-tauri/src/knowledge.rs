@@ -372,6 +372,245 @@ fn materialize_note_image_assets(
     Ok(saved)
 }
 
+fn decode_embedded_js_string(raw: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = raw.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let current = chars[index];
+        if current != '\\' {
+            out.push(current);
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if index >= chars.len() {
+            out.push('\\');
+            break;
+        }
+        match chars[index] {
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '\'' => out.push('\''),
+            '/' => out.push('/'),
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'u' => {
+                if index + 4 < chars.len() {
+                    let hex: String = chars[index + 1..=index + 4].iter().collect();
+                    if let Ok(value) = u32::from_str_radix(&hex, 16) {
+                        if let Some(decoded) = char::from_u32(value) {
+                            out.push(decoded);
+                            index += 4;
+                        }
+                    }
+                }
+            }
+            other => out.push(other),
+        }
+        index += 1;
+    }
+    out
+}
+
+fn extract_html_attribute_near(html: &str, anchor: &str, attribute: &str) -> Option<String> {
+    let anchor_index = html.find(anchor)?;
+    let slice = &html[anchor_index..html.len().min(anchor_index + 1200)];
+    let attribute_patterns = [
+        format!("{attribute}=\""),
+        format!("{attribute}='"),
+        format!("{attribute}=&quot;"),
+    ];
+    for pattern in attribute_patterns {
+        let Some(start) = slice.find(&pattern) else {
+            continue;
+        };
+        let value_start = start + pattern.len();
+        let rest = &slice[value_start..];
+        let terminator = if pattern.ends_with("&quot;") {
+            "&quot;"
+        } else if pattern.ends_with('\'') {
+            "'"
+        } else {
+            "\""
+        };
+        if let Some(end) = rest.find(terminator) {
+            let value = rest[..end].trim();
+            if !value.is_empty() {
+                return Some(decode_embedded_js_string(value));
+            }
+        }
+    }
+    None
+}
+
+fn extract_css_url_near(html: &str, anchor: &str) -> Option<String> {
+    let anchor_index = html.find(anchor)?;
+    let slice = &html[anchor_index..html.len().min(anchor_index + 1600)];
+    let url_index = slice.find("url(")?;
+    let rest = &slice[url_index + 4..];
+    let end = rest.find(')')?;
+    let raw = rest[..end]
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace("&quot;", "")
+        .trim()
+        .to_string();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(decode_embedded_js_string(&raw))
+    }
+}
+
+fn extract_json_string_values(html: &str, key: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    let pattern = format!("\"{key}\":\"");
+    let mut offset = 0usize;
+    while offset < html.len() && values.len() < limit {
+        let Some(relative_start) = html[offset..].find(&pattern) else {
+            break;
+        };
+        let start = offset + relative_start + pattern.len();
+        let bytes = html.as_bytes();
+        let mut index = start;
+        let mut escaped = false;
+        while index < html.len() {
+            let byte = bytes[index];
+            if escaped {
+                escaped = false;
+                index += 1;
+                continue;
+            }
+            if byte == b'\\' {
+                escaped = true;
+                index += 1;
+                continue;
+            }
+            if byte == b'"' {
+                let candidate = decode_embedded_js_string(&html[start..index])
+                    .trim()
+                    .to_string();
+                if !candidate.is_empty() {
+                    values.push(candidate);
+                }
+                index += 1;
+                break;
+            }
+            index += 1;
+        }
+        offset = index.max(start);
+    }
+    values
+}
+
+fn normalize_xiaohongshu_asset_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().replace("&amp;", "&");
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Some(trimmed)
+    } else if trimmed.starts_with("//") {
+        Some(format!("https:{trimmed}"))
+    } else {
+        None
+    }
+}
+
+fn fetch_xiaohongshu_note_assets(source_url: &str) -> Result<KnowledgeEntryAssetsInput, String> {
+    let html_bytes = run_curl_bytes("GET", source_url, None, &[], None)?;
+    let html = String::from_utf8_lossy(&html_bytes);
+
+    let video_url = extract_json_string_values(&html, "masterUrl", 4)
+        .into_iter()
+        .find_map(|value| normalize_xiaohongshu_asset_url(&value))
+        .or_else(|| {
+            extract_html_attribute_near(&html, "property=\"og:video\"", "content")
+                .and_then(|value| normalize_xiaohongshu_asset_url(&value))
+        });
+
+    let mut image_urls = extract_json_string_values(&html, "urlDefault", 8)
+        .into_iter()
+        .filter_map(|value| normalize_xiaohongshu_asset_url(&value))
+        .collect::<Vec<_>>();
+    if image_urls.is_empty() {
+        image_urls = extract_json_string_values(&html, "urlPre", 8)
+            .into_iter()
+            .filter_map(|value| normalize_xiaohongshu_asset_url(&value))
+            .collect::<Vec<_>>();
+    }
+
+    let cover_url = extract_css_url_near(&html, "xgplayer-poster")
+        .and_then(|value| normalize_xiaohongshu_asset_url(&value))
+        .or_else(|| image_urls.first().cloned())
+        .or_else(|| {
+            extract_html_attribute_near(&html, "property=\"og:image\"", "content")
+                .and_then(|value| normalize_xiaohongshu_asset_url(&value))
+        });
+
+    Ok(KnowledgeEntryAssetsInput {
+        cover_url,
+        image_urls,
+        video_url,
+        thumbnail_url: None,
+    })
+}
+
+fn merge_missing_entry_assets(
+    current: &KnowledgeEntryAssetsInput,
+    fallback: &KnowledgeEntryAssetsInput,
+) -> KnowledgeEntryAssetsInput {
+    KnowledgeEntryAssetsInput {
+        cover_url: normalize_string(current.cover_url.clone())
+            .or_else(|| fallback.cover_url.clone()),
+        image_urls: if normalize_vec(current.image_urls.clone()).is_empty() {
+            fallback.image_urls.clone()
+        } else {
+            current.image_urls.clone()
+        },
+        video_url: normalize_string(current.video_url.clone())
+            .or_else(|| fallback.video_url.clone()),
+        thumbnail_url: normalize_string(current.thumbnail_url.clone())
+            .or_else(|| fallback.thumbnail_url.clone()),
+    }
+}
+
+fn maybe_backfill_xiaohongshu_assets(
+    normalized_kind: &str,
+    source_domain: Option<&str>,
+    source_link: Option<&str>,
+    assets: &KnowledgeEntryAssetsInput,
+) -> KnowledgeEntryAssetsInput {
+    if !matches!(normalized_kind, "xhs-note" | "xhs-video") {
+        return assets.clone();
+    }
+    let is_xiaohongshu = source_domain
+        .map(|value| value.contains("xiaohongshu.com"))
+        .unwrap_or(false)
+        || source_link
+            .map(|value| value.contains("xiaohongshu.com/"))
+            .unwrap_or(false);
+    if !is_xiaohongshu {
+        return assets.clone();
+    }
+    let has_cover = normalize_string(assets.cover_url.clone()).is_some()
+        || !normalize_vec(assets.image_urls.clone()).is_empty();
+    let has_video = normalize_string(assets.video_url.clone()).is_some();
+    if has_cover && (normalized_kind != "xhs-video" || has_video) {
+        return assets.clone();
+    }
+    let Some(source_url) = source_link else {
+        return assets.clone();
+    };
+    match fetch_xiaohongshu_note_assets(source_url) {
+        Ok(fallback) => merge_missing_entry_assets(assets, &fallback),
+        Err(_) => assets.clone(),
+    }
+}
+
 fn ensure_supported_space(
     state: &State<'_, AppState>,
     requested_space_id: Option<&str>,
@@ -1053,6 +1292,12 @@ fn ingest_note_entry(
     let title = derive_note_title(request, &normalized_kind);
     let source_link = source_link_from_input(&request.source);
     let source_domain = source_domain_from_input(&request.source);
+    let resolved_assets = maybe_backfill_xiaohongshu_assets(
+        &normalized_kind,
+        source_domain.as_deref(),
+        source_link.as_deref(),
+        &request.assets,
+    );
     let entry_id = existing_entry_id
         .clone()
         .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
@@ -1071,7 +1316,7 @@ fn ingest_note_entry(
     }
 
     let stats = request.content.stats.clone().unwrap_or_default();
-    let image_sources = normalize_vec(request.assets.image_urls.clone());
+    let image_sources = normalize_vec(resolved_assets.image_urls.clone());
     let images = materialize_note_image_assets(&entry_dir, &image_sources)?;
     let tag_source_text = [
         request.content.text.clone(),
@@ -1084,7 +1329,7 @@ fn ingest_note_entry(
     .collect::<Vec<_>>()
     .join("\n");
     let merged_tags = merge_tags_with_text(request.content.tags.clone(), &tag_source_text);
-    let cover_source = normalize_string(request.assets.cover_url.clone());
+    let cover_source = normalize_string(resolved_assets.cover_url.clone());
     let cover_url = if let Some(source) = cover_source.clone() {
         Some(
             image_sources
@@ -1099,7 +1344,7 @@ fn ingest_note_entry(
     } else {
         images.first().cloned()
     };
-    let video_source = normalize_string(request.assets.video_url.clone());
+    let video_source = normalize_string(resolved_assets.video_url.clone());
     let video_asset = video_source
         .as_ref()
         .map(|source| materialize_note_asset_source(&entry_dir, source, ".", "video", "video"))
@@ -1878,4 +2123,67 @@ pub(crate) fn persist_note_transcript(
     );
     let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
     Ok(json!({ "success": true, "transcript": transcript, "legacyFallback": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        decode_embedded_js_string, extract_css_url_near, extract_html_attribute_near,
+        extract_json_string_values, maybe_backfill_xiaohongshu_assets, KnowledgeEntryAssetsInput,
+    };
+
+    #[test]
+    fn extracts_xiaohongshu_embedded_urls() {
+        let html = r#"
+            <meta property="og:video" content="https://sns-video-al.xhscdn.com/stream/demo.mp4?sign=1&amp;t=2">
+            <div class="xgplayer-poster" style='background-image: url("http://sns-webpic-qc.xhscdn.com/cover.webp");'></div>
+            <script>
+            window.__INITIAL_STATE__={"note":{"video":{"media":{"stream":{"h264":[{"masterUrl":"http:\u002F\u002Fsns-video-al.xhscdn.com\u002Fstream\u002F1.mp4"}]}},"imageList":[{"urlDefault":"http:\u002F\u002Fsns-webpic-qc.xhscdn.com\u002Fcover-default.webp"}]}}}
+            </script>
+        "#;
+
+        assert_eq!(
+            extract_html_attribute_near(html, "property=\"og:video\"", "content").as_deref(),
+            Some("https://sns-video-al.xhscdn.com/stream/demo.mp4?sign=1&amp;t=2")
+        );
+        assert_eq!(
+            extract_css_url_near(html, "xgplayer-poster").as_deref(),
+            Some("http://sns-webpic-qc.xhscdn.com/cover.webp")
+        );
+        assert_eq!(
+            extract_json_string_values(html, "masterUrl", 2),
+            vec!["http://sns-video-al.xhscdn.com/stream/1.mp4".to_string()]
+        );
+        assert_eq!(
+            extract_json_string_values(html, "urlDefault", 2),
+            vec!["http://sns-webpic-qc.xhscdn.com/cover-default.webp".to_string()]
+        );
+    }
+
+    #[test]
+    fn decodes_js_unicode_escapes() {
+        assert_eq!(
+            decode_embedded_js_string(r#"http:\u002F\u002Fexample.com\u002Fvideo.mp4"#),
+            "http://example.com/video.mp4"
+        );
+    }
+
+    #[test]
+    fn keeps_existing_assets_when_already_complete() {
+        let assets = KnowledgeEntryAssetsInput {
+            cover_url: Some("https://example.com/cover.jpg".to_string()),
+            image_urls: vec!["https://example.com/cover.jpg".to_string()],
+            video_url: Some("https://example.com/video.mp4".to_string()),
+            thumbnail_url: None,
+        };
+        let resolved = maybe_backfill_xiaohongshu_assets(
+            "xhs-video",
+            Some("www.xiaohongshu.com"),
+            Some("https://www.xiaohongshu.com/explore/abc"),
+            &assets,
+        );
+        assert_eq!(resolved.cover_url, assets.cover_url);
+        assert_eq!(resolved.image_urls, assets.image_urls);
+        assert_eq!(resolved.video_url, assets.video_url);
+    }
 }
