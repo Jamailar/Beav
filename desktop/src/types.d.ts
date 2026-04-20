@@ -837,9 +837,9 @@ declare global {
       clipboardReadText: () => Promise<string>;
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
-        getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; error?: string }>;
-        prepare: () => Promise<{ success: boolean; path: string; alreadyPrepared?: boolean; error?: string }>;
-        openDir: () => Promise<{ success: boolean; path: string; error?: string }>;
+        getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; pluginPath?: string; checkedPaths?: string[]; error?: string }>;
+        prepare: () => Promise<{ success: boolean; path: string; pluginPath?: string; bundledPath?: string; alreadyPrepared?: boolean; error?: string }>;
+        openDir: () => Promise<{ success: boolean; path: string; pluginPath?: string; error?: string }>;
       };
       fetchModels: (config: { apiKey: string, baseURL: string, presetId?: string, protocol?: 'openai' | 'anthropic' | 'gemini', purpose?: 'chat' | 'image' }) => Promise<Array<{ id: string; capabilities?: Array<'chat' | 'image' | 'video' | 'audio' | 'transcription' | 'embedding'> }>>;
       aiRoles: {

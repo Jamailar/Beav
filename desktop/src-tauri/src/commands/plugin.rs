@@ -116,14 +116,16 @@ pub fn handle_plugin_channel(
                 let export_path = browser_plugin_export_root(state)?;
                 let prepared_path = browser_plugin_prepared_dir(&export_path);
                 migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
-                if !prepared_path.join("manifest.json").exists() {
+                let already_prepared = prepared_path.join("manifest.json").exists();
+                if !already_prepared {
                     copy_dir_recursive(&bundled_path, &prepared_path)?;
                 }
                 Ok(json!({
                     "success": true,
                     "path": export_path.display().to_string(),
                     "pluginPath": prepared_path.display().to_string(),
-                    "alreadyPrepared": prepared_path.join("manifest.json").exists()
+                    "bundledPath": bundled_path.display().to_string(),
+                    "alreadyPrepared": already_prepared
                 }))
             }
             "plugin:open-browser-extension-dir" => {
