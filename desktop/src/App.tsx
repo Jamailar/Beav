@@ -5,6 +5,7 @@ import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
+import { appAlert } from './utils/appDialogs';
 import { uiTraceInteraction } from './utils/uiDebug';
 
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
@@ -214,6 +215,7 @@ function App() {
   const viewHistoryRef = useRef<ViewType[]>(['manuscripts']);
   const capturePromptOpenRef = useRef(false);
   const captureStatusRef = useRef<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const lastAuthStatusRef = useRef('');
 
   useEffect(() => {
     viewHistoryRef.current = [...viewHistoryRef.current.filter((item) => item !== currentView), currentView];
@@ -221,6 +223,38 @@ function App() {
     nextMounted.add(currentView);
     setMountedViews(nextMounted);
   }, [currentView]);
+
+  useEffect(() => {
+    let mounted = true;
+    const handleAuthStateChanged = (event: { payload?: { status?: string } } | { status?: string } | null | undefined) => {
+      const payload = (event && typeof event === 'object' && 'payload' in event)
+        ? (event as { payload?: { status?: string } }).payload
+        : (event as { status?: string } | null | undefined);
+      const nextStatus = String((payload as { status?: string } | null | undefined)?.status || '');
+      const prevStatus = lastAuthStatusRef.current;
+      lastAuthStatusRef.current = nextStatus;
+      if (
+        mounted
+        && nextStatus === 'reauthRequired'
+        && prevStatus !== 'reauthRequired'
+      ) {
+        void appAlert('登录失效，请重新登录');
+      }
+    };
+
+    void window.ipcRenderer.auth.getState()
+      .then((snapshot) => {
+        if (!mounted) return;
+        lastAuthStatusRef.current = String((snapshot as { status?: string } | null | undefined)?.status || '');
+      })
+      .catch(() => {});
+
+    window.ipcRenderer.auth.onStateChanged(handleAuthStateChanged);
+    return () => {
+      mounted = false;
+      window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
+    };
+  }, []);
 
   useEffect(() => {
     if (currentView !== 'manuscripts' && immersiveMode) {

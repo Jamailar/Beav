@@ -703,6 +703,7 @@ struct AppState {
 }
 
 static GLOBAL_DEBUG_STORE: OnceLock<Arc<Mutex<AppStore>>> = OnceLock::new();
+static GLOBAL_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
 struct AssistantRuntime {
     stop: Arc<AtomicBool>,
@@ -1886,12 +1887,58 @@ fn register_global_debug_store(store: Arc<Mutex<AppStore>>) {
     let _ = GLOBAL_DEBUG_STORE.set(store);
 }
 
+fn register_global_app_handle(app: AppHandle) {
+    let _ = GLOBAL_APP_HANDLE.set(app);
+}
+
 pub(crate) fn append_debug_trace_global(line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
     eprintln!("{}", line);
     if let Some(store) = GLOBAL_DEBUG_STORE.get() {
         write_debug_line_to_store(store, &line);
     }
+}
+
+pub(crate) fn try_refresh_official_auth_for_ai_request(
+    request_url: &str,
+    api_key: Option<&str>,
+    reason: &str,
+) -> Result<Option<String>, String> {
+    let Some(app) = GLOBAL_APP_HANDLE.get().cloned() else {
+        return Ok(None);
+    };
+    let state = app.state::<AppState>();
+    commands::official::refresh_official_auth_for_ai_request(
+        &app,
+        &state,
+        request_url,
+        api_key,
+        reason,
+    )
+}
+
+fn build_chat_error_payload(error: &str, session_id: Option<String>) -> Value {
+    let normalized = error.trim();
+    let lower = normalized.to_lowercase();
+    let login_expired = normalized.contains("登录失效")
+        || normalized.contains("重新登录")
+        || lower.contains("invalid access token");
+    json!({
+        "message": if login_expired {
+            "登录失效，请重新登录"
+        } else {
+            normalized
+        },
+        "raw": if login_expired && normalized != "登录失效，请重新登录" {
+            normalized
+        } else {
+            ""
+        },
+        "category": if login_expired { "auth" } else { "execution" },
+        "statusCode": if login_expired || normalized.contains("HTTP 401") { 401 } else { 0 },
+        "errorCode": if login_expired || normalized.contains("HTTP 401") { "401" } else { "" },
+        "sessionId": session_id,
+    })
 }
 
 pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
@@ -3806,6 +3853,7 @@ fn run_openai_streaming_chat_completion(
     config: &ResolvedChatConfig,
     body: &Value,
     max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
 ) -> Result<StreamingChatCompletion, String> {
     let mut child = spawn_curl_json_process(
         "POST",
@@ -4040,6 +4088,26 @@ fn run_openai_streaming_chat_completion(
     }
 
     if let Some(status_code) = http_status_code.filter(|code| !(200..300).contains(code)) {
+        if allow_official_reauth_retry && status_code == 401 {
+            if let Some(refreshed_api_key) = try_refresh_official_auth_for_ai_request(
+                &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+                config.api_key.as_deref(),
+                "streaming-http-401",
+            )? {
+                let mut refreshed_config = config.clone();
+                refreshed_config.api_key = Some(refreshed_api_key);
+                return run_openai_streaming_chat_completion(
+                    app,
+                    state,
+                    session_id,
+                    runtime_mode,
+                    &refreshed_config,
+                    body,
+                    max_time_seconds,
+                    false,
+                );
+            }
+        }
         let raw_body = raw_response_lines.join("\n");
         let details = http_error_details_from_text(status_code, &raw_body);
         append_debug_trace_state(
@@ -5634,6 +5702,7 @@ fn run_openai_interactive_chat_runtime(
                 config,
                 &body,
                 None,
+                true,
             ) {
                 Ok(value) => value,
                 Err(error) => {
@@ -6109,6 +6178,7 @@ fn run_openai_prompted_streaming_fallback(
         config,
         &body,
         Some(90),
+        true,
     )?;
     let final_content = streamed.content;
     if final_content.trim().is_empty() {
@@ -6621,11 +6691,7 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
                     session_id.as_deref(),
                     "chat.error",
                     "chat execution failed",
-                    Some(json!({
-                        "message": error,
-                        "category": "execution",
-                        "sessionId": session_id,
-                    })),
+                    Some(build_chat_error_payload(&error, session_id.clone())),
                 );
             }
         });
@@ -6756,6 +6822,7 @@ fn main() {
             commands::redclaw::redclaw_runner_status
         ])
         .setup(|app| {
+            register_global_app_handle(app.handle().clone());
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
             if let Err(error) = knowledge_index::initialize(app.handle(), &state) {

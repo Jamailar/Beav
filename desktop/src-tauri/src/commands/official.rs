@@ -6,7 +6,7 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::{
     append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
-    normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
+    normalize_base_url, normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
     official_auth_token_from_settings, official_base_url_from_settings, official_fallback_products,
     official_points_snapshot, official_response_items, official_settings_api_keys,
     official_settings_call_records_list, official_settings_models, official_settings_orders,
@@ -189,6 +189,21 @@ fn official_session_recoverable(settings: &Value) -> bool {
 
 fn official_session_logged_in(settings: &Value) -> bool {
     session_access_token(settings).is_some() || official_session_recoverable(settings)
+}
+
+fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&str>) -> bool {
+    let official_base_url = normalize_base_url(&official_base_url_from_settings(settings));
+    let request_url = normalize_base_url(request_url);
+    if official_base_url.is_empty() || request_url.is_empty() {
+        return false;
+    }
+    if !request_url.starts_with(&official_base_url) {
+        return false;
+    }
+    let official_token = official_auth_token_from_settings(settings).unwrap_or_default();
+    let provided_token = api_key.unwrap_or_default().trim();
+    !official_token.trim().is_empty()
+        && (provided_token.is_empty() || provided_token == official_token)
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
@@ -518,6 +533,81 @@ fn clear_official_auth_state(settings: &mut Value) {
         object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
         object.insert("redbox_auth_wechat_login_json".to_string(), json!(""));
         object.insert("redbox_official_models_json".to_string(), json!("[]"));
+    }
+}
+
+fn force_official_reauth(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    expected_generation: Option<u64>,
+    source: &str,
+) {
+    let mut settings = with_store(state, |store| Ok(store.settings.clone())).unwrap_or_else(|_| json!({}));
+    clear_official_auth_state(&mut settings);
+    let _ = apply_official_settings_update(
+        app,
+        state,
+        &settings,
+        source,
+        None,
+        expected_generation,
+    );
+    let _ = auth::mark_auth_reauth_required(app, state, "登录失效，请重新登录");
+}
+
+pub(crate) fn refresh_official_auth_for_ai_request(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    request_url: &str,
+    api_key: Option<&str>,
+    reason: &str,
+) -> Result<Option<String>, String> {
+    let generation = auth::auth_generation(state)?;
+    let mut settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    if !is_official_ai_request(&settings, request_url, api_key) {
+        return Ok(None);
+    }
+
+    log_official_auth(
+        state,
+        "ai-401",
+        format!("reason={reason} url={request_url} attempting token refresh"),
+    );
+
+    match refresh_official_auth_session_with_lock(
+        app,
+        state,
+        &mut settings,
+        true,
+        "ai-401",
+        Some(generation),
+    ) {
+        Ok(_) => {
+            let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
+            let refreshed_token = official_auth_token_from_settings(&latest_settings)
+                .filter(|value| !value.trim().is_empty());
+            if refreshed_token.is_some() {
+                log_official_auth(state, "ai-401-refresh-success", format!("url={request_url}"));
+                Ok(refreshed_token)
+            } else {
+                log_official_auth(
+                    state,
+                    "ai-401-refresh-missing-token",
+                    format!("url={request_url}"),
+                );
+                force_official_reauth(app, state, Some(generation), "official-ai-reauth");
+                Err("登录失效，请重新登录".to_string())
+            }
+        }
+        Err(error) => {
+            log_official_auth(
+                state,
+                "ai-401-refresh-failed",
+                format!("url={request_url} error={error}"),
+            );
+            force_official_reauth(app, state, Some(generation), "official-ai-reauth");
+            Err("登录失效，请重新登录".to_string())
+        }
     }
 }
 

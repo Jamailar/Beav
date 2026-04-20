@@ -234,6 +234,26 @@ pub(crate) fn run_curl_json_response(
     body: Option<Value>,
     max_time_seconds: Option<u64>,
 ) -> Result<HttpJsonResponse, String> {
+    run_curl_json_response_inner(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body,
+        max_time_seconds,
+        true,
+    )
+}
+
+fn run_curl_json_response_inner(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+) -> Result<HttpJsonResponse, String> {
     let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = build_curl_json_command(
         method,
@@ -294,10 +314,26 @@ pub(crate) fn run_curl_json_response(
 
     let parsed = serde_json::from_str(normalized_body)
         .map_err(|error| format!("Invalid JSON response: {error}"))?;
-    Ok(HttpJsonResponse {
+    let response = HttpJsonResponse {
         status,
         body: parsed,
-    })
+    };
+    if allow_official_reauth_retry && response.status == 401 {
+        if let Some(refreshed_api_key) =
+            crate::try_refresh_official_auth_for_ai_request(url, api_key, "json-http-401")?
+        {
+            return run_curl_json_response_inner(
+                method,
+                url,
+                Some(refreshed_api_key.as_str()),
+                extra_headers,
+                body,
+                max_time_seconds,
+                false,
+            );
+        }
+    }
+    Ok(response)
 }
 
 pub(crate) fn run_curl_json(
