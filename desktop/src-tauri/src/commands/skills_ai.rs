@@ -1,7 +1,8 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    build_market_skill_record, build_user_skill_record, compute_skill_discovery_fingerprint,
-    invoke_skill, skill_catalog_changed, skills_catalog_list_value, SkillInvokeRequest,
+    build_market_file_skill_record, build_workspace_skill_record, compute_skill_discovery_fingerprint,
+    invoke_skill, refresh_skill_store_catalog, resolve_skill_file_path, skill_catalog_changed,
+    skills_catalog_list_value, write_skill_record_to_path, SkillInvokeRequest,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -83,6 +84,7 @@ pub fn handle_skills_ai_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "skills:list" => {
+                let _ = refresh_skill_store_catalog(state);
                 let include_body = payload
                     .get("includeBody")
                     .and_then(Value::as_bool)
@@ -178,32 +180,46 @@ pub fn handle_skills_ai_channel(
                 if name.is_empty() {
                     return Ok(json!({ "success": false, "error": "技能名称不能为空" }));
                 }
-                let created = with_store_mut(state, |store| {
-                    let item = build_user_skill_record(&name);
-                    store.skills.push(item.clone());
-                    Ok(item)
-                })?;
+                let workspace = workspace_root(state).ok();
+                let created = if workspace.is_some() {
+                    build_workspace_skill_record(&name)
+                } else {
+                    crate::skills::build_user_skill_record(&name)
+                };
+                let Some(path) = resolve_skill_file_path(&created, workspace.as_deref()) else {
+                    return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
+                };
+                write_skill_record_to_path(&created, &path)?;
+                let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                Ok(json!({ "success": true, "location": created.location }))
+                Ok(json!({
+                    "success": true,
+                    "location": created.location,
+                    "path": path.display().to_string()
+                }))
             }
             "skills:save" => {
                 let location = payload_string(payload, "location").unwrap_or_default();
                 let content = payload_string(payload, "content").unwrap_or_default();
-                with_store_mut(state, |store| {
-                    let Some(skill) = store
+                let workspace = workspace_root(state).ok();
+                let existing = with_store(state, |store| {
+                    Ok(store
                         .skills
-                        .iter_mut()
+                        .iter()
                         .find(|item| item.location == location)
-                    else {
-                        return Ok(json!({ "success": false, "error": "技能不存在" }));
-                    };
-                    skill.body = content;
-                    Ok(json!({ "success": true }))
-                })
-                .map(|value| {
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                    value
-                })
+                        .cloned())
+                })?;
+                let Some(mut skill) = existing else {
+                    return Ok(json!({ "success": false, "error": "技能不存在" }));
+                };
+                skill.body = content;
+                let Some(path) = resolve_skill_file_path(&skill, workspace.as_deref()) else {
+                    return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
+                };
+                write_skill_record_to_path(&skill, &path)?;
+                let _ = refresh_skill_store_catalog(state);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                Ok(json!({ "success": true, "path": path.display().to_string() }))
             }
             "skills:disable" | "skills:enable" => {
                 let name = payload_string(payload, "name").unwrap_or_default();
@@ -225,13 +241,19 @@ pub fn handle_skills_ai_channel(
                 if slug.is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少技能 slug" }));
                 }
-                let created = with_store_mut(state, |store| {
-                    let item = build_market_skill_record(&slug);
-                    store.skills.push(item);
-                    Ok(json!({ "success": true, "displayName": slug }))
-                })?;
+                let created = build_market_file_skill_record(&slug);
+                let Some(path) = resolve_skill_file_path(&created, None) else {
+                    return Ok(json!({ "success": false, "error": "无法解析技能文件路径" }));
+                };
+                write_skill_record_to_path(&created, &path)?;
+                let _ = refresh_skill_store_catalog(state);
                 let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
-                Ok(created)
+                Ok(json!({
+                    "success": true,
+                    "displayName": slug,
+                    "location": created.location,
+                    "path": path.display().to_string()
+                }))
             }
             "ai:roles:list" => Ok(json!([
                 {

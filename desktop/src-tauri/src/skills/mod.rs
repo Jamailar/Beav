@@ -18,6 +18,8 @@ mod prompt;
 mod runtime;
 #[path = "state.rs"]
 mod state;
+#[path = "store_sync.rs"]
+mod store_sync;
 #[path = "watcher.rs"]
 mod watcher;
 
@@ -31,4 +33,5 @@ pub use permissions::*;
 pub use prompt::*;
 pub use runtime::*;
 pub use state::*;
+pub use store_sync::*;
 pub use watcher::*;

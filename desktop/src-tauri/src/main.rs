@@ -6991,6 +6991,9 @@ fn main() {
             ) {
                 eprintln!("[RedBox assistant daemon restore] {error}");
             }
+            if let Err(error) = skills::refresh_skill_store_catalog(&state) {
+                eprintln!("[RedBox skill catalog refresh] {error}");
+            }
             if let Err(error) =
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
             {
