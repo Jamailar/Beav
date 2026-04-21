@@ -42,12 +42,20 @@ function extractUrlValue(raw: string): string | null {
   return source;
 }
 
+function normalizeSvgDataUrlMime(source: string): string {
+  const raw = String(source || '').trim();
+  if (!/^data:image\/svg(?=;|,)/i.test(raw)) {
+    return raw;
+  }
+  return raw.replace(/^data:image\/svg(?=;|,)/i, 'data:image/svg+xml');
+}
+
 function serializeRichpostHtml(doc: Document): string {
   return `<!doctype html>\n${doc.documentElement.outerHTML}`;
 }
 
 function normalizeRichpostAssetUrl(source: string): string {
-  const raw = String(source || '').trim();
+  const raw = normalizeSvgDataUrlMime(source);
   if (!raw || raw === 'none') return '';
   return resolveAssetUrl(raw) || raw;
 }

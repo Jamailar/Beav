@@ -1385,11 +1385,12 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
         .unwrap_or("")
         .to_lowercase();
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" => (
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => (
             format!("image/{}", if ext == "jpg" { "jpeg" } else { ext.as_str() }),
             "image".to_string(),
             true,
         ),
+        "svg" => ("image/svg+xml".to_string(), "image".to_string(), true),
         "mp3" | "wav" | "m4a" | "aac" | "ogg" => ("audio/*".to_string(), "audio".to_string(), true),
         "mp4" | "mov" | "mkv" | "avi" | "webm" => {
             ("video/*".to_string(), "video".to_string(), false)
@@ -1402,6 +1403,20 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
             "binary".to_string(),
             false,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::guess_mime_and_kind;
+    use std::path::Path;
+
+    #[test]
+    fn guess_mime_and_kind_uses_svg_xml_mime() {
+        let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(Path::new("cover.svg"));
+        assert_eq!(mime_type, "image/svg+xml");
+        assert_eq!(kind, "image");
+        assert!(direct_upload_eligible);
     }
 }
 
