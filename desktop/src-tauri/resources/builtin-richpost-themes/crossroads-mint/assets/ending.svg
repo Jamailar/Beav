@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="896" height="1200" viewBox="0 0 896 1200" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="82" y1="58" x2="806" y2="1148" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5AACE4"/>
+      <stop offset="0.54" stop-color="#50C6D8"/>
+      <stop offset="1" stop-color="#68D6BA"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="146" y1="160" x2="748" y2="1038" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EDF8F9" stop-opacity="0.97"/>
+      <stop offset="1" stop-color="#DBEDF3" stop-opacity="0.95"/>
+    </linearGradient>
+    <radialGradient id="mist" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(462 612) rotate(90) scale(508 424)">
+      <stop stop-color="#F0FDFC" stop-opacity="0.52"/>
+      <stop offset="1" stop-color="#F0FDFC" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="24" y="58" width="848" height="1084" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feColorMatrix values="0 0 0 0 0.101961 0 0 0 0 0.486275 0 0 0 0 0.654902 0 0 0 0.22 0"/>
+      <feBlend in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="896" height="1200" fill="url(#bg)"/>
+  <rect width="896" height="1200" fill="url(#mist)"/>
+  <circle cx="116" cy="1080" r="146" fill="#44A2F8" fill-opacity="0.23"/>
+  <circle cx="796" cy="1096" r="166" fill="#97EBDD" fill-opacity="0.18"/>
+  <g filter="url(#shadow)">
+    <rect x="78" y="104" width="740" height="988" rx="42" fill="url(#paper)"/>
+    <rect x="78.75" y="104.75" width="738.5" height="986.5" rx="41.25" stroke="#F8FEFE" stroke-opacity="0.72" stroke-width="1.5"/>
+  </g>
+  <ellipse cx="448" cy="360" rx="236" ry="102" fill="#F8FFFE" fill-opacity="0.28"/>
+  <ellipse cx="448" cy="884" rx="250" ry="114" fill="#D7EEF1" fill-opacity="0.44"/>
+  <rect x="178" y="868" width="12" height="88" rx="6" fill="#2A925C" fill-opacity="0.86"/>
+  <rect x="204" y="900" width="228" height="18" rx="9" fill="#F0E794" fill-opacity="0.6"/>
+  <g opacity="0.88">
+    <circle cx="710" cy="72" r="24" fill="#16372E"/>
+    <circle cx="710" cy="72" r="23.25" stroke="#D7FFF0" stroke-opacity="0.24" stroke-width="1.5"/>
+    <path d="M710 53L713.4 64.8L725 72L713.4 79.2L710 91L706.6 79.2L695 72L706.6 64.8L710 53Z" fill="#EBFFF5" fill-opacity="0.9"/>
+  </g>
+</svg>

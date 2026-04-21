@@ -1,4 +1,5 @@
 use super::super::*;
+use super::bundled::{bundled_richpost_theme_ids, ensure_bundled_richpost_themes};
 use super::scaffold::{
     default_richpost_layout_tokens, normalize_richpost_layout_tokens_value,
     write_richpost_layout_tokens_for_theme,
@@ -425,6 +426,7 @@ fn write_custom_richpost_theme_index(
 pub(crate) fn read_custom_richpost_theme_specs(
     package_path: &std::path::Path,
 ) -> Vec<RichpostThemeSpec> {
+    let _ = ensure_bundled_richpost_themes(package_path);
     let _ = migrate_legacy_richpost_theme_store(package_path);
     read_custom_richpost_theme_specs_from_dirs(package_path)
 }
@@ -433,9 +435,13 @@ pub(crate) fn write_custom_richpost_theme_specs(
     package_path: &std::path::Path,
     themes: &[RichpostThemeSpec],
 ) -> Result<(), String> {
+    ensure_bundled_richpost_themes(package_path)?;
     let themes_dir = package_richpost_theme_store_dir(package_path);
     fs::create_dir_all(&themes_dir).map_err(|error| error.to_string())?;
     let mut keep_ids = BTreeSet::new();
+    for theme_id in bundled_richpost_theme_ids() {
+        keep_ids.insert(sanitize_richpost_theme_id_fragment(theme_id));
+    }
     for theme in themes {
         let theme_id = sanitize_richpost_theme_id_fragment(&theme.id);
         keep_ids.insert(theme_id.clone());

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="896" height="1200" viewBox="0 0 896 1200" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="74" y1="36" x2="808" y2="1162" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#59ACE6"/>
+      <stop offset="0.55" stop-color="#52C6D9"/>
+      <stop offset="1" stop-color="#63D5BD"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="108" y1="114" x2="796" y2="1114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ECF8F9" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#DBEDF4" stop-opacity="0.95"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(292 498) rotate(90) scale(514 432)">
+      <stop stop-color="#EFFDFC" stop-opacity="0.56"/>
+      <stop offset="1" stop-color="#EFFDFC" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(714 120) rotate(90) scale(174 196)">
+      <stop stop-color="#C8FFF1" stop-opacity="0.44"/>
+      <stop offset="1" stop-color="#C8FFF1" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="12" y="32" width="872" height="1124" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feColorMatrix values="0 0 0 0 0.101961 0 0 0 0 0.486275 0 0 0 0 0.654902 0 0 0 0.22 0"/>
+      <feBlend in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="896" height="1200" fill="url(#bg)"/>
+  <rect width="896" height="1200" fill="url(#glowA)"/>
+  <rect width="896" height="1200" fill="url(#glowB)"/>
+  <circle cx="124" cy="1096" r="154" fill="#47A4FA" fill-opacity="0.23"/>
+  <circle cx="790" cy="1080" r="180" fill="#8BE8DF" fill-opacity="0.16"/>
+  <g filter="url(#shadow)">
+    <rect x="60" y="78" width="776" height="1048" rx="42" fill="url(#paper)"/>
+    <rect x="60.75" y="78.75" width="774.5" height="1046.5" rx="41.25" stroke="#F8FEFE" stroke-opacity="0.74" stroke-width="1.5"/>
+  </g>
+  <ellipse cx="444" cy="312" rx="242" ry="104" fill="#F8FFFE" fill-opacity="0.32"/>
+  <ellipse cx="446" cy="866" rx="318" ry="140" fill="#DCEEF2" fill-opacity="0.48"/>
+  <path d="M238 944C258 929.333 278 929.333 298 944C318 958.667 338 958.667 358 944C378 929.333 398 929.333 418 944C438 958.667 458 958.667 478 944C498 929.333 518 929.333 538 944" stroke="#1D2530" stroke-opacity="0.24" stroke-width="4" stroke-linecap="round"/>
+  <g opacity="0.9">
+    <circle cx="726" cy="62" r="25" fill="#15362D"/>
+    <circle cx="726" cy="62" r="24.25" stroke="#D7FFF1" stroke-opacity="0.26" stroke-width="1.5"/>
+    <path d="M726 42L729.6 54.8L742 62L729.6 69.2L726 82L722.4 69.2L710 62L722.4 54.8L726 42Z" fill="#EBFFF5" fill-opacity="0.92"/>
+  </g>
+</svg>

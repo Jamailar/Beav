@@ -1,0 +1,44 @@
+{
+  "accent": "#1f7d58",
+  "bodyBackgroundPath": "themes/crossroads-mint/assets/body.svg",
+  "bodyColor": "#121a1d",
+  "bodyFont": "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+  "bodyFrame": {
+    "h": 0.79,
+    "w": 0.74,
+    "x": 0.14,
+    "y": 0.11
+  },
+  "coverBackgroundPath": "themes/crossroads-mint/assets/cover.svg",
+  "coverFrame": {
+    "h": 0.792,
+    "w": 0.734,
+    "x": 0.139,
+    "y": 0.107
+  },
+  "description": "青蓝渐变背景配合浅色玻璃纸张卡片，适合清爽、观点型、留白感较强的图文。",
+  "endingBackgroundPath": "themes/crossroads-mint/assets/ending.svg",
+  "endingFrame": {
+    "h": 0.738,
+    "w": 0.708,
+    "x": 0.152,
+    "y": 0.138
+  },
+  "headingColor": "#091015",
+  "headingFont": "\"Songti SC\",\"STSong\",\"Source Han Serif SC\",serif",
+  "id": "crossroads-mint",
+  "imageRadius": "24px",
+  "label": "薄荷清透",
+  "muted": "#4d6267",
+  "pageBg": "#eef8f8",
+  "previewCardBg": "rgba(241,250,250,.88)",
+  "previewCardBorder": "rgba(23,62,67,.10)",
+  "previewCardShadow": "0 22px 56px rgba(34,100,122,.14)",
+  "shellBg": "linear-gradient(135deg,#4fa8ea 0%,#4fc9dc 46%,#5dd6be 100%)",
+  "source": "builtin",
+  "surfaceBg": "rgba(240,249,249,.96)",
+  "surfaceBorder": "rgba(23,62,67,.08)",
+  "surfaceRadius": "36px",
+  "surfaceShadow": "0 24px 54px rgba(18,86,126,.16)",
+  "text": "#121a1d"
+}
