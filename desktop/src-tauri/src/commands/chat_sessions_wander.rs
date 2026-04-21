@@ -440,7 +440,7 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                     })
                     .unwrap_or_else(|| "先从目录中最像正文的文件开始探索。".to_string());
                 return format!(
-                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 先探索目录: {}\n- 识别规则: {}\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
+                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"list\"|\"read\", scope=\"workspace\") 读取，只有在 redbox_fs 不足时才回退 bash。\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
                     index + 1,
                     title,
                     item_type,
@@ -450,6 +450,12 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 );
             }
 
+            let workspace_path = material_ref
+                .and_then(|value| value.get("workspacePath"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
             let folder_path = material_ref
                 .and_then(|value| value.get("folderPath"))
                 .and_then(Value::as_str)
@@ -457,6 +463,10 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let preferred_path = workspace_path
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| folder_path.clone());
             let exploration_hint = material_ref
                 .and_then(|value| value.get("explorationHint"))
                 .and_then(Value::as_str)
@@ -480,11 +490,12 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "优先 meta.json，再按命名线索继续探索。".to_string());
             format!(
-                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 先探索目录: {}\n- 探索顺序: {}\n- 识别规则: {}",
+                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 原始记录路径: {}\n- 探索顺序: {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"list\"|\"read\", scope=\"workspace\") 读取这些路径；只有在 redbox_fs 不足时才回退 bash。",
                 index + 1,
                 title,
                 item_type,
                 source_type,
+                preferred_path,
                 folder_path,
                 exploration_hint,
                 naming_rules

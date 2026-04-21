@@ -2142,6 +2142,7 @@ fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
                 &source_type,
                 "knowledge/redbook",
                 note.folder_path.as_deref(),
+                &note.id,
                 exploration_hint,
                 naming_rules,
                 &note.title,
@@ -2168,6 +2169,7 @@ fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
                 "youtube",
                 "knowledge/youtube",
                 video.folder_path.as_deref(),
+                &video.id,
                 "先列出素材目录，再优先读取 meta.json。随后根据目录和 meta 中出现的字段，自主寻找 subtitle / transcript / captions / description 等相关文件；不要预设固定后缀。",
                 vec![
                     "优先识别 meta.json".to_string(),
@@ -2200,6 +2202,7 @@ fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
                 "document",
                 "knowledge/docs",
                 Some(source.root_path.as_str()),
+                &source.id,
                 "先列出文档源目录，再优先从样例文件入手。如果样例文件不存在或信息不足，再按目录结构自行选择最相关的正文文件继续读取。",
                 source
                     .sample_files
@@ -2218,6 +2221,7 @@ fn build_wander_material_ref(
     source_type: &str,
     storage_root: &str,
     folder_path: Option<&str>,
+    fallback_leaf: &str,
     exploration_hint: &str,
     naming_rules: Vec<String>,
     display_title: &str,
@@ -2233,18 +2237,65 @@ fn build_wander_material_ref(
             }
             acc
         });
+    let workspace_path = derive_workspace_material_path(storage_root, folder_path, fallback_leaf);
     let exists = folder_path.map(Path::new).is_some_and(Path::exists);
     json!({
         "kind": kind,
         "sourceType": source_type,
         "storageRoot": storage_root,
         "folderPath": folder_path,
+        "workspacePath": workspace_path,
         "explorationHint": exploration_hint,
         "namingRules": normalized_rules,
         "displayTitle": display_title,
         "sourceUrl": source_url,
         "exists": exists,
     })
+}
+
+fn derive_workspace_material_path(
+    storage_root: &str,
+    folder_path: Option<&str>,
+    fallback_leaf: &str,
+) -> String {
+    let normalized_root = storage_root
+        .trim()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    let normalized_leaf = fallback_leaf
+        .trim()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    let normalized_folder = folder_path
+        .unwrap_or_default()
+        .trim()
+        .replace('\\', "/");
+
+    if !normalized_root.is_empty() {
+        if normalized_folder == normalized_root
+            || normalized_folder.starts_with(&(normalized_root.clone() + "/"))
+        {
+            return normalized_folder.trim_matches('/').to_string();
+        }
+        let marker = format!("/{}/", normalized_root);
+        if let Some(index) = normalized_folder.find(&marker) {
+            return normalized_folder[index + 1..].trim_matches('/').to_string();
+        }
+        let suffix = format!("/{}", normalized_root);
+        if normalized_folder.ends_with(&suffix) {
+            return normalized_root;
+        }
+    }
+
+    if normalized_root.is_empty() {
+        return normalized_leaf;
+    }
+    if normalized_leaf.is_empty() {
+        return normalized_root;
+    }
+    format!("{normalized_root}/{normalized_leaf}")
 }
 
 fn build_wander_items_text(items: &[Value]) -> String {

@@ -36,10 +36,10 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
-        ToolPack::Wander => &["bash"],
+        ToolPack::Wander => &["redbox_fs", "bash"],
         ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
-        ToolPack::Redclaw => &["bash", "app_cli"],
+        ToolPack::Redclaw => &["bash", "redbox_fs", "app_cli"],
         ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
         ToolPack::Editor => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
         ToolPack::Diagnostics => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
@@ -64,5 +64,17 @@ mod tests {
     fn audio_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("audio-editor");
         assert!(tools.contains(&"redbox_editor"));
+    }
+
+    #[test]
+    fn wander_runtime_includes_structured_file_tool() {
+        let tools = tool_names_for_runtime_mode("wander");
+        assert!(tools.contains(&"redbox_fs"));
+    }
+
+    #[test]
+    fn redclaw_runtime_includes_structured_file_tool() {
+        let tools = tool_names_for_runtime_mode("redclaw");
+        assert!(tools.contains(&"redbox_fs"));
     }
 }

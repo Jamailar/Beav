@@ -21,6 +21,7 @@ interface WanderMaterialRef {
   sourceType?: string;
   storageRoot?: string;
   folderPath?: string;
+  workspacePath?: string;
   explorationHint?: string;
   namingRules?: string[];
   displayTitle?: string;
@@ -373,6 +374,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       sourceType: typeof payload.sourceType === 'string' ? payload.sourceType : undefined,
       storageRoot: typeof payload.storageRoot === 'string' ? payload.storageRoot : undefined,
       folderPath: typeof payload.folderPath === 'string' ? payload.folderPath : undefined,
+      workspacePath: typeof payload.workspacePath === 'string' ? payload.workspacePath : undefined,
       explorationHint: typeof payload.explorationHint === 'string' ? payload.explorationHint : undefined,
       namingRules: Array.isArray(payload.namingRules)
         ? payload.namingRules.map((value) => String(value || '').trim()).filter(Boolean)
@@ -387,7 +389,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const meta = (item.meta || {}) as Record<string, unknown>;
     const materialRef = resolveWanderMaterialRef(item);
     if (materialRef) {
-      const folderPath = String(materialRef.folderPath || '').trim();
+      const workspacePath = String(materialRef.workspacePath || '').trim();
+      const folderPath = workspacePath || String(materialRef.folderPath || '').trim();
       const fallbackName = folderPath.split(/[\\/]/).filter(Boolean).pop() || item.id;
       const namingRulesHint = (materialRef.namingRules || []).length > 0
         ? `识别规则：${(materialRef.namingRules || []).join('；')}`
@@ -477,11 +480,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const content = [
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
-      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材文件夹中的文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
+      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
+      '优先使用 `redbox_fs(action="list" | "read", scope="workspace")` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
       '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       skillLoadingEnabled
-        ? '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。'
-        : '本次不要额外加载 writing-style 技能。请直接基于素材完成标题候选、正文、标签建议和封面文案，但仍然避免模板化表达。',
+        ? '开始写作前，先对齐 RedClaw 个性化档案（尤其 CreatorProfile.md / user.md）与已激活的 writing-style 技能；标题、正文、标签和封面文案都必须服从这两层约束，不要写成模板化的 AI 文案。'
+        : '即使本次不额外加载 writing-style 技能，仍然要先参考 RedClaw 个性化档案（尤其 CreatorProfile.md / user.md），再基于素材完成标题候选、正文、标签建议和封面文案，避免模板化表达。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
       '',
@@ -513,6 +517,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
       taskHints: {
         intent: 'manuscript_creation',
+        platform: 'xiaohongshu',
+        taskType: 'direct_write',
+        formatTarget: 'markdown',
+        sourceMode: 'knowledge',
         activeSkills: skillLoadingEnabled ? ['writing-style'] : [],
       },
       attachment: {
