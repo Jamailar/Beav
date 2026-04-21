@@ -18,6 +18,8 @@ export type RichpostZoneLayoutInspection = {
   lineHeightPx: number;
   paragraphFont: string;
   paragraphLineHeightPx: number;
+  contentBottomPx: number;
+  frameBottomPx: number;
 };
 
 export type RichpostLayoutInspection = {
@@ -89,12 +91,30 @@ function parseLineHeightPx(style: CSSStyleDeclaration | null | undefined): numbe
   return 24;
 }
 
-function inspectZoneLayout(zone: HTMLElement | null, paragraphSelector: string): RichpostZoneLayoutInspection | null {
+function inspectZoneContentBottom(zone: HTMLElement): number {
+  const candidates = Array.from(zone.querySelectorAll<HTMLElement>('.rb-block, .page-asset, p, ul, ol, table, blockquote, hr'))
+    .filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.height > 0.5 || rect.width > 0.5;
+    });
+  if (candidates.length === 0) {
+    return zone.getBoundingClientRect().bottom;
+  }
+  return candidates.reduce((bottom, node) => Math.max(bottom, node.getBoundingClientRect().bottom), zone.getBoundingClientRect().bottom);
+}
+
+function inspectZoneLayout(
+  zone: HTMLElement | null,
+  paragraphSelector: string,
+  frame: HTMLElement | null,
+): RichpostZoneLayoutInspection | null {
   if (!zone) return null;
   const view = zone.ownerDocument.defaultView || window;
   const zoneStyle = view.getComputedStyle(zone);
   const paragraph = zone.querySelector(paragraphSelector) as HTMLElement | null;
   const paragraphStyle = paragraph ? view.getComputedStyle(paragraph) : zoneStyle;
+  const frameRect = frame?.getBoundingClientRect() || zone.getBoundingClientRect();
+  const contentBottomPx = inspectZoneContentBottom(zone);
   const widthPx = Math.max(zone.clientWidth, Math.round(zone.getBoundingClientRect().width));
   const heightPx = Math.max(zone.clientHeight, Math.round(zone.getBoundingClientRect().height));
   const scrollWidthPx = Math.max(zone.scrollWidth, widthPx);
@@ -105,11 +125,13 @@ function inspectZoneLayout(zone: HTMLElement | null, paragraphSelector: string):
     scrollWidthPx,
     scrollHeightPx,
     overflowX: scrollWidthPx > widthPx + 1,
-    overflowY: scrollHeightPx > heightPx + 1,
+    overflowY: contentBottomPx > frameRect.bottom + 1,
     font: buildCanvasFont(zoneStyle),
     lineHeightPx: parseLineHeightPx(zoneStyle),
     paragraphFont: buildCanvasFont(paragraphStyle),
     paragraphLineHeightPx: parseLineHeightPx(paragraphStyle),
+    contentBottomPx,
+    frameBottomPx: frameRect.bottom,
   };
 }
 
@@ -389,11 +411,12 @@ export async function inspectRichpostHtmlLayout(
   document.body.appendChild(frame);
   try {
     const doc = await waitForIframeContentReady(frame);
+    const stageFrame = doc.querySelector('.rb-stage-frame') as HTMLElement | null;
     const titleZone = doc.querySelector('.rb-zone-title') as HTMLElement | null;
     const bodyZone = doc.querySelector('.rb-zone-body') as HTMLElement | null;
     return {
-      title: inspectZoneLayout(titleZone, '.rb-block.rb-heading h1, .rb-block.rb-heading h2, .rb-block.rb-heading h3, .rb-block.rb-heading h4, .rb-block.rb-heading h5, .rb-block.rb-heading h6'),
-      body: inspectZoneLayout(bodyZone, '.rb-block.rb-paragraph p, .rb-block.rb-paragraph'),
+      title: inspectZoneLayout(titleZone, '.rb-block.rb-heading h1, .rb-block.rb-heading h2, .rb-block.rb-heading h3, .rb-block.rb-heading h4, .rb-block.rb-heading h5, .rb-block.rb-heading h6', stageFrame),
+      body: inspectZoneLayout(bodyZone, '.rb-block.rb-paragraph p, .rb-block.rb-paragraph', stageFrame),
     };
   } finally {
     frame.remove();
