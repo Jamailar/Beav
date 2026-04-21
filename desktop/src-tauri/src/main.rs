@@ -1750,7 +1750,10 @@ fn collect_browser_plugin_candidates_from_root(
         if !path.is_dir() {
             continue;
         }
-        let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
         if matches!(file_name, "Plugin" | "browser-extension") {
             push(path.clone());
         }
@@ -2096,23 +2099,62 @@ fn knowledge_source_texts(store: &AppStore) -> Vec<(String, String, Value)> {
 }
 
 fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
+    let mut content_candidates = Vec::<String>::new();
+    if note.transcript.is_some() {
+        content_candidates.push("transcript.md".to_string());
+    }
+    if note.html_file.is_some() {
+        content_candidates.push("content.html".to_string());
+    }
+    content_candidates.push("content.md".to_string());
+    let source_type = note
+        .capture_kind
+        .clone()
+        .unwrap_or_else(|| "note".to_string());
+    let is_video_note = note.video.is_some() || note.video_url.is_some();
+    let read_strategy = if is_video_note {
+        "meta_then_transcript_or_description"
+    } else {
+        "meta_then_content"
+    };
+    let read_hint = if is_video_note {
+        "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 transcript.md，则继续读取转录文件，否则回退到 meta.json 内的 description。"
+    } else {
+        "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 content.md 或 content.html，再继续读取正文文件。"
+    };
     json!({
         "id": note.id,
-        "type": if note.video.is_some() || note.video_url.is_some() { "video" } else { "note" },
+        "type": if is_video_note { "video" } else { "note" },
         "title": note.title,
         "content": note.excerpt.clone().unwrap_or_else(|| note.content.chars().take(500).collect::<String>()),
         "cover": note.cover,
         "meta": {
-            "sourceType": note.capture_kind,
+            "sourceType": source_type,
             "folderPath": note.folder_path,
             "sourceDomain": note.source_domain,
             "sourceLink": note.source_link.clone().or(note.source_url.clone()),
-            "sourceUrl": note.source_link.clone().or(note.source_url.clone())
+            "sourceUrl": note.source_link.clone().or(note.source_url.clone()),
+            "materialRef": build_wander_material_ref(
+                "redbook-note",
+                &source_type,
+                "knowledge/redbook",
+                note.folder_path.as_deref(),
+                Some("meta.json"),
+                content_candidates,
+                read_strategy,
+                read_hint,
+                &note.title,
+                note.source_link.as_deref().or(note.source_url.as_deref()),
+            )
         }
     })
 }
 
 fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
+    let mut content_candidates = Vec::<String>::new();
+    if video.has_subtitle {
+        content_candidates.push("subtitle.txt".to_string());
+    }
     json!({
         "id": video.id,
         "type": "video",
@@ -2123,12 +2165,28 @@ fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
             "sourceType": "youtube",
             "videoId": video.video_id,
             "folderPath": video.folder_path,
-            "sourceUrl": video.video_url
+            "sourceUrl": video.video_url,
+            "materialRef": build_wander_material_ref(
+                "youtube-video",
+                "youtube",
+                "knowledge/youtube",
+                video.folder_path.as_deref(),
+                Some("meta.json"),
+                content_candidates,
+                "meta_then_subtitle_or_description",
+                "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 subtitle.txt，再读取字幕文件，否则回退到 meta.json 内的 description。",
+                &video.title,
+                Some(video.video_url.as_str()),
+            )
         }
     })
 }
 
 fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
+    let primary_entry = source
+        .sample_files
+        .first()
+        .map(|value| normalize_relative_path(value));
     json!({
         "id": source.id,
         "type": "note",
@@ -2140,8 +2198,76 @@ fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
             "sourceName": source.name,
             "sourceKind": source.kind,
             "filePath": source.root_path,
-            "relativePath": source.sample_files.first().cloned().unwrap_or_default()
+            "relativePath": source.sample_files.first().cloned().unwrap_or_default(),
+            "materialRef": build_wander_material_ref(
+                "document-source",
+                "document",
+                "knowledge/docs",
+                Some(source.root_path.as_str()),
+                primary_entry.as_deref(),
+                source
+                    .sample_files
+                    .iter()
+                    .map(|value| normalize_relative_path(value))
+                    .collect::<Vec<_>>(),
+                "direct_file_or_sample",
+                "优先读取 entryPath 指向的样例文件；若 entryPath 不存在，再根据 contentCandidates 选择一个真实文件继续读取。",
+                &source.name,
+                None,
+            )
         }
+    })
+}
+
+fn build_wander_material_ref(
+    kind: &str,
+    source_type: &str,
+    storage_root: &str,
+    folder_path: Option<&str>,
+    entry_file: Option<&str>,
+    content_candidates: Vec<String>,
+    read_strategy: &str,
+    read_hint: &str,
+    display_title: &str,
+    source_url: Option<&str>,
+) -> Value {
+    let normalized_entry_file = entry_file
+        .map(normalize_relative_path)
+        .filter(|value| !value.trim().is_empty());
+    let entry_path = match (folder_path, normalized_entry_file.as_deref()) {
+        (Some(folder), Some(entry)) => Some(Path::new(folder).join(entry).display().to_string()),
+        (Some(folder), None) => Some(folder.to_string()),
+        (None, Some(entry)) => Some(entry.to_string()),
+        (None, None) => None,
+    };
+    let normalized_candidates = content_candidates
+        .into_iter()
+        .map(|value| normalize_relative_path(&value))
+        .filter(|value| !value.trim().is_empty())
+        .fold(Vec::<String>::new(), |mut acc, value| {
+            if !acc.iter().any(|item| item == &value) {
+                acc.push(value);
+            }
+            acc
+        });
+    let exists = entry_path
+        .as_deref()
+        .map(Path::new)
+        .is_some_and(Path::exists)
+        || folder_path.map(Path::new).is_some_and(Path::exists);
+    json!({
+        "kind": kind,
+        "sourceType": source_type,
+        "storageRoot": storage_root,
+        "folderPath": folder_path,
+        "entryFile": normalized_entry_file,
+        "entryPath": entry_path,
+        "contentCandidates": normalized_candidates,
+        "readStrategy": read_strategy,
+        "readHint": read_hint,
+        "displayTitle": display_title,
+        "sourceUrl": source_url,
+        "exists": exists,
     })
 }
 

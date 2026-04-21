@@ -16,6 +16,21 @@ interface WanderItem {
   meta?: Record<string, unknown>;
 }
 
+interface WanderMaterialRef {
+  kind?: string;
+  sourceType?: string;
+  storageRoot?: string;
+  folderPath?: string;
+  entryFile?: string;
+  entryPath?: string;
+  contentCandidates?: string[];
+  readStrategy?: string;
+  readHint?: string;
+  displayTitle?: string;
+  sourceUrl?: string;
+  exists?: boolean;
+}
+
 interface WanderResult {
   content_direction: string;
   thinking_process: string[];
@@ -349,8 +364,52 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       || '未命名选题';
   }
 
+  const resolveWanderMaterialRef = (item: WanderItem): WanderMaterialRef | null => {
+    const meta = (item.meta || {}) as Record<string, unknown>;
+    const materialRef = meta.materialRef;
+    if (!materialRef || typeof materialRef !== 'object') {
+      return null;
+    }
+    const payload = materialRef as Record<string, unknown>;
+    return {
+      kind: typeof payload.kind === 'string' ? payload.kind : undefined,
+      sourceType: typeof payload.sourceType === 'string' ? payload.sourceType : undefined,
+      storageRoot: typeof payload.storageRoot === 'string' ? payload.storageRoot : undefined,
+      folderPath: typeof payload.folderPath === 'string' ? payload.folderPath : undefined,
+      entryFile: typeof payload.entryFile === 'string' ? payload.entryFile : undefined,
+      entryPath: typeof payload.entryPath === 'string' ? payload.entryPath : undefined,
+      contentCandidates: Array.isArray(payload.contentCandidates)
+        ? payload.contentCandidates.map((value) => String(value || '').trim()).filter(Boolean)
+        : undefined,
+      readStrategy: typeof payload.readStrategy === 'string' ? payload.readStrategy : undefined,
+      readHint: typeof payload.readHint === 'string' ? payload.readHint : undefined,
+      displayTitle: typeof payload.displayTitle === 'string' ? payload.displayTitle : undefined,
+      sourceUrl: typeof payload.sourceUrl === 'string' ? payload.sourceUrl : undefined,
+      exists: typeof payload.exists === 'boolean' ? payload.exists : undefined,
+    };
+  };
+
   const buildKnowledgeFolderReference = (item: WanderItem) => {
     const meta = (item.meta || {}) as Record<string, unknown>;
+    const materialRef = resolveWanderMaterialRef(item);
+    if (materialRef) {
+      const folderPath = String(materialRef.folderPath || materialRef.entryPath || '').trim();
+      const entryPath = String(materialRef.entryPath || folderPath || '').trim();
+      const entryFile = String(materialRef.entryFile || '').trim();
+      const fallbackName = folderPath.split(/[\\/]/).filter(Boolean).pop() || item.id;
+      const displayName = materialRef.kind === 'document-source' || materialRef.sourceType === 'document'
+        ? (entryFile || fallbackName)
+        : fallbackName;
+      const candidateHint = (materialRef.contentCandidates || []).length > 0
+        ? `候选文件：${(materialRef.contentCandidates || []).join('、')}`
+        : '';
+      return {
+        folderName: displayName,
+        folderPath: folderPath || entryPath || `material://${item.id}`,
+        metaPath: entryPath || folderPath || `material://${item.id}`,
+        contentHint: [materialRef.readHint, candidateHint].filter(Boolean).join(' '),
+      };
+    }
     if (meta.sourceType === 'document') {
       const filePath = String(meta.filePath || '').trim();
       const relativePath = String(meta.relativePath || '').trim();
@@ -413,8 +472,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         `素材${order}（${connectedTag}）`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
         `标题：${item.title || '(无标题)'}`,
-        `文件夹名：${folderRef.folderName}`,
-        `文件夹路径：${folderRef.folderPath}`,
+        `素材名：${folderRef.folderName}`,
+        `素材路径：${folderRef.folderPath}`,
         `必读文件：${folderRef.metaPath}`,
         `读取提示：${folderRef.contentHint}`,
       ].join('\n');
@@ -429,7 +488,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
       '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材文件夹中的文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '请优先读取每个素材目录下的 meta.json，并按需要继续读取正文/转录文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
+      '请优先按每条素材引用中的入口文件开始读取，再按提示继续读取正文/转录文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       skillLoadingEnabled
         ? '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。'
         : '本次不要额外加载 writing-style 技能。请直接基于素材完成标题候选、正文、标签建议和封面文案，但仍然避免模板化表达。',
@@ -441,7 +500,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       `内容方向：${activeDirection || ''}`,
       `建议保存稿件路径：${suggestedManuscriptPath}`,
       '',
-      '## 需要先读取的素材文件夹（当前工作空间下）',
+      '## 需要先读取的素材引用',
       folderListText,
       '',
       '## 参考素材（来自漫步）',

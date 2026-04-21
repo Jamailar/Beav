@@ -407,47 +407,80 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .get("sourceType")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            let material_ref = meta.get("materialRef").and_then(Value::as_object);
             if source_type == "document" {
-                let root_path = meta
-                    .get("filePath")
+                let entry_path = material_ref
+                    .and_then(|value| value.get("entryPath"))
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let relative_path = meta
-                    .get("relativePath")
+                let root_path = material_ref
+                    .and_then(|value| value.get("folderPath"))
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .trim()
                     .to_string();
+                let relative_path = material_ref
+                    .and_then(|value| value.get("entryFile"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| value.trim().to_string())
+                    .or_else(|| {
+                        meta.get("relativePath")
+                            .and_then(Value::as_str)
+                            .map(|value| value.trim().to_string())
+                    })
+                    .unwrap_or_default();
                 return format!(
-                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 用 redbox_fs 直接读取文件: {}\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
+                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 用 redbox_fs 直接读取文件: {}\n- 读取策略: {}\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
                     index + 1,
                     title,
                     item_type,
                     source_type,
-                    if !relative_path.is_empty() { relative_path } else { root_path }
+                    if !entry_path.is_empty() {
+                        entry_path
+                    } else if !relative_path.is_empty() {
+                        relative_path
+                    } else {
+                        root_path
+                    },
+                    material_ref
+                        .and_then(|value| value.get("readHint"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("直接读取样例文件本身。")
                 );
             }
 
-            let folder_path = meta
-                .get("folderPath")
+            let folder_path = material_ref
+                .and_then(|value| value.get("folderPath"))
+                .and_then(Value::as_str)
+                .or_else(|| meta.get("folderPath").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let entry_path = material_ref
+                .and_then(|value| value.get("entryPath"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let read_hint = if source_type == "youtube" || item_type == "video" {
-                "先 list 目录，再优先读取 meta.json；若 meta 中存在 transcriptFile / subtitle 线索，再读取对应转录文件。"
-            } else {
-                "先 list 目录，再优先读取 meta.json；如果目录中存在 content.md，再继续读取 content.md。"
-            };
+            let read_hint = material_ref
+                .and_then(|value| value.get("readHint"))
+                .and_then(Value::as_str)
+                .unwrap_or(if source_type == "youtube" || item_type == "video" {
+                    "先 list 目录，再优先读取 meta.json；若 meta 中存在 transcriptFile / subtitle 线索，再读取对应转录文件。"
+                } else {
+                    "先 list 目录，再优先读取 meta.json；如果目录中存在 content.md，再继续读取 content.md。"
+                });
             format!(
-                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 目录路径: {}\n- 读取顺序: {}",
+                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 素材路径: {}\n- 入口文件: {}\n- 读取顺序: {}",
                 index + 1,
                 title,
                 item_type,
                 source_type,
                 folder_path,
+                if entry_path.is_empty() { "(未提供)" } else { &entry_path },
                 read_hint
             )
         })
