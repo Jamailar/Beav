@@ -9,15 +9,18 @@ use crate::events::{
 };
 use crate::helpers::{
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
-    extract_markdown_frontmatter_block, get_draft_type_from_file_name, normalize_relative_path,
-    strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION,
-    POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
+    extract_markdown_frontmatter_block, get_default_package_entry, get_draft_type_from_file_name,
+    normalize_relative_path, strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION,
+    AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::with_store;
 use crate::runtime::{McpServerRecord, SkillRecord};
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
-use crate::{make_id, now_iso, payload_field, payload_string, resolve_manuscript_path, AppState};
+use crate::{
+    join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
+    AppState,
+};
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
@@ -56,7 +59,16 @@ struct AuthoringTargetPreference {
     preferred_subdir: Option<String>,
 }
 
-fn normalize_authoring_target_subdir(requested_path: &str, preferred_subdir: Option<&str>) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthoringProjectKind {
+    Redpost,
+    Redarticle,
+}
+
+fn normalize_authoring_target_subdir(
+    requested_path: &str,
+    preferred_subdir: Option<&str>,
+) -> String {
     let normalized = normalize_relative_path(requested_path);
     let subdir = preferred_subdir
         .map(normalize_relative_path)
@@ -68,6 +80,38 @@ fn normalize_authoring_target_subdir(requested_path: &str, preferred_subdir: Opt
         return normalized;
     }
     format!("{}/{}", subdir.trim_end_matches('/'), normalized)
+}
+
+fn authoring_project_kind_from_value(value: Option<&str>) -> Option<AuthoringProjectKind> {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "redpost" | "post" | "richpost" | "xiaohongshu" => Some(AuthoringProjectKind::Redpost),
+        "redarticle" | "article" | "longform" | "wechat" | "wechat_official_account" => {
+            Some(AuthoringProjectKind::Redarticle)
+        }
+        _ => None,
+    }
+}
+
+fn authoring_project_extension(kind: AuthoringProjectKind) -> &'static str {
+    match kind {
+        AuthoringProjectKind::Redpost => POST_DRAFT_EXTENSION,
+        AuthoringProjectKind::Redarticle => ARTICLE_DRAFT_EXTENSION,
+    }
+}
+
+fn build_authoring_project_relative_path(
+    parent: Option<&str>,
+    project_id: &str,
+    kind: AuthoringProjectKind,
+) -> String {
+    let normalized_parent = parent
+        .map(normalize_relative_path)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_default();
+    normalize_relative_path(&join_relative(
+        &normalized_parent,
+        &ensure_manuscript_file_name(project_id, authoring_project_extension(kind)),
+    ))
 }
 
 impl CliArgs {
@@ -489,15 +533,16 @@ impl<'a> AppCliExecutor<'a> {
                 self.call_channel(
                     "manuscripts:create-file",
                     json!({
-                        "parentPath": parent_path,
-                        "name": name,
-                        "title": args.string(&["title"]),
-                        "content": payload_string(payload, "content")
-                            .or_else(|| args.string(&["content"]))
-                            .unwrap_or_default(),
+                    "parentPath": parent_path,
+                    "name": name,
+                    "title": args.string(&["title"]),
+                    "content": payload_string(payload, "content")
+                        .or_else(|| args.string(&["content"]))
+                        .unwrap_or_default(),
                     }),
                 )
             }
+            "create-project" => self.handle_manuscript_create_project(&args, payload),
             "delete" => self.call_channel(
                 "manuscripts:delete",
                 json!(args
@@ -2137,18 +2182,20 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     .get("taskHints")
                     .and_then(|value| payload_string(value, "platform"))
             });
-            let preferred_subdir = payload_string(metadata, "saveSubdir").or_else(|| {
-                metadata
-                    .get("taskHints")
-                    .and_then(|value| payload_string(value, "saveSubdir"))
-            }).or_else(|| {
-                let context_type = payload_string(metadata, "contextType").unwrap_or_default();
-                if context_type == "wander" {
-                    Some("wander".to_string())
-                } else {
-                    None
-                }
-            });
+            let preferred_subdir = payload_string(metadata, "saveSubdir")
+                .or_else(|| {
+                    metadata
+                        .get("taskHints")
+                        .and_then(|value| payload_string(value, "saveSubdir"))
+                })
+                .or_else(|| {
+                    let context_type = payload_string(metadata, "contextType").unwrap_or_default();
+                    if context_type == "wander" {
+                        Some("wander".to_string())
+                    } else {
+                        None
+                    }
+                });
             let preference = match platform.as_deref() {
                 Some("wechat_official_account") => AuthoringTargetPreference {
                     preferred_extension: ARTICLE_DRAFT_EXTENSION,
@@ -2169,6 +2216,80 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         .flatten()
     }
 
+    fn default_authoring_project_kind(&self) -> AuthoringProjectKind {
+        let Some(preference) = self.current_authoring_target_preference() else {
+            return AuthoringProjectKind::Redpost;
+        };
+        if preference.preferred_extension == ARTICLE_DRAFT_EXTENSION {
+            AuthoringProjectKind::Redarticle
+        } else {
+            AuthoringProjectKind::Redpost
+        }
+    }
+
+    fn handle_manuscript_create_project(
+        &self,
+        args: &CliArgs,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let title = payload_string(payload, "title")
+            .or_else(|| args.string(&["title"]))
+            .or_else(|| args.positionals.first().cloned())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "manuscripts create-project requires --title".to_string())?;
+        let requested_parent = payload_string(payload, "parent")
+            .or_else(|| payload_string(payload, "parentPath"))
+            .or_else(|| args.string(&["parent", "parent-path", "parentPath"]));
+        let project_kind = authoring_project_kind_from_value(
+            payload_string(payload, "kind")
+                .or_else(|| args.string(&["kind"]))
+                .as_deref(),
+        )
+        .unwrap_or_else(|| self.default_authoring_project_kind());
+        let project_id = make_id(match project_kind {
+            AuthoringProjectKind::Redpost => "redpost",
+            AuthoringProjectKind::Redarticle => "redarticle",
+        });
+        let preferred_subdir = self
+            .current_authoring_target_preference()
+            .and_then(|preference| preference.preferred_subdir);
+        let normalized_parent = requested_parent
+            .map(|value| normalize_relative_path(&value))
+            .filter(|value| !value.trim().is_empty())
+            .or(preferred_subdir)
+            .unwrap_or_default();
+        let relative = build_authoring_project_relative_path(
+            Some(&normalized_parent),
+            &project_id,
+            project_kind,
+        );
+        let (parent_path, name) = split_parent_and_name(&relative);
+        let created = self.call_channel(
+            "manuscripts:create-file",
+            json!({
+                "parentPath": parent_path,
+                "name": name,
+                "title": title,
+                "content": ""
+            }),
+        )?;
+        let entry_name = get_default_package_entry(&relative);
+        Ok(json!({
+            "success": created.get("success").and_then(Value::as_bool).unwrap_or(true),
+            "path": created.get("path").cloned().unwrap_or_else(|| json!(relative.clone())),
+            "projectPath": created.get("path").cloned().unwrap_or_else(|| json!(relative.clone())),
+            "contentPath": join_relative(&relative, entry_name),
+            "entryPath": join_relative(&relative, entry_name),
+            "projectId": project_id,
+            "title": title,
+            "kind": match project_kind {
+                AuthoringProjectKind::Redpost => "redpost",
+                AuthoringProjectKind::Redarticle => "redarticle",
+            },
+        }))
+    }
+
     fn normalize_manuscript_target_path(&self, requested_path: &str) -> String {
         let normalized = normalize_relative_path(requested_path);
         if normalized.trim().is_empty() {
@@ -2177,10 +2298,8 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let Some(preference) = self.current_authoring_target_preference() else {
             return ensure_manuscript_file_name(&normalized, ".md");
         };
-        let normalized = normalize_authoring_target_subdir(
-            &normalized,
-            preference.preferred_subdir.as_deref(),
-        );
+        let normalized =
+            normalize_authoring_target_subdir(&normalized, preference.preferred_subdir.as_deref());
         let resolved = resolve_manuscript_path(self.state, &normalized).ok();
         let target_exists = resolved.as_ref().map(|path| path.exists()).unwrap_or(false);
         if normalized.ends_with(preference.preferred_extension) {
@@ -3156,6 +3275,7 @@ fn help_response(namespace: Option<&str>) -> Value {
         "manuscripts" => vec![
             "manuscripts list",
             "manuscripts read --path <relativePath>",
+            "manuscripts create-project --title <title> [--kind redpost|redarticle] [--parent <folder>]",
             "manuscripts write --path <relativePath> [payload.content]",
             "manuscripts create --path <relativePath>",
             "manuscripts delete --path <relativePath>",
@@ -3379,6 +3499,26 @@ mod tests {
         assert_eq!(
             normalize_authoring_target_subdir("wander/第一篇稿子.redpost", Some("wander")),
             "wander/第一篇稿子.redpost"
+        );
+    }
+
+    #[test]
+    fn build_authoring_project_relative_path_uses_id_and_kind_extension() {
+        assert_eq!(
+            build_authoring_project_relative_path(
+                Some("wander"),
+                "redpost-123",
+                AuthoringProjectKind::Redpost,
+            ),
+            "wander/redpost-123.redpost"
+        );
+        assert_eq!(
+            build_authoring_project_relative_path(
+                Some("articles"),
+                "redarticle-456",
+                AuthoringProjectKind::Redarticle,
+            ),
+            "articles/redarticle-456.redarticle"
         );
     }
 

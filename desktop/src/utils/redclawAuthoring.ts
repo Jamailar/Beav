@@ -46,8 +46,8 @@ const TASK_LABEL: Record<AuthoringTaskType, string> = {
 };
 
 const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
-    xiaohongshu: '保存时默认创建 `.redpost` 图文工程，不要落成单个 `.md` 文件。',
-    wechat_official_account: '保存时默认创建 `.redarticle` 长文工程，不要落成单个 `.md` 文件。',
+    xiaohongshu: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redpost --title <标题>` 获取规范工程路径，再用该路径写入内容；不要把标题直接当文件名。',
+    wechat_official_account: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redarticle --title <标题>` 获取规范工程路径，再用该路径写入内容；不要把标题直接当文件名。',
 };
 
 export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) {
