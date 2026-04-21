@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RedBox 主题编辑指南</title>
+    <title>主题编辑指南</title>
     <style>
       :root {
         color-scheme: light;
@@ -132,32 +132,11 @@
         gap: 16px;
       }
 
-      .eyebrow {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
       h1 {
         margin: 12px 0 8px;
         font-size: clamp(28px, 4vw, 42px);
         line-height: 1.06;
         letter-spacing: -0.04em;
-      }
-
-      .hero p {
-        margin: 0;
-        max-width: 860px;
-        color: var(--text-secondary);
-        font-size: 14px;
       }
 
       .hero-actions {
@@ -206,51 +185,12 @@
         background: var(--surface-strong);
       }
 
-      .hero-grid {
-        display: grid;
-        gap: 14px;
-        margin-top: 18px;
-      }
-
-      @media (min-width: 920px) {
-        .hero-grid {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
-      }
-
-      .metric-card,
       .panel,
       .copy-panel {
         border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         background: var(--surface);
         box-shadow: var(--shadow-soft);
-      }
-
-      .metric-card {
-        padding: 16px;
-      }
-
-      .metric-label {
-        margin: 0 0 8px;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--text-tertiary);
-      }
-
-      .metric-card strong {
-        display: block;
-        font-size: 18px;
-        letter-spacing: -0.03em;
-      }
-
-      .metric-card span {
-        display: block;
-        margin-top: 6px;
-        color: var(--text-secondary);
-        font-size: 13px;
       }
 
       .layout {
@@ -469,35 +409,11 @@
       <section class="hero">
         <div class="hero-top">
           <div>
-            <div class="eyebrow">Theme Authoring Guide</div>
-            <h1>把当前主题规范直接发给 AI</h1>
-            <p>
-              这个页面面向用户自己的其他 AI 编程工具。内容已经整理成可直接复制的 Markdown，
-              核心目标是让外部 AI 明确知道 RedBox richpost 主题的真实文件结构、编辑顺序和禁区，
-              避免去改正文、改渲染产物，或者把主题目录写错。
-            </p>
+            <h1>主题编辑指南</h1>
           </div>
           <div class="hero-actions">
             <button class="button" type="button" id="copy-markdown-btn">复制完整 Markdown</button>
             <a class="ghost-button" href="#markdown-section">查看 Markdown</a>
-          </div>
-        </div>
-
-        <div class="hero-grid">
-          <div class="metric-card">
-            <div class="metric-label">真实编辑目标</div>
-            <strong><code>themes/&lt;theme-id&gt;/</code></strong>
-            <span>真正要改的是主题根目录，而不是最终渲染产物。</span>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">结构边界</div>
-            <strong>cover / body / ending</strong>
-            <span>首页、内容页、尾页是三套独立母版，不要把它们混成一页样式。</span>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">复制后用途</div>
-            <strong>发给 Cursor / Claude / Copilot</strong>
-            <span>复制的是 Markdown 指令，不是说明摘要，外部 AI 可以直接按它落盘。</span>
           </div>
         </div>
       </section>
@@ -506,7 +422,7 @@
         <main class="stack">
           <section class="panel">
             <h2>主题目录的真实结构</h2>
-            <p>当前仓库里，richpost 主题的主编辑目标是工作区下的 <code>themes/&lt;theme-id&gt;/</code>。主题目录索引可能同时存在兼容文件，但真正应该修改的是下面这些文件。</p>
+            <p><code>themes/&lt;theme-id&gt;/</code> 是当前 richpost 主题的主编辑目标。</p>
             <div class="tree">themes/
   index.json                         # 当前主题目录索引
   richpost-theme-template.md         # 主题规则说明，给 AI 和开发者读
@@ -603,8 +519,7 @@
         </main>
 
         <aside class="copy-panel" id="markdown-section">
-          <h2>复制给 AI 的 Markdown</h2>
-          <p>这份 Markdown 已经按“外部 AI 直接执行”的口径写好。复制后可以直接发给 Cursor、Claude Code、Copilot 或其他 AI 编程工具。</p>
+          <h2>Markdown</h2>
           <div class="copy-actions">
             <button class="button" type="button" id="copy-markdown-btn-side">复制 Markdown</button>
             <a class="ghost-button" href="#top" onclick="window.scrollTo({ top: 0, behavior: 'smooth' }); return false;">回到顶部</a>
@@ -612,19 +527,17 @@
           <div class="copy-status" id="copy-status">准备就绪</div>
           <div class="markdown-box">
             <div class="markdown-toolbar">
-              <strong>Markdown Prompt</strong>
-              <span>复制的是完整内容，不是摘要</span>
+              <strong>Markdown</strong>
             </div>
             <pre class="markdown-preview" id="markdown-preview"></pre>
           </div>
-          <div class="footer">如果项目里同时存在 <code>themes/index.json</code> 和 <code>themes/richpost-themes.json</code>，外部 AI 应优先以当前 <code>themes/&lt;theme-id&gt;/</code> 为实际编辑目标。</div>
         </aside>
       </div>
     </div>
 
     <script id="markdown-source" type="text/plain"># RedBox Richpost Theme Authoring Guide
 
-你现在要为 RedBox / LexBox 的 richpost 图文系统创建或修改主题。你的任务是只改主题模板层，不改正文层。
+你现在要为 RedBox 的 richpost 图文系统创建或修改主题。你的任务是只改主题模板层，不改正文层。
 
 ## 任务目标
 
