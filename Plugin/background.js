@@ -901,6 +901,37 @@ function buildDouyinEntry(payload) {
     || normalizeText(payload?.content)
     || normalizeText(payload?.description)
     || normalizeText(payload?.title);
+  const commentsSnapshot = Array.isArray(payload?.commentsSnapshot)
+    ? payload.commentsSnapshot
+        .map((item) => ({
+          author: normalizeText(item?.author),
+          text: normalizeText(item?.text),
+          likes: Number(item?.likes || 0),
+          replies: Number(item?.replies || 0),
+          createdAt: normalizeText(item?.createdAt),
+          location: normalizeText(item?.location),
+        }))
+        .filter((item) => item.author || item.text)
+    : [];
+  const publishedAt = normalizeText(payload?.publishedAt);
+  const indexText = normalizeText(payload?.indexText)
+    || [
+      normalizeText(payload?.title),
+      text,
+      publishedAt ? `发布时间：${publishedAt}` : '',
+      commentsSnapshot.length > 0
+        ? `评论快照：\n${commentsSnapshot.map((item, index) => {
+            const meta = [
+              item.author,
+              item.location,
+              item.createdAt,
+              item.likes ? `赞${item.likes}` : '',
+              item.replies ? `回复${item.replies}` : '',
+            ].filter(Boolean).join(' · ');
+            return `${index + 1}. ${meta}\n${item.text}`;
+          }).join('\n\n')}`
+        : '',
+    ].filter(Boolean).join('\n\n');
   const tags = Array.from(new Set(['抖音', ...extractTagsFromText(text)]));
 
   if (!sourceUrl || !videoAssetUrl) {
@@ -922,9 +953,15 @@ function buildDouyinEntry(payload) {
       description: truncateText(text, 500),
       siteName: sourceDomain,
       tags,
+      publishedAt: publishedAt || undefined,
+      authorProfileUrl: normalizeText(payload?.authorProfileUrl) || undefined,
+      commentsSnapshot,
+      indexText: indexText || undefined,
       stats: {
         likes: Number(payload?.stats?.likes || 0),
         collects: Number(payload?.stats?.collects || 0),
+        comments: Number(payload?.stats?.comments || 0),
+        shares: Number(payload?.stats?.shares || 0),
       },
     },
     assets: {
@@ -2854,6 +2891,7 @@ async function extractDouyinVideoPayload() {
 
   function getTitle() {
     const candidates = [
+      document.querySelector('[data-e2e="detail-video-info"] h1')?.textContent,
       document.querySelector('[data-e2e="video-desc"]')?.textContent,
       document.querySelector('[data-e2e="feed-active-video-desc"]')?.textContent,
       document.querySelector('[data-e2e="note-desc"]')?.textContent,
@@ -2873,6 +2911,7 @@ async function extractDouyinVideoPayload() {
 
   function getAuthor() {
     const candidates = [
+      document.querySelector('[data-e2e="user-info"] [data-click-from="title"]')?.textContent,
       document.querySelector('[data-e2e="user-info-name"]')?.textContent,
       document.querySelector('[data-e2e="video-author-name"]')?.textContent,
       document.querySelector('[data-e2e="video-author-nickname"]')?.textContent,
@@ -2887,13 +2926,89 @@ async function extractDouyinVideoPayload() {
     return '';
   }
 
+  function getAuthorProfileUrl() {
+    const candidates = [
+      document.querySelector('[data-e2e="user-info"] a[href*="/user/"]'),
+      document.querySelector('a[href*="/user/"]'),
+    ];
+    for (const candidate of candidates) {
+      const href = toAbsoluteUrl(candidate?.getAttribute?.('href') || '');
+      if (href) return href;
+    }
+    return '';
+  }
+
+  function extractCountFromContainer(container) {
+    if (!container) return 0;
+    const candidates = [
+      ...Array.from(container.querySelectorAll('span, div, p'))
+        .map((node) => normalizeText(node.textContent || ''))
+        .filter(Boolean),
+      normalizeText(container.textContent || ''),
+    ];
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const candidate = candidates[index];
+      if (!/[0-9一二三四五六七八九十百千万亿]/.test(candidate)) continue;
+      const parsed = parseCountText(candidate);
+      if (parsed > 0) return parsed;
+    }
+    return 0;
+  }
+
+  function getPublishedAt() {
+    const candidates = [
+      document.querySelector('[data-e2e="detail-video-publish-time"]')?.textContent,
+      document.querySelector('[class*="publish-time"]')?.textContent,
+      document.querySelector('meta[property="article:published_time"]')?.getAttribute('content'),
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeText(candidate).replace(/^发布时间[:：]\s*/, '');
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
   function getStats() {
-    const likeEl = document.querySelector('[data-e2e="like-count"], [data-e2e*="like"]');
-    const collectEl = document.querySelector('[data-e2e="collect-count"], [data-e2e*="collect"], [data-e2e*="favorite"]');
+    const likeEl = document.querySelector('[data-e2e="video-player-digg"], [data-e2e="like-count"], [data-e2e*="like"]');
+    const commentEl = document.querySelector('[data-e2e="feed-comment-icon"], [data-e2e*="comment"]');
+    const collectEl = document.querySelector('[data-e2e="video-player-collect"], [data-e2e="collect-count"], [data-e2e*="collect"], [data-e2e*="favorite"]');
+    const shareEl = document.querySelector('[data-e2e="video-player-share"], [data-e2e*="share"]');
     return {
-      likes: parseCountText(likeEl?.textContent || ''),
-      collects: parseCountText(collectEl?.textContent || ''),
+      likes: extractCountFromContainer(likeEl),
+      comments: extractCountFromContainer(commentEl),
+      collects: extractCountFromContainer(collectEl),
+      shares: extractCountFromContainer(shareEl),
     };
+  }
+
+  function getCommentsSnapshot(limit = 12) {
+    const items = Array.from(document.querySelectorAll('[data-e2e="comment-item"]')).slice(0, limit);
+    return items.map((item) => {
+      const author = normalizeText(
+        item.querySelector('.BT7MlqJC a, [data-click-from="title"]')?.textContent || '',
+      );
+      const text = normalizeText(
+        item.querySelector('.C7LroK_h, .WFJiGxr7')?.textContent || '',
+      );
+      const meta = normalizeText(
+        item.querySelector('.fJhvAqos')?.textContent || '',
+      );
+      const likes = parseCountText(
+        item.querySelector('.xZhLomAs span:last-child')?.textContent || '',
+      );
+      const replies = parseCountText(
+        item.querySelector('.comment-reply-expand-btn span')?.textContent || '',
+      );
+      const [createdAt = '', location = ''] = meta.split('·').map((value) => normalizeText(value));
+      return {
+        author,
+        text,
+        likes,
+        replies,
+        createdAt,
+        location,
+      };
+    }).filter((item) => item.author || item.text);
   }
 
   function captureVideoCoverDataUrl(videoEl) {
@@ -2974,25 +3089,53 @@ async function extractDouyinVideoPayload() {
 
   const pathnameSegments = String(location.pathname || '').split('/').filter(Boolean);
   const pathId = pathnameSegments[pathnameSegments.length - 1] || '';
-  const videoId = normalizeText(pathId) || `douyin-${Date.now()}`;
+  const detailId = normalizeText(
+    document.querySelector('[data-e2e="detail-video-info"]')?.getAttribute('data-e2e-aweme-id') || '',
+  );
+  const videoId = detailId || normalizeText(pathId) || `douyin-${Date.now()}`;
   const title = getTitle();
   const description = normalizeText(
     document.querySelector('meta[name="description"]')?.getAttribute('content')
     || title,
   );
+  const author = getAuthor();
+  const publishedAt = getPublishedAt();
+  const commentsSnapshot = getCommentsSnapshot();
+  const indexText = [
+    title,
+    description,
+    author ? `作者：${author}` : '',
+    publishedAt ? `发布时间：${publishedAt}` : '',
+    commentsSnapshot.length > 0
+      ? `评论快照：\n${commentsSnapshot.map((item, index) => {
+          const meta = [
+            item.author,
+            item.location,
+            item.createdAt,
+            item.likes ? `赞${item.likes}` : '',
+            item.replies ? `回复${item.replies}` : '',
+          ].filter(Boolean).join(' · ');
+          return `${index + 1}. ${meta}\n${item.text}`;
+        }).join('\n\n')}`
+      : '',
+  ].filter(Boolean).join('\n\n');
 
   return {
     noteId: videoId,
     title,
-    author: getAuthor(),
+    author,
+    authorProfileUrl: getAuthorProfileUrl(),
     content: description,
     text: description,
     description,
+    publishedAt,
     coverUrl: rawCoverUrl || '',
     coverDataUrl,
     videoUrl,
     videoDataUrl: videoDataUrl || '',
     stats: getStats(),
+    commentsSnapshot,
+    indexText,
     source: sourceUrl,
   };
 }

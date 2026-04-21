@@ -28,7 +28,13 @@ import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EditorLayoutToggleButton } from '../components/manuscripts/EditorLayoutToggleButton';
-import { loadRichpostPreviewHtml, renderRichpostHtmlToPng, renderRichpostPageUrlToPng } from '../components/manuscripts/richpostPreviewImage';
+import {
+    loadRichpostPreviewHtml,
+    RICHPOST_RENDER_VIEWPORT_HEIGHT,
+    RICHPOST_RENDER_VIEWPORT_WIDTH,
+    renderRichpostHtmlToPng,
+    renderRichpostPageUrlToPng,
+} from '../components/manuscripts/richpostPreviewImage';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -395,8 +401,8 @@ type ExportVideoResolution = 'source' | '1080p' | '720p';
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 const RICHPOST_CARD_PREVIEW_WIDTH = 1080;
 const RICHPOST_CARD_PREVIEW_HEIGHT = 1440;
-const RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH = 1080;
-const RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT = 1440;
+const RICHPOST_CARD_PREVIEW_VIEWPORT_WIDTH = RICHPOST_RENDER_VIEWPORT_WIDTH;
+const RICHPOST_CARD_PREVIEW_VIEWPORT_HEIGHT = RICHPOST_RENDER_VIEWPORT_HEIGHT;
 const RICHPOST_CARD_PREVIEW_DEBOUNCE_MS = 700;
 
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {

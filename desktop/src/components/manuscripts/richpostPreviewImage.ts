@@ -4,6 +4,8 @@ const RICHPOST_FONT_SCALE_MIN = 0.8;
 const RICHPOST_FONT_SCALE_MAX = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN = 0.8;
 const RICHPOST_LINE_HEIGHT_SCALE_MAX = 1.4;
+export const RICHPOST_RENDER_VIEWPORT_WIDTH = 560;
+export const RICHPOST_RENDER_VIEWPORT_HEIGHT = RICHPOST_RENDER_VIEWPORT_WIDTH * 4 / 3;
 
 function clampScale(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -317,8 +319,18 @@ export async function renderRichpostPageUrlToPng(
   if (!String(sourceUrl || '').trim()) {
     throw new Error('图文预览页地址为空');
   }
-  const viewportWidth = Math.max(1, Math.round(Number(options?.viewportWidth) || 1080));
-  const viewportHeight = Math.max(1, Math.round(Number(options?.viewportHeight) || 1440));
+  const viewportWidth = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportWidth))
+      ? Number(options?.viewportWidth)
+      : RICHPOST_RENDER_VIEWPORT_WIDTH
+  );
+  const viewportHeight = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportHeight))
+      ? Number(options?.viewportHeight)
+      : RICHPOST_RENDER_VIEWPORT_HEIGHT
+  );
   const frame = document.createElement('iframe');
   frame.src = sourceUrl;
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
@@ -345,8 +357,18 @@ export async function renderRichpostHtmlToPng(
   options?: RichpostPngRenderOptions
 ): Promise<string> {
   void pageId;
-  const viewportWidth = Math.max(1, Math.round(Number(options?.viewportWidth) || 1080));
-  const viewportHeight = Math.max(1, Math.round(Number(options?.viewportHeight) || 1440));
+  const viewportWidth = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportWidth))
+      ? Number(options?.viewportWidth)
+      : RICHPOST_RENDER_VIEWPORT_WIDTH
+  );
+  const viewportHeight = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportHeight))
+      ? Number(options?.viewportHeight)
+      : RICHPOST_RENDER_VIEWPORT_HEIGHT
+  );
   const frame = document.createElement('iframe');
   frame.srcdoc = materializeRichpostBackgroundInHtml(html);
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');

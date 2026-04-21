@@ -14,7 +14,12 @@ import {
 import { CodeMirrorEditor } from './CodeMirrorEditor';
 import { MarkdownItPreview } from './MarkdownItPreview';
 import { WritingDiffProposalPanel } from './WritingDiffProposalPanel';
-import { loadRichpostPreviewHtml, renderRichpostHtmlToPng } from './richpostPreviewImage';
+import {
+  loadRichpostPreviewHtml,
+  RICHPOST_RENDER_VIEWPORT_HEIGHT,
+  RICHPOST_RENDER_VIEWPORT_WIDTH,
+  renderRichpostHtmlToPng,
+} from './richpostPreviewImage';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
 
@@ -245,6 +250,22 @@ function RichpostThemePreviewFrame({
   bare?: boolean;
   capturePointer?: boolean;
 }) {
+  const frameHostRef = useRef<HTMLDivElement | null>(null);
+  const [frameWidth, setFrameWidth] = useState(0);
+
+  useEffect(() => {
+    const node = frameHostRef.current;
+    if (!node) return;
+    const update = () => setFrameWidth(node.getBoundingClientRect().width || 0);
+    update();
+    const observer = new ResizeObserver(() => update());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const previewScale = frameWidth > 0 ? frameWidth / RICHPOST_RENDER_VIEWPORT_WIDTH : 1;
+  const previewHeight = RICHPOST_RENDER_VIEWPORT_HEIGHT * previewScale;
+
   return (
     <div
       className={clsx(
@@ -253,13 +274,23 @@ function RichpostThemePreviewFrame({
         active ? 'ring-1 ring-accent-primary/35' : ''
       )}
     >
-      <div className="pointer-events-none aspect-[3/4] w-full bg-surface-elevated">
+      <div
+        ref={frameHostRef}
+        className="pointer-events-none relative w-full overflow-hidden bg-surface-elevated"
+        style={{ height: previewHeight || undefined, aspectRatio: '3 / 4' }}
+      >
         {html ? (
           <iframe
             title={PRESET_PREVIEW_TITLE}
             srcDoc={html}
             sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="pointer-events-none h-full w-full border-0 bg-surface-elevated"
+            className="pointer-events-none absolute left-0 top-0 border-0 bg-surface-elevated"
+            style={{
+              width: `${RICHPOST_RENDER_VIEWPORT_WIDTH}px`,
+              height: `${RICHPOST_RENDER_VIEWPORT_HEIGHT}px`,
+              transform: `scale(${previewScale || 1})`,
+              transformOrigin: 'top left',
+            }}
             tabIndex={-1}
           />
         ) : (
@@ -1207,6 +1238,7 @@ function RichPostPreview({
   const coverSrc = assetUrl(coverAsset);
   const previewWidth = compact ? RICHPOST_PREVIEW_PAGE_WIDTH_COMPACT : RICHPOST_PREVIEW_PAGE_WIDTH;
   const previewHeight = Math.round(previewWidth * 4 / 3);
+  const previewScale = previewWidth / RICHPOST_RENDER_VIEWPORT_WIDTH;
   const previewFrameUrl = buildPreviewFrameUrl(
     previewSource?.fileUrl || previewSource?.filePath,
     previewSource?.updatedAt,
@@ -1234,13 +1266,23 @@ function RichPostPreview({
                   style={{ width: previewWidth + 32 }}
                 >
                   {frameUrl ? (
-                    <iframe
-                      title={page.title || page.label}
-                      src={frameUrl}
-                      sandbox={RICHPOST_PREVIEW_SANDBOX}
-                      className="block border border-border bg-surface-elevated"
+                    <div
+                      className="relative overflow-hidden border border-border bg-surface-elevated"
                       style={{ width: previewWidth, height: previewHeight }}
-                    />
+                    >
+                      <iframe
+                        title={page.title || page.label}
+                        src={frameUrl}
+                        sandbox={RICHPOST_PREVIEW_SANDBOX}
+                        className="absolute left-0 top-0 border-0 bg-surface-elevated"
+                        style={{
+                          width: `${RICHPOST_RENDER_VIEWPORT_WIDTH}px`,
+                          height: `${RICHPOST_RENDER_VIEWPORT_HEIGHT}px`,
+                          transform: `scale(${previewScale})`,
+                          transformOrigin: 'top left',
+                        }}
+                      />
+                    </div>
                   ) : (
                     <div
                       className="flex items-center justify-center border border-dashed border-border bg-surface-elevated text-sm text-text-tertiary"
@@ -1262,21 +1304,41 @@ function RichPostPreview({
             </div>
           </div>
         ) : !hasRenderedPages && previewFrameUrl ? (
-          <iframe
-            title="图文预览"
-            src={previewFrameUrl}
-            sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="block border border-border bg-surface-elevated"
+          <div
+            className="relative overflow-hidden border border-border bg-surface-elevated"
             style={{ width: previewWidth, height: previewHeight }}
-          />
+          >
+            <iframe
+              title="图文预览"
+              src={previewFrameUrl}
+              sandbox={RICHPOST_PREVIEW_SANDBOX}
+              className="absolute left-0 top-0 border-0 bg-surface-elevated"
+              style={{
+                width: `${RICHPOST_RENDER_VIEWPORT_WIDTH}px`,
+                height: `${RICHPOST_RENDER_VIEWPORT_HEIGHT}px`,
+                transform: `scale(${previewScale})`,
+                transformOrigin: 'top left',
+              }}
+            />
+          </div>
         ) : !hasRenderedPages && previewHtml?.trim() ? (
-          <iframe
-            title="图文预览"
-            srcDoc={previewHtml}
-            sandbox={RICHPOST_PREVIEW_SANDBOX}
-            className="block border border-border bg-surface-elevated"
+          <div
+            className="relative overflow-hidden border border-border bg-surface-elevated"
             style={{ width: previewWidth, height: previewHeight }}
-          />
+          >
+            <iframe
+              title="图文预览"
+              srcDoc={previewHtml}
+              sandbox={RICHPOST_PREVIEW_SANDBOX}
+              className="absolute left-0 top-0 border-0 bg-surface-elevated"
+              style={{
+                width: `${RICHPOST_RENDER_VIEWPORT_WIDTH}px`,
+                height: `${RICHPOST_RENDER_VIEWPORT_HEIGHT}px`,
+                transform: `scale(${previewScale})`,
+                transformOrigin: 'top left',
+              }}
+            />
+          </div>
         ) : !hasRenderedPages ? (
           <div className="space-y-5 border border-border bg-surface-primary p-6">
             {coverSrc ? (

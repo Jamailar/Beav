@@ -870,15 +870,20 @@ fn transcribe_note_media_source(
 ) -> Result<String, String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let (endpoint, api_key, model_name) = resolve_transcription_settings(&settings_snapshot)
-        .ok_or_else(|| "未配置音频转写接口，请先在设置中填写 transcription endpoint/model".to_string())?;
+        .ok_or_else(|| {
+            "未配置音频转写接口，请先在设置中填写 transcription endpoint/model".to_string()
+        })?;
     let media_source = media_source.trim();
     if media_source.is_empty() {
         return Err("缺少可转录的视频来源".to_string());
     }
 
-    let extension = asset_extension_from_url_or_path(media_source).unwrap_or_else(|| "bin".to_string());
-    let mime_type = if matches!(extension.as_str(), "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac")
-    {
+    let extension =
+        asset_extension_from_url_or_path(media_source).unwrap_or_else(|| "bin".to_string());
+    let mime_type = if matches!(
+        extension.as_str(),
+        "mp3" | "wav" | "m4a" | "aac" | "ogg" | "flac"
+    ) {
         "audio/*"
     } else {
         "video/*"
@@ -930,13 +935,10 @@ fn spawn_note_transcription_processing(
             ),
         );
 
-        let start_outcome = write_note_transcription_meta_status(
-            &entry_dir,
-            "processing",
-            None,
-            None,
-        )
-        .and_then(|_| emit_note_transcription_event(&app_handle, &note_id, "processing", false, None));
+        let start_outcome =
+            write_note_transcription_meta_status(&entry_dir, "processing", None, None).and_then(
+                |_| emit_note_transcription_event(&app_handle, &note_id, "processing", false, None),
+            );
         if let Err(error) = start_outcome {
             append_debug_log_state(
                 &state,
@@ -961,7 +963,8 @@ fn spawn_note_transcription_processing(
 
         if let Err(error) = outcome {
             let _ = write_note_transcription_meta_status(&entry_dir, "failed", None, Some(&error));
-            let _ = emit_note_transcription_event(&app_handle, &note_id, "failed", false, Some(&error));
+            let _ =
+                emit_note_transcription_event(&app_handle, &note_id, "failed", false, Some(&error));
             append_debug_log_state(
                 &state,
                 format!(
@@ -1534,16 +1537,14 @@ fn ingest_note_entry(
     let existing_transcript_file = existing_meta
         .as_ref()
         .and_then(note_transcript_file_from_meta);
-    let existing_transcription_status = existing_meta
-        .as_ref()
-        .and_then(|meta| {
-            meta.get("transcriptionStatus")
-                .or_else(|| meta.get("transcription_status"))
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        });
+    let existing_transcription_status = existing_meta.as_ref().and_then(|meta| {
+        meta.get("transcriptionStatus")
+            .or_else(|| meta.get("transcription_status"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    });
     let has_existing_transcript = existing_transcript_file.is_some();
     let transcription_media_source = video_asset
         .as_ref()
@@ -1802,8 +1803,10 @@ pub(crate) fn ingest_entry(
     }
     match kind {
         "youtube-video" => ingest_youtube_entry(app, state, request),
-        "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article" | "knowledge-note"
-        | "webpage" | "article" | "text-note" => ingest_note_entry(app, state, request),
+        "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article"
+        | "knowledge-note" | "webpage" | "article" | "text-note" => {
+            ingest_note_entry(app, state, request)
+        }
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
 }

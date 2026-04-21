@@ -568,14 +568,18 @@ fn clear_official_source_binding(settings: &mut Value, previous_official_token: 
         }
     }
 
-    let current_default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
-    let current_api_endpoint = normalize_base_url(&payload_string(settings, "api_endpoint").unwrap_or_default());
+    let current_default_source_id =
+        payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let current_api_endpoint =
+        normalize_base_url(&payload_string(settings, "api_endpoint").unwrap_or_default());
     let current_api_key = payload_string(settings, "api_key").unwrap_or_default();
     let current_video_api_key = payload_string(settings, "video_api_key").unwrap_or_default();
     let should_reset_default_source = current_default_source_id == "redbox_official_auto";
     let should_reset_root_route = should_reset_default_source
-        || (!current_api_endpoint.is_empty() && current_api_endpoint == normalized_official_base_url)
-        || (!previous_official_token.trim().is_empty() && current_api_key == previous_official_token);
+        || (!current_api_endpoint.is_empty()
+            && current_api_endpoint == normalized_official_base_url)
+        || (!previous_official_token.trim().is_empty()
+            && current_api_key == previous_official_token);
     let should_clear_video_api_key = !current_video_api_key.is_empty()
         && (should_reset_root_route
             || (!previous_official_token.trim().is_empty()
@@ -2798,10 +2802,7 @@ mod tests {
             payload_string(&settings, "model_name").as_deref(),
             Some("gpt-5.3-codex")
         );
-        assert_eq!(
-            payload_string(&settings, "video_api_key").as_deref(),
-            None
-        );
+        assert_eq!(payload_string(&settings, "video_api_key").as_deref(), None);
 
         let sources = payload_string(&settings, "ai_sources_json")
             .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())

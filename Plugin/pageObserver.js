@@ -310,6 +310,112 @@ function getCurrentXhsMainVideoElement(root) {
     }) || null;
 }
 
+function getCurrentXhsVideoElements(root) {
+    const scope = root || document;
+    const candidates = Array.from(scope.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+    const seen = new Set();
+    const unique = [];
+    candidates.forEach((el, index) => {
+        if (isCommentRelatedNode(el)) return;
+        const src = normalizeText(el.currentSrc || el.getAttribute('src') || '');
+        const poster = normalizeText(el.getAttribute('poster') || '');
+        const key = src || poster || `video-index-${index}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        unique.push(el);
+    });
+    return unique;
+}
+
+function parseDurationTextToSeconds(value) {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric;
+    }
+
+    const parts = raw
+        .split(':')
+        .map((part) => Number(part.trim()))
+        .filter((part) => Number.isFinite(part) && part >= 0);
+    if (parts.length < 2 || parts.length > 3) return null;
+
+    let seconds = 0;
+    for (const part of parts) {
+        seconds = (seconds * 60) + part;
+    }
+    return seconds > 0 ? seconds : null;
+}
+
+function getXhsStateVideoDurationSeconds(stateNote) {
+    const candidates = [
+        stateNote?.video?.duration,
+        stateNote?.video?.durationSeconds,
+        stateNote?.video?.media?.duration,
+        stateNote?.video?.media?.durationSeconds,
+        stateNote?.video?.durationMs,
+        stateNote?.video?.duration_ms,
+        stateNote?.video?.media?.durationMs,
+        stateNote?.video?.media?.duration_ms,
+    ];
+
+    for (const candidate of candidates) {
+        const seconds = parseDurationTextToSeconds(candidate);
+        if (!seconds) continue;
+        return seconds > 10000 || (Number.isInteger(seconds) && seconds > 2000 && seconds % 1000 === 0)
+            ? seconds / 1000
+            : seconds;
+    }
+
+    return null;
+}
+
+function getXhsVideoDurationSeconds(videoEl, root, stateNote) {
+    const directDuration = Number(videoEl?.duration);
+    if (Number.isFinite(directDuration) && directDuration > 0) {
+        return directDuration;
+    }
+
+    const scopes = [
+        videoEl?.closest?.('.media-container'),
+        videoEl?.closest?.('.player-container'),
+        videoEl?.closest?.('.player-el'),
+        videoEl?.closest?.('.xgplayer'),
+        root,
+        document,
+    ].filter(Boolean);
+    for (const scope of scopes) {
+        const timeEls = Array.from(scope.querySelectorAll('xg-time span, .xgplayer-time span'));
+        const parsed = parseDurationTextToSeconds(timeEls[timeEls.length - 1]?.textContent || '');
+        if (parsed) return parsed;
+    }
+
+    return getXhsStateVideoDurationSeconds(stateNote);
+}
+
+function resolveXhsNoteType(root, stateNote) {
+    if (isLivePhotoNote(root)) {
+        return 'image';
+    }
+
+    const videoElements = getCurrentXhsVideoElements(root);
+    const hasStateVideo = Boolean(stateNote?.video);
+    const videoCount = Math.max(videoElements.length, hasStateVideo ? 1 : 0);
+    if (videoCount !== 1) {
+        return 'image';
+    }
+
+    const mainVideo = getCurrentXhsMainVideoElement(root) || videoElements[0] || null;
+    const durationSeconds = getXhsVideoDurationSeconds(mainVideo, root || document, stateNote);
+    if (durationSeconds == null) {
+        return 'video';
+    }
+
+    return durationSeconds > 2 ? 'video' : 'image';
+}
+
 function collectDeepHttpUrls(input, maxCount = 40) {
     const urls = [];
     const seenObjects = new WeakSet();
@@ -368,11 +474,32 @@ function getXhsImageUrls(root, stateNote) {
     }
     if (urls.length > 0) return urls;
 
-    const imgEls = Array.from((root || document).querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'));
+    const swiperSlides = Array.from((root || document).querySelectorAll('.note-slider .swiper-slide, .swiper .swiper-slide'))
+        .filter((slide) => !isCommentRelatedNode(slide))
+        .filter((slide) => !slide.classList?.contains('swiper-slide-duplicate'))
+        .map((slide, domIndex) => ({
+            slide,
+            domIndex,
+            slideIndex: Number.parseInt(slide.getAttribute('data-swiper-slide-index') || '', 10),
+        }))
+        .sort((a, b) => {
+            const aHasIndex = Number.isFinite(a.slideIndex);
+            const bHasIndex = Number.isFinite(b.slideIndex);
+            if (aHasIndex && bHasIndex && a.slideIndex !== b.slideIndex) {
+                return a.slideIndex - b.slideIndex;
+            }
+            if (aHasIndex !== bHasIndex) {
+                return aHasIndex ? -1 : 1;
+            }
+            return a.domIndex - b.domIndex;
+        });
+    const imgEls = swiperSlides.length > 0
+        ? swiperSlides.map(({ slide }) => slide.querySelector('img')).filter(Boolean)
+        : Array.from((root || document).querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'));
     imgEls.forEach((img) => {
         if (isCommentRelatedNode(img)) return;
-        if (!isNodeVisible(img)) return;
         if (img.closest('.avatar,[class*="avatar"]')) return;
+        if (img.closest('.swiper-slide-duplicate')) return;
         pushUniqueHttpUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || img.currentSrc || '');
     });
     return urls;
@@ -428,8 +555,8 @@ function detectXhsNoteInfo() {
     const title = getXhsNoteTitle(effectiveRoot);
     const text = getXhsTextContent(effectiveRoot);
     const imageUrls = getXhsImageUrls(noteRoot, stateNote);
-    const videoUrls = getXhsVideoUrls(noteRoot, stateNote);
-    const hasVideo = Boolean(getCurrentXhsMainVideoElement(noteRoot) || videoUrls.length > 0);
+    const noteType = resolveXhsNoteType(noteRoot, stateNote);
+    const hasVideo = noteType === 'video' || getCurrentXhsVideoElements(noteRoot).length > 0 || Boolean(stateNote?.video);
     const hasStateContent = Boolean(stateNote && (stateNote.title || stateNote.desc || stateNote.video || stateNote.imageList || stateNote.images));
     const hasDomContent = Boolean(title || text.length > 20 || imageUrls.length > 0 || hasVideo);
     const hasValidNote = Boolean((noteRoot || articleRoot) && hasDomContent) || hasStateContent;
@@ -441,7 +568,7 @@ function detectXhsNoteInfo() {
         });
     }
 
-    const isVideoNote = hasVideo && imageUrls.length === 0;
+    const isVideoNote = noteType === 'video';
     return {
         kind: isVideoNote ? 'xhs-video' : 'xhs-image',
         action: 'save-xhs',
