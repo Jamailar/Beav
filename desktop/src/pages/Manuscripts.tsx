@@ -44,7 +44,6 @@ import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import type { EditorProjectFile } from '../components/manuscripts/editorProject';
-import { WritingDraftWorkbench } from '../components/manuscripts/WritingDraftWorkbench';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../features/chat/editorSessionBinding';
 import {
@@ -61,6 +60,9 @@ const VideoDraftWorkbench = lazy(async () => ({
 }));
 const AudioDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/AudioDraftWorkbench')).AudioDraftWorkbench,
+}));
+const WritingDraftWorkbench = lazy(async () => ({
+    default: (await import('../components/manuscripts/WritingDraftWorkbench')).WritingDraftWorkbench,
 }));
 
 type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
@@ -3217,57 +3219,59 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         />
                     </Suspense>
                 ) : (
-                    <WritingDraftWorkbench
-                        isActive={isActive}
-                        draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
-                        title={currentDescriptor.title}
-                        filePath={editorFile}
-                        editorBody={editorBody}
-                        writeProposal={editorWriteProposalView}
-                        editorBodyDirty={editorBodyDirty}
-                        isSavingEditorBody={isSavingEditorBody}
-                        isApplyingWriteProposal={isApplyingWriteProposal}
-                        isRejectingWriteProposal={isRejectingWriteProposal}
-                        editorChatSessionId={editorChatSessionId}
-                        editorChatReady={editorChatSessionReady}
-                        layoutPreview={articleLayoutPreview}
-                        wechatPreview={articleWechatPreview}
-                        hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
-                        richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
-                        richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
-                        richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
-                        richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
-                        richpostThemesDir={typeof packageState?.richpostThemesDir === 'string' ? packageState.richpostThemesDir : null}
-                        richpostThemeTemplateFile={typeof packageState?.richpostThemeTemplateFile === 'string' ? packageState.richpostThemeTemplateFile : null}
-                        isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
-                        longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
-                        longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
-                        isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
-                        richpostPages={richpostPagePreviews}
-                        coverAsset={packageCoverAsset}
-                        imageAssets={packageImageAssets}
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
+                        <WritingDraftWorkbench
+                            isActive={isActive}
+                            draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
+                            title={currentDescriptor.title}
+                            filePath={editorFile}
+                            editorBody={editorBody}
+                            writeProposal={editorWriteProposalView}
+                            editorBodyDirty={editorBodyDirty}
+                            isSavingEditorBody={isSavingEditorBody}
+                            isApplyingWriteProposal={isApplyingWriteProposal}
+                            isRejectingWriteProposal={isRejectingWriteProposal}
+                            editorChatSessionId={editorChatSessionId}
+                            editorChatReady={editorChatSessionReady}
+                            layoutPreview={articleLayoutPreview}
+                            wechatPreview={articleWechatPreview}
+                            hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
+                            richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
+                            richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
+                            richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
+                            richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
+                            richpostThemesDir={typeof packageState?.richpostThemesDir === 'string' ? packageState.richpostThemesDir : null}
+                            richpostThemeTemplateFile={typeof packageState?.richpostThemeTemplateFile === 'string' ? packageState.richpostThemeTemplateFile : null}
+                            isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
+                            longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
+                            longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
+                            isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
+                            richpostPages={richpostPagePreviews}
+                            coverAsset={packageCoverAsset}
+                            imageAssets={packageImageAssets}
                             onEditorBodyChange={(value) => {
                                 setEditorBody(value);
                                 setEditorBodyDirty(true);
                             }}
-                        onAcceptWriteProposal={() => {
-                            void handleAcceptEditorWriteProposal();
-                        }}
-                        onSelectRichpostTheme={(themeId) => {
-                            void handleSelectRichpostTheme(themeId);
-                        }}
-                        onUpdateRichpostTypography={(settings) => {
-                            void handleUpdateRichpostTypography(settings);
-                        }}
-                        onSelectLongformLayoutPreset={(presetId, target) => {
-                            void handleSelectLongformLayoutPreset(presetId, target);
-                        }}
+                            onAcceptWriteProposal={() => {
+                                void handleAcceptEditorWriteProposal();
+                            }}
+                            onSelectRichpostTheme={(themeId) => {
+                                void handleSelectRichpostTheme(themeId);
+                            }}
+                            onUpdateRichpostTypography={(settings) => {
+                                void handleUpdateRichpostTypography(settings);
+                            }}
+                            onSelectLongformLayoutPreset={(presetId, target) => {
+                                void handleSelectLongformLayoutPreset(presetId, target);
+                            }}
                             onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
                             onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                             onRejectWriteProposal={() => {
                                 void handleRejectEditorWriteProposal();
                             }}
-                    />
+                        />
+                    </Suspense>
                 )}
             </div>
         );
