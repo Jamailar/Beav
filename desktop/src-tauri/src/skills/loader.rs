@@ -4,6 +4,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use normalized_line_endings::Normalized;
 use serde::{Deserialize, Serialize};
 
 use crate::redbox_project_root;
@@ -74,6 +75,14 @@ fn parse_bool(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+pub fn normalize_skill_text(value: &str) -> String {
+    value.chars().normalized().collect()
+}
+
+pub fn normalize_skill_logical_path(value: &str) -> String {
+    value.trim().replace('\\', "/")
 }
 
 fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
@@ -155,12 +164,19 @@ pub fn normalized_activation_scope(value: Option<&str>) -> &'static str {
 }
 
 pub fn split_skill_body(body: &str) -> (SkillMetadataRecord, String) {
-    let trimmed = body.trim_start();
+    let normalized = normalize_skill_text(body);
+    let trimmed = normalized.trim_start();
     let Some(rest) = trimmed.strip_prefix("---\n") else {
-        return (SkillMetadataRecord::default(), body.trim().to_string());
+        return (
+            SkillMetadataRecord::default(),
+            normalized.trim().to_string(),
+        );
     };
     let Some((frontmatter, content)) = rest.split_once("\n---\n") else {
-        return (SkillMetadataRecord::default(), body.trim().to_string());
+        return (
+            SkillMetadataRecord::default(),
+            normalized.trim().to_string(),
+        );
     };
     (
         parse_frontmatter_metadata(frontmatter),
@@ -244,7 +260,9 @@ fn load_section_folder(folder: &Path) -> String {
             if !path.is_file() {
                 continue;
             }
-            let content = fs::read_to_string(&path).unwrap_or_default();
+            let content = fs::read_to_string(&path)
+                .map(|value| normalize_skill_text(&value))
+                .unwrap_or_default();
             let name = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -271,7 +289,9 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        let content = fs::read_to_string(&path)
+            .map(|value| normalize_skill_text(&value))
+            .unwrap_or_default();
         if content.trim().is_empty() {
             continue;
         }
@@ -300,7 +320,9 @@ pub fn load_skill_bundle_sections_from_root(
             rules: BTreeMap::new(),
         };
     }
-    let body = fs::read_to_string(&skill_file).unwrap_or_default();
+    let body = fs::read_to_string(&skill_file)
+        .map(|value| normalize_skill_text(&value))
+        .unwrap_or_default();
     let references = load_section_folder(&skill_root.join("references"));
     let scripts = load_section_folder(&skill_root.join("scripts"));
     let rules = load_named_markdown_folder(&skill_root.join("rules"));
@@ -386,6 +408,24 @@ mod tests {
         assert_eq!(
             normalized_activation_scope(loaded.metadata.activation_scope.as_deref()),
             "turn"
+        );
+    }
+
+    #[test]
+    fn split_skill_body_normalizes_crlf_frontmatter() {
+        let (metadata, body) = split_skill_body(
+            "---\r\nallowedRuntimeModes: [wander]\r\nhookMode: inline\r\n---\r\n# Skill\r\n\r\nBody",
+        );
+        assert_eq!(metadata.allowed_runtime_modes, vec!["wander"]);
+        assert_eq!(metadata.hook_mode.as_deref(), Some("inline"));
+        assert_eq!(body, "# Skill\n\nBody");
+    }
+
+    #[test]
+    fn normalize_skill_logical_path_converts_backslashes() {
+        assert_eq!(
+            normalize_skill_logical_path(r"builtin-skills\writing-style\SKILL.md"),
+            "builtin-skills/writing-style/SKILL.md"
         );
     }
 

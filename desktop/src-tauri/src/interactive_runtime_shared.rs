@@ -7,7 +7,7 @@ use tauri::State;
 use crate::persistence::ensure_store_hydrated_for_subjects;
 use crate::persistence::with_store;
 use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
-use crate::skills::build_skill_runtime_state;
+use crate::skills::{build_skill_runtime_state, normalize_skill_logical_path};
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
@@ -469,7 +469,8 @@ pub(crate) fn resolve_workspace_tool_path(
     if trimmed.is_empty() {
         return Err("path is required".to_string());
     }
-    if let Some(relative) = trimmed.strip_prefix("builtin-skills/") {
+    let logical_trimmed = normalize_skill_logical_path(trimmed);
+    if let Some(relative) = logical_trimmed.strip_prefix("builtin-skills/") {
         let builtin_root = redbox_project_root().join("builtin-skills");
         let candidate = builtin_root.join(relative);
         let normalized = candidate.canonicalize().unwrap_or(candidate.clone());

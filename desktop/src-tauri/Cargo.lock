@@ -2189,6 +2189,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 
 [[package]]
+name = "normalized-line-endings"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec1c9b208b243df153ffa70a7212704a421c77927c37fb871e699b28d696088"
+
+[[package]]
 name = "notify"
 version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2961,6 +2967,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
  "glob",
+ "normalized-line-endings",
  "notify",
  "open",
  "pulldown-cmark",
