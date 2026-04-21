@@ -23,6 +23,10 @@ import {
   type McpServerRuntimeItem,
   type McpServerConfig,
   type McpSessionState,
+  type RuntimePerfBenchmarkMode,
+  type RuntimePerfPreset,
+  type RuntimePerfRunResult,
+  type RuntimePerfTimelineItem,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
   AiPresetLogo,
@@ -77,6 +81,29 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
+const RUNTIME_PERF_HISTORY_LIMIT = 12;
+const RUNTIME_PERF_TIMELINE_LIMIT = 40;
+const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
+const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
+  {
+    id: 'latency-smoke',
+    label: '延迟冒烟',
+    description: '验证纯文本响应路径，观察 thinking 到首个 response 的延迟。',
+    message: '请直接回答：用三句话说明当前 runtime mode 的职责、主要风险和最先检查的观测点。不要调用工具。',
+  },
+  {
+    id: 'tooling-probe',
+    label: '工具探测',
+    description: '尽量触发一次真实工具调用，检查 tool-start/tool-end 延迟和成功率。',
+    message: '先调用一个最适合当前运行时的诊断类工具读取状态，再用两条结论总结发现。若当前上下文没有合适工具，再明确说明原因。',
+  },
+  {
+    id: 'long-response',
+    label: '长响应',
+    description: '拉长输出链路，观察持续流式输出和总耗时。',
+    message: '围绕当前 runtime mode 输出一个结构化调试清单，至少包含：入口、关键事件、常见瓶颈、建议日志位、回归检查项，每项 2 到 3 句。',
+  },
+];
 
 type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
 
@@ -263,6 +290,56 @@ type RuntimeHookDefinition = {
   enabled?: boolean;
 };
 
+type RuntimePerfCollector = {
+  runId: string;
+  sessionId: string;
+  startedAt: number;
+  thinkingStartedMs?: number;
+  thoughtFirstTokenMs?: number;
+  firstResponseMs?: number;
+  firstToolStartMs?: number;
+  firstCheckpointMs?: number;
+  toolCalls: number;
+  toolSuccessCount: number;
+  toolFailureCount: number;
+  checkpointCount: number;
+  checkpointTypes: string[];
+  responseChars?: number;
+  timeline: RuntimePerfTimelineItem[];
+};
+
+function toRuntimePerfRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  return value as Record<string, unknown>;
+}
+
+function toRuntimePerfText(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function toRuntimePerfNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
+  if (mode === 'chatroom') return 'chatroom';
+  if (mode === 'diagnostics') return 'diagnostics';
+  return mode;
+}
+
+function formatRuntimePerfRunIndex(index: number): string {
+  return `Run ${String(index).padStart(2, '0')}`;
+}
+
 const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < MIN_CHAT_MAX_TOKENS) {
@@ -359,6 +436,14 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isRuntimeCreating, setIsRuntimeCreating] = useState(false);
   const [runtimeTaskActionRunning, setRuntimeTaskActionRunning] = useState<Record<string, 'resume' | 'cancel' | undefined>>({});
   const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | undefined>>({});
+  const [runtimePerfMode, setRuntimePerfMode] = useState<RuntimePerfBenchmarkMode>('diagnostics');
+  const [runtimePerfPresetId, setRuntimePerfPresetId] = useState<string>(RUNTIME_PERF_PRESETS[0].id);
+  const [runtimePerfMessage, setRuntimePerfMessage] = useState<string>(RUNTIME_PERF_PRESETS[0].message);
+  const [runtimePerfIterations, setRuntimePerfIterations] = useState(1);
+  const [isRuntimePerfRunning, setIsRuntimePerfRunning] = useState(false);
+  const [runtimePerfStatusMessage, setRuntimePerfStatusMessage] = useState('');
+  const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
+  const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -373,6 +458,46 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
   );
+
+  const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
+    setRuntimePerfResults((prev) =>
+      prev.map((run) => (run.id === runId ? updater(run) : run))
+    );
+  }, []);
+
+  const snapshotRuntimePerfCollector = useCallback((collector: RuntimePerfCollector) => ({
+    thinkingStartedMs: collector.thinkingStartedMs,
+    thoughtFirstTokenMs: collector.thoughtFirstTokenMs,
+    firstResponseMs: collector.firstResponseMs,
+    firstToolStartMs: collector.firstToolStartMs,
+    firstCheckpointMs: collector.firstCheckpointMs,
+    responseChars: collector.responseChars,
+    toolCalls: collector.toolCalls,
+    toolSuccessCount: collector.toolSuccessCount,
+    toolFailureCount: collector.toolFailureCount,
+    checkpointCount: collector.checkpointCount,
+    checkpointTypes: [...collector.checkpointTypes],
+    timeline: [...collector.timeline],
+  }), []);
+
+  const appendRuntimePerfTimeline = useCallback((
+    collector: RuntimePerfCollector,
+    event: Omit<RuntimePerfTimelineItem, 'id' | 'offsetMs'> & { offsetMs?: number },
+  ) => {
+    const offsetMs = typeof event.offsetMs === 'number'
+      ? event.offsetMs
+      : Math.max(0, event.at - collector.startedAt);
+    const item: RuntimePerfTimelineItem = {
+      id: `${collector.runId}:${collector.timeline.length}:${event.eventType}:${event.at}`,
+      at: event.at,
+      offsetMs,
+      eventType: event.eventType,
+      label: event.label,
+      detail: event.detail,
+      tone: event.tone,
+    };
+    collector.timeline = [...collector.timeline, item].slice(-RUNTIME_PERF_TIMELINE_LIMIT);
+  }, []);
 
   const buildWeixinQrImageUrl = useCallback(async (rawUrl?: string): Promise<string | undefined> => {
     const text = String(rawUrl || '').trim();
@@ -399,6 +524,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const runtimeTaskTracesLoadRequestRef = useRef(0);
   const runtimeSessionDetailsLoadRequestRef = useRef(0);
   const runtimeObservabilityRefreshTimerRef = useRef<number | null>(null);
+  const runtimePerfCollectorRef = useRef<RuntimePerfCollector | null>(null);
+  const runtimePerfRunCounterRef = useRef(0);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
@@ -1722,6 +1849,151 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     };
   }, [activeTab, formData.developer_mode_enabled, isActive, loadRuntimeSessionDetails, loadRuntimeSessions, selectedRuntimeSessionId]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+
+    const onRuntimePerfEvent = (_event: unknown, envelope?: unknown) => {
+      const collector = runtimePerfCollectorRef.current;
+      if (!collector) return;
+
+      const record = toRuntimePerfRecord(envelope);
+      const eventType = toRuntimePerfText(record.eventType);
+      const sessionId = toRuntimePerfText(record.sessionId);
+      const timestamp = toRuntimePerfNumber(record.timestamp) || Date.now();
+      if (!eventType || sessionId !== collector.sessionId) return;
+
+      const payload = toRuntimePerfRecord(record.payload);
+      let changed = false;
+
+      if (eventType === 'runtime:stream-start') {
+        const phase = toRuntimePerfText(payload.phase) || 'unknown';
+        if (phase === 'thinking' && collector.thinkingStartedMs == null) {
+          collector.thinkingStartedMs = Math.max(0, timestamp - collector.startedAt);
+          changed = true;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `phase · ${phase}`,
+          detail: toRuntimePerfText(payload.runtimeMode) || undefined,
+          tone: 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:text-delta') {
+        const stream = toRuntimePerfText(payload.stream);
+        const content = toRuntimePerfText(payload.content);
+        if (stream === 'thought' && collector.thoughtFirstTokenMs == null) {
+          collector.thoughtFirstTokenMs = Math.max(0, timestamp - collector.startedAt);
+          appendRuntimePerfTimeline(collector, {
+            at: timestamp,
+            eventType,
+            label: 'thought first token',
+            detail: `${content.length} chars`,
+            tone: 'neutral',
+          });
+          changed = true;
+        }
+        if (stream === 'response') {
+          if (collector.firstResponseMs == null) {
+            collector.firstResponseMs = Math.max(0, timestamp - collector.startedAt);
+            appendRuntimePerfTimeline(collector, {
+              at: timestamp,
+              eventType,
+              label: 'response first token',
+              detail: `${content.length} chars`,
+              tone: 'success',
+            });
+            changed = true;
+          }
+          const nextChars = (collector.responseChars || 0) + content.length;
+          if (nextChars !== collector.responseChars) {
+            collector.responseChars = nextChars;
+            changed = true;
+          }
+        }
+      } else if (eventType === 'runtime:tool-start') {
+        collector.toolCalls += 1;
+        if (collector.firstToolStartMs == null) {
+          collector.firstToolStartMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool start · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(payload.description) || undefined,
+          tone: 'warning',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:tool-end') {
+        const output = toRuntimePerfRecord(payload.output);
+        const success = output.success !== false;
+        if (success) {
+          collector.toolSuccessCount += 1;
+        } else {
+          collector.toolFailureCount += 1;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool ${success ? 'done' : 'failed'} · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(output.content) || undefined,
+          tone: success ? 'success' : 'error',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:checkpoint') {
+        const checkpointType = toRuntimePerfText(payload.checkpointType) || 'checkpoint';
+        collector.checkpointCount += 1;
+        if (collector.firstCheckpointMs == null) {
+          collector.firstCheckpointMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        if (checkpointType && !collector.checkpointTypes.includes(checkpointType)) {
+          collector.checkpointTypes = [...collector.checkpointTypes, checkpointType];
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `checkpoint · ${checkpointType}`,
+          detail: toRuntimePerfText(payload.summary) || undefined,
+          tone: checkpointType === 'chat.error' ? 'error' : 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:done') {
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `done · ${toRuntimePerfText(payload.status) || 'completed'}`,
+          detail: toRuntimePerfText(payload.reason) || undefined,
+          tone: toRuntimePerfText(payload.status) === 'error' ? 'error' : 'success',
+        });
+        const content = toRuntimePerfText(payload.content);
+        if (content) {
+          collector.responseChars = Math.max(collector.responseChars || 0, content.length);
+        }
+        changed = true;
+      }
+
+      if (!changed) return;
+
+      updateRuntimePerfRun(collector.runId, (run) => ({
+        ...run,
+        ...snapshotRuntimePerfCollector(collector),
+      }));
+    };
+
+    window.ipcRenderer.on('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    };
+  }, [
+    activeTab,
+    appendRuntimePerfTimeline,
+    formData.developer_mode_enabled,
+    isActive,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
+  ]);
+
   const loadRuntimeHooks = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.toolHooks.list();
@@ -1795,6 +2067,242 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
+  ]);
+
+  const handleApplyRuntimePerfPreset = useCallback((presetId: string) => {
+    const preset = RUNTIME_PERF_PRESETS.find((item) => item.id === presetId) || RUNTIME_PERF_PRESETS[0];
+    setRuntimePerfPresetId(preset.id);
+    setRuntimePerfMessage(preset.message);
+  }, []);
+
+  const ensureRuntimePerfSession = useCallback(async (
+    mode: RuntimePerfBenchmarkMode,
+    index: number,
+  ): Promise<{ id: string }> => {
+    const contextType = runtimePerfContextTypeForMode(mode);
+    const timestamp = Date.now();
+    const contextId = `developer-runtime-perf-${mode}-${timestamp}-${index}`;
+    const title = `Runtime Perf · ${mode} · ${formatRuntimePerfRunIndex(index)}`;
+    if (mode === 'diagnostics') {
+      return await window.ipcRenderer.chat.createDiagnosticsSession({
+        title,
+        contextId,
+        contextType,
+      }) as { id: string };
+    }
+    return await window.ipcRenderer.chat.createContextSession({
+      contextId,
+      contextType,
+      title,
+    }) as { id: string };
+  }, []);
+
+  const handleClearRuntimePerfResults = useCallback(() => {
+    runtimePerfCollectorRef.current = null;
+    setActiveRuntimePerfRunId('');
+    setRuntimePerfResults([]);
+    setRuntimePerfStatusMessage('');
+  }, []);
+
+  const handleRunRuntimePerfBenchmark = useCallback(async () => {
+    const trimmedMessage = runtimePerfMessage.trim();
+    if (!trimmedMessage || isRuntimePerfRunning) return;
+
+    setIsRuntimePerfRunning(true);
+    setRuntimePerfStatusMessage(`准备执行 ${runtimePerfIterations} 轮 runtime benchmark...`);
+
+    try {
+      for (let iterationIndex = 0; iterationIndex < runtimePerfIterations; iterationIndex += 1) {
+        const runNumber = ++runtimePerfRunCounterRef.current;
+        const session = await ensureRuntimePerfSession(runtimePerfMode, runNumber);
+        const sessionId = String(session?.id || '').trim();
+        if (!sessionId) {
+          throw new Error('性能测试未拿到有效 sessionId');
+        }
+
+        const startedAt = Date.now();
+        const runId = `runtime-perf-${startedAt}-${runNumber}`;
+        const collector: RuntimePerfCollector = {
+          runId,
+          sessionId,
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [],
+        };
+        runtimePerfCollectorRef.current = collector;
+        setActiveRuntimePerfRunId(runId);
+        setSelectedRuntimeSessionId(sessionId);
+        appendRuntimePerfTimeline(collector, {
+          at: startedAt,
+          eventType: 'run:start',
+          label: '测试开始',
+          detail: `${runtimePerfMode} · ${formatRuntimePerfRunIndex(runNumber)}`,
+          tone: 'neutral',
+          offsetMs: 0,
+        });
+        const pendingRun: RuntimePerfRunResult = {
+          id: runId,
+          index: runNumber,
+          runtimeMode: runtimePerfMode,
+          sessionId,
+          presetId: runtimePerfPresetId,
+          message: trimmedMessage,
+          status: 'running',
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [...collector.timeline],
+        };
+        setRuntimePerfResults((prev) => [
+          pendingRun,
+          ...prev,
+        ].slice(0, RUNTIME_PERF_HISTORY_LIMIT));
+
+        setRuntimePerfStatusMessage(`执行中：第 ${iterationIndex + 1}/${runtimePerfIterations} 轮`);
+
+        let finalStatus: RuntimePerfRunResult['status'] = 'completed';
+        let finalError = '';
+        let finalResponseChars = 0;
+        let routeValue: unknown = null;
+        let orchestrationValue: unknown = null;
+
+        try {
+          const result = await window.ipcRenderer.runtime.query({
+            sessionId,
+            message: trimmedMessage,
+          }) as {
+            success?: boolean;
+            response?: string;
+            route?: unknown;
+            orchestration?: unknown;
+          };
+          if (result?.success === false) {
+            throw new Error('runtime query returned success=false');
+          }
+          finalResponseChars = String(result?.response || '').length;
+          routeValue = result?.route;
+          orchestrationValue = result?.orchestration;
+        } catch (error) {
+          finalStatus = 'failed';
+          finalError = error instanceof Error ? error.message : String(error);
+        }
+
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(collector, {
+          at: completedAt,
+          eventType: 'run:finish',
+          label: finalStatus === 'completed' ? '测试完成' : '测试失败',
+          detail: finalError || undefined,
+          tone: finalStatus === 'completed' ? 'success' : 'error',
+        });
+
+        const [summary, checkpoints, toolResults] = await Promise.all([
+          window.ipcRenderer.debug.getRuntimeSummary(),
+          window.ipcRenderer.runtime.getCheckpoints({ sessionId, limit: 120 }),
+          window.ipcRenderer.runtime.getToolResults({ sessionId, limit: 120 }),
+        ]);
+        setRuntimeDiagnosticsSummary(summary || null);
+
+        const checkpointRows = (Array.isArray(checkpoints) ? checkpoints : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionCheckpointItem[];
+        const toolRows = (Array.isArray(toolResults) ? toolResults : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionToolResultItem[];
+        const recentRuntimeMetrics = Array.isArray(summary?.phase0?.runtimeQueries?.recent)
+          ? summary.phase0.runtimeQueries.recent as Array<Record<string, unknown>>
+          : [];
+        const matchingMetric = recentRuntimeMetrics.find((item) =>
+          String(item.sessionId || '').trim() === sessionId
+          && (toRuntimePerfNumber(item.createdAt) || 0) >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS)
+        );
+
+        const toolSuccessCount = toolRows.filter((item) => Boolean(item.success)).length;
+        const toolFailureCount = toolRows.length - toolSuccessCount;
+        const checkpointTypes = checkpointRows
+          .map((item) => String(item.checkpointType || '').trim())
+          .filter(Boolean);
+
+        collector.responseChars = collector.responseChars ?? finalResponseChars;
+        collector.toolCalls = Math.max(collector.toolCalls, toolRows.length);
+        collector.toolSuccessCount = Math.max(collector.toolSuccessCount, toolSuccessCount);
+        collector.toolFailureCount = Math.max(collector.toolFailureCount, toolFailureCount);
+        collector.checkpointCount = Math.max(collector.checkpointCount, checkpointRows.length);
+        collector.checkpointTypes = checkpointTypes.length ? checkpointTypes : collector.checkpointTypes;
+
+        updateRuntimePerfRun(runId, (run) => ({
+          ...run,
+          status: finalStatus,
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - startedAt),
+          promptChars: toRuntimePerfNumber(matchingMetric?.promptChars),
+          activeSkillCount: toRuntimePerfNumber(matchingMetric?.activeSkillCount),
+          responseChars: collector.responseChars ?? finalResponseChars,
+          toolCalls: collector.toolCalls,
+          toolSuccessCount: collector.toolSuccessCount,
+          toolFailureCount: collector.toolFailureCount,
+          checkpointCount: collector.checkpointCount,
+          checkpointTypes: [...collector.checkpointTypes],
+          route: routeValue,
+          orchestration: orchestrationValue,
+          error: finalError || undefined,
+          ...snapshotRuntimePerfCollector(collector),
+        }));
+
+        runtimePerfCollectorRef.current = null;
+        setActiveRuntimePerfRunId('');
+        await loadRuntimeSessions();
+        await loadRuntimeSessionDetails(sessionId);
+      }
+      setRuntimePerfStatusMessage(`已完成 ${runtimePerfIterations} 轮 runtime benchmark`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimePerfStatusMessage(`runtime benchmark 失败：${message}`);
+      const activeCollector = runtimePerfCollectorRef.current;
+      if (activeCollector) {
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(activeCollector, {
+          at: completedAt,
+          eventType: 'run:error',
+          label: '执行异常',
+          detail: message,
+          tone: 'error',
+        });
+        updateRuntimePerfRun(activeCollector.runId, (run) => ({
+          ...run,
+          status: 'failed',
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - run.startedAt),
+          error: message,
+          ...snapshotRuntimePerfCollector(activeCollector),
+        }));
+      }
+    } finally {
+      runtimePerfCollectorRef.current = null;
+      setActiveRuntimePerfRunId('');
+      setIsRuntimePerfRunning(false);
+    }
+  }, [
+    appendRuntimePerfTimeline,
+    ensureRuntimePerfSession,
+    isRuntimePerfRunning,
+    loadRuntimeSessionDetails,
+    loadRuntimeSessions,
+    runtimePerfIterations,
+    runtimePerfMessage,
+    runtimePerfMode,
+    runtimePerfPresetId,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
   ]);
 
   const handleCreateRuntimeTask = async () => {
@@ -3706,6 +4214,22 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleRefreshToolDiagnostics={loadToolDiagnostics}
                 handleRunAllDirectToolDiagnostics={() => runAllToolDiagnostics('direct')}
                 handleRunAllAiToolDiagnostics={() => runAllToolDiagnostics('ai')}
+                runtimePerfPresets={RUNTIME_PERF_PRESETS}
+                runtimePerfMode={runtimePerfMode}
+                setRuntimePerfMode={setRuntimePerfMode}
+                runtimePerfPresetId={runtimePerfPresetId}
+                setRuntimePerfPresetId={setRuntimePerfPresetId}
+                runtimePerfMessage={runtimePerfMessage}
+                setRuntimePerfMessage={setRuntimePerfMessage}
+                runtimePerfIterations={runtimePerfIterations}
+                setRuntimePerfIterations={setRuntimePerfIterations}
+                runtimePerfResults={runtimePerfResults}
+                activeRuntimePerfRunId={activeRuntimePerfRunId}
+                isRuntimePerfRunning={isRuntimePerfRunning}
+                runtimePerfStatusMessage={runtimePerfStatusMessage}
+                handleApplyRuntimePerfPreset={handleApplyRuntimePerfPreset}
+                handleRunRuntimePerfBenchmark={handleRunRuntimePerfBenchmark}
+                handleClearRuntimePerfResults={handleClearRuntimePerfResults}
                 runtimeTasks={runtimeTasks}
                 runtimeRoles={runtimeRoles}
                 runtimeDiagnosticsSummary={runtimeDiagnosticsSummary}

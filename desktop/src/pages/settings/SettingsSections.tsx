@@ -14,6 +14,9 @@ import type {
   MemoryMaintenanceStatus,
     MemorySearchResult,
     RoleSpec,
+    RuntimePerfBenchmarkMode,
+    RuntimePerfPreset,
+    RuntimePerfRunResult,
     RuntimeToolResultItem,
     ToolDiagnosticDescriptor,
     ToolDiagnosticRunResult,
@@ -202,6 +205,10 @@ function DiagnosticCopyButton({ text, label = '复制' }: { text: string; label?
             <span>{copied ? '已复制' : label}</span>
         </button>
     );
+}
+
+function formatRuntimePerfRunIndex(index: number): string {
+    return `Run ${String(index).padStart(2, '0')}`;
 }
 
 type AssistantDaemonDraft = {
@@ -1694,6 +1701,22 @@ interface ToolsSettingsSectionProps {
     handleRefreshToolDiagnostics: () => Promise<void>;
     handleRunAllDirectToolDiagnostics: () => Promise<void>;
     handleRunAllAiToolDiagnostics: () => Promise<void>;
+    runtimePerfPresets: RuntimePerfPreset[];
+    runtimePerfMode: RuntimePerfBenchmarkMode;
+    setRuntimePerfMode: Dispatch<SetStateAction<RuntimePerfBenchmarkMode>>;
+    runtimePerfPresetId: string;
+    setRuntimePerfPresetId: Dispatch<SetStateAction<string>>;
+    runtimePerfMessage: string;
+    setRuntimePerfMessage: Dispatch<SetStateAction<string>>;
+    runtimePerfIterations: number;
+    setRuntimePerfIterations: Dispatch<SetStateAction<number>>;
+    runtimePerfResults: RuntimePerfRunResult[];
+    activeRuntimePerfRunId: string;
+    isRuntimePerfRunning: boolean;
+    runtimePerfStatusMessage: string;
+    handleApplyRuntimePerfPreset: (presetId: string) => void;
+    handleRunRuntimePerfBenchmark: () => Promise<void>;
+    handleClearRuntimePerfResults: () => void;
     runtimeTasks: AgentTaskSnapshot[];
     runtimeRoles: RoleSpec[];
     runtimeDiagnosticsSummary: RuntimeDiagnosticsSummary | null;
@@ -1799,6 +1822,22 @@ export function ToolsSettingsSection({
     handleRefreshToolDiagnostics,
     handleRunAllDirectToolDiagnostics,
     handleRunAllAiToolDiagnostics,
+    runtimePerfPresets,
+    runtimePerfMode,
+    setRuntimePerfMode,
+    runtimePerfPresetId,
+    setRuntimePerfPresetId,
+    runtimePerfMessage,
+    setRuntimePerfMessage,
+    runtimePerfIterations,
+    setRuntimePerfIterations,
+    runtimePerfResults,
+    activeRuntimePerfRunId,
+    isRuntimePerfRunning,
+    runtimePerfStatusMessage,
+    handleApplyRuntimePerfPreset,
+    handleRunRuntimePerfBenchmark,
+    handleClearRuntimePerfResults,
     runtimeTasks,
     runtimeRoles,
     runtimeDiagnosticsSummary,
@@ -1988,6 +2027,39 @@ export function ToolsSettingsSection({
         runtimeSessionTranscriptText,
         selectedRuntimeSession,
     ]);
+
+    const selectedRuntimePerfPreset = useMemo(
+        () => runtimePerfPresets.find((item) => item.id === runtimePerfPresetId) || runtimePerfPresets[0] || null,
+        [runtimePerfPresetId, runtimePerfPresets],
+    );
+
+    const runtimePerfSummary = useMemo(() => {
+        const completedRuns = runtimePerfResults.filter((item) => item.status === 'completed');
+        if (completedRuns.length === 0) {
+            return null;
+        }
+        const average = (values: number[]) => {
+            if (values.length === 0) return 0;
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        };
+        const completedCount = completedRuns.length;
+        const toolCallCount = completedRuns.reduce((sum, item) => sum + item.toolCalls, 0);
+        const toolSuccessCount = completedRuns.reduce((sum, item) => sum + item.toolSuccessCount, 0);
+        return {
+            completedCount,
+            avgTotalElapsedMs: average(completedRuns.map((item) => item.totalElapsedMs || 0)),
+            avgFirstResponseMs: average(completedRuns.map((item) => item.firstResponseMs || 0).filter((item) => item > 0)),
+            avgThinkingStartedMs: average(completedRuns.map((item) => item.thinkingStartedMs || 0).filter((item) => item > 0)),
+            avgPromptChars: average(completedRuns.map((item) => item.promptChars || 0).filter((item) => item > 0)),
+            avgResponseChars: average(completedRuns.map((item) => item.responseChars || 0).filter((item) => item > 0)),
+            toolSuccessRate: toolCallCount > 0 ? toolSuccessCount / toolCallCount : 0,
+        };
+    }, [runtimePerfResults]);
+
+    const runtimePerfResultsText = useMemo(() => {
+        if (runtimePerfResults.length === 0) return '暂无 benchmark 结果。';
+        return JSON.stringify(runtimePerfResults, null, 2);
+    }, [runtimePerfResults]);
 
     const availabilityLabel = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
@@ -2573,6 +2645,293 @@ export function ToolsSettingsSection({
                             ) : (
                                 <div className="text-[11px] text-text-tertiary">暂无 runtime warm 数据。</div>
                             )}
+                        </div>
+                    </div>
+
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-text-primary">AI Runtime 性能测试</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    用真实 `runtime.query` 跑 benchmark，采集 `runtime:event` 时间线，并把耗时、checkpoint、tool 调用结果结构化保留下来。
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {runtimePerfResults.length > 0 ? (
+                                    <DiagnosticCopyButton text={runtimePerfResultsText} label="复制 JSON" />
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => void handleClearRuntimePerfResults()}
+                                    disabled={isRuntimePerfRunning || runtimePerfResults.length === 0}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                >
+                                    清空结果
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">测试配置</div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Runtime Mode</label>
+                                        <select
+                                            value={runtimePerfMode}
+                                            onChange={(event) => setRuntimePerfMode(event.target.value as RuntimePerfBenchmarkMode)}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="diagnostics">diagnostics</option>
+                                            <option value="chatroom">chatroom</option>
+                                            <option value="knowledge">knowledge</option>
+                                            <option value="advisor-discussion">advisor-discussion</option>
+                                            <option value="redclaw">redclaw</option>
+                                            <option value="background-maintenance">background-maintenance</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Benchmark Preset</label>
+                                        <select
+                                            value={runtimePerfPresetId}
+                                            onChange={(event) => {
+                                                setRuntimePerfPresetId(event.target.value);
+                                                handleApplyRuntimePerfPreset(event.target.value);
+                                            }}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            {runtimePerfPresets.map((preset) => (
+                                                <option key={preset.id} value={preset.id}>{preset.label}</option>
+                                            ))}
+                                        </select>
+                                        <div className="text-[11px] text-text-tertiary">
+                                            {selectedRuntimePerfPreset?.description || '选择一个预设后会自动填充 prompt。'}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">执行轮次</label>
+                                        <select
+                                            value={String(runtimePerfIterations)}
+                                            onChange={(event) => setRuntimePerfIterations(Math.max(1, Number(event.target.value) || 1))}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="1">1 轮</option>
+                                            <option value="3">3 轮</option>
+                                            <option value="5">5 轮</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">测试 Prompt</label>
+                                        <textarea
+                                            value={runtimePerfMessage}
+                                            onChange={(event) => setRuntimePerfMessage(event.target.value)}
+                                            rows={6}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        />
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleRunRuntimePerfBenchmark()}
+                                        disabled={isRuntimePerfRunning || !runtimePerfMessage.trim()}
+                                        className="w-full px-3 py-2 bg-accent-primary text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                                    >
+                                        {isRuntimePerfRunning ? 'Benchmark 执行中...' : '运行 Runtime Benchmark'}
+                                    </button>
+
+                                    <div className="text-[11px] text-text-tertiary">
+                                        {runtimePerfStatusMessage || '每轮都会创建独立 session，避免历史上下文污染结果。'}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">聚合指标</div>
+                                    {!runtimePerfSummary ? (
+                                        <div className="text-[11px] text-text-tertiary">先执行 benchmark，再看均值对比。</div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-2">
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">已完成轮次</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.completedCount}</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均总耗时</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.avgTotalElapsedMs.toFixed(1)} ms</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均首个响应</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgFirstResponseMs > 0 ? `${runtimePerfSummary.avgFirstResponseMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 thinking 开始</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgThinkingStartedMs > 0 ? `${runtimePerfSummary.avgThinkingStartedMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 prompt chars</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgPromptChars > 0 ? runtimePerfSummary.avgPromptChars.toFixed(1) : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">工具成功率</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {(runtimePerfSummary.toolSuccessRate * 100).toFixed(1)}%
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-medium text-text-primary">Run 结果</div>
+                                        <span className="text-[11px] text-text-tertiary">最近 {runtimePerfResults.length} 条</span>
+                                    </div>
+                                    {runtimePerfResults.length === 0 ? (
+                                        <div className="text-[11px] text-text-tertiary">暂无 runtime benchmark 结果。</div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {runtimePerfResults.map((run) => {
+                                                const isActiveRun = activeRuntimePerfRunId === run.id;
+                                                return (
+                                                    <div
+                                                        key={run.id}
+                                                        className={clsx(
+                                                            'rounded border p-3 space-y-3',
+                                                            isActiveRun
+                                                                ? 'border-accent-primary bg-accent-primary/5'
+                                                                : 'border-border bg-surface-secondary/20'
+                                                        )}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <div className="text-sm font-medium text-text-primary">{formatRuntimePerfRunIndex(run.index)}</div>
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary border border-border text-text-tertiary">
+                                                                        {run.runtimeMode}
+                                                                    </span>
+                                                                    <span className={clsx(
+                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                        run.status === 'completed'
+                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                            : run.status === 'failed'
+                                                                                ? 'bg-red-500/10 text-red-600'
+                                                                                : 'bg-blue-500/10 text-blue-600'
+                                                                    )}>
+                                                                        {run.status}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                                    {run.sessionId}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedRuntimeSessionId(run.sessionId)}
+                                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                                            >
+                                                                查看 Session
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">总耗时</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.totalElapsedMs != null ? `${run.totalElapsedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个响应</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstResponseMs != null ? `${run.firstResponseMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">thinking</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.thinkingStartedMs != null ? `${run.thinkingStartedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个工具</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstToolStartMs != null ? `${run.firstToolStartMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">prompt chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.promptChars ?? '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">response chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.responseChars ?? '--'}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-1 text-[11px] text-text-secondary">
+                                                                <div>tool calls: {run.toolCalls}</div>
+                                                                <div>tool success: {run.toolSuccessCount}</div>
+                                                                <div>tool failed: {run.toolFailureCount}</div>
+                                                                <div>checkpoints: {run.checkpointCount}</div>
+                                                                <div>active skills: {run.activeSkillCount ?? '--'}</div>
+                                                                {run.checkpointTypes.length > 0 ? (
+                                                                    <div className="text-text-tertiary break-words">
+                                                                        checkpoint types: {run.checkpointTypes.join(', ')}
+                                                                    </div>
+                                                                ) : null}
+                                                                {run.error ? <div className="text-red-600 break-words">error: {run.error}</div> : null}
+                                                            </div>
+
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-2">
+                                                                <div className="text-[11px] font-medium text-text-primary">事件时间线</div>
+                                                                {run.timeline.length === 0 ? (
+                                                                    <div className="text-[11px] text-text-tertiary">暂无事件。</div>
+                                                                ) : (
+                                                                    <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                                        {run.timeline.map((item) => (
+                                                                            <div key={item.id} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                                                <div className="flex items-center justify-between gap-2">
+                                                                                    <div className="text-[11px] font-medium text-text-primary">{item.label}</div>
+                                                                                    <span className={clsx(
+                                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                                        item.tone === 'success'
+                                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                                            : item.tone === 'warning'
+                                                                                                ? 'bg-amber-500/10 text-amber-600'
+                                                                                                : item.tone === 'error'
+                                                                                                    ? 'bg-red-500/10 text-red-600'
+                                                                                                    : 'bg-surface-secondary border border-border text-text-tertiary'
+                                                                                    )}>
+                                                                                        +{item.offsetMs} ms
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div className="mt-1 text-[10px] text-text-tertiary">{item.eventType}</div>
+                                                                                {item.detail ? (
+                                                                                    <div className="mt-1 text-[11px] text-text-secondary whitespace-pre-wrap break-words">
+                                                                                        {item.detail}
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
 
