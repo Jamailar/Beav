@@ -2,13 +2,14 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
+use crate::runtime::{
+    interactive_recovery_plan, InteractiveFallbackMode, InteractiveRecoveryContext,
+};
 use crate::{
     append_debug_log_state, provider_profile_from_config, resolve_chat_config,
-    run_anthropic_interactive_chat_runtime,
-    run_gemini_interactive_chat_runtime, run_openai_interactive_chat_runtime,
-    run_openai_prompted_streaming_fallback, AppState,
+    run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
+    run_openai_interactive_chat_runtime, run_openai_prompted_json_fallback, with_store, AppState,
 };
-use crate::runtime::interactive_recovery_plan;
 
 pub fn resolve_chat_exchange_response_stage(
     app: Option<&AppHandle>,
@@ -65,19 +66,35 @@ pub fn resolve_chat_exchange_response_stage(
         }),
         Err(error) => {
             let provider_profile = provider_profile_from_config(&config);
-            let recovery_plan =
-                interactive_recovery_plan(&context.runtime_mode, &provider_profile, &error);
+            let tool_loop_started =
+                session_has_interactive_tool_results(state, context.working_session_id.as_str());
+            let recovery_plan = interactive_recovery_plan(
+                InteractiveRecoveryContext {
+                    runtime_mode: &context.runtime_mode,
+                    protocol: &config.protocol,
+                    provider_profile: &provider_profile,
+                    tool_loop_started,
+                },
+                &error,
+            );
             append_debug_log_state(
                 state,
                 format!(
-                    "[runtime][{}][{}] interactive-runtime-failed | {}",
-                    context.runtime_mode, context.working_session_id, error
+                    "[runtime][{}][{}] interactive-runtime-failed | layer={} category={} retryInteractive={} fallbackMode={:?} toolLoopStarted={} | {}",
+                    context.runtime_mode,
+                    context.working_session_id,
+                    recovery_plan.envelope.layer.as_key(),
+                    recovery_plan.envelope.category.as_key(),
+                    recovery_plan.retry_interactive,
+                    recovery_plan.fallback_mode,
+                    tool_loop_started,
+                    error
                 ),
             );
             if !recovery_plan.retry_interactive || config.protocol != "openai" {
                 return Err(error);
             }
-            match run_openai_interactive_chat_runtime(
+            let retry_error = match run_openai_interactive_chat_runtime(
                 app,
                 state,
                 Some(context.working_session_id.as_str()),
@@ -108,47 +125,59 @@ pub fn resolve_chat_exchange_response_stage(
                             context.runtime_mode, context.working_session_id, retry_error
                         ),
                     );
+                    retry_error
                 }
+            };
+            if !recovery_plan.allow_text_fallback() {
+                return Err(format!(
+                    "interactive runtime failed: {}; interactive retry failed: {}",
+                    error, retry_error
+                ));
             }
-            if !recovery_plan.allow_text_fallback {
-                return Err(error);
-            }
-            match run_openai_prompted_streaming_fallback(
-                app,
-                state,
-                Some(context.working_session_id.as_str()),
-                &config,
-                message,
-                &context.runtime_mode,
-            ) {
-                Ok(response) => {
-                    append_debug_log_state(
+            match recovery_plan.fallback_mode {
+                InteractiveFallbackMode::JsonTextCompletion => {
+                    match run_openai_prompted_json_fallback(
+                        app,
                         state,
-                        format!(
-                            "[runtime][{}][{}] interactive-runtime-fallback=openai-prompted-stream",
-                            context.runtime_mode, context.working_session_id
-                        ),
-                    );
-                    Ok(ChatExchangeResponseStage {
-                        response,
-                        emitted_live_events: emits_live_events_for_runtime_mode(
-                            &context.runtime_mode,
-                        ),
-                    })
+                        Some(context.working_session_id.as_str()),
+                        &config,
+                        message,
+                        &context.runtime_mode,
+                    ) {
+                        Ok(response) => {
+                            append_debug_log_state(
+                            state,
+                            format!(
+                                "[runtime][{}][{}] interactive-runtime-fallback=openai-prompted-json",
+                                context.runtime_mode, context.working_session_id
+                            ),
+                        );
+                            Ok(ChatExchangeResponseStage {
+                                response,
+                                emitted_live_events: false,
+                            })
+                        }
+                        Err(fallback_error) => {
+                            append_debug_log_state(
+                                state,
+                                format!(
+                                    "[runtime][{}][{}] interactive-runtime-fallback-failed | {}",
+                                    context.runtime_mode,
+                                    context.working_session_id,
+                                    fallback_error
+                                ),
+                            );
+                            Err(format!(
+                            "interactive runtime failed: {}; interactive retry failed: {}; fallback failed: {}",
+                            error, retry_error, fallback_error
+                        ))
+                        }
+                    }
                 }
-                Err(fallback_error) => {
-                    append_debug_log_state(
-                        state,
-                        format!(
-                            "[runtime][{}][{}] interactive-runtime-fallback-failed | {}",
-                            context.runtime_mode, context.working_session_id, fallback_error
-                        ),
-                    );
-                    Err(format!(
-                        "interactive runtime failed: {}; interactive retry failed; fallback failed: {}",
-                        error, fallback_error
-                    ))
-                }
+                InteractiveFallbackMode::None => Err(format!(
+                    "interactive runtime failed: {}; interactive retry failed: {}",
+                    error, retry_error
+                )),
             }
         }
     }
@@ -156,6 +185,16 @@ pub fn resolve_chat_exchange_response_stage(
 
 fn emits_live_events_for_runtime_mode(runtime_mode: &str) -> bool {
     runtime_mode != "wander"
+}
+
+fn session_has_interactive_tool_results(state: &State<'_, AppState>, session_id: &str) -> bool {
+    with_store(state, |store| {
+        Ok(store
+            .session_tool_results
+            .iter()
+            .any(|record| record.session_id == session_id))
+    })
+    .unwrap_or(false)
 }
 
 #[cfg(test)]

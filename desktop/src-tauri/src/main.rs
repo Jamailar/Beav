@@ -53,8 +53,7 @@ use persistence::{
 };
 use runtime::{
     append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
-    resolve_runtime_mode_from_context_type, role_sequence_for_route,
-    runtime_error_payload,
+    resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_error_payload,
     runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord,
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
@@ -4272,6 +4271,57 @@ fn run_openai_streaming_chat_completion(
     )
 }
 
+fn extract_openai_json_assistant_response(
+    response: &Value,
+) -> Result<(String, Vec<InteractiveToolCall>), String> {
+    let choice = response
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .cloned()
+        .ok_or_else(|| "interactive runtime returned no choices".to_string())?;
+    let assistant_message = choice
+        .get("message")
+        .cloned()
+        .ok_or_else(|| "interactive runtime returned no message".to_string())?;
+    let assistant_content = assistant_message
+        .get("content")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let tool_calls = assistant_message
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|raw| {
+            let id = raw.get("id").and_then(|value| value.as_str())?.to_string();
+            let function = raw.get("function")?;
+            let name = function
+                .get("name")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            let arguments = function
+                .get("arguments")
+                .and_then(|value| value.as_str())
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .unwrap_or_else(|| json!({}));
+            Some(InteractiveToolCall {
+                id,
+                name,
+                arguments,
+                raw: json!({
+                    "id": raw.get("id").cloned().unwrap_or_else(|| json!(null)),
+                    "type": raw.get("type").cloned().unwrap_or_else(|| json!("function")),
+                    "function": function.clone(),
+                }),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok((assistant_content, tool_calls))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GeneratedMediaPreview {
     id: String,
@@ -5769,54 +5819,10 @@ fn run_openai_interactive_chat_runtime(
             };
             (streamed.content, streamed.tool_calls)
         } else {
-            let response = run_openai_json_chat_completion_transport(
-                state,
-                config,
-                &body,
-                None,
-                true,
-            )?;
-            let choice = response
-                .get("choices")
-                .and_then(|value| value.as_array())
-                .and_then(|items| items.first())
-                .cloned()
-                .ok_or_else(|| "interactive runtime returned no choices".to_string())?;
-            let assistant_message = choice
-                .get("message")
-                .cloned()
-                .ok_or_else(|| "interactive runtime returned no message".to_string())?;
-            let assistant_content = assistant_message
-                .get("content")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string();
-            let tool_calls = assistant_message
-                .get("tool_calls")
-                .and_then(|value| value.as_array())
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|raw| {
-                    let id = raw.get("id").and_then(|value| value.as_str())?.to_string();
-                    let function = raw.get("function")?;
-                    let name = function
-                        .get("name")
-                        .and_then(|value| value.as_str())?
-                        .to_string();
-                    let arguments = function
-                        .get("arguments")
-                        .and_then(|value| value.as_str())
-                        .and_then(|value| serde_json::from_str::<Value>(value).ok())
-                        .unwrap_or_else(|| json!({}));
-                    Some(InteractiveToolCall {
-                        id,
-                        name,
-                        arguments,
-                        raw,
-                    })
-                })
-                .collect::<Vec<_>>();
+            let response =
+                run_openai_json_chat_completion_transport(state, config, &body, None, true)?;
+            let (assistant_content, tool_calls) =
+                extract_openai_json_assistant_response(&response)?;
             (assistant_content, tool_calls)
         };
         if session_id
@@ -6229,7 +6235,7 @@ fn run_openai_interactive_chat_runtime(
     })
 }
 
-fn run_openai_prompted_streaming_fallback(
+fn run_openai_prompted_json_fallback(
     app: &AppHandle,
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -6257,23 +6263,23 @@ fn run_openai_prompted_streaming_fallback(
     let mut body = json!({
         "model": config.model_name,
         "messages": messages,
-        "stream": true
+        "stream": false
     });
     if provider_profile.should_disable_thinking(runtime_mode, false) {
         body["enable_thinking"] = json!(false);
     }
 
-    let streamed = run_openai_streaming_chat_completion(
-        app,
-        state,
-        session_id,
-        runtime_mode,
-        config,
-        &body,
-        Some(90),
-        true,
-    )?;
-    let final_content = streamed.content;
+    let response = run_openai_json_chat_completion_transport(state, config, &body, Some(90), true)?;
+    let (final_content, tool_calls) = extract_openai_json_assistant_response(&response)?;
+    if !tool_calls.is_empty() {
+        finalize_interactive_runtime_state(
+            state,
+            session_id,
+            &final_content,
+            Some("json fallback returned tool calls"),
+        );
+        return Err("interactive json fallback returned tool calls".to_string());
+    }
     if final_content.trim().is_empty() {
         finalize_interactive_runtime_state(
             state,
@@ -6310,7 +6316,7 @@ fn run_openai_prompted_streaming_fallback(
             "completed",
             Some(runtime_mode),
             Some(&final_content),
-            Some("response_end"),
+            Some("json_fallback"),
         );
     }
     Ok(final_content)

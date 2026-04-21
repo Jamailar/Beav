@@ -16,10 +16,62 @@ pub enum RuntimeErrorLayer {
     Unknown,
 }
 
+impl RuntimeErrorLayer {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Auth => "auth",
+            Self::RateLimit => "rate_limit",
+            Self::Transport => "transport",
+            Self::Protocol => "protocol",
+            Self::Recovery => "recovery",
+            Self::Tool => "tool",
+            Self::Persistence => "persistence",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeErrorCategory {
+    Auth,
+    RateLimit,
+    PartialBody,
+    Http2Framing,
+    Timeout,
+    Transport,
+    InvalidRequest,
+    ProtocolMismatch,
+    RecoveryIncomplete,
+    ToolExecution,
+    Persistence,
+    Unknown,
+}
+
+impl RuntimeErrorCategory {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Auth => "auth",
+            Self::RateLimit => "rate_limit",
+            Self::PartialBody => "partial_body",
+            Self::Http2Framing => "http2_framing",
+            Self::Timeout => "timeout",
+            Self::Transport => "transport",
+            Self::InvalidRequest => "invalid_request",
+            Self::ProtocolMismatch => "protocol_mismatch",
+            Self::RecoveryIncomplete => "recovery_incomplete",
+            Self::ToolExecution => "tool_execution",
+            Self::Persistence => "persistence",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeErrorEnvelope {
     pub code: String,
+    pub category: RuntimeErrorCategory,
     pub layer: RuntimeErrorLayer,
     pub retryable: bool,
     pub title: String,
@@ -32,9 +84,30 @@ pub struct RuntimeErrorEnvelope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractiveFallbackMode {
+    None,
+    JsonTextCompletion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InteractiveRecoveryContext<'a> {
+    pub runtime_mode: &'a str,
+    pub protocol: &'a str,
+    pub provider_profile: &'a ProviderProfile,
+    pub tool_loop_started: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractiveRecoveryPlan {
+    pub envelope: RuntimeErrorEnvelope,
     pub retry_interactive: bool,
-    pub allow_text_fallback: bool,
+    pub fallback_mode: InteractiveFallbackMode,
+}
+
+impl InteractiveRecoveryPlan {
+    pub fn allow_text_fallback(self: &Self) -> bool {
+        self.fallback_mode != InteractiveFallbackMode::None
+    }
 }
 
 pub fn runtime_error_envelope_from_error(
@@ -62,26 +135,28 @@ pub fn runtime_error_envelope_from_error(
     } else {
         None
     };
-    let (layer, retryable, title, code) = if normalized.contains("登录失效")
+    let (category, layer, retryable, title) = if normalized.contains("登录失效")
         || normalized.contains("重新登录")
         || lower.contains("invalid access token")
+        || lower.contains("invalid api key")
+        || lower.contains("api_key_required")
         || http_status == Some(401)
     {
         (
+            RuntimeErrorCategory::Auth,
             RuntimeErrorLayer::Auth,
             false,
             "登录失效，请重新登录".to_string(),
-            "401".to_string(),
         )
     } else if http_status == Some(429)
         || lower.contains("rate limit")
         || lower.contains("too many requests")
     {
         (
+            RuntimeErrorCategory::RateLimit,
             RuntimeErrorLayer::RateLimit,
             true,
             "请求频率受限".to_string(),
-            "429".to_string(),
         )
     } else if lower.contains("required execution steps")
         || lower.contains("required tool execution")
@@ -89,78 +164,92 @@ pub fn runtime_error_envelope_from_error(
         || lower.contains("interactive fallback returned")
     {
         (
+            RuntimeErrorCategory::RecoveryIncomplete,
             RuntimeErrorLayer::Recovery,
             false,
             "执行恢复失败".to_string(),
-            "recovery".to_string(),
         )
-    } else if lower.contains("tool ")
-        && (lower.contains(" failed") || lower.contains("error"))
-    {
+    } else if lower.contains("tool ") && (lower.contains(" failed") || lower.contains("error")) {
         (
+            RuntimeErrorCategory::ToolExecution,
             RuntimeErrorLayer::Tool,
             false,
             "工具执行失败".to_string(),
-            "tool".to_string(),
         )
     } else if lower.contains("curl: (18)")
         || lower.contains("partial file")
         || lower.contains("unexpected eof")
         || lower.contains("error decoding response body")
-        || lower.contains("curl: (16)")
-        || lower.contains("http2 framing")
-        || lower.contains("network")
-        || lower.contains("broken pipe")
-        || lower.contains("connection reset")
-        || lower.contains("empty reply")
-        || lower.contains("timeout")
     {
         (
+            RuntimeErrorCategory::PartialBody,
+            RuntimeErrorLayer::Transport,
+            true,
+            "流式响应中断".to_string(),
+        )
+    } else if lower.contains("curl: (16)") || lower.contains("http2 framing") {
+        (
+            RuntimeErrorCategory::Http2Framing,
             RuntimeErrorLayer::Transport,
             true,
             "网络传输异常".to_string(),
-            if lower.contains("curl: (18)") || lower.contains("partial file") {
-                "partial_body".to_string()
-            } else if lower.contains("curl: (16)") || lower.contains("http2 framing") {
-                "http2_framing".to_string()
-            } else if lower.contains("timeout") {
-                "timeout".to_string()
-            } else {
-                "transport".to_string()
-            },
         )
-    } else if lower.contains("invalid json")
-        || lower.contains("invalidparameter")
-        || lower.contains("invalid_request_error")
-        || lower.contains("unsupported runtime protocol")
-        || lower.contains("tool_choice parameter")
+    } else if lower.contains("timeout") {
+        (
+            RuntimeErrorCategory::Timeout,
+            RuntimeErrorLayer::Transport,
+            true,
+            "请求超时".to_string(),
+        )
+    } else if lower.contains("network")
+        || lower.contains("broken pipe")
+        || lower.contains("connection reset")
+        || lower.contains("empty reply")
     {
         (
+            RuntimeErrorCategory::Transport,
+            RuntimeErrorLayer::Transport,
+            true,
+            "网络传输异常".to_string(),
+        )
+    } else if lower.contains("invalid json")
+        || lower.contains("tool_choice parameter")
+        || lower.contains("unsupported runtime protocol")
+    {
+        (
+            RuntimeErrorCategory::ProtocolMismatch,
             RuntimeErrorLayer::Protocol,
             true,
             "模型协议不兼容".to_string(),
-            "protocol".to_string(),
+        )
+    } else if lower.contains("invalidparameter") || lower.contains("invalid_request_error") {
+        (
+            RuntimeErrorCategory::InvalidRequest,
+            RuntimeErrorLayer::Protocol,
+            true,
+            "请求参数不兼容".to_string(),
         )
     } else if lower.contains("workspace")
         || lower.contains("filepath is required")
         || lower.contains("path is required")
     {
         (
+            RuntimeErrorCategory::Persistence,
             RuntimeErrorLayer::Persistence,
             false,
             "工作区数据异常".to_string(),
-            "persistence".to_string(),
         )
     } else {
         (
+            RuntimeErrorCategory::Unknown,
             RuntimeErrorLayer::Unknown,
             false,
             "执行异常".to_string(),
-            String::new(),
         )
     };
     RuntimeErrorEnvelope {
-        code,
+        code: category.as_key().to_string(),
+        category,
         layer,
         retryable,
         title,
@@ -181,20 +270,20 @@ pub fn runtime_error_envelope_from_error(
 }
 
 pub fn interactive_recovery_plan(
-    runtime_mode: &str,
-    provider_profile: &ProviderProfile,
+    context: InteractiveRecoveryContext<'_>,
     error: &str,
 ) -> InteractiveRecoveryPlan {
-    let envelope =
-        runtime_error_envelope_from_error(error, Some(provider_profile), None);
+    let envelope = runtime_error_envelope_from_error(error, Some(context.provider_profile), None);
     let retry_interactive = envelope.retryable
         && matches!(
             envelope.layer,
             RuntimeErrorLayer::Transport | RuntimeErrorLayer::Protocol
         );
     let allow_text_fallback = retry_interactive
-        && runtime_mode != "wander"
-        && provider_profile.capabilities.supports_text_fallback
+        && !context.tool_loop_started
+        && context.runtime_mode != "wander"
+        && context.protocol.eq_ignore_ascii_case("openai")
+        && context.provider_profile.capabilities.supports_text_fallback
         && !matches!(
             envelope.layer,
             RuntimeErrorLayer::Auth
@@ -204,8 +293,13 @@ pub fn interactive_recovery_plan(
                 | RuntimeErrorLayer::Persistence
         );
     InteractiveRecoveryPlan {
+        envelope,
         retry_interactive,
-        allow_text_fallback,
+        fallback_mode: if allow_text_fallback {
+            InteractiveFallbackMode::JsonTextCompletion
+        } else {
+            InteractiveFallbackMode::None
+        },
     }
 }
 
@@ -222,8 +316,8 @@ pub fn runtime_error_payload(
         "raw": envelope.raw.clone().unwrap_or_default(),
         "detail": envelope.detail,
         "hint": if envelope.retryable { "可稍后重试，系统会优先走交互恢复而不是直接结束。" } else { "" },
-        "category": format!("{:?}", envelope.layer).to_ascii_lowercase(),
-        "layer": format!("{:?}", envelope.layer).to_ascii_lowercase(),
+        "category": envelope.category.as_key(),
+        "layer": envelope.layer.as_key(),
         "retryable": envelope.retryable,
         "statusCode": envelope.http_status.unwrap_or_default(),
         "httpStatus": envelope.http_status,
@@ -237,7 +331,10 @@ pub fn runtime_error_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{interactive_recovery_plan, runtime_error_envelope_from_error, RuntimeErrorLayer};
+    use super::{
+        interactive_recovery_plan, runtime_error_envelope_from_error, InteractiveFallbackMode,
+        InteractiveRecoveryContext, RuntimeErrorCategory, RuntimeErrorLayer,
+    };
     use crate::provider_compat::provider_profile_from_config;
     use crate::runtime::ResolvedChatConfig;
 
@@ -254,34 +351,62 @@ mod tests {
     fn transport_errors_are_retryable_in_recovery_plan() {
         let profile = openai_profile();
         let plan = interactive_recovery_plan(
-            "redclaw",
-            &profile,
+            InteractiveRecoveryContext {
+                runtime_mode: "redclaw",
+                protocol: "openai",
+                provider_profile: &profile,
+                tool_loop_started: false,
+            },
             "curl: (18) Transferred a partial file",
         );
         assert!(plan.retry_interactive);
-        assert!(plan.allow_text_fallback);
+        assert_eq!(
+            plan.fallback_mode,
+            InteractiveFallbackMode::JsonTextCompletion
+        );
     }
 
     #[test]
-    fn execution_contract_failures_do_not_fallback_to_text() {
+    fn recovery_plan_preserves_interactive_mode_after_tool_loop_begins() {
         let profile = openai_profile();
         let plan = interactive_recovery_plan(
-            "wander",
-            &profile,
-            "interactive runtime ended before completing required execution steps: 读取素材真实文件",
+            InteractiveRecoveryContext {
+                runtime_mode: "redclaw",
+                protocol: "openai",
+                provider_profile: &profile,
+                tool_loop_started: true,
+            },
+            "error decoding response body",
         );
-        assert!(!plan.retry_interactive);
-        assert!(!plan.allow_text_fallback);
+        assert!(plan.retry_interactive);
+        assert_eq!(plan.fallback_mode, InteractiveFallbackMode::None);
+    }
+
+    #[test]
+    fn wander_never_allows_text_fallback() {
+        let profile = openai_profile();
+        let plan = interactive_recovery_plan(
+            InteractiveRecoveryContext {
+                runtime_mode: "wander",
+                protocol: "openai",
+                provider_profile: &profile,
+                tool_loop_started: false,
+            },
+            "curl: (18) Transferred a partial file",
+        );
+        assert!(plan.retry_interactive);
+        assert_eq!(plan.fallback_mode, InteractiveFallbackMode::None);
     }
 
     #[test]
     fn runtime_error_envelope_marks_protocol_errors() {
         let envelope = runtime_error_envelope_from_error(
-            "AI request failed: HTTP 502 AI upstream error (400): tool_choice parameter does not support being set to required",
-            None,
+            "The tool_choice parameter does not support being set to required or object in thinking mode",
+            Some(&openai_profile()),
             Some("qwen3.5-plus"),
         );
         assert_eq!(envelope.layer, RuntimeErrorLayer::Protocol);
-        assert!(envelope.retryable);
+        assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
+        assert_eq!(envelope.code, "protocol_mismatch");
     }
 }
