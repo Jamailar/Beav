@@ -346,15 +346,30 @@ async function renderRichpostFrameToPng(
   frame: HTMLIFrameElement,
   options?: RichpostPngRenderOptions
 ): Promise<string> {
-  const width = Math.max(1, Math.round(Number(options?.width) || 1080));
-  const height = Math.max(1, Math.round(Number(options?.height) || 1440));
   const doc = await waitForIframeContentReady(frame);
   await materializeRichpostBackgroundImage(doc);
   const backgroundSource = extractRichpostBackgroundSource(doc);
-  const target = (doc.querySelector('.rb-page-host') || doc.querySelector('.page') || doc.body) as HTMLElement | null;
+  const target = (
+    doc.querySelector('.rb-stage')
+    || doc.querySelector('.rb-page-host')
+    || doc.querySelector('.page')
+    || doc.body
+  ) as HTMLElement | null;
   if (!target) {
     throw new Error('未找到可导出的页面内容');
   }
+  const rect = target.getBoundingClientRect();
+  const targetWidth = Math.max(1, Math.round(rect.width || target.clientWidth || frame.clientWidth || RICHPOST_RENDER_VIEWPORT_WIDTH));
+  const targetHeight = Math.max(1, Math.round(rect.height || target.clientHeight || frame.clientHeight || RICHPOST_RENDER_VIEWPORT_HEIGHT));
+  const outputWidth = Math.max(1, Math.round(Number(options?.width) || targetWidth));
+  const outputHeight = Math.max(1, Math.round(Number(options?.height) || targetHeight));
+  const pixelRatio = Math.max(
+    1,
+    Math.min(
+      outputWidth / targetWidth,
+      outputHeight / targetHeight,
+    ),
+  );
   if (backgroundSource) {
     const root = doc.documentElement as HTMLElement | null;
     const body = doc.body as HTMLElement | null;
@@ -370,17 +385,15 @@ async function renderRichpostFrameToPng(
   }
   const foregroundDataUrl = await toPng(target, {
     cacheBust: true,
-    pixelRatio: 1,
-    width,
-    height,
-    canvasWidth: width,
-    canvasHeight: height,
+    pixelRatio,
+    width: targetWidth,
+    height: targetHeight,
     ...(backgroundSource ? {} : { backgroundColor: '#ffffff' }),
   });
   if (!backgroundSource) {
     return foregroundDataUrl;
   }
-  return await composeRichpostExportLayers(backgroundSource, foregroundDataUrl, width, height);
+  return await composeRichpostExportLayers(backgroundSource, foregroundDataUrl, outputWidth, outputHeight);
 }
 
 export async function inspectRichpostHtmlLayout(
