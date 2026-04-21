@@ -15,9 +15,6 @@ fn bundled_html_resource_path(
     file_name: &str,
     missing_message: &str,
 ) -> Result<PathBuf, String> {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join(file_name);
     let resource_dir = app
         .path()
         .resource_dir()
@@ -36,14 +33,17 @@ fn bundled_html_resource_path(
     push(resource_dir.join("_up_").join(file_name));
     push(resource_dir.join("_up_").join("resources").join(file_name));
 
+    if cfg!(debug_assertions) {
+        if let Ok(cwd) = std::env::current_dir() {
+            push(cwd.join("src-tauri").join("resources").join(file_name));
+            push(cwd.join("resources").join(file_name));
+        }
+    }
+
     for candidate in candidates {
         if candidate.exists() {
             return Ok(candidate);
         }
-    }
-
-    if cfg!(debug_assertions) && dev_path.exists() {
-        return Ok(dev_path);
     }
 
     Err(missing_message.to_string())
