@@ -338,7 +338,7 @@ function correctOverflowOnBodyPage(
         font,
         bodyMetrics.widthPx,
         lineHeightPx,
-        Math.max(0, bodyMetrics.heightPx - 2),
+        Math.max(0, bodyMetrics.availableHeightPx - 2),
       );
       if (split) {
         fragments[fragments.length - 1] = {

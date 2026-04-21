@@ -20,6 +20,8 @@ export type RichpostZoneLayoutInspection = {
   paragraphLineHeightPx: number;
   contentBottomPx: number;
   frameBottomPx: number;
+  zoneTopPx: number;
+  availableHeightPx: number;
 };
 
 export type RichpostLayoutInspection = {
@@ -113,12 +115,14 @@ function inspectZoneLayout(
   const zoneStyle = view.getComputedStyle(zone);
   const paragraph = zone.querySelector(paragraphSelector) as HTMLElement | null;
   const paragraphStyle = paragraph ? view.getComputedStyle(paragraph) : zoneStyle;
-  const frameRect = frame?.getBoundingClientRect() || zone.getBoundingClientRect();
+  const zoneRect = zone.getBoundingClientRect();
+  const frameRect = frame?.getBoundingClientRect() || zoneRect;
   const contentBottomPx = inspectZoneContentBottom(zone);
-  const widthPx = Math.max(zone.clientWidth, Math.round(zone.getBoundingClientRect().width));
-  const heightPx = Math.max(zone.clientHeight, Math.round(zone.getBoundingClientRect().height));
+  const widthPx = Math.max(zone.clientWidth, Math.round(zoneRect.width));
+  const heightPx = Math.max(zone.clientHeight, Math.round(zoneRect.height));
   const scrollWidthPx = Math.max(zone.scrollWidth, widthPx);
   const scrollHeightPx = Math.max(zone.scrollHeight, heightPx);
+  const availableHeightPx = Math.max(0, frameRect.bottom - zoneRect.top);
   return {
     widthPx,
     heightPx,
@@ -132,6 +136,8 @@ function inspectZoneLayout(
     paragraphLineHeightPx: parseLineHeightPx(paragraphStyle),
     contentBottomPx,
     frameBottomPx: frameRect.bottom,
+    zoneTopPx: zoneRect.top,
+    availableHeightPx,
   };
 }
 
