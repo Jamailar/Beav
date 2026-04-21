@@ -83,33 +83,6 @@ pub struct RuntimeErrorEnvelope {
     pub raw: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InteractiveFallbackMode {
-    None,
-    JsonTextCompletion,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InteractiveRecoveryContext<'a> {
-    pub runtime_mode: &'a str,
-    pub protocol: &'a str,
-    pub provider_profile: &'a ProviderProfile,
-    pub tool_loop_started: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InteractiveRecoveryPlan {
-    pub envelope: RuntimeErrorEnvelope,
-    pub retry_interactive: bool,
-    pub fallback_mode: InteractiveFallbackMode,
-}
-
-impl InteractiveRecoveryPlan {
-    pub fn allow_text_fallback(self: &Self) -> bool {
-        self.fallback_mode != InteractiveFallbackMode::None
-    }
-}
-
 pub fn runtime_error_envelope_from_error(
     error: &str,
     provider_profile: Option<&ProviderProfile>,
@@ -269,40 +242,6 @@ pub fn runtime_error_envelope_from_error(
     }
 }
 
-pub fn interactive_recovery_plan(
-    context: InteractiveRecoveryContext<'_>,
-    error: &str,
-) -> InteractiveRecoveryPlan {
-    let envelope = runtime_error_envelope_from_error(error, Some(context.provider_profile), None);
-    let retry_interactive = envelope.retryable
-        && matches!(
-            envelope.layer,
-            RuntimeErrorLayer::Transport | RuntimeErrorLayer::Protocol
-        );
-    let allow_text_fallback = retry_interactive
-        && !context.tool_loop_started
-        && context.runtime_mode != "wander"
-        && context.protocol.eq_ignore_ascii_case("openai")
-        && context.provider_profile.capabilities.supports_text_fallback
-        && !matches!(
-            envelope.layer,
-            RuntimeErrorLayer::Auth
-                | RuntimeErrorLayer::RateLimit
-                | RuntimeErrorLayer::Recovery
-                | RuntimeErrorLayer::Tool
-                | RuntimeErrorLayer::Persistence
-        );
-    InteractiveRecoveryPlan {
-        envelope,
-        retry_interactive,
-        fallback_mode: if allow_text_fallback {
-            InteractiveFallbackMode::JsonTextCompletion
-        } else {
-            InteractiveFallbackMode::None
-        },
-    }
-}
-
 pub fn runtime_error_payload(
     error: &str,
     provider_profile: Option<&ProviderProfile>,
@@ -315,7 +254,7 @@ pub fn runtime_error_payload(
         "title": envelope.title,
         "raw": envelope.raw.clone().unwrap_or_default(),
         "detail": envelope.detail,
-        "hint": if envelope.retryable { "可稍后重试，系统会优先走交互恢复而不是直接结束。" } else { "" },
+        "hint": if envelope.retryable { "可稍后重试。" } else { "" },
         "category": envelope.category.as_key(),
         "layer": envelope.layer.as_key(),
         "retryable": envelope.retryable,
@@ -331,10 +270,7 @@ pub fn runtime_error_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        interactive_recovery_plan, runtime_error_envelope_from_error, InteractiveFallbackMode,
-        InteractiveRecoveryContext, RuntimeErrorCategory, RuntimeErrorLayer,
-    };
+    use super::{runtime_error_envelope_from_error, RuntimeErrorCategory, RuntimeErrorLayer};
     use crate::provider_compat::provider_profile_from_config;
     use crate::runtime::ResolvedChatConfig;
 
@@ -345,57 +281,6 @@ mod tests {
             api_key: None,
             model_name: "gpt-5".to_string(),
         })
-    }
-
-    #[test]
-    fn transport_errors_are_retryable_in_recovery_plan() {
-        let profile = openai_profile();
-        let plan = interactive_recovery_plan(
-            InteractiveRecoveryContext {
-                runtime_mode: "redclaw",
-                protocol: "openai",
-                provider_profile: &profile,
-                tool_loop_started: false,
-            },
-            "curl: (18) Transferred a partial file",
-        );
-        assert!(plan.retry_interactive);
-        assert_eq!(
-            plan.fallback_mode,
-            InteractiveFallbackMode::JsonTextCompletion
-        );
-    }
-
-    #[test]
-    fn recovery_plan_preserves_interactive_mode_after_tool_loop_begins() {
-        let profile = openai_profile();
-        let plan = interactive_recovery_plan(
-            InteractiveRecoveryContext {
-                runtime_mode: "redclaw",
-                protocol: "openai",
-                provider_profile: &profile,
-                tool_loop_started: true,
-            },
-            "error decoding response body",
-        );
-        assert!(plan.retry_interactive);
-        assert_eq!(plan.fallback_mode, InteractiveFallbackMode::None);
-    }
-
-    #[test]
-    fn wander_never_allows_text_fallback() {
-        let profile = openai_profile();
-        let plan = interactive_recovery_plan(
-            InteractiveRecoveryContext {
-                runtime_mode: "wander",
-                protocol: "openai",
-                provider_profile: &profile,
-                tool_loop_started: false,
-            },
-            "curl: (18) Transferred a partial file",
-        );
-        assert!(plan.retry_interactive);
-        assert_eq!(plan.fallback_mode, InteractiveFallbackMode::None);
     }
 
     #[test]

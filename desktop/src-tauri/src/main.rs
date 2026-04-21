@@ -27,6 +27,7 @@ mod official_support;
 mod persistence;
 mod process_utils;
 mod provider_compat;
+mod provider_runtime;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
@@ -85,13 +86,13 @@ pub(crate) use diagnostics::*;
 pub(crate) use helpers::*;
 pub(crate) use http_utils::*;
 pub(crate) use legacy_import::*;
-pub(crate) use llm_transport::*;
 pub(crate) use manuscript_package::*;
 pub(crate) use media_generation::*;
 pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
 pub(crate) use process_utils::*;
 pub(crate) use provider_compat::*;
+pub(crate) use provider_runtime::*;
 pub(crate) use redclaw_profile::*;
 pub(crate) use startup_migration::*;
 
@@ -4295,79 +4296,6 @@ fn gemini_tools_for_session(
     }
 }
 
-fn run_openai_streaming_chat_completion(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    runtime_mode: &str,
-    config: &ResolvedChatConfig,
-    body: &Value,
-    max_time_seconds: Option<u64>,
-    allow_official_reauth_retry: bool,
-) -> Result<StreamingChatCompletion, String> {
-    run_openai_streaming_chat_completion_transport(
-        app,
-        state,
-        session_id,
-        runtime_mode,
-        config,
-        body,
-        max_time_seconds,
-        allow_official_reauth_retry,
-    )
-}
-
-fn extract_openai_json_assistant_response(
-    response: &Value,
-) -> Result<(String, Vec<InteractiveToolCall>), String> {
-    let choice = response
-        .get("choices")
-        .and_then(|value| value.as_array())
-        .and_then(|items| items.first())
-        .cloned()
-        .ok_or_else(|| "interactive runtime returned no choices".to_string())?;
-    let assistant_message = choice
-        .get("message")
-        .cloned()
-        .ok_or_else(|| "interactive runtime returned no message".to_string())?;
-    let assistant_content = assistant_message
-        .get("content")
-        .and_then(|value| value.as_str())
-        .unwrap_or("")
-        .to_string();
-    let tool_calls = assistant_message
-        .get("tool_calls")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|raw| {
-            let id = raw.get("id").and_then(|value| value.as_str())?.to_string();
-            let function = raw.get("function")?;
-            let name = function
-                .get("name")
-                .and_then(|value| value.as_str())?
-                .to_string();
-            let arguments = function
-                .get("arguments")
-                .and_then(|value| value.as_str())
-                .and_then(|value| serde_json::from_str::<Value>(value).ok())
-                .unwrap_or_else(|| json!({}));
-            Some(InteractiveToolCall {
-                id,
-                name,
-                arguments,
-                raw: json!({
-                    "id": raw.get("id").cloned().unwrap_or_else(|| json!(null)),
-                    "type": raw.get("type").cloned().unwrap_or_else(|| json!("function")),
-                    "function": function.clone(),
-                }),
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok((assistant_content, tool_calls))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GeneratedMediaPreview {
     id: String,
@@ -5846,31 +5774,31 @@ fn run_openai_interactive_chat_runtime(
             body["max_tokens"] = json!(900);
         }
         let streaming_enabled = !is_wander;
-        let (assistant_content, tool_calls) = if streaming_enabled {
-            let streamed = match run_openai_streaming_chat_completion(
-                app,
-                state,
-                session_id,
-                runtime_mode,
-                config,
-                &body,
-                None,
-                true,
-            ) {
-                Ok(value) => value,
-                Err(error) => {
-                    finalize_interactive_runtime_state(state, session_id, "", Some(&error));
-                    return Err(error);
-                }
-            };
-            (streamed.content, streamed.tool_calls)
-        } else {
-            let response =
-                run_openai_json_chat_completion_transport(state, config, &body, None, true)?;
-            let (assistant_content, tool_calls) =
-                extract_openai_json_assistant_response(&response)?;
-            (assistant_content, tool_calls)
+        let allow_text_fallback = !wander_saw_tool_call
+            && runtime_mode != "wander"
+            && provider_profile.capabilities.supports_text_fallback;
+        let turn_result = match run_openai_provider_turn(
+            app,
+            state,
+            session_id,
+            runtime_mode,
+            config,
+            &body,
+            None,
+            true,
+            allow_text_fallback,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                let error_message = error.to_string();
+                finalize_interactive_runtime_state(state, session_id, "", Some(&error_message));
+                return Err(error_message);
+            }
         };
+        let used_non_streaming_delivery = !streaming_enabled
+            || matches!(turn_result.delivery, ProviderTurnDelivery::JsonFallback);
+        let assistant_content = turn_result.content;
+        let tool_calls = turn_result.tool_calls;
         if session_id
             .map(|value| is_chat_runtime_cancel_requested(state, value))
             .unwrap_or(false)
@@ -5988,7 +5916,7 @@ fn run_openai_interactive_chat_runtime(
         }
 
         wander_saw_tool_call = true;
-        if !streaming_enabled && !assistant_content.trim().is_empty() {
+        if used_non_streaming_delivery && !assistant_content.trim().is_empty() {
             emit_runtime_text_delta(
                 app,
                 session_id.unwrap_or_default(),
@@ -5996,7 +5924,7 @@ fn run_openai_interactive_chat_runtime(
                 &assistant_content,
             );
         }
-        if !streaming_enabled {
+        if used_non_streaming_delivery {
             if let Some(current_session_id) = session_id {
                 emit_runtime_task_checkpoint_saved(
                     app,
@@ -6279,93 +6207,6 @@ fn run_openai_interactive_chat_runtime(
     } else {
         "interactive runtime terminated unexpectedly".to_string()
     })
-}
-
-fn run_openai_prompted_json_fallback(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    config: &ResolvedChatConfig,
-    message: &str,
-    runtime_mode: &str,
-) -> Result<String, String> {
-    let (prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message)?;
-    let provider_profile = provider_profile_from_config(config);
-    let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
-    let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
-    messages.insert(
-        0,
-        json!({
-            "role": "system",
-            "content": system_prompt
-        }),
-    );
-
-    if let Some(current_session_id) = session_id {
-        emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
-    }
-
-    let mut body = json!({
-        "model": config.model_name,
-        "messages": messages,
-        "stream": false
-    });
-    if provider_profile.should_disable_thinking(runtime_mode, false) {
-        body["enable_thinking"] = json!(false);
-    }
-
-    let response = run_openai_json_chat_completion_transport(state, config, &body, Some(90), true)?;
-    let (final_content, tool_calls) = extract_openai_json_assistant_response(&response)?;
-    if !tool_calls.is_empty() {
-        finalize_interactive_runtime_state(
-            state,
-            session_id,
-            &final_content,
-            Some("json fallback returned tool calls"),
-        );
-        return Err("interactive json fallback returned tool calls".to_string());
-    }
-    if final_content.trim().is_empty() {
-        finalize_interactive_runtime_state(
-            state,
-            session_id,
-            &final_content,
-            Some("empty fallback response"),
-        );
-        return Err("interactive fallback returned an empty response".to_string());
-    }
-
-    canonical_messages.push(canonical_text_message("assistant", final_content.clone()));
-    save_runtime_session_bundle(
-        state,
-        session_id,
-        "openai",
-        runtime_mode,
-        &config.model_name,
-        &canonical_messages,
-    )?;
-    finalize_interactive_runtime_state(state, session_id, &final_content, None);
-
-    if let Some(current_session_id) = session_id {
-        emit_runtime_task_checkpoint_saved(
-            app,
-            None,
-            Some(current_session_id),
-            "chat.response_end",
-            "chat response completed",
-            Some(json!({ "content": final_content.clone() })),
-        );
-        emit_runtime_done(
-            app,
-            current_session_id,
-            "completed",
-            Some(runtime_mode),
-            Some(&final_content),
-            Some("json_fallback"),
-        );
-    }
-    Ok(final_content)
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
