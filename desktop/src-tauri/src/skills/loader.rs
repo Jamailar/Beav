@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use normalized_line_endings::Normalized;
 use serde::{Deserialize, Serialize};
 
-use crate::redbox_project_root;
+use crate::{redbox_project_root, slug_from_relative_path};
 use crate::runtime::SkillRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -241,6 +241,112 @@ pub fn load_skill_catalog(skills: &[SkillRecord]) -> Vec<LoadedSkillRecord> {
     skills.iter().map(load_skill_record).collect()
 }
 
+fn parse_frontmatter_string(raw_body: &str, accepted_keys: &[&str]) -> Option<String> {
+    let normalized = normalize_skill_text(raw_body);
+    let trimmed = normalized.trim_start();
+    let rest = trimmed.strip_prefix("---\n")?;
+    let (frontmatter, _) = rest.split_once("\n---\n")?;
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = raw_key.trim().to_ascii_lowercase();
+        if accepted_keys
+            .iter()
+            .any(|accepted| key == accepted.trim().to_ascii_lowercase())
+        {
+            let value = normalize_string(raw_value);
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn derive_skill_description_from_content(content: &str) -> String {
+    let mut paragraph = Vec::<String>::new();
+    let mut skipped_heading = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !skipped_heading && trimmed.starts_with('#') {
+            skipped_heading = true;
+            continue;
+        }
+        paragraph.push(trimmed.to_string());
+    }
+    let description = paragraph.join(" ");
+    if description.is_empty() {
+        "Skill".to_string()
+    } else {
+        description
+    }
+}
+
+pub fn discover_skill_records_from_root(
+    root: &Path,
+    source_scope: &str,
+    is_builtin: bool,
+) -> Vec<SkillRecord> {
+    if !root.exists() || !root.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut records = Vec::<SkillRecord>::new();
+    for entry in entries.flatten() {
+        let skill_root = entry.path();
+        if !skill_root.is_dir() {
+            continue;
+        }
+        let skill_file = skill_root.join("SKILL.md");
+        if !skill_file.is_file() {
+            continue;
+        }
+        let Ok(raw_body) = fs::read_to_string(&skill_file).map(|value| normalize_skill_text(&value))
+        else {
+            continue;
+        };
+        let directory_name = entry.file_name().to_string_lossy().trim().to_string();
+        if directory_name.is_empty() {
+            continue;
+        }
+        let name = parse_frontmatter_string(&raw_body, &["name"]).unwrap_or(directory_name);
+        let (_, content) = split_skill_body(&raw_body);
+        let description = parse_frontmatter_string(
+            &raw_body,
+            &["description", "short-description", "short_description"],
+        )
+        .unwrap_or_else(|| derive_skill_description_from_content(&content));
+        records.push(SkillRecord {
+            name: name.clone(),
+            description,
+            location: format!("redbox://skills/{}", slug_from_relative_path(&name)),
+            body: raw_body,
+            source_scope: Some(source_scope.to_string()),
+            is_builtin: Some(is_builtin),
+            disabled: Some(false),
+        });
+    }
+    records.sort_by_key(|item| item.name.to_ascii_lowercase());
+    records
+}
+
+pub fn discover_builtin_skill_records() -> Vec<SkillRecord> {
+    discover_skill_records_from_root(&redbox_project_root().join("builtin-skills"), "builtin", true)
+}
+
 pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let mut roots = Vec::<PathBuf>::new();
@@ -433,6 +539,27 @@ mod tests {
             normalize_skill_logical_path(r"builtin-skills\writing-style\SKILL.md"),
             "builtin-skills/writing-style/SKILL.md"
         );
+    }
+
+    #[test]
+    fn discover_skill_records_from_root_reads_directory_skills() {
+        let root = std::env::temp_dir().join(format!("redbox-skill-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("demo-skill")).expect("root should be created");
+        fs::write(
+            root.join("demo-skill").join("SKILL.md"),
+            "---\ndescription: Demo description\n---\n# Demo Skill\n\nBody",
+        )
+        .expect("skill file should be written");
+
+        let discovered = discover_skill_records_from_root(&root, "user", false);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].name, "demo-skill");
+        assert_eq!(discovered[0].description, "Demo description");
+        assert_eq!(discovered[0].source_scope.as_deref(), Some("user"));
+        assert_eq!(discovered[0].is_builtin, Some(false));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
