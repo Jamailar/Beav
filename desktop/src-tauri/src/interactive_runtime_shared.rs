@@ -13,9 +13,10 @@ use crate::tools::registry::{
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
 };
 use crate::{
-    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
-    redbox_project_root, render_redbox_prompt, slug_from_relative_path, truncate_chars,
-    workspace_root, AppState,
+    compact_host_runtime_context, current_host_runtime_context, load_redbox_prompt,
+    load_redclaw_profile_prompt_bundle, now_iso, payload_string, redbox_project_root,
+    render_host_runtime_context_section, render_redbox_prompt, slug_from_relative_path,
+    truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_system_prompt(
@@ -39,6 +40,7 @@ pub(crate) fn interactive_runtime_system_prompt(
         prompt_prefix,
         prompt_suffix,
         advisor_context_section,
+        host_runtime_context_section,
     ) = with_store(state, |store| {
         let metadata = session_id.and_then(|id| {
             store
@@ -51,6 +53,9 @@ pub(crate) fn interactive_runtime_system_prompt(
         let skill_state =
             build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
         let mut project_context = format!("runtime_mode={runtime_mode}");
+        let host_context = current_host_runtime_context();
+        project_context.push_str("; ");
+        project_context.push_str(&compact_host_runtime_context(&host_context));
         if !skill_state.active_skills.is_empty() {
             project_context.push_str("; active_skills=");
             project_context.push_str(
@@ -73,16 +78,22 @@ pub(crate) fn interactive_runtime_system_prompt(
             skill_state.prompt_prefix,
             skill_state.prompt_suffix,
             advisor_runtime_context_section(metadata, &store.advisors),
+            render_host_runtime_context_section(&host_context),
         ))
     })
     .unwrap_or_else(|_| {
+        let host_context = current_host_runtime_context();
         (
             prompt_tool_lines_for_runtime_mode(runtime_mode),
-            format!("runtime_mode={runtime_mode}"),
+            format!(
+                "runtime_mode={runtime_mode}; {}",
+                compact_host_runtime_context(&host_context)
+            ),
             String::new(),
             String::new(),
             String::new(),
             String::new(),
+            render_host_runtime_context_section(&host_context),
         )
     });
     let workspace_root_value = workspace_root(state)
@@ -114,6 +125,10 @@ pub(crate) fn interactive_runtime_system_prompt(
             .join(" "),
         );
         sections.push(format!("Runtime context: {project_context}"));
+        sections.push(format!(
+            "Host runtime context:\n{}",
+            host_runtime_context_section.trim()
+        ));
         if !available_tools.trim().is_empty() {
             sections.push(format!("Available tools:\n{available_tools}"));
         }
@@ -162,6 +177,7 @@ pub(crate) fn interactive_runtime_system_prompt(
                 ),
                 ("memory_path", workspace_root_value.clone() + "/memory"),
                 ("project_context", project_context),
+                ("host_runtime_context", host_runtime_context_section.clone()),
                 ("skills_section", skills_section.clone()),
                 ("subjects_section", subjects_section),
                 ("current_date", now_iso()),
@@ -249,8 +265,10 @@ pub(crate) fn interactive_runtime_system_prompt(
 Use tools when the user asks about app state, knowledge, advisors, work items, memories, sessions, or settings. \
 Do not invent workspace/app facts that you can fetch with tools. \
 If no tool is needed, answer directly and concisely. \
-When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise.",
-        runtime_mode
+When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise. \
+Host runtime context: {}",
+        runtime_mode,
+        render_host_runtime_context_section(&current_host_runtime_context())
     )
 }
 

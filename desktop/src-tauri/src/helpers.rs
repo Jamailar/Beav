@@ -7,6 +7,90 @@ use url::Url;
 
 use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostRuntimeContext {
+    pub os_family: &'static str,
+    pub path_style: &'static str,
+    pub path_separator: &'static str,
+    pub shell_hint: &'static str,
+    pub exe_suffix: &'static str,
+    pub line_ending: &'static str,
+}
+
+pub(crate) fn current_host_runtime_context() -> HostRuntimeContext {
+    #[cfg(target_os = "windows")]
+    {
+        return HostRuntimeContext {
+            os_family: "windows",
+            path_style: "windows",
+            path_separator: "\\",
+            shell_hint: "powershell",
+            exe_suffix: ".exe",
+            line_ending: "crlf",
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return HostRuntimeContext {
+            os_family: "macos",
+            path_style: "posix",
+            path_separator: "/",
+            shell_hint: "zsh",
+            exe_suffix: "",
+            line_ending: "lf",
+        };
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        HostRuntimeContext {
+            os_family: "linux",
+            path_style: "posix",
+            path_separator: "/",
+            shell_hint: "bash",
+            exe_suffix: "",
+            line_ending: "lf",
+        }
+    }
+}
+
+pub(crate) fn compact_host_runtime_context(context: &HostRuntimeContext) -> String {
+    format!(
+        "host_os={}; path_style={}; path_separator={}; shell_hint={}; exe_suffix={}; line_ending={}",
+        context.os_family,
+        context.path_style,
+        context.path_separator,
+        context.shell_hint,
+        if context.exe_suffix.is_empty() {
+            "(none)"
+        } else {
+            context.exe_suffix
+        },
+        context.line_ending
+    )
+}
+
+pub(crate) fn render_host_runtime_context_section(context: &HostRuntimeContext) -> String {
+    [
+        format!("- Host OS: {}", context.os_family),
+        format!("- Path style: {}", context.path_style),
+        format!("- Path separator: {}", context.path_separator),
+        format!("- Preferred shell syntax hint: {}", context.shell_hint),
+        format!(
+            "- Executable suffix: {}",
+            if context.exe_suffix.is_empty() {
+                "(none)"
+            } else {
+                context.exe_suffix
+            }
+        ),
+        format!("- Default line ending: {}", context.line_ending),
+        "- When suggesting manual file paths or shell examples, prefer the host OS format unless a tool contract explicitly requires normalized logical paths.".to_string(),
+    ]
+    .join("\n")
+}
+
 pub(crate) fn normalize_relative_path(value: &str) -> String {
     value
         .replace('\\', "/")
@@ -812,4 +896,65 @@ pub(crate) fn file_url_for_path(path: &Path) -> String {
     Url::from_file_path(path)
         .map(|url| url.into())
         .unwrap_or_else(|_| format!("file://{}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_host_runtime_context_fields_are_consistent() {
+        let context = current_host_runtime_context();
+        assert!(!context.os_family.is_empty());
+        assert!(!context.path_style.is_empty());
+        assert!(!context.path_separator.is_empty());
+        assert!(!context.shell_hint.is_empty());
+        assert!(!context.line_ending.is_empty());
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(context.os_family, "windows");
+            assert_eq!(context.path_style, "windows");
+            assert_eq!(context.path_separator, "\\");
+            assert_eq!(context.shell_hint, "powershell");
+            assert_eq!(context.exe_suffix, ".exe");
+            assert_eq!(context.line_ending, "crlf");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(context.os_family, "macos");
+            assert_eq!(context.path_style, "posix");
+            assert_eq!(context.path_separator, "/");
+            assert_eq!(context.shell_hint, "zsh");
+            assert_eq!(context.exe_suffix, "");
+            assert_eq!(context.line_ending, "lf");
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            assert_eq!(context.os_family, "linux");
+            assert_eq!(context.path_style, "posix");
+            assert_eq!(context.path_separator, "/");
+            assert_eq!(context.shell_hint, "bash");
+            assert_eq!(context.exe_suffix, "");
+            assert_eq!(context.line_ending, "lf");
+        }
+    }
+
+    #[test]
+    fn render_host_runtime_context_section_contains_key_fields() {
+        let section = render_host_runtime_context_section(&HostRuntimeContext {
+            os_family: "windows",
+            path_style: "windows",
+            path_separator: "\\",
+            shell_hint: "powershell",
+            exe_suffix: ".exe",
+            line_ending: "crlf",
+        });
+        assert!(section.contains("Host OS: windows"));
+        assert!(section.contains("Path style: windows"));
+        assert!(section.contains("Preferred shell syntax hint: powershell"));
+        assert!(section.contains("Default line ending: crlf"));
+    }
 }

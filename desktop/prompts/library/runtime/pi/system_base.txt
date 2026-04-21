@@ -146,6 +146,9 @@ Subjects library schema:
 # Project Context
 {{project_context}}
 
+# Host Runtime Context
+{{host_runtime_context}}
+
 # Skills
 {{skills_section}}
 
