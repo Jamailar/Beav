@@ -429,22 +429,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
   };
 
-  const buildSuggestedManuscriptPath = (title: string) => {
-    const safeName = String(title || 'wander-draft')
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80) || 'wander-draft';
-    return `wander/${safeName}.redpost`;
-  };
-
   const startCreateInRedClaw = () => {
     if (!parsedResult || !onNavigateToRedClaw) return;
     const selectedOption = parsedResult.options?.[selectedOptionIndex];
     const activeTopic = selectedOption?.topic || parsedResult.topic;
     const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
-    const suggestedManuscriptPath = buildSuggestedManuscriptPath(activeTopic.title);
-
     const connectedSet = new Set(activeTopic.connections || []);
     const referenceCards = items.map((item, index) => {
       const folderRef = buildKnowledgeFolderReference(item);
@@ -472,29 +461,23 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       ].join('\n');
     }).join('\n\n---\n\n');
 
-    const folderListText = items.map((item, index) => {
-      const folderRef = buildKnowledgeFolderReference(item);
-      return `${index + 1}. ${folderRef.folderPath}`;
-    }).join('\n');
-
     const content = [
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
-      '## 执行要求',
-      '1. 不要只依赖消息里的摘要。开始写作前，先读取下方素材目录中的真实文件，再决定哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '2. 优先使用 `redbox_fs(action="list" | "read", scope="workspace")` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达时才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
-      '3. 每条素材都先 `list` 目录，再优先读取 `meta.json`，然后根据命名规则继续读取正文 / 转录 / 字幕文件。重点学习可复用的 hook、情绪触发点、叙事结构、反差和细节，不要逐条照搬素材。',
-      '4. 必须使用 `writing-style` 技能指导写作；如果当前未激活，先加载再写。写作前还要先参考用户长期档案，尤其 `CreatorProfile.md` 和 `user.md`。标题、正文、标签和封面文案都必须同时服从档案约束与写作风格，避免模板化表达。',
-      '5. 这不是命题作文。内容质量、传播性和完成度优先，不要求把所有素材都直接写进正文。只适合提供切口、结构、情绪或表达方式的素材，可以只吸收其方法；会拖累成稿质量的素材，可以舍弃。',
-      '6. 完稿后，最好再按 `writing-style` 的要求做一次自检。',
+      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
+      '优先使用 `redbox_fs(action="list" | "read", scope="workspace")` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
+      '',
+      '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
+      '',
+      '必须使用writing-style技能来指导写作风格。',
+      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md 再基于素材完成标题候选、正文、标签建议和封面文案，避免模板化表达。',
+      '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
+      '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
+      '完稿最好要按照writing-style技能的要求进行检查。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
       `内容方向：${activeDirection || ''}`,
-      `建议保存稿件路径：${suggestedManuscriptPath}`,
-      '',
-      '## 需要先探索的素材目录',
-      folderListText,
       '',
       '## 参考素材（来自漫步）',
       materialText,
@@ -502,13 +485,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '## 输出要求',
       '1. 先给出标题候选（至少5个，含强钩子）。',
       '2. 给出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。',
-      '3. 给出标签建议（8-12个）。',
-      '4. 给出封面文案建议（2-3个）。',
-      '5. 这是小红书图文任务，必须保存成 `.redpost` 工程，不要保存成单个 `.md` 文件。',
-      `6. 如目标工程不存在，先调用 app_cli 创建 \`.redpost\` 工程，再写入正文；也可以直接写入该工程路径，让宿主自动建包。推荐路径：${suggestedManuscriptPath}。`,
-      `7. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：app_cli(command="manuscripts write --path \\"${suggestedManuscriptPath}\\"", payload={ content: "...完整 markdown..." })。`,
-      '8. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
-      `9. 只有在工具成功后才能回显保存路径，并且必须使用工具返回的真实路径；不要只复述建议路径 ${suggestedManuscriptPath}。`,
+      '3. 这是小红书图文任务，必须保存成 `.redpost` 工程。',
+      '4. 如目标工程不存在，先调用 app_cli 创建 `.redpost` 工程，再写入正文；也可以直接写入该工程路径，让宿主自动建包。',
+      '5. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：',
+      '6. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
     ].join('\n');
 
     onNavigateToRedClaw({
