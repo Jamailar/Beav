@@ -104,6 +104,13 @@ interface ChatErrorEventPayload {
   category?: string;
 }
 
+interface StructuredChatErrorNotice {
+  title: string;
+  hint?: string;
+  detail?: string;
+  metaParts?: string[];
+}
+
 type FixedSessionWarmSnapshot = {
   messages: Message[];
   contextUsage: ChatContextUsage | null;
@@ -223,101 +230,25 @@ function parseEmbeddedHttpError(rawValue: string): Partial<ChatErrorEventPayload
   };
 }
 
-function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
+function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null | undefined): StructuredChatErrorNotice {
   const embedded = parseEmbeddedHttpError(typeof payload === 'string'
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.message || 'AI 请求失败').trim();
+  const title = String(data.message || '').trim() || '请求失败';
   const detail = String(data.raw || '').trim();
-  const lower = `${title}\n${detail}`.toLowerCase();
-  const detectedInsufficientBalance =
-    lower.includes('insufficient balance') ||
-    lower.includes('insufficient_balance') ||
-    lower.includes('insufficient_quota') ||
-    /\b1008\b/.test(lower);
-  const detectedInvalidKey =
-    lower.includes('invalid api key') ||
-    lower.includes('incorrect api key') ||
-    lower.includes('invalid_api_key') ||
-    lower.includes('authentication_error') ||
-    lower.includes('unauthorized');
-  const detectedRateLimit =
-    Number(data.statusCode) === 429 ||
-    lower.includes('rate limit') ||
-    lower.includes('too many requests');
-
-  const category = detectedInsufficientBalance
-    ? 'quota'
-    : detectedInvalidKey
-      ? 'auth'
-      : detectedRateLimit
-        ? 'rate_limit'
-        : String(data.category || '').trim();
-
-  const isValidationError = category === 'validation';
-  const isExecutionError = category === 'execution';
-
-  const hint = detectedInsufficientBalance
-    ? '账号余额/额度不足。请充值、升级套餐或切换到有余额的 AI 源。'
-    : detectedInvalidKey
-      ? '请检查 API Key 是否正确、是否过期，以及该模型是否有调用权限。'
-      : detectedRateLimit
-        ? '请求频率过高。请稍后重试，或降低并发与调用频率。'
-        : isValidationError
-          ? String(data.hint || '').trim() || '当前结果未通过执行校验，请先修复素材读取、证据链或保存回执问题。'
-          : isExecutionError
-            ? String(data.hint || '').trim() || '执行阶段发生错误，请检查素材读取、工具调用、文件路径或权限。'
-        : String(data.hint || '').trim() || '请检查 AI 源配置后重试。';
+  const hint = String(data.hint || '').trim();
+  const category = String(data.category || '').trim();
   const metaParts = [
     data.statusCode ? `HTTP ${data.statusCode}` : '',
     data.errorCode ? String(data.errorCode) : '',
     category || '',
   ].filter(Boolean);
-
-  const userFacingTitle = detectedInsufficientBalance
-    ? 'AI 账号余额不足（供应商返回）'
-    : detectedInvalidKey
-      ? 'AI API Key 无效或无权限（供应商返回）'
-      : detectedRateLimit
-        ? 'AI 请求被限流（供应商返回）'
-        : isValidationError
-          ? '执行校验未通过'
-          : isExecutionError
-            ? '任务执行失败'
-        : title;
-
-  const lines: string[] = [`❌ ${userFacingTitle}`];
-  lines.push(
-    isValidationError || isExecutionError
-      ? '说明：这是任务执行阶段返回的错误，不是 AI 源鉴权或 App 崩溃。'
-      : '说明：这是 AI 源接口返回的错误，不是 App 崩溃。'
-  );
-  if (hint) lines.push(`处理建议：${hint}`);
-  if (metaParts.length > 0) lines.push(`标识：${metaParts.join(' · ')}`);
-  if (detail) {
-    lines.push('');
-    lines.push('错误详情（用于反馈）：');
-    lines.push('```text');
-    lines.push(detail.slice(0, 3000));
-    lines.push('```');
-  }
-
-  const notice = detectedInsufficientBalance
-    ? `AI 源余额不足${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请充值或切换有余额的 AI 源。`
-    : detectedInvalidKey
-      ? `AI 源鉴权失败${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请检查 API Key。`
-      : detectedRateLimit
-        ? `AI 请求被限流${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请稍后重试。`
-        : isValidationError
-          ? '执行校验未通过，请先修复 reviewer 指出的问题。'
-          : isExecutionError
-            ? '任务执行失败，请检查素材读取、工具调用和文件权限。'
-        : `AI 请求失败：${userFacingTitle}${metaParts.length > 0 ? `（${metaParts.join(' / ')}）` : ''}`;
-
   return {
-    formatted: lines.join('\n'),
-    notice,
+    title,
+    hint: hint || undefined,
+    detail: detail || undefined,
+    metaParts: metaParts.length > 0 ? metaParts : undefined,
   };
 }
 
@@ -377,7 +308,7 @@ export function Chat({
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
@@ -1757,7 +1688,7 @@ export function Chat({
       if (!isActiveRef.current) return;
       suppressComposerFocus('error', 3000);
       blurComposer('error');
-      const { formatted, notice } = deriveChatErrorPresentation(error);
+      const notice = normalizeChatErrorNotice(error);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
@@ -1781,26 +1712,12 @@ export function Chat({
             });
             return [...prev.slice(0, -1), {
               ...lastMsg,
-              content: formatted,
               timeline,
               isStreaming: false,
               processingFinishedAt: now,
             }];
           }
-          const now = Date.now();
-          return [
-            ...prev,
-            {
-              id: now.toString(),
-              role: 'ai',
-              content: formatted,
-              tools: [],
-              timeline: [],
-              isStreaming: false,
-              processingStartedAt: now,
-              processingFinishedAt: now,
-            }
-          ];
+          return prev;
         });
       });
     };
@@ -2570,8 +2487,29 @@ export function Chat({
                   <>
                 {errorNotice && (
                   <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                    <div className="font-medium">本次 AI 请求失败</div>
-                    <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                    {typeof errorNotice === 'string' ? (
+                      <>
+                        <div className="font-medium">请求失败</div>
+                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium">{errorNotice.title}</div>
+                        {errorNotice.hint && (
+                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
+                        )}
+                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
+                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
+                            {errorNotice.metaParts.join(' · ')}
+                          </div>
+                        )}
+                        {errorNotice.detail && (
+                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                            {errorNotice.detail}
+                          </pre>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (
