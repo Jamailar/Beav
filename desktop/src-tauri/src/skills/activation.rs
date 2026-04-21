@@ -3,8 +3,7 @@ use serde_json::Value;
 use crate::runtime::SkillRecord;
 use crate::skills::{
     apply_skill_tool_permissions, build_skill_catalog_snapshot, build_skill_hook_output,
-    normalized_activation_scope, requested_session_skill_names, skill_allows_runtime_mode,
-    LoadedSkillRecord, SkillHookOutput,
+    requested_session_skill_names, skill_allows_runtime_mode, LoadedSkillRecord, SkillHookOutput,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -29,9 +28,7 @@ fn resolve_active_skills(
             continue;
         }
         let requested_match = requested.iter().any(|item| item == &skill.name);
-        let session_scoped =
-            normalized_activation_scope(skill.metadata.activation_scope.as_deref()) == "session";
-        if (requested_match && session_scoped) || skill.metadata.auto_activate {
+        if requested_match || skill.metadata.auto_activate {
             active.push(skill.clone());
         }
     }
@@ -110,5 +107,19 @@ mod tests {
         );
         assert_eq!(resolved.active_skills.len(), 1);
         assert_eq!(resolved.visible_skills.len(), 1);
+    }
+
+    #[test]
+    fn resolve_skill_set_activates_explicitly_requested_turn_scoped_skill() {
+        let resolved = resolve_skill_set(
+            &[skill("writing-style", "[redclaw, wander]", false)],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["writing-style"]
+            })),
+            &["app_cli".to_string()],
+        );
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills[0].name, "writing-style");
     }
 }

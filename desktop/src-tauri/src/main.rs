@@ -1412,7 +1412,8 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::guess_mime_and_kind;
+    use super::{guess_mime_and_kind, redbox_fs_profile_read_completed};
+    use serde_json::json;
     use std::path::Path;
 
     #[test]
@@ -1421,6 +1422,20 @@ mod tests {
         assert_eq!(mime_type, "image/svg+xml");
         assert_eq!(kind, "image");
         assert!(direct_upload_eligible);
+    }
+
+    #[test]
+    fn redbox_fs_profile_read_completed_matches_workspace_profile_reads() {
+        assert!(redbox_fs_profile_read_completed(&json!({
+            "action": "read",
+            "scope": "workspace",
+            "path": "redclaw/profile/user.md"
+        })));
+        assert!(!redbox_fs_profile_read_completed(&json!({
+            "action": "read",
+            "scope": "workspace",
+            "path": "notes/demo.md"
+        })));
     }
 }
 
@@ -4043,6 +4058,34 @@ struct InteractiveExecutionProgress {
     save_completed: bool,
 }
 
+fn redbox_fs_profile_read_completed(arguments: &Value) -> bool {
+    let action = payload_string(arguments, "action")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let scope = payload_string(arguments, "scope")
+        .unwrap_or_else(|| "workspace".to_string())
+        .to_ascii_lowercase();
+    if action != "read" || scope != "workspace" {
+        return false;
+    }
+    let path = payload_string(arguments, "path")
+        .unwrap_or_default()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if path.is_empty() {
+        return false;
+    }
+    path.starts_with("redclaw/profile/")
+        || path == "redclaw/profile"
+        || matches!(
+            path.as_str(),
+            "redclaw/profile/agent.md"
+                | "redclaw/profile/user.md"
+                | "redclaw/profile/creatorprofile.md"
+                | "redclaw/profile/soul.md"
+        )
+}
+
 fn interactive_execution_contract(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -4141,6 +4184,9 @@ fn interactive_execution_progress_observe_success(
                 .to_ascii_lowercase();
             if contract.require_source_read && scope == "workspace" && action == "read" {
                 progress.source_read_completed = true;
+            }
+            if contract.require_profile_read && redbox_fs_profile_read_completed(arguments) {
+                progress.profile_read_completed = true;
             }
         }
         "app_cli" => {
