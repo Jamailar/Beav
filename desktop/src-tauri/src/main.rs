@@ -1420,6 +1420,7 @@ mod tests {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn run_osascript_json(script: &str) -> Result<Value, String> {
     let output = std::process::Command::new("osascript")
         .arg("-l")
