@@ -78,6 +78,22 @@ fn merge_task_hints_into_session_metadata(
     Ok(requested_skills)
 }
 
+fn collect_active_skill_items_for_session(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(String, Vec<(String, String)>), String> {
+    with_store(state, |store| {
+        let runtime_mode = resolve_runtime_mode_for_session(&store, session_id);
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|item| item.metadata.as_ref());
+        let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
+        Ok((runtime_mode, items))
+    })
+}
+
 pub fn handle_send_channel(
     app: &AppHandle,
     channel: &str,
@@ -157,6 +173,40 @@ pub fn handle_send_channel(
                     ),
                 );
             }
+            if let Some(active_session_id) = session_id.as_deref() {
+                let (runtime_mode, activated_skills) =
+                    collect_active_skill_items_for_session(state, active_session_id)?;
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[runtime][skills][chat][{}] activated={} runtimeMode={}",
+                        active_session_id,
+                        if activated_skills.is_empty() {
+                            "none".to_string()
+                        } else {
+                            activated_skills
+                                .iter()
+                                .map(|(name, _)| name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        },
+                        runtime_mode
+                    ),
+                );
+                for (name, description) in activated_skills {
+                    emit_runtime_task_checkpoint_saved(
+                        app,
+                        None,
+                        Some(active_session_id),
+                        "chat.skill_activated",
+                        "skill activated",
+                        Some(json!({
+                            "name": name,
+                            "description": description,
+                        })),
+                    );
+                }
+            }
             let turn = build_chat_send_turn(
                 session_id.clone(),
                 message.clone(),
@@ -166,53 +216,6 @@ pub fn handle_send_channel(
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let completed = run_chat_send_turn(app, state, &prepared_turn, &message)?;
-            let session_hint = session_id.clone();
-            let (active_session_id, activated_skills) = with_store(state, |store| {
-                let target_session_id = session_hint
-                    .clone()
-                    .unwrap_or_else(|| latest_session_id(&store));
-                let runtime_mode = resolve_runtime_mode_for_session(&store, &target_session_id);
-                let metadata = store
-                    .chat_sessions
-                    .iter()
-                    .find(|item| item.id == target_session_id)
-                    .and_then(|item| item.metadata.as_ref());
-                let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
-                Ok((target_session_id, items))
-            })?;
-            append_debug_log_state(
-                state,
-                format!(
-                    "[runtime][skills][chat][{}] activated={} runtimeMode={}",
-                    active_session_id,
-                    if activated_skills.is_empty() {
-                        "none".to_string()
-                    } else {
-                        activated_skills
-                            .iter()
-                            .map(|(name, _)| name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    },
-                    with_store(state, |store| {
-                        Ok(resolve_runtime_mode_for_session(&store, &active_session_id))
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string())
-                ),
-            );
-            for (name, description) in activated_skills {
-                emit_runtime_task_checkpoint_saved(
-                    app,
-                    None,
-                    Some(&active_session_id),
-                    "chat.skill_activated",
-                    "skill activated",
-                    Some(json!({
-                        "name": name,
-                        "description": description,
-                    })),
-                );
-            }
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",
