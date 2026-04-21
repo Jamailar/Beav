@@ -38,11 +38,6 @@
   </g>
   <ellipse cx="452" cy="244" rx="232" ry="92" fill="#F7FEFD" fill-opacity="0.36"/>
   <ellipse cx="470" cy="846" rx="292" ry="122" fill="#D7EEF2" fill-opacity="0.42"/>
-  <g opacity="0.92">
-    <circle cx="698" cy="58" r="26" fill="#143A30"/>
-    <circle cx="698" cy="58" r="25.25" stroke="#D7FFF0" stroke-opacity="0.28" stroke-width="1.5"/>
-    <path d="M698 37L701.9 50.8L716 58L701.9 65.2L698 79L694.1 65.2L680 58L694.1 50.8L698 37Z" fill="#E7FFF3" fill-opacity="0.9"/>
-  </g>
   <rect x="148" y="872" width="12" height="86" rx="6" fill="#2F965C" fill-opacity="0.88"/>
   <rect x="175" y="902" width="176" height="16" rx="8" fill="#F3E79A" fill-opacity="0.66"/>
 </svg>

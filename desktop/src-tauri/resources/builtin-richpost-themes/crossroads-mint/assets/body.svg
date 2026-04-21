@@ -39,9 +39,4 @@
   <ellipse cx="444" cy="312" rx="242" ry="104" fill="#F8FFFE" fill-opacity="0.32"/>
   <ellipse cx="446" cy="866" rx="318" ry="140" fill="#DCEEF2" fill-opacity="0.48"/>
   <path d="M238 944C258 929.333 278 929.333 298 944C318 958.667 338 958.667 358 944C378 929.333 398 929.333 418 944C438 958.667 458 958.667 478 944C498 929.333 518 929.333 538 944" stroke="#1D2530" stroke-opacity="0.24" stroke-width="4" stroke-linecap="round"/>
-  <g opacity="0.9">
-    <circle cx="726" cy="62" r="25" fill="#15362D"/>
-    <circle cx="726" cy="62" r="24.25" stroke="#D7FFF1" stroke-opacity="0.26" stroke-width="1.5"/>
-    <path d="M726 42L729.6 54.8L742 62L729.6 69.2L726 82L722.4 69.2L710 62L722.4 54.8L726 42Z" fill="#EBFFF5" fill-opacity="0.92"/>
-  </g>
 </svg>
