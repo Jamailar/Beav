@@ -95,11 +95,6 @@ fn extract_openai_json_assistant_response(
                 id,
                 name,
                 arguments,
-                raw: json!({
-                    "id": raw.get("id").cloned().unwrap_or_else(|| json!(null)),
-                    "type": raw.get("type").cloned().unwrap_or_else(|| json!("function")),
-                    "function": function.clone(),
-                }),
             })
         })
         .collect::<Vec<_>>();

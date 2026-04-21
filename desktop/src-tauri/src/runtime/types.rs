@@ -452,7 +452,6 @@ pub struct InteractiveToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
-    pub raw: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

@@ -4836,12 +4836,6 @@ fn run_anthropic_interactive_chat_runtime(
                     id: call_id.clone(),
                     name: item.name.clone(),
                     arguments: parsed_arguments,
-                    raw: json!({
-                        "id": call_id,
-                        "type": "tool_use",
-                        "name": item.name,
-                        "input": raw_arguments,
-                    }),
                 })
             })
             .collect::<Vec<_>>();
@@ -5342,14 +5336,6 @@ fn run_gemini_interactive_chat_runtime(
                                     id: call_id.clone(),
                                     name: name.clone(),
                                     arguments: args.clone(),
-                                    raw: json!({
-                                        "id": call_id,
-                                        "functionCall": {
-                                            "id": function_call.get("id").cloned().unwrap_or(Value::Null),
-                                            "name": name,
-                                            "args": args
-                                        }
-                                    }),
                                 });
                             }
                         }

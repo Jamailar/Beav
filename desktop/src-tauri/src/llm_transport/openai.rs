@@ -303,14 +303,6 @@ fn finalize_tool_calls(
                 id: call_id.clone(),
                 name: tool_name.clone(),
                 arguments: parsed_arguments,
-                raw: json!({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": raw_arguments,
-                    }
-                }),
             })
         })
         .collect::<Vec<_>>();
