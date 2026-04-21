@@ -1,5 +1,13 @@
 const KNOWLEDGE_API_CANDIDATES = [
   {
+    baseUrl: 'http://127.0.0.1:23456',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://localhost:23456',
+    endpointPath: '/api/knowledge',
+  },
+  {
     baseUrl: 'http://127.0.0.1:31937',
     endpointPath: '/api/knowledge',
   },
@@ -816,10 +824,17 @@ function buildXhsEntry(payload) {
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
   const stableNoteId = normalizeText(payload?.noteId)
     || `xhs-${hashString(sourceUrl)}`;
+  const noteType = normalizeText(payload?.noteType);
   const videoAssetUrl = normalizeText(payload?.videoDataUrl)
     || normalizeText(payload?.videoUrl);
   const imageUrls = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
-  const kind = videoAssetUrl && imageUrls.length === 0 ? 'xhs-video' : 'xhs-note';
+  const kind = noteType === 'video'
+    ? 'xhs-video'
+    : noteType === 'image'
+      ? 'xhs-note'
+      : videoAssetUrl
+        ? 'xhs-video'
+        : 'xhs-note';
   const text = normalizeText(payload?.text) || normalizeText(payload?.content);
   const tags = Array.from(new Set(['小红书', ...extractTagsFromText(text)]));
 
@@ -1942,6 +1957,16 @@ async function extractXhsNotePayload() {
     return String(value || '').replace(/\s+/g, '').trim();
   }
 
+  function toAbsoluteUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
   function isCommentRelatedNode(el) {
     if (!el || !el.closest) return false;
     return Boolean(
@@ -2084,7 +2109,7 @@ async function extractXhsNotePayload() {
 
   function pushUniqueUrl(list, value) {
     if (!value || typeof value !== 'string') return;
-    const url = value.trim();
+    const url = toAbsoluteUrl(value);
     if (!/^https?:\/\//i.test(url)) return;
     if (!list.includes(url)) {
       list.push(url);
@@ -2126,18 +2151,173 @@ async function extractXhsNotePayload() {
   }
 
   function getCurrentNoteImgEls(root) {
-    let els = root
-      ? Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
-      : [];
-    if (els.length === 0) {
-      els = Array.from(document.querySelectorAll('.note-content .img-container img, .img-container img, .swiper-slide img'));
+    const swiperSlides = getCurrentNoteSwiperSlides(root)
+      .filter((slide) => !isDuplicateSwiperSlide(slide))
+      .map((slide, domIndex) => ({
+        slide,
+        domIndex,
+        slideIndex: Number.parseInt(slide.getAttribute('data-swiper-slide-index') || '', 10),
+      }))
+      .sort((a, b) => {
+        const aHasIndex = Number.isFinite(a.slideIndex);
+        const bHasIndex = Number.isFinite(b.slideIndex);
+        if (aHasIndex && bHasIndex && a.slideIndex !== b.slideIndex) {
+          return a.slideIndex - b.slideIndex;
+        }
+        if (aHasIndex !== bHasIndex) {
+          return aHasIndex ? -1 : 1;
+        }
+        return a.domIndex - b.domIndex;
+      });
+    const swiperImgs = swiperSlides
+      .map(({ slide }) => slide.querySelector('img'))
+      .filter((img) => isValidNoteImageElement(img));
+    if (swiperImgs.length > 0) {
+      return swiperImgs;
     }
-    return els.filter((img) => {
-      if (isCommentRelatedNode(img)) return false;
-      if (img.closest('.avatar,[class*="avatar"]')) return false;
-      const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-      return /^https?:\/\//i.test(src);
-    });
+
+    const els = root
+      ? Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
+      : Array.from(document.querySelectorAll('.note-content .img-container img, .img-container img, .swiper-slide img'));
+    return els.filter((img) => isValidNoteImageElement(img));
+  }
+
+  function isDuplicateSwiperSlide(node) {
+    return Boolean(node?.classList?.contains('swiper-slide-duplicate'));
+  }
+
+  function getCurrentNoteSwiperSlides(root) {
+    const slides = root
+      ? Array.from(root.querySelectorAll('.note-slider .swiper-slide, .swiper .swiper-slide'))
+      : Array.from(document.querySelectorAll('#noteContainer .note-slider .swiper-slide, #noteContainer .swiper .swiper-slide, .note-container .note-slider .swiper-slide, .note-container .swiper .swiper-slide'));
+    return slides.filter((slide) => !isCommentRelatedNode(slide));
+  }
+
+  function getNoteImageSrc(img) {
+    return String(img?.getAttribute('src') || img?.getAttribute('data-src') || img?.currentSrc || '').trim();
+  }
+
+  function isValidNoteImageElement(img) {
+    if (!img) return false;
+    if (isCommentRelatedNode(img)) return false;
+    if (img.closest('.avatar,[class*="avatar"]')) return false;
+    if (img.closest('.swiper-slide-duplicate')) return false;
+    return /^https?:\/\//i.test(getNoteImageSrc(img));
+  }
+
+  function getCurrentOriginalCoverImageUrl(root) {
+    const swiperSlides = getCurrentNoteSwiperSlides(root).filter((slide) => !isDuplicateSwiperSlide(slide));
+    const originalSlide = swiperSlides.find((slide) => String(slide.getAttribute('data-swiper-slide-index') || '').trim() === '0');
+    const activeSlide = swiperSlides.find((slide) => slide.classList.contains('swiper-slide-active'));
+    const fallbackSlide = swiperSlides[0] || null;
+    const coverImg = originalSlide?.querySelector('img')
+      || activeSlide?.querySelector('img')
+      || fallbackSlide?.querySelector('img')
+      || null;
+    return isValidNoteImageElement(coverImg) ? getNoteImageSrc(coverImg) : null;
+  }
+
+  function parseCssBackgroundImageUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw || raw === 'none') return '';
+    const match = raw.match(/url\((['"]?)(.*?)\1\)/i);
+    return toAbsoluteUrl(match?.[2] || '');
+  }
+
+  function getElementBackgroundImageUrl(el) {
+    if (!el) return '';
+    const inlineUrl = parseCssBackgroundImageUrl(el.style?.backgroundImage || '');
+    if (inlineUrl) return inlineUrl;
+    try {
+      return parseCssBackgroundImageUrl(window.getComputedStyle(el).backgroundImage);
+    } catch {
+      return '';
+    }
+  }
+
+  function collectStateCoverUrls(stateNote) {
+    const urls = [];
+    const cover = stateNote?.cover || stateNote?.noteCard?.cover || null;
+    const imageList = Array.isArray(stateNote?.imageList)
+      ? stateNote.imageList
+      : Array.isArray(stateNote?.images)
+        ? stateNote.images
+        : [];
+    const coverInfoList = Array.isArray(cover?.infoList) ? cover.infoList : [];
+
+    const pushCoverCandidate = (item) => {
+      if (!item) return;
+      if (typeof item === 'string') {
+        pushUniqueUrl(urls, item);
+        return;
+      }
+      pushUniqueUrl(urls, item?.urlDefault);
+      pushUniqueUrl(urls, item?.urlPre);
+      pushUniqueUrl(urls, item?.url);
+      pushUniqueUrl(urls, item?.urlDefaultWebp);
+      pushUniqueUrl(urls, item?.masterUrl);
+      pushUniqueUrl(urls, item?.src);
+    };
+
+    pushCoverCandidate(cover?.urlDefault);
+    pushCoverCandidate(cover?.urlPre);
+    pushCoverCandidate(cover?.url);
+    pushCoverCandidate(cover?.urlDefaultWebp);
+    coverInfoList.forEach(pushCoverCandidate);
+    imageList.forEach(pushCoverCandidate);
+
+    return urls;
+  }
+
+  function getCurrentFeedCardCoverUrl(noteId) {
+    const stableNoteId = String(noteId || '').trim();
+    if (!stableNoteId) return '';
+
+    const selectors = [
+      `#exploreFeeds .note-item a.cover[href*="/explore/${stableNoteId}"] img`,
+      `#exploreFeeds .note-item a.cover[href*="${stableNoteId}"] img`,
+      `.feeds-container .note-item a.cover[href*="/explore/${stableNoteId}"] img`,
+      `.feeds-container .note-item a.cover[href*="${stableNoteId}"] img`,
+    ];
+
+    for (const selector of selectors) {
+      const img = document.querySelector(selector);
+      const src = getNoteImageSrc(img);
+      if (/^https?:\/\//i.test(src)) {
+        return src;
+      }
+    }
+
+    return '';
+  }
+
+  function getCurrentVideoPosterUrl(root, stateNote) {
+    const mainVideo = getCurrentMainVideoElement(root);
+    const directPoster = toAbsoluteUrl(
+      mainVideo?.getAttribute('poster')
+      || root?.querySelector?.('video')?.getAttribute?.('poster')
+      || '',
+    );
+    if (/^https?:\/\//i.test(directPoster)) return directPoster;
+
+    const posterEls = Array.from(root?.querySelectorAll?.('xg-poster.xgplayer-poster, .xgplayer xg-poster, .xgplayer-poster') || [])
+      .filter((el) => !isCommentRelatedNode(el));
+    const activePoster = posterEls.find((el) => el.classList?.contains?.('active') || isNodeVisible(el)) || posterEls[0] || null;
+    const playerPoster = getElementBackgroundImageUrl(activePoster);
+    if (/^https?:\/\//i.test(playerPoster)) return playerPoster;
+
+    const feedCardPoster = getCurrentFeedCardCoverUrl(
+      stateNote?.noteId
+      || stateNote?.id
+      || stateNote?.note_id
+      || getCurrentOpenedNoteId(),
+    );
+    if (feedCardPoster) return feedCardPoster;
+
+    const stateCoverUrl = collectStateCoverUrls(stateNote)[0] || '';
+    if (stateCoverUrl) return stateCoverUrl;
+
+    return '';
   }
 
   function getImageUrls(root, stateNote) {
@@ -2165,7 +2345,7 @@ async function extractXhsNotePayload() {
 
     const imgEls = getCurrentNoteImgEls(root);
     imgEls.forEach((img) => {
-      pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
+      pushUniqueUrl(urls, getNoteImageSrc(img));
     });
     return urls;
   }
@@ -2184,6 +2364,112 @@ async function extractXhsNotePayload() {
       return Boolean(el.querySelector('source[src^="blob:"], source[src^="http"]'));
     });
     return tagged || null;
+  }
+
+  function getCurrentNoteVideoElements(root) {
+    if (!root) return [];
+    const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+    const seen = new Set();
+    const unique = [];
+    candidates.forEach((el, index) => {
+      if (isCommentRelatedNode(el)) return;
+      const src = String(el.currentSrc || el.getAttribute('src') || '').trim();
+      const poster = String(el.getAttribute('poster') || '').trim();
+      const key = src || poster || `video-index-${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      unique.push(el);
+    });
+    return unique;
+  }
+
+  function parseDurationTextToSeconds(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+
+    const parts = raw
+      .split(':')
+      .map((part) => Number(part.trim()))
+      .filter((part) => Number.isFinite(part) && part >= 0);
+    if (parts.length < 2 || parts.length > 3) return null;
+
+    let seconds = 0;
+    parts.forEach((part) => {
+      seconds = (seconds * 60) + part;
+    });
+    return seconds > 0 ? seconds : null;
+  }
+
+  function getStateVideoDurationSeconds(stateNote) {
+    const candidates = [
+      stateNote?.video?.duration,
+      stateNote?.video?.durationSeconds,
+      stateNote?.video?.media?.duration,
+      stateNote?.video?.media?.durationSeconds,
+      stateNote?.video?.durationMs,
+      stateNote?.video?.duration_ms,
+      stateNote?.video?.media?.durationMs,
+      stateNote?.video?.media?.duration_ms,
+    ];
+
+    for (const candidate of candidates) {
+      const seconds = parseDurationTextToSeconds(candidate);
+      if (!seconds) continue;
+      return seconds > 10000 || (Number.isInteger(seconds) && seconds > 2000 && seconds % 1000 === 0)
+        ? seconds / 1000
+        : seconds;
+    }
+
+    return null;
+  }
+
+  function getNoteVideoDurationSeconds(videoEl, root, stateNote) {
+    const directDuration = Number(videoEl?.duration);
+    if (Number.isFinite(directDuration) && directDuration > 0) {
+      return directDuration;
+    }
+
+    const scopes = [
+      videoEl?.closest?.('.media-container'),
+      videoEl?.closest?.('.player-container'),
+      videoEl?.closest?.('.player-el'),
+      videoEl?.closest?.('.xgplayer'),
+      root,
+      document,
+    ].filter(Boolean);
+    for (const scope of scopes) {
+      const timeEls = Array.from(scope.querySelectorAll('xg-time span, .xgplayer-time span'));
+      const parsed = parseDurationTextToSeconds(timeEls[timeEls.length - 1]?.textContent || '');
+      if (parsed) return parsed;
+    }
+
+    return getStateVideoDurationSeconds(stateNote);
+  }
+
+  function resolveXhsNoteType(root, stateNote) {
+    if (isLivePhotoNote(root)) {
+      return 'image';
+    }
+
+    const videoElements = getCurrentNoteVideoElements(root);
+    const hasStateVideo = Boolean(stateNote?.video);
+    const videoCount = Math.max(videoElements.length, hasStateVideo ? 1 : 0);
+    if (videoCount !== 1) {
+      return 'image';
+    }
+
+    const mainVideo = getCurrentMainVideoElement(root) || videoElements[0] || null;
+    const durationSeconds = getNoteVideoDurationSeconds(mainVideo, root, stateNote);
+    if (durationSeconds == null) {
+      return 'video';
+    }
+
+    return durationSeconds > 2 ? 'video' : 'image';
   }
 
   function collectDeepHttpUrls(input, maxCount = 40) {
@@ -2274,7 +2560,7 @@ async function extractXhsNotePayload() {
 
   function captureVideoCoverDataUrl(root) {
     try {
-      const videoEl = root.querySelector('video');
+      const videoEl = getCurrentMainVideoElement(root);
       if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return '';
       const canvas = document.createElement('canvas');
       canvas.width = videoEl.videoWidth;
@@ -2288,11 +2574,17 @@ async function extractXhsNotePayload() {
     }
   }
 
-  function getCoverUrl(root, images, videoUrl) {
-    const poster = root.querySelector('video')?.getAttribute('poster');
-    if (poster) return poster;
+  function getCoverUrl(root, images, noteType, stateNote) {
+    if (noteType === 'video') {
+      const poster = getCurrentVideoPosterUrl(root, stateNote);
+      if (poster) return poster;
+    }
+    const originalCover = getCurrentOriginalCoverImageUrl(root);
+    if (originalCover) return originalCover;
+    const stateCoverUrl = collectStateCoverUrls(stateNote)[0] || '';
+    if (stateCoverUrl) return stateCoverUrl;
     if (images[0]) return images[0];
-    return document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null;
+    return toAbsoluteUrl(document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '') || null;
   }
 
   function getStats() {
@@ -2340,10 +2632,10 @@ async function extractXhsNotePayload() {
   const title = String(getNoteTitle(root) || '').trim();
   const content = String(getTextContent(root) || '').trim();
   const images = getImageUrls(root, stateNote).slice(0, 9);
-  const videoCandidates = getCurrentNoteVideoUrls(root, stateNote);
-  const strictVideoNote = !isLivePhotoNote(root) && images.length === 0 && videoCandidates.length === 1;
-  const videoUrl = strictVideoNote ? videoCandidates[0] : null;
-  const coverUrl = getCoverUrl(root, images, videoUrl);
+  const noteType = resolveXhsNoteType(root, stateNote);
+  const videoCandidates = noteType === 'video' ? getCurrentNoteVideoUrls(root, stateNote) : [];
+  const videoUrl = noteType === 'video' ? (videoCandidates[0] || null) : null;
+  const coverUrl = getCoverUrl(root, images, noteType, stateNote);
   const capturedVideoCover = (!coverUrl && videoUrl) ? captureVideoCoverDataUrl(root) : '';
 
   const localizedImages = [];
@@ -2374,6 +2666,7 @@ async function extractXhsNotePayload() {
 
   return {
     noteId: stableNoteId,
+    noteType,
     title,
     author: getAuthor(root),
     content,
@@ -2813,6 +3106,109 @@ function detectCaptureTarget() {
       }) || null;
     }
 
+    function getCurrentNoteVideoElements(root) {
+      if (!root) return [];
+      const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+      const seen = new Set();
+      const unique = [];
+      candidates.forEach((el, index) => {
+        if (isCommentRelatedNode(el)) return;
+        const src = (el.currentSrc || el.getAttribute('src') || '').trim();
+        const poster = (el.getAttribute('poster') || '').trim();
+        const key = src || poster || `video-index-${index}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        unique.push(el);
+      });
+      return unique;
+    }
+
+    function parseDurationTextToSeconds(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric;
+      }
+
+      const parts = raw
+        .split(':')
+        .map((part) => Number(part.trim()))
+        .filter((part) => Number.isFinite(part) && part >= 0);
+      if (parts.length < 2 || parts.length > 3) return null;
+
+      let seconds = 0;
+      parts.forEach((part) => {
+        seconds = (seconds * 60) + part;
+      });
+      return seconds > 0 ? seconds : null;
+    }
+
+    function getStateVideoDurationSeconds(note) {
+      const candidates = [
+        note?.video?.duration,
+        note?.video?.durationSeconds,
+        note?.video?.media?.duration,
+        note?.video?.media?.durationSeconds,
+        note?.video?.durationMs,
+        note?.video?.duration_ms,
+        note?.video?.media?.durationMs,
+        note?.video?.media?.duration_ms,
+      ];
+      for (const candidate of candidates) {
+        const seconds = parseDurationTextToSeconds(candidate);
+        if (!seconds) continue;
+        return seconds > 10000 || (Number.isInteger(seconds) && seconds > 2000 && seconds % 1000 === 0)
+          ? seconds / 1000
+          : seconds;
+      }
+      return null;
+    }
+
+    function getNoteVideoDurationSeconds(videoEl, root, note) {
+      const directDuration = Number(videoEl?.duration);
+      if (Number.isFinite(directDuration) && directDuration > 0) {
+        return directDuration;
+      }
+
+      const scopes = [
+        videoEl?.closest?.('.media-container'),
+        videoEl?.closest?.('.player-container'),
+        videoEl?.closest?.('.player-el'),
+        videoEl?.closest?.('.xgplayer'),
+        root,
+        document,
+      ].filter(Boolean);
+      for (const scope of scopes) {
+        const timeEls = Array.from(scope.querySelectorAll('xg-time span, .xgplayer-time span'));
+        const parsed = parseDurationTextToSeconds(timeEls[timeEls.length - 1]?.textContent || '');
+        if (parsed) return parsed;
+      }
+
+      return getStateVideoDurationSeconds(note);
+    }
+
+    function resolveXhsNoteType(root, note) {
+      if (isLivePhotoNote(root)) {
+        return 'image';
+      }
+
+      const videoElements = getCurrentNoteVideoElements(root);
+      const hasStateVideo = Boolean(note?.video);
+      const videoCount = Math.max(videoElements.length, hasStateVideo ? 1 : 0);
+      if (videoCount !== 1) {
+        return 'image';
+      }
+
+      const mainVideo = getCurrentMainVideoElement(root) || videoElements[0] || null;
+      const durationSeconds = getNoteVideoDurationSeconds(mainVideo, root, note);
+      if (durationSeconds == null) {
+        return 'video';
+      }
+
+      return durationSeconds > 2 ? 'video' : 'image';
+    }
+
     function pushUniqueUrl(list, value) {
       if (!value || typeof value !== 'string') return;
       const url = value.trim();
@@ -2840,13 +3236,54 @@ function detectCaptureTarget() {
       return urls;
     }
 
+    function isDuplicateSwiperSlide(node) {
+      return Boolean(node?.classList?.contains('swiper-slide-duplicate'));
+    }
+
+    function getCurrentNoteSwiperSlides(root) {
+      return Array.from(root?.querySelectorAll('.note-slider .swiper-slide, .swiper .swiper-slide') || [])
+        .filter((slide) => !isCommentRelatedNode(slide));
+    }
+
+    function getNoteImageSrc(img) {
+      return String(img?.getAttribute('src') || img?.getAttribute('data-src') || img?.currentSrc || '').trim();
+    }
+
+    function isValidNoteImageElement(img) {
+      if (!img) return false;
+      if (isCommentRelatedNode(img)) return false;
+      if (img.closest('.avatar,[class*="avatar"]')) return false;
+      if (img.closest('.swiper-slide-duplicate')) return false;
+      return /^https?:\/\//i.test(getNoteImageSrc(img));
+    }
+
     function getCurrentNoteImageUrls(root, note) {
       const urls = getImageUrlsFromState(note);
       if (urls.length > 0) return urls;
-      const imgEls = Array.from(root?.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img') || []);
+      const swiperSlides = getCurrentNoteSwiperSlides(root)
+        .filter((slide) => !isDuplicateSwiperSlide(slide))
+        .map((slide, domIndex) => ({
+          slide,
+          domIndex,
+          slideIndex: Number.parseInt(slide.getAttribute('data-swiper-slide-index') || '', 10),
+        }))
+        .sort((a, b) => {
+          const aHasIndex = Number.isFinite(a.slideIndex);
+          const bHasIndex = Number.isFinite(b.slideIndex);
+          if (aHasIndex && bHasIndex && a.slideIndex !== b.slideIndex) {
+            return a.slideIndex - b.slideIndex;
+          }
+          if (aHasIndex !== bHasIndex) {
+            return aHasIndex ? -1 : 1;
+          }
+          return a.domIndex - b.domIndex;
+        });
+      const imgEls = swiperSlides.length > 0
+        ? swiperSlides.map(({ slide }) => slide.querySelector('img')).filter((img) => isValidNoteImageElement(img))
+        : Array.from(root?.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img') || [])
+          .filter((img) => isValidNoteImageElement(img));
       imgEls.forEach((img) => {
-        if (isCommentRelatedNode(img)) return;
-        pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
+        pushUniqueUrl(urls, getNoteImageSrc(img));
       });
       return urls;
     }
@@ -2888,9 +3325,7 @@ function detectCaptureTarget() {
 
     const noteRoot = document.querySelector('#noteContainer, .note-container, .note-content');
     const stateNote = getCurrentStateNote();
-    const imageUrls = getCurrentNoteImageUrls(noteRoot, stateNote);
-    const videoUrls = getCurrentNoteVideoUrls(noteRoot, stateNote);
-    const isVideoNote = Boolean(noteRoot || stateNote) && !isLivePhotoNote(noteRoot) && imageUrls.length === 0 && videoUrls.length === 1;
+    const isVideoNote = Boolean(noteRoot || stateNote) && resolveXhsNoteType(noteRoot, stateNote) === 'video';
 
     if (noteRoot || stateNote) {
       return {
