@@ -1413,7 +1413,9 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{guess_mime_and_kind, redbox_fs_profile_read_completed};
+    use super::{
+        guess_mime_and_kind, manuscript_save_result_path, redbox_fs_profile_read_completed,
+    };
     use serde_json::json;
     use std::path::Path;
 
@@ -1437,6 +1439,24 @@ mod tests {
             "scope": "workspace",
             "path": "notes/demo.md"
         })));
+    }
+
+    #[test]
+    fn manuscript_save_result_path_prefers_new_path() {
+        assert_eq!(
+            manuscript_save_result_path(&json!({
+                "success": true,
+                "newPath": "wander/demo.redpost"
+            })),
+            Some("wander/demo.redpost")
+        );
+        assert_eq!(
+            manuscript_save_result_path(&json!({
+                "success": true,
+                "projectPath": "wander/demo.redpost"
+            })),
+            Some("wander/demo.redpost")
+        );
     }
 }
 
@@ -4046,7 +4066,7 @@ impl InteractiveExecutionContract {
             missing.push("读取 RedClaw 用户档案");
         }
         if self.require_save && !progress.save_completed {
-            missing.push("调用 manuscripts write 保存稿件");
+            missing.push("调用 manuscripts write-current 保存稿件");
         }
         missing
     }
@@ -4085,6 +4105,18 @@ fn redbox_fs_profile_read_completed(arguments: &Value) -> bool {
                 | "redclaw/profile/creatorprofile.md"
                 | "redclaw/profile/soul.md"
         )
+}
+
+fn manuscript_save_result_path(result: &Value) -> Option<&str> {
+    ["filePath", "newPath", "path", "projectPath", "contentPath"]
+        .into_iter()
+        .find_map(|key| {
+            result
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn interactive_execution_contract(
@@ -4213,10 +4245,7 @@ fn interactive_execution_progress_observe_success(
                 let result_matches = artifact_suffix
                     .as_deref()
                     .and_then(|suffix| {
-                        result
-                            .get("filePath")
-                            .and_then(Value::as_str)
-                            .map(|path| path.ends_with(suffix))
+                        manuscript_save_result_path(result).map(|path| path.ends_with(suffix))
                     })
                     .unwrap_or(command_matches);
                 if command_matches || result_matches {

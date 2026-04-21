@@ -105,6 +105,42 @@ fn authoring_project_extension(kind: AuthoringProjectKind) -> &'static str {
     }
 }
 
+fn authoring_project_kind_from_target_path(path: &str) -> Option<AuthoringProjectKind> {
+    let normalized = normalize_relative_path(path);
+    if normalized.ends_with(POST_DRAFT_EXTENSION) {
+        return Some(AuthoringProjectKind::Redpost);
+    }
+    if normalized.ends_with(ARTICLE_DRAFT_EXTENSION) {
+        return Some(AuthoringProjectKind::Redarticle);
+    }
+    None
+}
+
+fn content_has_isolated_separator_line(content: &str) -> bool {
+    content.lines().any(|line| {
+        matches!(
+            line.trim(),
+            "---" | "***" | "___" | "<page-break>" | "[page-break]"
+        )
+    })
+}
+
+fn writing_style_save_violations(content: &str) -> Vec<&'static str> {
+    let mut violations = Vec::<&'static str>::new();
+    let normalized = content.replace("\r\n", "\n");
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("page-break") || normalized.contains('\u{000C}') {
+        violations.push("正文包含分页符或 page-break 标记");
+    }
+    if content_has_isolated_separator_line(&normalized) {
+        violations.push("正文包含孤立分隔线 `---` / `***` / `___`");
+    }
+    if normalized.contains("\n\n\n") {
+        violations.push("正文包含连续三个空行");
+    }
+    violations
+}
+
 fn build_authoring_project_relative_path(
     parent: Option<&str>,
     project_id: &str,
@@ -462,12 +498,9 @@ impl<'a> AppCliExecutor<'a> {
                     .ok_or_else(|| "manuscripts read requires --path".to_string())?),
             ),
             "write-current" => {
-                let target = self
-                    .current_authoring_session_target()
-                    .ok_or_else(|| {
-                        "manuscripts write-current requires an active authoring project"
-                            .to_string()
-                    })?;
+                let target = self.current_authoring_session_target().ok_or_else(|| {
+                    "manuscripts write-current requires an active authoring project".to_string()
+                })?;
                 let mut merged = merge_payload(&args.options, payload);
                 if let Some(object) = merged.as_object_mut() {
                     object.insert("path".to_string(), json!(target.project_path.clone()));
@@ -478,6 +511,10 @@ impl<'a> AppCliExecutor<'a> {
                         );
                     }
                 }
+                self.validate_authoring_save_content(
+                    Some(target.project_kind),
+                    &payload_string(&merged, "content").unwrap_or_default(),
+                )?;
                 self.call_channel("manuscripts:save", merged)
             }
             "write" | "save" => {
@@ -496,6 +533,10 @@ impl<'a> AppCliExecutor<'a> {
                         );
                     }
                 }
+                self.validate_authoring_save_content(
+                    authoring_project_kind_from_target_path(&normalized_path),
+                    &payload_string(&merged, "content").unwrap_or_default(),
+                )?;
                 let maybe_proposal = self.maybe_queue_writing_manuscript_proposal(
                     &normalized_path,
                     payload_string(&merged, "content").unwrap_or_default(),
@@ -2284,6 +2325,87 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         .flatten()
     }
 
+    fn current_session_has_skill(&self, skill_name: &str) -> bool {
+        let Some(session_id) = self.session_id else {
+            return false;
+        };
+        with_store(self.state, |store| {
+            let metadata = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|session| session.metadata.as_ref());
+            let Some(metadata) = metadata else {
+                return Ok(false);
+            };
+            let mut names = Vec::<String>::new();
+            if let Some(items) = metadata.get("activeSkills").and_then(Value::as_array) {
+                names.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string),
+                );
+            }
+            if let Some(items) = metadata
+                .get("taskHints")
+                .and_then(|value| value.get("activeSkills"))
+                .and_then(Value::as_array)
+            {
+                names.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string),
+                );
+            }
+            if let Some(items) = metadata
+                .get("sessionSkillState")
+                .and_then(|value| value.get("active"))
+                .and_then(Value::as_array)
+            {
+                names.extend(
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("skillName"))
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string),
+                );
+            }
+            Ok(names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(skill_name)))
+        })
+        .unwrap_or(false)
+    }
+
+    fn validate_authoring_save_content(
+        &self,
+        project_kind: Option<AuthoringProjectKind>,
+        content: &str,
+    ) -> Result<(), String> {
+        if content.trim().is_empty() {
+            return Ok(());
+        }
+        if !matches!(
+            project_kind,
+            Some(AuthoringProjectKind::Redpost | AuthoringProjectKind::Redarticle)
+        ) {
+            return Ok(());
+        }
+        if !self.current_session_has_skill("writing-style") {
+            return Ok(());
+        }
+        let violations = writing_style_save_violations(content);
+        if violations.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "writing-style 保存前校验未通过：{}。请先修正文案后再保存。",
+            violations.join("；")
+        ))
+    }
+
     fn persist_current_authoring_session_target(
         &self,
         project_path: &str,
@@ -3834,5 +3956,21 @@ mod tests {
             payload_string(&merged, "aspectRatio"),
             Some("9:16".to_string())
         );
+    }
+
+    #[test]
+    fn writing_style_save_violations_reject_forbidden_markers() {
+        let violations =
+            writing_style_save_violations("## 标题\n\n---\n\n正文第一段。\n\n\n正文第二段。\n");
+
+        assert!(violations.contains(&"正文包含孤立分隔线 `---` / `***` / `___`"));
+        assert!(violations.contains(&"正文包含连续三个空行"));
+    }
+
+    #[test]
+    fn content_has_isolated_separator_line_ignores_normal_text_lines() {
+        assert!(content_has_isolated_separator_line("标题\n---\n正文"));
+        assert!(!content_has_isolated_separator_line("标题 --- 正文"));
+        assert!(!content_has_isolated_separator_line("| --- | --- |"));
     }
 }

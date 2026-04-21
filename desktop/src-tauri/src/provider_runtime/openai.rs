@@ -86,8 +86,8 @@ fn extract_openai_json_assistant_response(
                 .get("name")
                 .and_then(|value| value.as_str())?
                 .to_string();
-            let arguments = openai_tool_arguments_value(function.get("arguments"))
-                .unwrap_or_else(|| json!({}));
+            let arguments =
+                openai_tool_arguments_value(function.get("arguments")).unwrap_or_else(|| json!({}));
             Some(InteractiveToolCall {
                 id,
                 name,
