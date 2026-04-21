@@ -5836,17 +5836,16 @@ fn run_openai_interactive_chat_runtime(
         } else {
             json!("auto")
         };
+        let include_tools = !forcing_toolless_turn && !tool_turn_limit_reached;
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tools": if forcing_toolless_turn {
-                json!([])
-            } else {
-                interactive_runtime_tools_for_mode(state, runtime_mode, session_id)
-            },
             "tool_choice": tool_choice,
             "stream": !is_wander
         });
+        if include_tools {
+            body["tools"] = interactive_runtime_tools_for_mode(state, runtime_mode, session_id);
+        }
         if disable_thinking_for_turn {
             body["enable_thinking"] = json!(false);
         }

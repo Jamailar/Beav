@@ -164,6 +164,16 @@ fn finalize_thought_phase(app: &AppHandle, session_id: &str) {
     );
 }
 
+fn openai_tool_arguments_text(value: Option<&Value>) -> Option<String> {
+    let raw = value?;
+    match raw {
+        Value::String(text) => Some(text.clone()),
+        Value::Object(_) | Value::Array(_) | Value::Bool(_) | Value::Number(_) | Value::Null => {
+            serde_json::to_string(raw).ok()
+        }
+    }
+}
+
 fn process_openai_sse_event(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -227,10 +237,9 @@ fn process_openai_sse_event(
                 if let Some(name_piece) = function.get("name").and_then(|value| value.as_str()) {
                     entry.name.push_str(name_piece);
                 }
-                if let Some(arguments_piece) =
-                    function.get("arguments").and_then(|value| value.as_str())
+                if let Some(arguments_piece) = openai_tool_arguments_text(function.get("arguments"))
                 {
-                    entry.arguments.push_str(arguments_piece);
+                    entry.arguments.push_str(&arguments_piece);
                 }
             }
         }

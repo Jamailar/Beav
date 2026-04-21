@@ -86,10 +86,7 @@ fn extract_openai_json_assistant_response(
                 .get("name")
                 .and_then(|value| value.as_str())?
                 .to_string();
-            let arguments = function
-                .get("arguments")
-                .and_then(|value| value.as_str())
-                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+            let arguments = openai_tool_arguments_value(function.get("arguments"))
                 .unwrap_or_else(|| json!({}));
             Some(InteractiveToolCall {
                 id,
@@ -99,6 +96,16 @@ fn extract_openai_json_assistant_response(
         })
         .collect::<Vec<_>>();
     Ok((assistant_content, tool_calls))
+}
+
+fn openai_tool_arguments_value(value: Option<&Value>) -> Option<Value> {
+    let raw = value?;
+    match raw {
+        Value::String(text) => serde_json::from_str::<Value>(text).ok(),
+        Value::Object(_) | Value::Array(_) | Value::Bool(_) | Value::Number(_) | Value::Null => {
+            Some(raw.clone())
+        }
+    }
 }
 
 fn should_attempt_json_fallback(error: &LlmTransportError, allow_text_fallback: bool) -> bool {
@@ -215,8 +222,9 @@ pub(crate) fn run_openai_provider_turn(
 
 #[cfg(test)]
 mod tests {
-    use super::should_attempt_json_fallback;
+    use super::{openai_tool_arguments_value, should_attempt_json_fallback};
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
+    use serde_json::json;
 
     #[test]
     fn partial_body_allows_provider_json_fallback() {
@@ -233,5 +241,13 @@ mod tests {
         let error =
             LlmTransportError::with_status(TransportMode::Auto, 401, "invalid api key", None);
         assert!(!should_attempt_json_fallback(&error, true));
+    }
+
+    #[test]
+    fn tool_arguments_parser_accepts_object_arguments() {
+        assert_eq!(
+            openai_tool_arguments_value(Some(&json!({ "path": "wander/a.redpost" }))),
+            Some(json!({ "path": "wander/a.redpost" }))
+        );
     }
 }
