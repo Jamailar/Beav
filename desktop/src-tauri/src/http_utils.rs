@@ -293,6 +293,12 @@ fn run_curl_json_response_attempt(
     )
     .or_else(|error| {
         if allow_http1_retry && should_retry_with_http1_1(&error) {
+            crate::append_debug_trace_global(format!(
+                "[http][curl-json] transport retry method={} url={} upgrade=http1.1 reason={}",
+                method,
+                url,
+                truncate_http_error(&error)
+            ));
             return execute_curl_json_response_once(
                 method,
                 url,
@@ -353,11 +359,20 @@ fn execute_curl_json_response_once(
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
+        let error = if stderr.is_empty() {
             format!("curl failed with status {}", output.status)
         } else {
             stderr
-        });
+        };
+        crate::append_debug_trace_global(format!(
+            "[http][curl-json] curl_error method={} url={} transport={} exit_status={} error={}",
+            method,
+            url,
+            if force_http1_1 { "http1.1" } else { "default" },
+            output.status,
+            truncate_http_error(&error)
+        ));
+        return Err(error);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -371,14 +386,32 @@ fn execute_curl_json_response_once(
     let normalized_body = body_text.trim();
 
     if normalized_body.is_empty() {
+        crate::append_debug_trace_global(format!(
+            "[http][curl-json] empty_json_body method={} url={} transport={} status={}",
+            method,
+            url,
+            if force_http1_1 { "http1.1" } else { "default" },
+            status
+        ));
         return Ok(HttpJsonResponse {
             status,
             body: json!({}),
         });
     }
 
-    let parsed = serde_json::from_str(normalized_body)
-        .map_err(|error| format!("Invalid JSON response: {error}"))?;
+    let parsed = serde_json::from_str(normalized_body).map_err(|error| {
+        let message = format!("Invalid JSON response: {error}");
+        crate::append_debug_trace_global(format!(
+            "[http][curl-json] invalid_json method={} url={} transport={} status={} body_preview={} error={}",
+            method,
+            url,
+            if force_http1_1 { "http1.1" } else { "default" },
+            status,
+            truncate_http_error(normalized_body),
+            truncate_http_error(&message)
+        ));
+        message
+    })?;
     let response = HttpJsonResponse {
         status,
         body: parsed,
@@ -405,10 +438,23 @@ fn execute_curl_json_response_once(
 fn should_retry_with_http1_1(error: &str) -> bool {
     let normalized = error.trim().to_ascii_lowercase();
     normalized.contains("curl: (16)")
+        || normalized.contains("curl: (52)")
+        || normalized.contains("empty reply from server")
         || normalized.contains("http2 framing layer")
         || normalized.contains("http/2 framing layer")
         || normalized.contains("http2 stream")
         || normalized.contains("http/2 stream")
+}
+
+fn truncate_http_error(raw: &str) -> String {
+    let trimmed = raw.trim();
+    const LIMIT: usize = 240;
+    if trimmed.chars().count() <= LIMIT {
+        trimmed.to_string()
+    } else {
+        let prefix = trimmed.chars().take(LIMIT).collect::<String>();
+        format!("{prefix}...")
+    }
 }
 
 pub(crate) fn run_curl_json(
@@ -666,6 +712,9 @@ mod tests {
         ));
         assert!(should_retry_with_http1_1(
             "curl: (16) HTTP/2 stream 0 was not closed cleanly"
+        ));
+        assert!(should_retry_with_http1_1(
+            "curl: (52) Empty reply from server"
         ));
         assert!(!should_retry_with_http1_1("curl: (28) Operation timed out"));
     }
