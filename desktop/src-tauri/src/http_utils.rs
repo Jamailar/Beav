@@ -177,6 +177,7 @@ fn serialized_json_body(body: Option<&Value>) -> Result<Option<Vec<u8>>, String>
         .map_err(|error| error.to_string())
 }
 
+#[allow(dead_code)]
 pub(crate) fn spawn_curl_json_process_with_transport(
     method: &str,
     url: &str,

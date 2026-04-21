@@ -18,6 +18,7 @@ mod interactive_runtime_shared;
 mod knowledge;
 mod knowledge_index;
 mod legacy_import;
+mod llm_transport;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
@@ -84,6 +85,7 @@ pub(crate) use diagnostics::*;
 pub(crate) use helpers::*;
 pub(crate) use http_utils::*;
 pub(crate) use legacy_import::*;
+pub(crate) use llm_transport::*;
 pub(crate) use manuscript_package::*;
 pub(crate) use media_generation::*;
 pub(crate) use memory_maintenance::*;
@@ -4336,7 +4338,7 @@ fn run_openai_streaming_chat_completion(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
 ) -> Result<StreamingChatCompletion, String> {
-    run_openai_streaming_chat_completion_once(
+    run_openai_streaming_chat_completion_transport(
         app,
         state,
         session_id,
@@ -4345,377 +4347,7 @@ fn run_openai_streaming_chat_completion(
         body,
         max_time_seconds,
         allow_official_reauth_retry,
-        false,
     )
-    .or_else(|error| {
-        if should_retry_with_http1_1(&error) {
-            append_debug_trace_state(
-                state,
-                format!(
-                    "[runtime][stream][openai][{}] transport retry upgrade=http1.1 reason={}",
-                    session_id.unwrap_or("no-session"),
-                    text_snippet(&error, 200),
-                ),
-            );
-            return run_openai_streaming_chat_completion_once(
-                app,
-                state,
-                session_id,
-                runtime_mode,
-                config,
-                body,
-                max_time_seconds,
-                allow_official_reauth_retry,
-                true,
-            );
-        }
-        Err(error)
-    })
-}
-
-fn run_openai_streaming_chat_completion_once(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    runtime_mode: &str,
-    config: &ResolvedChatConfig,
-    body: &Value,
-    max_time_seconds: Option<u64>,
-    allow_official_reauth_retry: bool,
-    force_http1_1: bool,
-) -> Result<StreamingChatCompletion, String> {
-    let mut child = spawn_curl_json_process_with_transport(
-        "POST",
-        &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
-        config.api_key.as_deref(),
-        &[],
-        Some(body),
-        max_time_seconds,
-        true,
-        force_http1_1,
-    )?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "streaming curl stdout unavailable".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "streaming curl stderr unavailable".to_string())?;
-    let child = Arc::new(Mutex::new(child));
-
-    if let Some(session_id) = session_id {
-        if let Ok(mut guard) = state.active_chat_requests.lock() {
-            guard.insert(session_id.to_string(), Arc::clone(&child));
-        }
-    }
-
-    let stderr_handle = std::thread::spawn(move || {
-        let mut stderr_text = String::new();
-        let mut reader = BufReader::new(stderr);
-        let _ = reader.read_to_string(&mut stderr_text);
-        stderr_text
-    });
-
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    let mut event_data_lines = Vec::<String>::new();
-    let mut result = StreamingChatCompletion::default();
-    let mut tool_deltas = Vec::<StreamingToolDelta>::new();
-    let mut saw_tool_calls = false;
-    let mut responding_started = false;
-    let mut thought_closed = false;
-    let mut http_status_code: Option<u16> = None;
-    let mut raw_response_lines = Vec::<String>::new();
-
-    let finalize_thought_phase = |app: &AppHandle, session_id: &str| {
-        emit_runtime_task_checkpoint_saved(
-            app,
-            None,
-            Some(session_id),
-            "chat.thought_end",
-            "thought stream completed",
-            None,
-        );
-    };
-
-    let mut process_event = |data: &str| -> Result<bool, String> {
-        let trimmed = data.trim();
-        if trimmed.is_empty() {
-            return Ok(false);
-        }
-        if trimmed == "[DONE]" {
-            result.saw_done = true;
-            if result.terminal_reason.is_none() {
-                result.terminal_reason = Some("done".to_string());
-            }
-            return Ok(true);
-        }
-        let payload = serde_json::from_str::<Value>(trimmed)
-            .map_err(|error| format!("Invalid SSE JSON: {error}"))?;
-        let choice = payload
-            .get("choices")
-            .and_then(|value| value.as_array())
-            .and_then(|items| items.first())
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        let delta = choice
-            .get("delta")
-            .cloned()
-            .or_else(|| choice.get("message").cloned())
-            .unwrap_or_else(|| json!({}));
-        let finish_reason = choice
-            .get("finish_reason")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or("");
-        if !finish_reason.is_empty() {
-            result.terminal_reason = Some(finish_reason.to_string());
-        }
-
-        if let Some(items) = delta.get("tool_calls").and_then(|value| value.as_array()) {
-            saw_tool_calls = true;
-            for item in items {
-                let index = item
-                    .get("index")
-                    .and_then(|value| value.as_u64())
-                    .unwrap_or(tool_deltas.len() as u64) as usize;
-                while tool_deltas.len() <= index {
-                    tool_deltas.push(StreamingToolDelta::default());
-                }
-                let entry = &mut tool_deltas[index];
-                if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
-                    entry.id = id.to_string();
-                }
-                if let Some(function) = item.get("function") {
-                    if let Some(name_piece) = function.get("name").and_then(|value| value.as_str())
-                    {
-                        entry.name.push_str(name_piece);
-                    }
-                    if let Some(arguments_piece) =
-                        function.get("arguments").and_then(|value| value.as_str())
-                    {
-                        entry.arguments.push_str(arguments_piece);
-                    }
-                }
-            }
-        }
-
-        if let Some(content_piece) = delta.get("content").and_then(|value| value.as_str()) {
-            if !content_piece.is_empty() {
-                result.content.push_str(content_piece);
-                if let Some(session_id) = session_id {
-                    let _ = commands::chat_state::update_chat_runtime_state(
-                        state,
-                        session_id,
-                        true,
-                        result.content.clone(),
-                        None,
-                    );
-                }
-                if !saw_tool_calls {
-                    if let Some(session_id) = session_id {
-                        if !thought_closed {
-                            finalize_thought_phase(app, session_id);
-                            thought_closed = true;
-                        }
-                        if !responding_started {
-                            emit_runtime_stream_start(
-                                app,
-                                session_id,
-                                "responding",
-                                Some(runtime_mode),
-                            );
-                            responding_started = true;
-                        }
-                        emit_runtime_text_delta(app, session_id, "response", content_piece);
-                    }
-                }
-            }
-        }
-        if matches!(
-            finish_reason,
-            "stop" | "tool_calls" | "length" | "content_filter"
-        ) {
-            return Ok(true);
-        }
-        Ok(false)
-    };
-
-    loop {
-        if session_id
-            .map(|value| is_chat_runtime_cancel_requested(state, value))
-            .unwrap_or(false)
-        {
-            if let Ok(mut child_guard) = child.lock() {
-                let _ = child_guard.kill();
-            }
-        }
-        line.clear();
-        let read = reader
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            result.saw_eof = true;
-            if !event_data_lines.is_empty() {
-                let should_stop = process_event(&event_data_lines.join("\n"))?;
-                event_data_lines.clear();
-                if should_stop {
-                    break;
-                }
-            }
-            break;
-        }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if let Some(status_text) = trimmed.strip_prefix(HTTP_STATUS_MARKER) {
-            http_status_code = status_text.trim().parse::<u16>().ok();
-            continue;
-        }
-        if trimmed.is_empty() {
-            if !event_data_lines.is_empty() {
-                let should_stop = process_event(&event_data_lines.join("\n"))?;
-                event_data_lines.clear();
-                if should_stop {
-                    break;
-                }
-            }
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("data:") {
-            event_data_lines.push(value.trim().to_string());
-        } else {
-            raw_response_lines.push(trimmed.to_string());
-        }
-    }
-
-    if let Some(session_id) = session_id {
-        if let Ok(mut guard) = state.active_chat_requests.lock() {
-            guard.remove(session_id);
-        }
-    }
-
-    let status = {
-        let mut child_guard = child
-            .lock()
-            .map_err(|_| "streaming curl child lock 已损坏".to_string())?;
-        child_guard.wait().map_err(|error| error.to_string())?
-    };
-    let stderr_text = stderr_handle.join().unwrap_or_default().trim().to_string();
-
-    if session_id
-        .map(|value| is_chat_runtime_cancel_requested(state, value))
-        .unwrap_or(false)
-    {
-        return Err("chat generation cancelled".to_string());
-    }
-
-    if !status.success() {
-        return Err(if stderr_text.is_empty() {
-            format!("curl failed with status {status}")
-        } else {
-            stderr_text
-        });
-    }
-
-    if let Some(status_code) = http_status_code.filter(|code| !(200..300).contains(code)) {
-        if allow_official_reauth_retry && status_code == 401 {
-            if let Some(refreshed_api_key) = try_refresh_official_auth_for_ai_request(
-                &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
-                config.api_key.as_deref(),
-                "streaming-http-401",
-            )? {
-                let mut refreshed_config = config.clone();
-                refreshed_config.api_key = Some(refreshed_api_key);
-                return run_openai_streaming_chat_completion_once(
-                    app,
-                    state,
-                    session_id,
-                    runtime_mode,
-                    &refreshed_config,
-                    body,
-                    max_time_seconds,
-                    false,
-                    force_http1_1,
-                );
-            }
-        }
-        let raw_body = raw_response_lines.join("\n");
-        let details = http_error_details_from_text(status_code, &raw_body);
-        append_debug_trace_state(
-            state,
-            format!(
-                "{} | runtimeMode={} model={} transport={}",
-                http_error_debug_line(
-                    "ai-http",
-                    "POST",
-                    &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
-                    &details
-                ),
-                runtime_mode,
-                config.model_name,
-                if force_http1_1 { "http1.1" } else { "default" },
-            ),
-        );
-        return Err(format_http_error_message("AI request", &details));
-    }
-
-    if saw_tool_calls && !thought_closed {
-        if let Some(session_id) = session_id {
-            if !result.content.trim().is_empty() {
-                emit_runtime_text_delta(app, session_id, "thought", &result.content);
-            }
-            finalize_thought_phase(app, session_id);
-        }
-    }
-
-    result.tool_calls = tool_deltas
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, item)| {
-            if item.name.trim().is_empty() {
-                return None;
-            }
-            let tool_name = item.name.clone();
-            let raw_arguments = item.arguments.trim().to_string();
-            let parsed_arguments =
-                serde_json::from_str::<Value>(&raw_arguments).unwrap_or_else(|_| json!({}));
-            let call_id = if item.id.trim().is_empty() {
-                format!("call-{}-{}", session_id.unwrap_or(runtime_mode), index + 1)
-            } else {
-                item.id
-            };
-            Some(InteractiveToolCall {
-                id: call_id.clone(),
-                name: tool_name.clone(),
-                arguments: parsed_arguments,
-                raw: json!({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": raw_arguments,
-                    }
-                }),
-            })
-        })
-        .collect::<Vec<_>>();
-    append_debug_trace_state(
-        state,
-        format!(
-            "[runtime][stream][openai][{}] terminal_reason={} done={} eof={} content_chars={} tool_calls={} status_success={} transport={} stderr={}",
-            session_id.unwrap_or("no-session"),
-            result.terminal_reason.as_deref().unwrap_or("none"),
-            result.saw_done,
-            result.saw_eof,
-            result.content.chars().count(),
-            result.tool_calls.len(),
-            status.success(),
-            if force_http1_1 { "http1.1" } else { "default" },
-            text_snippet(&stderr_text, 160),
-        ),
-    );
-
-    Ok(result)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -6215,13 +5847,12 @@ fn run_openai_interactive_chat_runtime(
             };
             (streamed.content, streamed.tool_calls)
         } else {
-            let response = run_curl_json_with_timeout(
-                "POST",
-                &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
-                config.api_key.as_deref(),
-                &[],
-                Some(body),
+            let response = run_openai_json_chat_completion_transport(
+                state,
+                config,
+                &body,
                 None,
+                true,
             )?;
             let choice = response
                 .get("choices")
