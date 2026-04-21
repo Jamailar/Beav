@@ -47,7 +47,6 @@ const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
 const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
 const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
-  'redbox-auth:display-session',
   'redbox-auth:panel-display',
 ] as const;
 

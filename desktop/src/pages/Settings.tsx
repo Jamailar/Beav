@@ -63,6 +63,7 @@ import {
   REDBOX_OFFICIAL_VIDEO_MODELS,
 } from '../../shared/redboxVideo';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
+import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
   GeneralSettingsSection,
   SettingsSaveBar,
@@ -81,8 +82,6 @@ type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
-type OfficialAuthStateSnapshot = Awaited<ReturnType<typeof window.ipcRenderer.auth.getState>>;
-
 type AssistantDaemonDraft = {
   enabled: boolean;
   autoStart: boolean;
@@ -700,7 +699,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
-  const [officialAuthState, setOfficialAuthState] = useState<OfficialAuthStateSnapshot | null>(null);
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;
@@ -746,45 +745,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       canceled = true;
     };
   }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const applyOfficialAuthState = (snapshot: OfficialAuthStateSnapshot | null | undefined) => {
-      if (!mounted) return;
-      setOfficialAuthState(snapshot || null);
-    };
-
-    const handleOfficialAuthStateChanged = (
-      event:
-        | { payload?: OfficialAuthStateSnapshot | null }
-        | OfficialAuthStateSnapshot
-        | null
-        | undefined,
-      payloadArg?: OfficialAuthStateSnapshot | null,
-    ) => {
-      const payload = payloadArg !== undefined
-        ? payloadArg
-        : (event && typeof event === 'object' && 'payload' in event)
-          ? (event as { payload?: OfficialAuthStateSnapshot | null }).payload
-          : (event as OfficialAuthStateSnapshot | null | undefined);
-      applyOfficialAuthState(payload);
-    };
-
-    void window.ipcRenderer.auth.getState()
-      .then((snapshot) => {
-        applyOfficialAuthState(snapshot);
-      })
-      .catch(() => {
-        applyOfficialAuthState(null);
-      });
-
-    window.ipcRenderer.auth.onStateChanged(handleOfficialAuthStateChanged);
-    return () => {
-      mounted = false;
-      window.ipcRenderer.auth.offStateChanged(handleOfficialAuthStateChanged);
-    };
-  }, []);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -844,8 +804,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
 
   const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
-  const officialAuthKnown = officialAuthState !== null;
-  const officialAuthPending = !officialAuthKnown
+  const officialAuthKnown = officialAuthBootstrapped;
+  const officialAuthPending = !officialAuthBootstrapped
     || officialAuthStatus === 'restoring'
     || officialAuthStatus === 'refreshing';
   const officialAuthLoggedIn = officialAuthKnown
