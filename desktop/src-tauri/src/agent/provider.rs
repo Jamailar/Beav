@@ -72,6 +72,39 @@ pub fn resolve_chat_exchange_response_stage(
             if context.runtime_mode == "wander" || config.protocol != "openai" {
                 return Err(error);
             }
+            match run_openai_interactive_chat_runtime(
+                app,
+                state,
+                Some(context.working_session_id.as_str()),
+                &config,
+                message,
+                &context.runtime_mode,
+            ) {
+                Ok(response) => {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[runtime][{}][{}] interactive-runtime-fallback=openai-interactive-retry",
+                            context.runtime_mode, context.working_session_id
+                        ),
+                    );
+                    return Ok(ChatExchangeResponseStage {
+                        response,
+                        emitted_live_events: emits_live_events_for_runtime_mode(
+                            &context.runtime_mode,
+                        ),
+                    });
+                }
+                Err(retry_error) => {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "[runtime][{}][{}] interactive-runtime-retry-failed | {}",
+                            context.runtime_mode, context.working_session_id, retry_error
+                        ),
+                    );
+                }
+            }
             match run_openai_prompted_streaming_fallback(
                 app,
                 state,
@@ -104,7 +137,7 @@ pub fn resolve_chat_exchange_response_stage(
                         ),
                     );
                     Err(format!(
-                        "interactive runtime failed: {}; fallback failed: {}",
+                        "interactive runtime failed: {}; interactive retry failed; fallback failed: {}",
                         error, fallback_error
                     ))
                 }
