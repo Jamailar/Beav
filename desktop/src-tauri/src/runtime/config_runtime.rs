@@ -82,12 +82,16 @@ pub fn resolve_chat_config(
     let base_url = model_config
         .get("baseURL")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "api_endpoint"))
         .unwrap_or_default();
     let model_name = model_config
         .get("modelName")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "model_name"))
         .unwrap_or_default();
@@ -97,11 +101,15 @@ pub fn resolve_chat_config(
     let api_key = model_config
         .get("apiKey")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "api_key"));
     let protocol = model_config
         .get("protocol")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| infer_protocol(&base_url, None, None));
     Some(ResolvedChatConfig {

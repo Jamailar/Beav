@@ -410,6 +410,34 @@ mod tests {
     }
 
     #[test]
+    fn resolve_chat_config_treats_empty_override_fields_as_missing() {
+        let config = resolve_chat_config(
+            &json!({
+                "api_endpoint": "https://private.api.ziz.hk/v1",
+                "api_key": "rbx-live-1",
+                "model_name": "gpt-5.3-codex"
+            }),
+            Some(&json!({
+                "baseURL": "   ",
+                "apiKey": "",
+                "modelName": "gpt-5.3-codex",
+                "protocol": "   "
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            ResolvedChatConfig {
+                protocol: "openai".to_string(),
+                base_url: "https://private.api.ziz.hk/v1".to_string(),
+                api_key: Some("rbx-live-1".to_string()),
+                model_name: "gpt-5.3-codex".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn next_memory_maintenance_at_ms_uses_shorter_delay_for_long_responses() {
         let short = next_memory_maintenance_at_ms("short", 1_000);
         let long = next_memory_maintenance_at_ms(&"a".repeat(1201), 1_000);

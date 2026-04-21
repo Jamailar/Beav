@@ -1139,6 +1139,19 @@ export function Chat({
     };
   }, [fixedSessionId, isActive, loadChatRooms]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshChatModels = () => {
+      void loadChatModelOptions();
+    };
+    window.ipcRenderer.on('settings:updated', refreshChatModels);
+    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    return () => {
+      window.ipcRenderer.off('settings:updated', refreshChatModels);
+      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+    };
+  }, [isActive, loadChatModelOptions]);
+
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
       window.ipcRenderer.chat.cancel({ sessionId: currentSessionId });
