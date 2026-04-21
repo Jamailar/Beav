@@ -3,9 +3,12 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, State};
+use tokio::runtime::Handle;
+use tokio::task;
 
 use super::{LlmTransportError, TransportErrorKind, TransportMode};
 use crate::events::{
@@ -70,6 +73,16 @@ fn remember_transport_mode(config: &ResolvedChatConfig, mode: TransportMode) {
     if let Ok(mut guard) = preference_store().lock() {
         guard.insert(transport_preference_key(config), mode);
     }
+}
+
+fn run_transport_future<F, T>(future: F) -> T
+where
+    F: Future<Output = T>,
+{
+    if let Ok(handle) = Handle::try_current() {
+        return task::block_in_place(|| handle.block_on(future));
+    }
+    tauri::async_runtime::block_on(future)
 }
 
 async fn send_openai_request(
@@ -537,7 +550,7 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
 ) -> Result<StreamingChatCompletion, String> {
     let trace_session_id = session_id.unwrap_or("no-session");
     let attempt = |mode| {
-        tauri::async_runtime::block_on(run_stream_attempt(
+        run_transport_future(run_stream_attempt(
             app,
             state,
             session_id,
@@ -603,7 +616,7 @@ pub(crate) fn run_openai_json_chat_completion_transport(
     allow_official_reauth_retry: bool,
 ) -> Result<Value, String> {
     let attempt = |mode| {
-        tauri::async_runtime::block_on(run_json_attempt(
+        run_transport_future(run_json_attempt(
             state,
             config,
             body,
