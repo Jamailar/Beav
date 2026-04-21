@@ -694,16 +694,28 @@ function pathBasenameSafe(rawPath: string): string {
     return parts[parts.length - 1] || '';
 }
 
+function normalizeAssetKindReference(value: string | null | undefined): string {
+    const trimmed = String(value || '').trim().toLowerCase();
+    if (!trimmed) return '';
+    return trimmed.split(/[?#]/, 1)[0] || '';
+}
+
 function isSameDraftRelativePath(left: string | null | undefined, right: string | null | undefined): boolean {
     return String(left || '').replace(/\\/g, '/').trim() === String(right || '').replace(/\\/g, '/').trim();
 }
 
 function inferAssetKind(asset: MediaAsset): 'image' | 'video' | 'audio' | 'unknown' {
     const mime = String(asset.mimeType || '').toLowerCase();
-    const ref = `${asset.relativePath || ''} ${asset.previewUrl || ''} ${asset.absolutePath || ''}`.toLowerCase();
-    if (mime.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(ref)) return 'image';
-    if (mime.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(ref)) return 'video';
-    if (mime.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(ref)) return 'audio';
+    const refs = [
+        normalizeAssetKindReference(asset.relativePath),
+        normalizeAssetKindReference(asset.previewUrl),
+        normalizeAssetKindReference(asset.absolutePath),
+        normalizeAssetKindReference(asset.title),
+    ].filter(Boolean);
+    const ref = refs.join(' ');
+    if (mime.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|bmp|svg|heic|heif|avif|jfif)$/i.test(ref)) return 'image';
+    if (mime.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv|mpg|mpeg|m2ts|mts|ts|3gp|wmv|flv)$/i.test(ref)) return 'video';
+    if (mime.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|aiff|aif|caf)$/i.test(ref)) return 'audio';
     return 'unknown';
 }
 
@@ -1350,12 +1362,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         if (filter === 'all' && activeFolder) return [] as MediaAsset[];
         return assets.filter((asset) => {
             const assetKind = inferAssetKind(asset);
-            if (filter === 'media' && !['image', 'video', 'audio'].includes(assetKind)) return false;
+            if (filter === 'media' && !['image', 'video', 'audio', 'unknown'].includes(assetKind)) return false;
             if (filter === 'image' && assetKind !== 'image') return false;
             if (filter === 'video' && assetKind !== 'video') return false;
             if (filter === 'audio' && assetKind !== 'audio') return false;
             if (filter === 'drafts' || filter === 'folders') return false;
-            if (isMediaScope && getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
+            if (isMediaScope && mediaFolder && getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
             const haystack = `${asset.title || ''} ${asset.prompt || ''} ${asset.relativePath || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         });
