@@ -25,6 +25,7 @@ mod memory_maintenance;
 mod official_support;
 mod persistence;
 mod process_utils;
+mod provider_compat;
 mod redclaw_profile;
 mod runtime;
 mod scheduler;
@@ -88,6 +89,7 @@ pub(crate) use media_generation::*;
 pub(crate) use memory_maintenance::*;
 pub(crate) use official_support::*;
 pub(crate) use process_utils::*;
+pub(crate) use provider_compat::*;
 pub(crate) use redclaw_profile::*;
 pub(crate) use startup_migration::*;
 
@@ -6082,9 +6084,7 @@ fn run_openai_interactive_chat_runtime(
     let (mut prompt_messages, mut canonical_messages) =
         interactive_runtime_message_bundle(state, session_id, message)?;
     let is_wander = runtime_mode == "wander";
-    let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
-    let is_qwen_compatible_model =
-        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
+    let provider_profile = provider_profile_from_config(config);
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut wander_saw_tool_call = false;
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -6114,8 +6114,8 @@ fn run_openai_interactive_chat_runtime(
         }
         let requires_forced_tool_choice =
             ((is_wander && tool_turn == 1) || must_force_first_tool_turn) && !forcing_toolless_turn;
-        let disable_thinking_for_turn = (is_wander && is_qwen_compatible_model)
-            || (is_qwen_compatible_model && requires_forced_tool_choice);
+        let disable_thinking_for_turn =
+            provider_profile.should_disable_thinking(runtime_mode, requires_forced_tool_choice);
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
         if let Some(current_session_id) = session_id {
             emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
@@ -6686,6 +6686,7 @@ fn run_openai_prompted_streaming_fallback(
 ) -> Result<String, String> {
     let (prompt_messages, mut canonical_messages) =
         interactive_runtime_message_bundle(state, session_id, message)?;
+    let provider_profile = provider_profile_from_config(config);
     let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
     let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
     messages.insert(
@@ -6700,15 +6701,12 @@ fn run_openai_prompted_streaming_fallback(
         emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
     }
 
-    let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
-    let disable_qwen_thinking =
-        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
     let mut body = json!({
         "model": config.model_name,
         "messages": messages,
         "stream": true
     });
-    if disable_qwen_thinking {
+    if provider_profile.should_disable_thinking(runtime_mode, false) {
         body["enable_thinking"] = json!(false);
     }
 
