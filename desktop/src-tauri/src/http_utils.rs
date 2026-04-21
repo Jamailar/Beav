@@ -177,7 +177,7 @@ fn serialized_json_body(body: Option<&Value>) -> Result<Option<Vec<u8>>, String>
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn spawn_curl_json_process(
+pub(crate) fn spawn_curl_json_process_with_transport(
     method: &str,
     url: &str,
     api_key: Option<&str>,
@@ -185,6 +185,7 @@ pub(crate) fn spawn_curl_json_process(
     body: Option<&Value>,
     max_time_seconds: Option<u64>,
     no_buffer: bool,
+    force_http1_1: bool,
 ) -> Result<std::process::Child, String> {
     let serialized_body = serialized_json_body(body)?;
     let mut command = build_curl_json_command(
@@ -195,7 +196,7 @@ pub(crate) fn spawn_curl_json_process(
         serialized_body.is_some(),
         max_time_seconds,
         no_buffer,
-        false,
+        force_http1_1,
     )?;
     command
         .arg("-w")
@@ -435,7 +436,7 @@ fn execute_curl_json_response_once(
     Ok(response)
 }
 
-fn should_retry_with_http1_1(error: &str) -> bool {
+pub(crate) fn should_retry_with_http1_1(error: &str) -> bool {
     let normalized = error.trim().to_ascii_lowercase();
     normalized.contains("curl: (16)")
         || normalized.contains("curl: (52)")

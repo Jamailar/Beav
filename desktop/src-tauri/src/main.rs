@@ -4161,7 +4161,55 @@ fn run_openai_streaming_chat_completion(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
 ) -> Result<StreamingChatCompletion, String> {
-    let mut child = spawn_curl_json_process(
+    run_openai_streaming_chat_completion_once(
+        app,
+        state,
+        session_id,
+        runtime_mode,
+        config,
+        body,
+        max_time_seconds,
+        allow_official_reauth_retry,
+        false,
+    )
+    .or_else(|error| {
+        if should_retry_with_http1_1(&error) {
+            append_debug_trace_state(
+                state,
+                format!(
+                    "[runtime][stream][openai][{}] transport retry upgrade=http1.1 reason={}",
+                    session_id.unwrap_or("no-session"),
+                    text_snippet(&error, 200),
+                ),
+            );
+            return run_openai_streaming_chat_completion_once(
+                app,
+                state,
+                session_id,
+                runtime_mode,
+                config,
+                body,
+                max_time_seconds,
+                allow_official_reauth_retry,
+                true,
+            );
+        }
+        Err(error)
+    })
+}
+
+fn run_openai_streaming_chat_completion_once(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+    config: &ResolvedChatConfig,
+    body: &Value,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+    force_http1_1: bool,
+) -> Result<StreamingChatCompletion, String> {
+    let mut child = spawn_curl_json_process_with_transport(
         "POST",
         &format!("{}/chat/completions", normalize_base_url(&config.base_url)),
         config.api_key.as_deref(),
@@ -4169,6 +4217,7 @@ fn run_openai_streaming_chat_completion(
         Some(body),
         max_time_seconds,
         true,
+        force_http1_1,
     )?;
     let stdout = child
         .stdout
@@ -4402,7 +4451,7 @@ fn run_openai_streaming_chat_completion(
             )? {
                 let mut refreshed_config = config.clone();
                 refreshed_config.api_key = Some(refreshed_api_key);
-                return run_openai_streaming_chat_completion(
+                return run_openai_streaming_chat_completion_once(
                     app,
                     state,
                     session_id,
@@ -4411,6 +4460,7 @@ fn run_openai_streaming_chat_completion(
                     body,
                     max_time_seconds,
                     false,
+                    force_http1_1,
                 );
             }
         }
@@ -4419,7 +4469,7 @@ fn run_openai_streaming_chat_completion(
         append_debug_trace_state(
             state,
             format!(
-                "{} | runtimeMode={} model={}",
+                "{} | runtimeMode={} model={} transport={}",
                 http_error_debug_line(
                     "ai-http",
                     "POST",
@@ -4428,6 +4478,7 @@ fn run_openai_streaming_chat_completion(
                 ),
                 runtime_mode,
                 config.model_name,
+                if force_http1_1 { "http1.1" } else { "default" },
             ),
         );
         return Err(format_http_error_message("AI request", &details));
@@ -4476,7 +4527,7 @@ fn run_openai_streaming_chat_completion(
     append_debug_trace_state(
         state,
         format!(
-            "[runtime][stream][openai][{}] terminal_reason={} done={} eof={} content_chars={} tool_calls={} status_success={} stderr={}",
+            "[runtime][stream][openai][{}] terminal_reason={} done={} eof={} content_chars={} tool_calls={} status_success={} transport={} stderr={}",
             session_id.unwrap_or("no-session"),
             result.terminal_reason.as_deref().unwrap_or("none"),
             result.saw_done,
@@ -4484,6 +4535,7 @@ fn run_openai_streaming_chat_completion(
             result.content.chars().count(),
             result.tool_calls.len(),
             status.success(),
+            if force_http1_1 { "http1.1" } else { "default" },
             text_snippet(&stderr_text, 160),
         ),
     );
