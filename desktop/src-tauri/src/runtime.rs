@@ -4,6 +4,8 @@ mod agent_engine;
 mod config_runtime;
 #[path = "runtime/events.rs"]
 mod events;
+#[path = "runtime/interactive_recovery.rs"]
+mod interactive_recovery;
 #[path = "runtime/interactive_loop.rs"]
 mod interactive_loop;
 #[path = "runtime/orchestration_runtime.rs"]
@@ -18,6 +20,7 @@ mod types;
 pub use agent_engine::*;
 pub use config_runtime::*;
 pub use events::*;
+pub use interactive_recovery::*;
 pub use interactive_loop::*;
 pub use orchestration_runtime::*;
 pub use session_runtime::*;

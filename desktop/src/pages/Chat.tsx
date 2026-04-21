@@ -97,11 +97,18 @@ interface ChatRuntimeState {
 
 interface ChatErrorEventPayload {
   message?: string;
+  title?: string;
   raw?: string;
+  detail?: string;
   hint?: string;
   statusCode?: number;
+  httpStatus?: number;
   errorCode?: string;
   category?: string;
+  layer?: string;
+  retryable?: boolean;
+  transportMode?: string;
+  modelName?: string;
 }
 
 interface StructuredChatErrorNotice {
@@ -235,14 +242,16 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.message || '').trim() || '请求失败';
-  const detail = String(data.raw || '').trim();
+  const title = String(data.title || data.message || '').trim() || '请求失败';
+  const detail = String(data.detail || data.raw || '').trim();
   const hint = String(data.hint || '').trim();
-  const category = String(data.category || '').trim();
+  const layer = String(data.layer || data.category || '').trim();
   const metaParts = [
-    data.statusCode ? `HTTP ${data.statusCode}` : '',
+    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
     data.errorCode ? String(data.errorCode) : '',
-    category || '',
+    layer || '',
+    data.transportMode ? `transport:${String(data.transportMode)}` : '',
+    data.retryable ? '可重试' : '',
   ].filter(Boolean);
   return {
     title,

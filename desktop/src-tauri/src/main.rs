@@ -54,6 +54,7 @@ use persistence::{
 use runtime::{
     append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
     resolve_runtime_mode_from_context_type, role_sequence_for_route,
+    runtime_error_payload,
     runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord,
     RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
@@ -1966,86 +1967,7 @@ pub(crate) fn try_refresh_official_auth_for_ai_request(
 }
 
 fn build_chat_error_payload(error: &str, session_id: Option<String>) -> Value {
-    let normalized = error.trim();
-    let lower = normalized.to_lowercase();
-    let login_expired = normalized.contains("登录失效")
-        || normalized.contains("重新登录")
-        || lower.contains("invalid access token");
-    let status_code = if login_expired || normalized.contains("HTTP 401") {
-        401
-    } else if normalized.contains("HTTP 429") {
-        429
-    } else {
-        0
-    };
-    let rate_limited =
-        status_code == 429 || lower.contains("rate limit") || lower.contains("too many requests");
-    let partial_stream =
-        lower.contains("curl: (18)") || lower.contains("transferred a partial file");
-    let transport_error = partial_stream
-        || lower.contains("connection reset")
-        || lower.contains("broken pipe")
-        || lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("connection aborted")
-        || lower.contains("streaming curl stdout unavailable")
-        || lower.contains("streaming curl stderr unavailable");
-    let (message, raw, category, error_code) = if login_expired {
-        (
-            "登录失效，请重新登录".to_string(),
-            if normalized != "登录失效，请重新登录" {
-                normalized.to_string()
-            } else {
-                String::new()
-            },
-            "auth".to_string(),
-            "401".to_string(),
-        )
-    } else if rate_limited {
-        (
-            "请求频率受限".to_string(),
-            normalized.to_string(),
-            "rate_limit".to_string(),
-            if status_code == 429 {
-                "429".to_string()
-            } else {
-                String::new()
-            },
-        )
-    } else if partial_stream {
-        (
-            "流式响应中断".to_string(),
-            normalized.to_string(),
-            "transport".to_string(),
-            "curl_18".to_string(),
-        )
-    } else if transport_error {
-        (
-            "网络传输异常".to_string(),
-            normalized.to_string(),
-            "transport".to_string(),
-            String::new(),
-        )
-    } else {
-        (
-            normalized.to_string(),
-            String::new(),
-            String::new(),
-            if status_code == 401 {
-                "401".to_string()
-            } else {
-                String::new()
-            },
-        )
-    };
-    json!({
-        "message": message,
-        "raw": raw,
-        "category": category,
-        "statusCode": status_code,
-        "errorCode": error_code,
-        "sessionId": session_id,
-    })
+    runtime_error_payload(error, None, None, session_id)
 }
 
 pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {

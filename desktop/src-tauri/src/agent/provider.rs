@@ -3,10 +3,12 @@ use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
 use crate::{
-    append_debug_log_state, resolve_chat_config, run_anthropic_interactive_chat_runtime,
+    append_debug_log_state, provider_profile_from_config, resolve_chat_config,
+    run_anthropic_interactive_chat_runtime,
     run_gemini_interactive_chat_runtime, run_openai_interactive_chat_runtime,
     run_openai_prompted_streaming_fallback, AppState,
 };
+use crate::runtime::interactive_recovery_plan;
 
 pub fn resolve_chat_exchange_response_stage(
     app: Option<&AppHandle>,
@@ -62,6 +64,9 @@ pub fn resolve_chat_exchange_response_stage(
             emitted_live_events: emits_live_events_for_runtime_mode(&context.runtime_mode),
         }),
         Err(error) => {
+            let provider_profile = provider_profile_from_config(&config);
+            let recovery_plan =
+                interactive_recovery_plan(&context.runtime_mode, &provider_profile, &error);
             append_debug_log_state(
                 state,
                 format!(
@@ -69,7 +74,7 @@ pub fn resolve_chat_exchange_response_stage(
                     context.runtime_mode, context.working_session_id, error
                 ),
             );
-            if context.runtime_mode == "wander" || config.protocol != "openai" {
+            if !recovery_plan.retry_interactive || config.protocol != "openai" {
                 return Err(error);
             }
             match run_openai_interactive_chat_runtime(
@@ -104,6 +109,9 @@ pub fn resolve_chat_exchange_response_stage(
                         ),
                     );
                 }
+            }
+            if !recovery_plan.allow_text_fallback {
+                return Err(error);
             }
             match run_openai_prompted_streaming_fallback(
                 app,
