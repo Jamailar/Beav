@@ -1414,7 +1414,8 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        guess_mime_and_kind, manuscript_save_result_path, redbox_fs_profile_read_completed,
+        guess_mime_and_kind, interactive_tool_panic_message, manuscript_save_result_path,
+        redbox_fs_profile_read_completed,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1457,6 +1458,20 @@ mod tests {
             })),
             Some("wander/demo.redpost")
         );
+    }
+
+    #[test]
+    fn interactive_tool_panic_message_keeps_string_payload() {
+        let message =
+            interactive_tool_panic_message("app_cli", Box::new("memory list exploded".to_string()));
+        assert!(message.contains("app_cli"));
+        assert!(message.contains("memory list exploded"));
+    }
+
+    #[test]
+    fn interactive_tool_panic_message_handles_unknown_payload() {
+        let message = interactive_tool_panic_message("app_cli", Box::new(42usize));
+        assert_eq!(message, "工具 app_cli 执行时发生 panic");
     }
 }
 
@@ -2530,437 +2545,144 @@ fn execute_interactive_tool_call(
     arguments: &Value,
     model_config: Option<&Value>,
 ) -> Result<Value, String> {
-    let tool_executor = tools::executor::InteractiveToolExecutor::new(
-        app,
-        state,
-        runtime_mode,
-        session_id,
-        tool_call_id,
-    );
-    let prepared = tool_executor.prepare_tool_call(name, arguments)?;
-    let name = prepared.name;
-    let arguments = &prepared.arguments;
-    if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
-        return result;
-    }
-    let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
-        commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
-            .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
-    };
+    let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tool_executor = tools::executor::InteractiveToolExecutor::new(
+            app,
+            state,
+            runtime_mode,
+            session_id,
+            tool_call_id,
+        );
+        let prepared = tool_executor.prepare_tool_call(name, arguments)?;
+        let name = prepared.name;
+        let arguments = &prepared.arguments;
+        if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
+            return result;
+        }
+        let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
+            commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
+                .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
+        };
 
-    match name {
-        "redbox_editor" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
-            let is_video_package = get_package_kind_from_file_name(&file_path) == Some("video");
-            let ensure_script_confirmed = |next_action: &str| -> Result<(), String> {
-                let script_state = call_manuscript_channel(
-                    "manuscripts:get-package-script-state",
-                    json!({ "filePath": file_path.clone() }),
-                )?;
-                let status = script_state
-                    .pointer("/script/approval/status")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("pending");
-                if status == "confirmed" {
-                    return Ok(());
-                }
-                Err(format!(
-                    "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
-                ))
-            };
-            let reject_video_timeline_action = |legacy_action: &str| -> Result<Value, String> {
-                Err(format!(
-                    "视频稿件已切换到 AI 简化编辑流，`{legacy_action}` 不再可用。请改用 `project_read` 读取工程，或用 `ffmpeg_edit` 执行受控剪辑。"
-                ))
-            };
-            match action.as_str() {
-                "script_read" | "script-read" => call_manuscript_channel(
-                    "manuscripts:get-package-script-state",
-                    json!({ "filePath": file_path }),
-                ),
-                "project_read" | "project-read" => {
-                    if is_video_package {
-                        call_manuscript_channel(
-                            "manuscripts:get-video-project-state",
-                            json!({ "filePath": file_path }),
-                        )
-                    } else {
-                        call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
-                    }
-                }
-                "remotion_read" | "remotion-read" => call_manuscript_channel(
-                    "manuscripts:get-remotion-context",
-                    json!({ "filePath": file_path }),
-                ),
-                "script_update" | "script-update" => {
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-package-script",
-                        editor_tool_payload(file_path.clone(), arguments, &["content", "source"]),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.script_changed",
-                            "editor script changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "source": payload_string(arguments, "source").unwrap_or_else(|| "ai".to_string())
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "script_confirm" | "script-confirm" => {
-                    let result = call_manuscript_channel(
-                        "manuscripts:confirm-package-script",
+        match name {
+            "redbox_editor" => {
+                let action = payload_string(arguments, "action").unwrap_or_default();
+                let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
+                let is_video_package = get_package_kind_from_file_name(&file_path) == Some("video");
+                let ensure_script_confirmed = |next_action: &str| -> Result<(), String> {
+                    let script_state = call_manuscript_channel(
+                        "manuscripts:get-package-script-state",
                         json!({ "filePath": file_path.clone() }),
                     )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.script_confirmed",
-                            "editor script confirmed",
-                            Some(json!({ "filePath": file_path })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "timeline_read" | "clips" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("timeline_read");
-                    }
-                    call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
-                }
-                "selection_read" | "playhead_read" => call_manuscript_channel(
-                    "manuscripts:get-editor-runtime-state",
-                    json!({ "filePath": file_path }),
-                ),
-                "timeline_zoom_read"
-                | "timeline-zoom-read"
-                | "timeline_scroll_read"
-                | "timeline-scroll-read"
-                | "panel_read"
-                | "panel-read" => call_manuscript_channel(
-                    "manuscripts:get-editor-runtime-state",
-                    json!({ "filePath": file_path }),
-                ),
-                "selection_set" | "selection-set" => {
-                    let clip_id = payload_string(arguments, "clipId");
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "selectedClipId": clip_id
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.selection_changed",
-                            "editor selection changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "clipId": payload_string(arguments, "clipId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "playhead_seek" | "playhead-seek" => {
-                    let seconds = payload_field(arguments, "seconds")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0)
-                        .max(0.0);
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "playheadSeconds": seconds
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.playhead_changed",
-                            "editor playhead changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "seconds": seconds
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "focus_clip" | "focus-clip" => {
-                    let clip_id = payload_string(arguments, "clipId").unwrap_or_default();
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "selectedClipId": clip_id
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.selection_changed",
-                            "editor selection changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "clipId": payload_string(arguments, "clipId").unwrap_or_default()
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "focus_item" | "focus-item" => {
-                    let clip_id = payload_string(arguments, "clipId");
-                    let scene_id = payload_string(arguments, "sceneId");
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "selectedClipId": clip_id,
-                            "selectedSceneId": scene_id
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.selection_changed",
-                            "editor selection changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "clipId": payload_string(arguments, "clipId"),
-                                "sceneId": payload_string(arguments, "sceneId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "panel_open" | "panel-open" => {
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "previewTab": payload_string(arguments, "previewTab"),
-                            "activePanel": payload_string(arguments, "activePanel"),
-                            "drawerPanel": payload_string(arguments, "drawerPanel")
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.panel_changed",
-                            "editor panel changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "previewTab": payload_string(arguments, "previewTab"),
-                                "activePanel": payload_string(arguments, "activePanel"),
-                                "drawerPanel": payload_string(arguments, "drawerPanel")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "timeline_zoom_set" | "timeline-zoom-set" => {
-                    let zoom_percent = payload_field(arguments, "zoomPercent")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(100.0)
-                        .clamp(25.0, 400.0);
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "timelineZoomPercent": zoom_percent
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.viewport_changed",
-                            "editor viewport changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "zoomPercent": zoom_percent
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "timeline_scroll_set" | "timeline-scroll-set" => {
-                    let scroll_left = payload_field(arguments, "scrollLeft")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0)
-                        .max(0.0);
-                    let max_scroll_left = payload_field(arguments, "maxScrollLeft")
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(scroll_left)
-                        .max(scroll_left);
-                    let result = call_manuscript_channel(
-                        "manuscripts:update-editor-runtime-state",
-                        json!({
-                            "filePath": file_path.clone(),
-                            "sessionId": session_id,
-                            "viewportScrollLeft": scroll_left,
-                            "viewportMaxScrollLeft": max_scroll_left
-                        }),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.viewport_changed",
-                            "editor viewport changed",
-                            Some(json!({
-                                "filePath": file_path,
-                                "scrollLeft": scroll_left,
-                                "maxScrollLeft": max_scroll_left
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "track_add" | "track-add" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("track_add");
-                    }
-                    call_manuscript_channel("manuscripts:add-package-track", {
-                        ensure_script_confirmed("track_add")?;
-                        editor_tool_payload(file_path, arguments, &["kind"])
-                    })
-                }
-                "track_reorder" | "track-reorder" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("track_reorder");
-                    }
-                    ensure_script_confirmed("track_reorder")?;
-                    let result = call_manuscript_channel(
-                        "manuscripts:move-package-track",
-                        editor_tool_payload(
-                            file_path.clone(),
-                            arguments,
-                            &["trackId", "direction"],
-                        ),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor track reordered",
-                            Some(json!({
-                                "filePath": file_path,
-                                "trackId": payload_string(arguments, "trackId"),
-                                "direction": payload_string(arguments, "direction")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "track_delete" | "track-delete" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("track_delete");
-                    }
-                    ensure_script_confirmed("track_delete")?;
-                    let result = call_manuscript_channel(
-                        "manuscripts:delete-package-track",
-                        editor_tool_payload(file_path.clone(), arguments, &["trackId"]),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor track deleted",
-                            Some(json!({
-                                "filePath": file_path,
-                                "trackId": payload_string(arguments, "trackId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "clip_add" | "clip-add" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_add");
-                    }
-                    call_manuscript_channel("manuscripts:add-package-clip", {
-                        ensure_script_confirmed("clip_add")?;
-                        editor_tool_payload(
-                            file_path,
-                            arguments,
-                            &["assetId", "track", "order", "durationMs"],
-                        )
-                    })
-                }
-                "clip_insert_at_playhead" | "clip-insert-at-playhead" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_insert_at_playhead");
-                    }
-                    ensure_script_confirmed("clip_insert_at_playhead")?;
-                    let result = call_manuscript_channel(
-                        "manuscripts:insert-package-clip-at-playhead",
-                        editor_tool_payload(
-                            file_path.clone(),
-                            arguments,
-                            &["assetId", "track", "order", "durationMs"],
-                        ),
-                    )?;
-                    let inserted_clip_id = payload_field(&result, "insertedClipId")
+                    let status = script_state
+                        .pointer("/script/approval/status")
                         .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    if !inserted_clip_id.is_empty() {
-                        let _ = call_manuscript_channel(
+                        .unwrap_or("pending");
+                    if status == "confirmed" {
+                        return Ok(());
+                    }
+                    Err(format!(
+                    "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
+                ))
+                };
+                let reject_video_timeline_action = |legacy_action: &str| -> Result<Value, String> {
+                    Err(format!(
+                    "视频稿件已切换到 AI 简化编辑流，`{legacy_action}` 不再可用。请改用 `project_read` 读取工程，或用 `ffmpeg_edit` 执行受控剪辑。"
+                ))
+                };
+                match action.as_str() {
+                    "script_read" | "script-read" => call_manuscript_channel(
+                        "manuscripts:get-package-script-state",
+                        json!({ "filePath": file_path }),
+                    ),
+                    "project_read" | "project-read" => {
+                        if is_video_package {
+                            call_manuscript_channel(
+                                "manuscripts:get-video-project-state",
+                                json!({ "filePath": file_path }),
+                            )
+                        } else {
+                            call_manuscript_channel(
+                                "manuscripts:get-package-state",
+                                json!(file_path),
+                            )
+                        }
+                    }
+                    "remotion_read" | "remotion-read" => call_manuscript_channel(
+                        "manuscripts:get-remotion-context",
+                        json!({ "filePath": file_path }),
+                    ),
+                    "script_update" | "script-update" => {
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-package-script",
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["content", "source"],
+                            ),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.script_changed",
+                                "editor script changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "source": payload_string(arguments, "source").unwrap_or_else(|| "ai".to_string())
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "script_confirm" | "script-confirm" => {
+                        let result = call_manuscript_channel(
+                            "manuscripts:confirm-package-script",
+                            json!({ "filePath": file_path.clone() }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.script_confirmed",
+                                "editor script confirmed",
+                                Some(json!({ "filePath": file_path })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "timeline_read" | "clips" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("timeline_read");
+                        }
+                        call_manuscript_channel("manuscripts:get-package-state", json!(file_path))
+                    }
+                    "selection_read" | "playhead_read" => call_manuscript_channel(
+                        "manuscripts:get-editor-runtime-state",
+                        json!({ "filePath": file_path }),
+                    ),
+                    "timeline_zoom_read"
+                    | "timeline-zoom-read"
+                    | "timeline_scroll_read"
+                    | "timeline-scroll-read"
+                    | "panel_read"
+                    | "panel-read" => call_manuscript_channel(
+                        "manuscripts:get-editor-runtime-state",
+                        json!({ "filePath": file_path }),
+                    ),
+                    "selection_set" | "selection-set" => {
+                        let clip_id = payload_string(arguments, "clipId");
+                        let result = call_manuscript_channel(
                             "manuscripts:update-editor-runtime-state",
                             json!({
                                 "filePath": file_path.clone(),
                                 "sessionId": session_id,
-                                "selectedClipId": inserted_clip_id.clone()
+                                "selectedClipId": clip_id
                             }),
-                        );
-                    }
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor timeline changed",
-                            Some(json!({
-                                "filePath": file_path.clone(),
-                                "action": "clip_insert_at_playhead",
-                                "clipId": inserted_clip_id.clone()
-                            })),
-                        );
-                        if !inserted_clip_id.is_empty() {
+                        )?;
+                        if let Some(active_session_id) = session_id {
                             emit_runtime_task_checkpoint_saved(
                                 app,
                                 None,
@@ -2969,412 +2691,725 @@ fn execute_interactive_tool_call(
                                 "editor selection changed",
                                 Some(json!({
                                     "filePath": file_path,
-                                    "clipId": inserted_clip_id
+                                    "clipId": payload_string(arguments, "clipId")
                                 })),
                             );
                         }
+                        Ok(result)
                     }
-                    Ok(result)
-                }
-                "subtitle_add" | "subtitle-add" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("subtitle_add");
-                    }
-                    ensure_script_confirmed("subtitle_add")?;
-                    let result = call_manuscript_channel(
-                        "manuscripts:insert-package-subtitle-at-playhead",
-                        editor_tool_payload(
-                            file_path.clone(),
-                            arguments,
-                            &["text", "track", "order", "durationMs"],
-                        ),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor subtitle added",
-                            Some(json!({
-                                "filePath": file_path,
-                                "text": payload_string(arguments, "text")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "text_add" | "text-add" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("text_add");
-                    }
-                    ensure_script_confirmed("text_add")?;
-                    let result = call_manuscript_channel(
-                        "manuscripts:insert-package-text-at-playhead",
-                        editor_tool_payload(
-                            file_path.clone(),
-                            arguments,
-                            &["text", "track", "durationMs", "textStyle"],
-                        ),
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor text added",
-                            Some(json!({
-                                "filePath": file_path,
-                                "text": payload_string(arguments, "text")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "clip_update" | "clip-update" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_update");
-                    }
-                    call_manuscript_channel("manuscripts:update-package-clip", {
-                        ensure_script_confirmed("clip_update")?;
-                        editor_tool_payload(
-                            file_path,
-                            arguments,
-                            &[
-                                "clipId",
-                                "name",
-                                "assetKind",
-                                "subtitleStyle",
-                                "textStyle",
-                                "transitionStyle",
-                                "track",
-                                "order",
-                                "durationMs",
-                                "trimInMs",
-                                "trimOutMs",
-                                "enabled",
-                            ],
-                        )
-                    })
-                }
-                "clip_move" | "clip-move" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_move");
-                    }
-                    call_manuscript_channel("manuscripts:update-package-clip", {
-                        ensure_script_confirmed("clip_move")?;
-                        editor_tool_payload(file_path, arguments, &["clipId", "track", "order"])
-                    })
-                }
-                "clip_toggle_enabled" | "clip-toggle-enabled" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_toggle_enabled");
-                    }
-                    call_manuscript_channel("manuscripts:update-package-clip", {
-                        ensure_script_confirmed("clip_toggle_enabled")?;
-                        editor_tool_payload(file_path, arguments, &["clipId", "enabled"])
-                    })
-                }
-                "clip_delete" | "clip-delete" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_delete");
-                    }
-                    call_manuscript_channel("manuscripts:delete-package-clip", {
-                        ensure_script_confirmed("clip_delete")?;
-                        editor_tool_payload(file_path, arguments, &["clipId"])
-                    })
-                }
-                "clip_split" | "clip-split" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_split");
-                    }
-                    call_manuscript_channel("manuscripts:split-package-clip", {
-                        ensure_script_confirmed("clip_split")?;
-                        editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"])
-                    })
-                }
-                "clip_duplicate" | "clip-duplicate" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_duplicate");
-                    }
-                    let result =
-                        call_manuscript_channel("manuscripts:duplicate-editor-project-clip", {
-                            ensure_script_confirmed("clip_duplicate")?;
-                            editor_tool_payload(
-                                file_path.clone(),
-                                arguments,
-                                &["clipId", "trackId", "fromMs"],
-                            )
-                        })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor clip duplicated",
-                            Some(json!({
-                                "filePath": file_path,
-                                "clipId": payload_string(arguments, "clipId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "clip_replace_asset" | "clip-replace-asset" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("clip_replace_asset");
-                    }
-                    let result = call_manuscript_channel(
-                        "manuscripts:replace-editor-project-clip-asset",
-                        {
-                            ensure_script_confirmed("clip_replace_asset")?;
-                            editor_tool_payload(
-                                file_path.clone(),
-                                arguments,
-                                &["clipId", "assetId"],
-                            )
-                        },
-                    )?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor clip asset replaced",
-                            Some(json!({
-                                "filePath": file_path,
-                                "clipId": payload_string(arguments, "clipId"),
-                                "assetId": payload_string(arguments, "assetId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "marker_add" | "marker-add" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("marker_add");
-                    }
-                    let result =
-                        call_manuscript_channel("manuscripts:add-editor-project-marker", {
-                            ensure_script_confirmed("marker_add")?;
-                            editor_tool_payload(
-                                file_path.clone(),
-                                arguments,
-                                &["frame", "color", "label"],
-                            )
-                        })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor marker added",
-                            Some(json!({
-                                "filePath": file_path,
-                                "frame": payload_field(arguments, "frame").cloned().unwrap_or(Value::Null)
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "marker_update" | "marker-update" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("marker_update");
-                    }
-                    let result =
-                        call_manuscript_channel("manuscripts:update-editor-project-marker", {
-                            ensure_script_confirmed("marker_update")?;
-                            editor_tool_payload(
-                                file_path.clone(),
-                                arguments,
-                                &["markerId", "frame", "color", "label"],
-                            )
-                        })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor marker updated",
-                            Some(json!({
-                                "filePath": file_path,
-                                "markerId": payload_string(arguments, "markerId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "marker_delete" | "marker-delete" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("marker_delete");
-                    }
-                    let result =
-                        call_manuscript_channel("manuscripts:delete-editor-project-marker", {
-                            ensure_script_confirmed("marker_delete")?;
-                            editor_tool_payload(file_path.clone(), arguments, &["markerId"])
-                        })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor marker deleted",
-                            Some(json!({
-                                "filePath": file_path,
-                                "markerId": payload_string(arguments, "markerId")
-                            })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "undo" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("undo");
-                    }
-                    let result = call_manuscript_channel("manuscripts:undo-editor-project", {
-                        ensure_script_confirmed("undo")?;
-                        json!({ "filePath": file_path.clone() })
-                    })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor undo",
-                            Some(json!({ "filePath": file_path })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "redo" => {
-                    if is_video_package {
-                        return reject_video_timeline_action("redo");
-                    }
-                    let result = call_manuscript_channel("manuscripts:redo-editor-project", {
-                        ensure_script_confirmed("redo")?;
-                        json!({ "filePath": file_path.clone() })
-                    })?;
-                    if let Some(active_session_id) = session_id {
-                        emit_runtime_task_checkpoint_saved(
-                            app,
-                            None,
-                            Some(active_session_id),
-                            "editor.timeline_changed",
-                            "editor redo",
-                            Some(json!({ "filePath": file_path })),
-                        );
-                    }
-                    Ok(result)
-                }
-                "ffmpeg_edit" | "ffmpeg-edit" => {
-                    call_manuscript_channel("manuscripts:ffmpeg-edit", {
-                        ensure_script_confirmed("ffmpeg_edit")?;
-                        editor_tool_payload(file_path, arguments, &["operations", "intentSummary"])
-                    })
-                }
-                "remotion_generate" | "remotion-generate" => {
-                    call_manuscript_channel("manuscripts:generate-remotion-scene", {
-                        ensure_script_confirmed("remotion_generate")?;
-                        let mut payload =
-                            editor_tool_payload(file_path, arguments, &["instructions"]);
+                    "playhead_seek" | "playhead-seek" => {
+                        let seconds = payload_field(arguments, "seconds")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "playheadSeconds": seconds
+                            }),
+                        )?;
                         if let Some(active_session_id) = session_id {
-                            if let Some(object) = payload.as_object_mut() {
-                                object.insert("sessionId".to_string(), json!(active_session_id));
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.playhead_changed",
+                                "editor playhead changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "seconds": seconds
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "focus_clip" | "focus-clip" => {
+                        let clip_id = payload_string(arguments, "clipId").unwrap_or_default();
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "selectedClipId": clip_id
+                            }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.selection_changed",
+                                "editor selection changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "clipId": payload_string(arguments, "clipId").unwrap_or_default()
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "focus_item" | "focus-item" => {
+                        let clip_id = payload_string(arguments, "clipId");
+                        let scene_id = payload_string(arguments, "sceneId");
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "selectedClipId": clip_id,
+                                "selectedSceneId": scene_id
+                            }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.selection_changed",
+                                "editor selection changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "clipId": payload_string(arguments, "clipId"),
+                                    "sceneId": payload_string(arguments, "sceneId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "panel_open" | "panel-open" => {
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "previewTab": payload_string(arguments, "previewTab"),
+                                "activePanel": payload_string(arguments, "activePanel"),
+                                "drawerPanel": payload_string(arguments, "drawerPanel")
+                            }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.panel_changed",
+                                "editor panel changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "previewTab": payload_string(arguments, "previewTab"),
+                                    "activePanel": payload_string(arguments, "activePanel"),
+                                    "drawerPanel": payload_string(arguments, "drawerPanel")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "timeline_zoom_set" | "timeline-zoom-set" => {
+                        let zoom_percent = payload_field(arguments, "zoomPercent")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(100.0)
+                            .clamp(25.0, 400.0);
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "timelineZoomPercent": zoom_percent
+                            }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.viewport_changed",
+                                "editor viewport changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "zoomPercent": zoom_percent
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "timeline_scroll_set" | "timeline-scroll-set" => {
+                        let scroll_left = payload_field(arguments, "scrollLeft")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                        let max_scroll_left = payload_field(arguments, "maxScrollLeft")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(scroll_left)
+                            .max(scroll_left);
+                        let result = call_manuscript_channel(
+                            "manuscripts:update-editor-runtime-state",
+                            json!({
+                                "filePath": file_path.clone(),
+                                "sessionId": session_id,
+                                "viewportScrollLeft": scroll_left,
+                                "viewportMaxScrollLeft": max_scroll_left
+                            }),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.viewport_changed",
+                                "editor viewport changed",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "scrollLeft": scroll_left,
+                                    "maxScrollLeft": max_scroll_left
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "track_add" | "track-add" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("track_add");
+                        }
+                        call_manuscript_channel("manuscripts:add-package-track", {
+                            ensure_script_confirmed("track_add")?;
+                            editor_tool_payload(file_path, arguments, &["kind"])
+                        })
+                    }
+                    "track_reorder" | "track-reorder" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("track_reorder");
+                        }
+                        ensure_script_confirmed("track_reorder")?;
+                        let result = call_manuscript_channel(
+                            "manuscripts:move-package-track",
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["trackId", "direction"],
+                            ),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor track reordered",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "trackId": payload_string(arguments, "trackId"),
+                                    "direction": payload_string(arguments, "direction")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "track_delete" | "track-delete" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("track_delete");
+                        }
+                        ensure_script_confirmed("track_delete")?;
+                        let result = call_manuscript_channel(
+                            "manuscripts:delete-package-track",
+                            editor_tool_payload(file_path.clone(), arguments, &["trackId"]),
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor track deleted",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "trackId": payload_string(arguments, "trackId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "clip_add" | "clip-add" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_add");
+                        }
+                        call_manuscript_channel("manuscripts:add-package-clip", {
+                            ensure_script_confirmed("clip_add")?;
+                            editor_tool_payload(
+                                file_path,
+                                arguments,
+                                &["assetId", "track", "order", "durationMs"],
+                            )
+                        })
+                    }
+                    "clip_insert_at_playhead" | "clip-insert-at-playhead" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_insert_at_playhead");
+                        }
+                        ensure_script_confirmed("clip_insert_at_playhead")?;
+                        let result = call_manuscript_channel(
+                            "manuscripts:insert-package-clip-at-playhead",
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["assetId", "track", "order", "durationMs"],
+                            ),
+                        )?;
+                        let inserted_clip_id = payload_field(&result, "insertedClipId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !inserted_clip_id.is_empty() {
+                            let _ = call_manuscript_channel(
+                                "manuscripts:update-editor-runtime-state",
+                                json!({
+                                    "filePath": file_path.clone(),
+                                    "sessionId": session_id,
+                                    "selectedClipId": inserted_clip_id.clone()
+                                }),
+                            );
+                        }
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor timeline changed",
+                                Some(json!({
+                                    "filePath": file_path.clone(),
+                                    "action": "clip_insert_at_playhead",
+                                    "clipId": inserted_clip_id.clone()
+                                })),
+                            );
+                            if !inserted_clip_id.is_empty() {
+                                emit_runtime_task_checkpoint_saved(
+                                    app,
+                                    None,
+                                    Some(active_session_id),
+                                    "editor.selection_changed",
+                                    "editor selection changed",
+                                    Some(json!({
+                                        "filePath": file_path,
+                                        "clipId": inserted_clip_id
+                                    })),
+                                );
                             }
                         }
-                        if let (Some(object), Some(config)) =
-                            (payload.as_object_mut(), model_config)
-                        {
-                            object.insert("modelConfig".to_string(), config.clone());
+                        Ok(result)
+                    }
+                    "subtitle_add" | "subtitle-add" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("subtitle_add");
                         }
-                        payload
-                    })
-                }
-                "remotion_save" | "remotion-save" => {
-                    call_manuscript_channel("manuscripts:save-remotion-scene", {
-                        ensure_script_confirmed("remotion_save")?;
-                        editor_tool_payload(file_path, arguments, &["scene"])
-                    })
-                }
-                "export" => call_manuscript_channel("manuscripts:render-remotion-video", {
-                    ensure_script_confirmed("export")?;
-                    editor_tool_payload(file_path, arguments, &[])
-                }),
-                _ => Err(format!("unsupported redbox_editor action: {action}")),
-            }
-        }
-        "redbox_fs" => {
-            let action = payload_string(arguments, "action").unwrap_or_default();
-            let scope = payload_string(arguments, "scope")
-                .unwrap_or_else(|| "workspace".to_string())
-                .to_ascii_lowercase();
-            let raw_path = payload_string(arguments, "path").unwrap_or_default();
-            match action.as_str() {
-                "search" if scope == "knowledge" => {
-                    crate::tools::knowledge_search::execute_grep(state, session_id, arguments)
-                }
-                "list" if scope == "knowledge" => {
-                    crate::tools::knowledge_search::execute_glob(state, session_id, arguments)
-                }
-                "read" if scope == "knowledge" => {
-                    crate::tools::knowledge_search::execute_read(state, session_id, arguments)
-                }
-                "search" => {
-                    crate::tools::workspace_search::execute_search(state, session_id, arguments)
-                }
-                "list" => {
-                    if raw_path.trim().is_empty() {
-                        return Err(
-                            "path is required for redbox_fs(action=list, scope=workspace)"
-                                .to_string(),
-                        );
-                    }
-                    let limit = parse_usize_arg(arguments, "limit", 20, 50);
-                    let resolved =
-                        interactive_runtime_shared::resolve_workspace_tool_path_for_session(
-                            state, session_id, &raw_path,
+                        ensure_script_confirmed("subtitle_add")?;
+                        let result = call_manuscript_channel(
+                            "manuscripts:insert-package-subtitle-at-playhead",
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["text", "track", "order", "durationMs"],
+                            ),
                         )?;
-                    if !resolved.is_dir() {
-                        return Err(format!("not a directory: {}", resolved.display()));
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor subtitle added",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "text": payload_string(arguments, "text")
+                                })),
+                            );
+                        }
+                        Ok(result)
                     }
-                    Ok(json!({
-                        "path": resolved.display().to_string(),
-                        "entries": list_directory_entries(&resolved, limit)?
-                    }))
-                }
-                "read" => {
-                    if raw_path.trim().is_empty() {
-                        return Err(
-                            "path is required for redbox_fs(action=read, scope=workspace)"
-                                .to_string(),
-                        );
-                    }
-                    let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
-                    let resolved =
-                        interactive_runtime_shared::resolve_workspace_tool_path_for_session(
-                            state, session_id, &raw_path,
+                    "text_add" | "text-add" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("text_add");
+                        }
+                        ensure_script_confirmed("text_add")?;
+                        let result = call_manuscript_channel(
+                            "manuscripts:insert-package-text-at-playhead",
+                            editor_tool_payload(
+                                file_path.clone(),
+                                arguments,
+                                &["text", "track", "durationMs", "textStyle"],
+                            ),
                         )?;
-                    if !resolved.is_file() {
-                        return Err(format!("not a file: {}", resolved.display()));
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor text added",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "text": payload_string(arguments, "text")
+                                })),
+                            );
+                        }
+                        Ok(result)
                     }
-                    let content =
-                        fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
-                    Ok(json!({
-                        "path": resolved.display().to_string(),
-                        "content": truncate_chars(&content, max_chars)
-                    }))
+                    "clip_update" | "clip-update" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_update");
+                        }
+                        call_manuscript_channel("manuscripts:update-package-clip", {
+                            ensure_script_confirmed("clip_update")?;
+                            editor_tool_payload(
+                                file_path,
+                                arguments,
+                                &[
+                                    "clipId",
+                                    "name",
+                                    "assetKind",
+                                    "subtitleStyle",
+                                    "textStyle",
+                                    "transitionStyle",
+                                    "track",
+                                    "order",
+                                    "durationMs",
+                                    "trimInMs",
+                                    "trimOutMs",
+                                    "enabled",
+                                ],
+                            )
+                        })
+                    }
+                    "clip_move" | "clip-move" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_move");
+                        }
+                        call_manuscript_channel("manuscripts:update-package-clip", {
+                            ensure_script_confirmed("clip_move")?;
+                            editor_tool_payload(file_path, arguments, &["clipId", "track", "order"])
+                        })
+                    }
+                    "clip_toggle_enabled" | "clip-toggle-enabled" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_toggle_enabled");
+                        }
+                        call_manuscript_channel("manuscripts:update-package-clip", {
+                            ensure_script_confirmed("clip_toggle_enabled")?;
+                            editor_tool_payload(file_path, arguments, &["clipId", "enabled"])
+                        })
+                    }
+                    "clip_delete" | "clip-delete" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_delete");
+                        }
+                        call_manuscript_channel("manuscripts:delete-package-clip", {
+                            ensure_script_confirmed("clip_delete")?;
+                            editor_tool_payload(file_path, arguments, &["clipId"])
+                        })
+                    }
+                    "clip_split" | "clip-split" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_split");
+                        }
+                        call_manuscript_channel("manuscripts:split-package-clip", {
+                            ensure_script_confirmed("clip_split")?;
+                            editor_tool_payload(file_path, arguments, &["clipId", "splitRatio"])
+                        })
+                    }
+                    "clip_duplicate" | "clip-duplicate" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_duplicate");
+                        }
+                        let result = call_manuscript_channel(
+                            "manuscripts:duplicate-editor-project-clip",
+                            {
+                                ensure_script_confirmed("clip_duplicate")?;
+                                editor_tool_payload(
+                                    file_path.clone(),
+                                    arguments,
+                                    &["clipId", "trackId", "fromMs"],
+                                )
+                            },
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor clip duplicated",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "clipId": payload_string(arguments, "clipId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "clip_replace_asset" | "clip-replace-asset" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("clip_replace_asset");
+                        }
+                        let result = call_manuscript_channel(
+                            "manuscripts:replace-editor-project-clip-asset",
+                            {
+                                ensure_script_confirmed("clip_replace_asset")?;
+                                editor_tool_payload(
+                                    file_path.clone(),
+                                    arguments,
+                                    &["clipId", "assetId"],
+                                )
+                            },
+                        )?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor clip asset replaced",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "clipId": payload_string(arguments, "clipId"),
+                                    "assetId": payload_string(arguments, "assetId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "marker_add" | "marker-add" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("marker_add");
+                        }
+                        let result =
+                            call_manuscript_channel("manuscripts:add-editor-project-marker", {
+                                ensure_script_confirmed("marker_add")?;
+                                editor_tool_payload(
+                                    file_path.clone(),
+                                    arguments,
+                                    &["frame", "color", "label"],
+                                )
+                            })?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor marker added",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "frame": payload_field(arguments, "frame").cloned().unwrap_or(Value::Null)
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "marker_update" | "marker-update" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("marker_update");
+                        }
+                        let result =
+                            call_manuscript_channel("manuscripts:update-editor-project-marker", {
+                                ensure_script_confirmed("marker_update")?;
+                                editor_tool_payload(
+                                    file_path.clone(),
+                                    arguments,
+                                    &["markerId", "frame", "color", "label"],
+                                )
+                            })?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor marker updated",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "markerId": payload_string(arguments, "markerId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "marker_delete" | "marker-delete" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("marker_delete");
+                        }
+                        let result =
+                            call_manuscript_channel("manuscripts:delete-editor-project-marker", {
+                                ensure_script_confirmed("marker_delete")?;
+                                editor_tool_payload(file_path.clone(), arguments, &["markerId"])
+                            })?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor marker deleted",
+                                Some(json!({
+                                    "filePath": file_path,
+                                    "markerId": payload_string(arguments, "markerId")
+                                })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "undo" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("undo");
+                        }
+                        let result = call_manuscript_channel("manuscripts:undo-editor-project", {
+                            ensure_script_confirmed("undo")?;
+                            json!({ "filePath": file_path.clone() })
+                        })?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor undo",
+                                Some(json!({ "filePath": file_path })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "redo" => {
+                        if is_video_package {
+                            return reject_video_timeline_action("redo");
+                        }
+                        let result = call_manuscript_channel("manuscripts:redo-editor-project", {
+                            ensure_script_confirmed("redo")?;
+                            json!({ "filePath": file_path.clone() })
+                        })?;
+                        if let Some(active_session_id) = session_id {
+                            emit_runtime_task_checkpoint_saved(
+                                app,
+                                None,
+                                Some(active_session_id),
+                                "editor.timeline_changed",
+                                "editor redo",
+                                Some(json!({ "filePath": file_path })),
+                            );
+                        }
+                        Ok(result)
+                    }
+                    "ffmpeg_edit" | "ffmpeg-edit" => {
+                        call_manuscript_channel("manuscripts:ffmpeg-edit", {
+                            ensure_script_confirmed("ffmpeg_edit")?;
+                            editor_tool_payload(
+                                file_path,
+                                arguments,
+                                &["operations", "intentSummary"],
+                            )
+                        })
+                    }
+                    "remotion_generate" | "remotion-generate" => {
+                        call_manuscript_channel("manuscripts:generate-remotion-scene", {
+                            ensure_script_confirmed("remotion_generate")?;
+                            let mut payload =
+                                editor_tool_payload(file_path, arguments, &["instructions"]);
+                            if let Some(active_session_id) = session_id {
+                                if let Some(object) = payload.as_object_mut() {
+                                    object
+                                        .insert("sessionId".to_string(), json!(active_session_id));
+                                }
+                            }
+                            if let (Some(object), Some(config)) =
+                                (payload.as_object_mut(), model_config)
+                            {
+                                object.insert("modelConfig".to_string(), config.clone());
+                            }
+                            payload
+                        })
+                    }
+                    "remotion_save" | "remotion-save" => {
+                        call_manuscript_channel("manuscripts:save-remotion-scene", {
+                            ensure_script_confirmed("remotion_save")?;
+                            editor_tool_payload(file_path, arguments, &["scene"])
+                        })
+                    }
+                    "export" => call_manuscript_channel("manuscripts:render-remotion-video", {
+                        ensure_script_confirmed("export")?;
+                        editor_tool_payload(file_path, arguments, &[])
+                    }),
+                    _ => Err(format!("unsupported redbox_editor action: {action}")),
                 }
-                _ => Err(format!("unsupported fs action: {action}")),
             }
+            "redbox_fs" => {
+                let action = payload_string(arguments, "action").unwrap_or_default();
+                let scope = payload_string(arguments, "scope")
+                    .unwrap_or_else(|| "workspace".to_string())
+                    .to_ascii_lowercase();
+                let raw_path = payload_string(arguments, "path").unwrap_or_default();
+                match action.as_str() {
+                    "search" if scope == "knowledge" => {
+                        crate::tools::knowledge_search::execute_grep(state, session_id, arguments)
+                    }
+                    "list" if scope == "knowledge" => {
+                        crate::tools::knowledge_search::execute_glob(state, session_id, arguments)
+                    }
+                    "read" if scope == "knowledge" => {
+                        crate::tools::knowledge_search::execute_read(state, session_id, arguments)
+                    }
+                    "search" => {
+                        crate::tools::workspace_search::execute_search(state, session_id, arguments)
+                    }
+                    "list" => {
+                        if raw_path.trim().is_empty() {
+                            return Err(
+                                "path is required for redbox_fs(action=list, scope=workspace)"
+                                    .to_string(),
+                            );
+                        }
+                        let limit = parse_usize_arg(arguments, "limit", 20, 50);
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        if !resolved.is_dir() {
+                            return Err(format!("not a directory: {}", resolved.display()));
+                        }
+                        Ok(json!({
+                            "path": resolved.display().to_string(),
+                            "entries": list_directory_entries(&resolved, limit)?
+                        }))
+                    }
+                    "read" => {
+                        if raw_path.trim().is_empty() {
+                            return Err(
+                                "path is required for redbox_fs(action=read, scope=workspace)"
+                                    .to_string(),
+                            );
+                        }
+                        let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        if !resolved.is_file() {
+                            return Err(format!("not a file: {}", resolved.display()));
+                        }
+                        let content =
+                            fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
+                        Ok(json!({
+                            "path": resolved.display().to_string(),
+                            "content": truncate_chars(&content, max_chars)
+                        }))
+                    }
+                    _ => Err(format!("unsupported fs action: {action}")),
+                }
+            }
+            other => Err(format!("unsupported interactive tool: {other}")),
         }
-        other => Err(format!("unsupported interactive tool: {other}")),
+    }));
+    match execution {
+        Ok(result) => result,
+        Err(payload) => Err(interactive_tool_panic_message(name, payload)),
     }
 }
 
@@ -4628,6 +4663,161 @@ fn append_generated_media_sections(
     append_generated_media_markdown(&with_images, "## 生成视频", videos)
 }
 
+#[derive(Debug, Clone)]
+struct PendingInteractiveToolCall {
+    call_id: String,
+    tool_name: String,
+}
+
+fn interactive_tool_abort_message() -> &'static str {
+    "工具调用已中止：本轮运行在返回结果前结束。"
+}
+
+fn append_aborted_interactive_tool_result(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    call_id: &str,
+    tool_name: &str,
+    failure_text: &str,
+) {
+    let _ = with_store_mut(state, |store| {
+        let (runtime_id, parent_runtime_id, source_task_id) =
+            session_lineage_fields(store, session_id);
+        store.session_tool_results.push(SessionToolResultRecord {
+            id: make_id("tool-result"),
+            session_id: session_id.to_string(),
+            runtime_id,
+            parent_runtime_id,
+            source_task_id,
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            command: None,
+            success: false,
+            result_text: None,
+            summary_text: Some(failure_text.to_string()),
+            prompt_text: None,
+            original_chars: None,
+            prompt_chars: None,
+            truncated: false,
+            payload: Some(json!({
+                "aborted": true,
+                "toolName": tool_name,
+                "callId": call_id,
+            })),
+            created_at: now_i64(),
+            updated_at: now_i64(),
+        });
+        append_session_transcript(
+            store,
+            session_id,
+            "tool.result",
+            "tool",
+            failure_text.to_string(),
+            Some(json!({
+                "callId": call_id,
+                "toolName": tool_name,
+                "success": false,
+                "aborted": true,
+            })),
+        );
+        append_session_checkpoint(
+            store,
+            session_id,
+            "tool.call",
+            format!("tool {tool_name} aborted"),
+            Some(json!({
+                "callId": call_id,
+                "toolName": tool_name,
+                "error": failure_text,
+                "aborted": true,
+            })),
+        );
+        Ok(())
+    });
+}
+
+struct InteractiveToolCallGuard<'a> {
+    app: &'a AppHandle,
+    state: &'a State<'a, AppState>,
+    session_id: Option<&'a str>,
+    pending: Vec<PendingInteractiveToolCall>,
+}
+
+impl<'a> InteractiveToolCallGuard<'a> {
+    fn new(
+        app: &'a AppHandle,
+        state: &'a State<'a, AppState>,
+        session_id: Option<&'a str>,
+    ) -> Self {
+        Self {
+            app,
+            state,
+            session_id,
+            pending: Vec::new(),
+        }
+    }
+
+    fn start(&mut self, call_id: &str, tool_name: &str) {
+        if self.pending.iter().any(|item| item.call_id == call_id) {
+            return;
+        }
+        self.pending.push(PendingInteractiveToolCall {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+        });
+    }
+
+    fn finish(&mut self, call_id: &str) {
+        self.pending.retain(|item| item.call_id != call_id);
+    }
+}
+
+impl Drop for InteractiveToolCallGuard<'_> {
+    fn drop(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let failure_text = interactive_tool_abort_message();
+        for pending in self.pending.drain(..) {
+            emit_runtime_tool_result(
+                self.app,
+                self.session_id,
+                &pending.call_id,
+                &pending.tool_name,
+                false,
+                failure_text,
+            );
+            if let Some(session_id) = self.session_id {
+                append_aborted_interactive_tool_result(
+                    self.state,
+                    session_id,
+                    &pending.call_id,
+                    &pending.tool_name,
+                    failure_text,
+                );
+            }
+        }
+    }
+}
+
+fn interactive_tool_panic_message(
+    tool_name: &str,
+    payload: Box<dyn std::any::Any + Send>,
+) -> String {
+    let detail = if let Some(message) = payload.downcast_ref::<String>() {
+        message.trim().to_string()
+    } else if let Some(message) = payload.downcast_ref::<&str>() {
+        message.trim().to_string()
+    } else {
+        String::new()
+    };
+    if detail.is_empty() {
+        format!("工具 {tool_name} 执行时发生 panic")
+    } else {
+        format!("工具 {tool_name} 执行时发生 panic：{detail}")
+    }
+}
+
 fn run_anthropic_interactive_chat_runtime(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -4645,6 +4835,7 @@ fn run_anthropic_interactive_chat_runtime(
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
+    let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
 
     while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
@@ -5063,6 +5254,7 @@ fn run_anthropic_interactive_chat_runtime(
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         for call in tool_calls {
             let description = format!("Interactive tool call: {}", call.name);
+            in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
                 app,
                 session_id,
@@ -5111,6 +5303,7 @@ fn run_anthropic_interactive_chat_runtime(
                         true,
                         &result_text,
                     );
+                    in_flight_tool_calls.finish(&call.id);
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
                             let (runtime_id, parent_runtime_id, source_task_id) =
@@ -5159,6 +5352,7 @@ fn run_anthropic_interactive_chat_runtime(
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    in_flight_tool_calls.finish(&call.id);
                     append_prompt_and_canonical_message(
                         &mut prompt_messages,
                         &mut canonical_messages,
@@ -5225,6 +5419,7 @@ fn run_gemini_interactive_chat_runtime(
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
+    let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
 
     while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
@@ -5633,6 +5828,7 @@ fn run_gemini_interactive_chat_runtime(
         let mut skill_activation_names = Vec::<String>::new();
         for call in tool_calls {
             let description = format!("Interactive tool call: {}", call.name);
+            in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
                 app,
                 session_id,
@@ -5681,6 +5877,7 @@ fn run_gemini_interactive_chat_runtime(
                         true,
                         &result_text,
                     );
+                    in_flight_tool_calls.finish(&call.id);
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
                             let (runtime_id, parent_runtime_id, source_task_id) =
@@ -5728,6 +5925,7 @@ fn run_gemini_interactive_chat_runtime(
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
+                    in_flight_tool_calls.finish(&call.id);
                     append_prompt_and_canonical_message(
                         &mut prompt_messages,
                         &mut canonical_messages,
@@ -5794,6 +5992,7 @@ fn run_openai_interactive_chat_runtime(
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
+    let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
     let execution_contract = interactive_execution_contract(state, session_id);
     let mut execution_progress = InteractiveExecutionProgress::default();
@@ -6086,6 +6285,7 @@ fn run_openai_interactive_chat_runtime(
                 normalized_tool_call.arguments.clone()
             };
             let description = format!("Interactive tool call: {}", effective_tool_name);
+            in_flight_tool_calls.start(&call.id, effective_tool_name);
             emit_runtime_tool_request(
                 app,
                 session_id,
@@ -6139,6 +6339,7 @@ fn run_openai_interactive_chat_runtime(
                         true,
                         &result_text,
                     );
+                    in_flight_tool_calls.finish(&call.id);
                     append_debug_log_state(
                         state,
                         format!(
@@ -6242,6 +6443,7 @@ fn run_openai_interactive_chat_runtime(
                         false,
                         &failure_text,
                     );
+                    in_flight_tool_calls.finish(&call.id);
                     append_debug_log_state(
                         state,
                         format!(
