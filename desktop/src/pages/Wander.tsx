@@ -465,7 +465,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '',
       '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       '',
-      '当前会话会预加载 writing-style，直接按这份风格写；不要再次调用 `skills invoke --name writing-style`。',
+      '当前会话会预加载 writing-style，直接按这份风格写；不要再次调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
       '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md 再基于素材完成标题候选、正文、标签建议和封面文案，避免模板化表达。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',

@@ -130,7 +130,7 @@ export interface ToolEvent {
   input: unknown;
   output?: { success: boolean; content: string };
   description?: string;
-  status: 'running' | 'done';
+  status: 'running' | 'done' | 'failed';
 }
 
 export interface SkillEvent {

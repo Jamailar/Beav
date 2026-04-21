@@ -37,7 +37,7 @@ pub fn canonical_tool_name(name: &str) -> &str {
 
 pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall {
     match name {
-        "app_cli" => passthrough("app_cli", arguments),
+        "app_cli" => normalize_app_cli_call(arguments),
         "bash" => passthrough("bash", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
@@ -60,7 +60,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "redbox_app_query" => app_query_direct(arguments),
         "redbox_fs" => passthrough("redbox_fs", arguments),
         "redbox_profile_doc" => profile_doc_to_app_cli(arguments),
-        "redbox_editor" => passthrough("redbox_editor", arguments),
+        "redbox_editor" => normalize_redbox_editor_call(arguments),
         _ => NormalizedToolCall {
             name: "",
             arguments: json!({}),
@@ -79,25 +79,142 @@ fn passthrough(name: &'static str, arguments: &Value) -> NormalizedToolCall {
     }
 }
 
+fn compat_metadata_value(
+    legacy_tool_name: Option<&str>,
+    legacy_command: Option<&str>,
+    translated_action: Option<&str>,
+) -> Option<Value> {
+    let mut object = Map::new();
+    if let Some(value) = legacy_tool_name.filter(|item| !item.trim().is_empty()) {
+        object.insert("legacyToolName".to_string(), json!(value));
+    }
+    if let Some(value) = legacy_command.filter(|item| !item.trim().is_empty()) {
+        object.insert("legacyCommand".to_string(), json!(value));
+    }
+    if let Some(value) = translated_action.filter(|item| !item.trim().is_empty()) {
+        object.insert("translatedAction".to_string(), json!(value));
+    }
+    if object.is_empty() {
+        None
+    } else {
+        Some(Value::Object(object))
+    }
+}
+
+fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
+    let Some(object) = arguments.as_object() else {
+        return NormalizedToolCall {
+            name: "app_cli",
+            arguments: json!({}),
+        };
+    };
+    if let Some(action) = object.get("action").and_then(Value::as_str) {
+        let normalized_action = normalize_action_token(action);
+        let mut normalized = object.clone();
+        normalized.insert("action".to_string(), json!(normalized_action.clone()));
+        if normalized_action != action.trim() {
+            if let Some(metadata) =
+                compat_metadata_value(Some("app_cli"), None, Some(&normalized_action))
+            {
+                normalized.insert("__compat".to_string(), metadata);
+            }
+        }
+        return NormalizedToolCall {
+            name: "app_cli",
+            arguments: Value::Object(normalized),
+        };
+    }
+    let command = object
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
+    if command.is_empty() {
+        let mut normalized = object.clone();
+        if let Some(metadata) = compat_metadata_value(Some("app_cli"), Some(""), None) {
+            normalized.insert("__compat".to_string(), metadata);
+        }
+        return NormalizedToolCall {
+            name: "app_cli",
+            arguments: Value::Object(normalized),
+        };
+    }
+    translate_legacy_app_cli_command(command, &payload)
+}
+
+fn normalize_redbox_editor_call(arguments: &Value) -> NormalizedToolCall {
+    let Some(object) = arguments.as_object() else {
+        return passthrough("redbox_editor", arguments);
+    };
+    let Some(action) = object.get("action").and_then(Value::as_str) else {
+        return passthrough("redbox_editor", arguments);
+    };
+    let normalized_action = normalize_action_token(action);
+    let mut normalized = object.clone();
+    normalized.insert("action".to_string(), json!(normalized_action.clone()));
+    if normalized_action != action.trim() {
+        if let Some(metadata) = compat_metadata_value(
+            Some("redbox_editor"),
+            Some(action),
+            Some(&normalized_action),
+        ) {
+            normalized.insert("__compat".to_string(), metadata);
+        }
+    }
+    NormalizedToolCall {
+        name: "redbox_editor",
+        arguments: Value::Object(normalized),
+    }
+}
+
+fn normalize_action_token(value: &str) -> String {
+    let trimmed = value.trim();
+    match trimmed {
+        "project-read" => "project_read".to_string(),
+        "script-read" => "script_read".to_string(),
+        "script-update" => "script_update".to_string(),
+        "script-confirm" => "script_confirm".to_string(),
+        "ffmpeg-edit" => "ffmpeg_edit".to_string(),
+        "remotion-read" => "remotion_read".to_string(),
+        "remotion-generate" => "remotion_generate".to_string(),
+        "remotion-save" => "remotion_save".to_string(),
+        "selection-set" => "selection_set".to_string(),
+        "playhead-seek" => "playhead_seek".to_string(),
+        "focus-clip" => "focus_clip".to_string(),
+        "focus-item" => "focus_item".to_string(),
+        "panel-open" => "panel_open".to_string(),
+        "timeline-zoom-read" => "timeline_zoom_read".to_string(),
+        "timeline-zoom-set" => "timeline_zoom_set".to_string(),
+        "timeline-scroll-read" => "timeline_scroll_read".to_string(),
+        "timeline-scroll-set" => "timeline_scroll_set".to_string(),
+        "track-add" => "track_add".to_string(),
+        "track-reorder" => "track_reorder".to_string(),
+        "track-delete" => "track_delete".to_string(),
+        "clip-add" => "clip_add".to_string(),
+        "clip-insert-at-playhead" => "clip_insert_at_playhead".to_string(),
+        "subtitle-add" => "subtitle_add".to_string(),
+        "text-add" => "text_add".to_string(),
+        "clip-update" => "clip_update".to_string(),
+        "clip-move" => "clip_move".to_string(),
+        "clip-toggle-enabled" => "clip_toggle_enabled".to_string(),
+        "clip-delete" => "clip_delete".to_string(),
+        "clip-split" => "clip_split".to_string(),
+        "clip-duplicate" => "clip_duplicate".to_string(),
+        "clip-replace-asset" => "clip_replace_asset".to_string(),
+        "marker-add" => "marker_add".to_string(),
+        "marker-update" => "marker_update".to_string(),
+        "marker-delete" => "marker_delete".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn app_query(operation: &'static str, arguments: &Value) -> NormalizedToolCall {
     let mut payload = Map::new();
     copy_if_present(&mut payload, arguments, "query");
     copy_if_present(&mut payload, arguments, "status");
     copy_if_present(&mut payload, arguments, "limit");
-    let command = match operation {
-        "spaces.list" => "spaces list",
-        "advisors.list" => "advisors list",
-        "knowledge.search" => "knowledge search",
-        "work.list" => "work list",
-        "memory.search" => "memory search",
-        "chat.sessions.list" => "chat sessions list",
-        "settings.summary" => "settings summary",
-        "redclaw.projects.list" => "redclaw projects",
-        "redclaw.profile.bundle" => "redclaw profile-bundle",
-        "redclaw.profile.onboarding" => "redclaw profile-onboarding",
-        _ => "help",
-    };
-    app_cli_call(command, Value::Object(payload))
+    app_cli_action_or_legacy_call("redbox_app_query", operation, Value::Object(payload))
 }
 
 fn app_query_direct(arguments: &Value) -> NormalizedToolCall {
@@ -109,20 +226,7 @@ fn app_query_direct(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "query");
     copy_if_present(&mut payload, arguments, "status");
     copy_if_present(&mut payload, arguments, "limit");
-    let command = match operation {
-        "spaces.list" => "spaces list",
-        "advisors.list" => "advisors list",
-        "knowledge.search" => "knowledge search",
-        "work.list" => "work list",
-        "memory.search" => "memory search",
-        "chat.sessions.list" => "chat sessions list",
-        "settings.summary" => "settings summary",
-        "redclaw.projects.list" => "redclaw projects",
-        "redclaw.profile.bundle" => "redclaw profile-bundle",
-        "redclaw.profile.onboarding" => "redclaw profile-onboarding",
-        _ => "help",
-    };
-    app_cli_call(command, Value::Object(payload))
+    app_cli_action_or_legacy_call("redbox_app_query", operation, Value::Object(payload))
 }
 
 fn fs_call(action: &'static str, arguments: &Value) -> NormalizedToolCall {
@@ -160,7 +264,12 @@ fn profile_update(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "docType");
     copy_if_present(&mut payload, arguments, "markdown");
     copy_if_present(&mut payload, arguments, "reason");
-    app_cli_call("redclaw profile-update", Value::Object(payload))
+    app_cli_action_call(
+        "redclaw.profile.update",
+        Value::Object(payload),
+        Some("redclaw_update_profile_doc"),
+        None,
+    )
 }
 
 fn creator_profile_update(arguments: &Value) -> NormalizedToolCall {
@@ -168,7 +277,12 @@ fn creator_profile_update(arguments: &Value) -> NormalizedToolCall {
     payload.insert("docType".to_string(), json!("creator_profile"));
     copy_if_present(&mut payload, arguments, "markdown");
     copy_if_present(&mut payload, arguments, "reason");
-    app_cli_call("redclaw profile-update", Value::Object(payload))
+    app_cli_action_call(
+        "redclaw.profile.update",
+        Value::Object(payload),
+        Some("redclaw_update_creator_profile"),
+        None,
+    )
 }
 
 fn profile_doc_to_app_cli(arguments: &Value) -> NormalizedToolCall {
@@ -180,13 +294,26 @@ fn profile_doc_to_app_cli(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "docType");
     copy_if_present(&mut payload, arguments, "markdown");
     copy_if_present(&mut payload, arguments, "reason");
-    let command = match action {
-        "bundle" => "redclaw profile-bundle",
-        "read" => "redclaw profile-read",
-        "update" => "redclaw profile-update",
-        _ => "help",
+    let translated_action = match action {
+        "bundle" => Some("redclaw.profile.bundle"),
+        "read" => Some("redclaw.profile.read"),
+        "update" => Some("redclaw.profile.update"),
+        _ => None,
     };
-    app_cli_call(command, Value::Object(payload))
+    match translated_action {
+        Some(translated) => app_cli_action_call(
+            translated,
+            Value::Object(payload),
+            Some("redbox_profile_doc"),
+            Some(action),
+        ),
+        None => app_cli_legacy_command_call(
+            "help redclaw",
+            Value::Object(payload),
+            Some("redbox_profile_doc"),
+            Some(action),
+        ),
+    }
 }
 
 fn mcp_to_app_cli(arguments: &Value) -> NormalizedToolCall {
@@ -194,23 +321,28 @@ fn mcp_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let command = match action {
-        "list" => "mcp list",
-        "save" => "mcp save",
-        "test" => "mcp test",
-        "call" => "mcp call",
-        "list_tools" => "mcp list-tools",
-        "list_resources" => "mcp list-resources",
-        "list_resource_templates" => "mcp list-resource-templates",
-        "sessions" => "mcp sessions",
-        "disconnect" => "mcp disconnect",
-        "disconnect_all" => "mcp disconnect-all",
-        "discover_local" => "mcp discover-local",
-        "import_local" => "mcp import-local",
-        "oauth_status" => "mcp oauth-status",
-        _ => "help",
+    let translated_action = match action {
+        "list" => Some("mcp.list"),
+        "call" => Some("mcp.call"),
+        "list_tools" => Some("mcp.listTools"),
+        "list_resources" => Some("mcp.listResources"),
+        "disconnect" => Some("mcp.disconnect"),
+        _ => None,
     };
-    app_cli_call(command, arguments.clone())
+    match translated_action {
+        Some(translated) => app_cli_action_call(
+            translated,
+            arguments.clone(),
+            Some("redbox_mcp"),
+            Some(action),
+        ),
+        None => app_cli_legacy_command_call(
+            &format!("mcp {}", action.replace('_', "-")),
+            arguments.clone(),
+            Some("redbox_mcp"),
+            Some(action),
+        ),
+    }
 }
 
 fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
@@ -218,21 +350,25 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let command = match action {
-        "list" => "skills list",
-        "invoke" => "skills invoke",
-        "create" => "skills create",
-        "save" => "skills save",
-        "enable" => "skills enable",
-        "disable" => "skills disable",
-        "market_install" => "skills market-install",
-        "ai_roles_list" => "ai roles-list",
-        "detect_protocol" => "ai detect-protocol",
-        "test_connection" => "ai test-connection",
-        "fetch_models" => "ai fetch-models",
-        _ => "help",
+    let translated_action = match action {
+        "list" => Some("skills.list"),
+        "invoke" => Some("skills.invoke"),
+        _ => None,
     };
-    app_cli_call(command, arguments.clone())
+    match translated_action {
+        Some(translated) => app_cli_action_call(
+            translated,
+            arguments.clone(),
+            Some("redbox_skill"),
+            Some(action),
+        ),
+        None => app_cli_legacy_command_call(
+            &legacy_skill_command(action),
+            arguments.clone(),
+            Some("redbox_skill"),
+            Some(action),
+        ),
+    }
 }
 
 fn runtime_to_app_cli(arguments: &Value) -> NormalizedToolCall {
@@ -240,39 +376,249 @@ fn runtime_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let command = match action {
-        "runtime_query" => "runtime query",
-        "runtime_resume" => "runtime resume",
-        "runtime_fork_session" => "runtime fork-session",
-        "runtime_get_trace" => "runtime get-trace",
-        "runtime_get_checkpoints" => "runtime get-checkpoints",
-        "runtime_get_tool_results" => "runtime get-tool-results",
-        "tasks_create" => "runtime tasks create",
-        "tasks_list" => "runtime tasks list",
-        "tasks_get" => "runtime tasks get",
-        "tasks_resume" => "runtime tasks resume",
-        "tasks_cancel" => "runtime tasks cancel",
-        "background_tasks_list" => "runtime background list",
-        "background_tasks_get" => "runtime background get",
-        "background_tasks_cancel" => "runtime background cancel",
-        "session_enter_diagnostics" => "runtime session-enter-diagnostics",
-        "session_bridge_status" => "runtime session-bridge status",
-        "session_bridge_list_sessions" => "runtime session-bridge list-sessions",
-        "session_bridge_get_session" => "runtime session-bridge get-session",
-        _ => "help",
+    let translated_action = match action {
+        "runtime_query" => Some("runtime.query"),
+        "runtime_get_checkpoints" => Some("runtime.getCheckpoints"),
+        "runtime_get_tool_results" => Some("runtime.getToolResults"),
+        "tasks_create" => Some("runtime.tasks.create"),
+        "tasks_list" => Some("runtime.tasks.list"),
+        "tasks_get" => Some("runtime.tasks.get"),
+        "tasks_resume" => Some("runtime.tasks.resume"),
+        "tasks_cancel" => Some("runtime.tasks.cancel"),
+        _ => None,
     };
-    app_cli_call(command, arguments.clone())
+    match translated_action {
+        Some(translated) => app_cli_action_call(
+            translated,
+            arguments.clone(),
+            Some("redbox_runtime_control"),
+            Some(action),
+        ),
+        None => app_cli_legacy_command_call(
+            &legacy_runtime_command(action),
+            arguments.clone(),
+            Some("redbox_runtime_control"),
+            Some(action),
+        ),
+    }
 }
 
-fn app_cli_call(command: &'static str, payload: Value) -> NormalizedToolCall {
+fn app_cli_action_or_legacy_call(
+    legacy_tool_name: &'static str,
+    operation: &str,
+    payload: Value,
+) -> NormalizedToolCall {
+    match operation {
+        "memory.search" => app_cli_action_call(
+            "memory.search",
+            payload,
+            Some(legacy_tool_name),
+            Some(operation),
+        ),
+        "redclaw.profile.bundle" => app_cli_action_call(
+            "redclaw.profile.bundle",
+            payload,
+            Some(legacy_tool_name),
+            Some(operation),
+        ),
+        _ => {
+            let command = match operation {
+                "spaces.list" => "spaces list",
+                "advisors.list" => "advisors list",
+                "knowledge.search" => "knowledge search",
+                "work.list" => "work list",
+                "chat.sessions.list" => "chat sessions list",
+                "settings.summary" => "settings summary",
+                "redclaw.projects.list" => "redclaw projects",
+                "redclaw.profile.onboarding" => "redclaw profile-onboarding",
+                _ => "help",
+            };
+            app_cli_legacy_command_call(command, payload, Some(legacy_tool_name), Some(operation))
+        }
+    }
+}
+
+fn app_cli_action_call(
+    action: &str,
+    payload: Value,
+    legacy_tool_name: Option<&str>,
+    legacy_command: Option<&str>,
+) -> NormalizedToolCall {
+    let mut arguments = Map::new();
+    arguments.insert("action".to_string(), json!(action));
+    if payload.is_object() {
+        arguments.insert("payload".to_string(), payload);
+    }
+    if let Some(metadata) = compat_metadata_value(legacy_tool_name, legacy_command, Some(action)) {
+        arguments.insert("__compat".to_string(), metadata);
+    }
+    NormalizedToolCall {
+        name: "app_cli",
+        arguments: Value::Object(arguments),
+    }
+}
+
+fn app_cli_legacy_command_call(
+    command: &str,
+    payload: Value,
+    legacy_tool_name: Option<&str>,
+    legacy_command: Option<&str>,
+) -> NormalizedToolCall {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), json!(command));
     if payload.is_object() {
         arguments.insert("payload".to_string(), payload);
     }
+    if let Some(metadata) = compat_metadata_value(legacy_tool_name, legacy_command, None) {
+        arguments.insert("__compat".to_string(), metadata);
+    }
     NormalizedToolCall {
         name: "app_cli",
         arguments: Value::Object(arguments),
+    }
+}
+
+fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> NormalizedToolCall {
+    let tokens = shell_words::split(command).unwrap_or_else(|_| {
+        command
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    });
+    let mut translated_payload = payload.as_object().cloned().unwrap_or_default();
+    let translated_action = match tokens
+        .iter()
+        .map(|item| item.as_str())
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["memory", "list", ..] => Some("memory.list"),
+        ["memory", "search", ..] => {
+            if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
+                translated_payload.insert("query".to_string(), json!(query));
+            }
+            Some("memory.search")
+        }
+        ["memory", "add", rest @ ..] => {
+            if !translated_payload.contains_key("content") && !rest.is_empty() {
+                translated_payload.insert("content".to_string(), json!(rest.join(" ")));
+            }
+            Some("memory.add")
+        }
+        ["redclaw", "profile-bundle", ..] => Some("redclaw.profile.bundle"),
+        ["redclaw", "profile-read", ..] => {
+            if let Some(doc_type) = extract_flag_value(&tokens, &["--doc-type"]) {
+                translated_payload.insert("docType".to_string(), json!(doc_type));
+            }
+            Some("redclaw.profile.read")
+        }
+        ["redclaw", "profile-update", ..] => Some("redclaw.profile.update"),
+        ["redclaw", "runner-status", ..] => Some("redclaw.runner.status"),
+        ["redclaw", "runner-start", ..] => Some("redclaw.runner.start"),
+        ["redclaw", "runner-stop", ..] => Some("redclaw.runner.stop"),
+        ["redclaw", "runner-set-config", ..] => Some("redclaw.runner.setConfig"),
+        ["manuscripts", "list", ..] => Some("manuscripts.list"),
+        ["manuscripts", "create-project", ..] => {
+            if let Some(kind) = extract_flag_value(&tokens, &["--kind"]) {
+                translated_payload.insert("kind".to_string(), json!(kind));
+            }
+            if let Some(parent) = extract_flag_value(&tokens, &["--parent"]) {
+                translated_payload.insert("parent".to_string(), json!(parent));
+            }
+            if let Some(title) = extract_flag_value(&tokens, &["--title"]) {
+                translated_payload.insert("title".to_string(), json!(title));
+            }
+            Some("manuscripts.createProject")
+        }
+        ["manuscripts", "write-current", ..] => Some("manuscripts.writeCurrent"),
+        ["subjects", "search", ..] => {
+            if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
+                translated_payload.insert("query".to_string(), json!(query));
+            }
+            Some("subjects.search")
+        }
+        ["subjects", "get", ..] => {
+            if let Some(id) = extract_flag_value(&tokens, &["--id"]) {
+                translated_payload.insert("id".to_string(), json!(id));
+            }
+            Some("subjects.get")
+        }
+        ["runtime", "query", ..] => Some("runtime.query"),
+        ["runtime", "get-checkpoints", ..] => Some("runtime.getCheckpoints"),
+        ["runtime", "get-tool-results", ..] => Some("runtime.getToolResults"),
+        ["runtime", "tasks", "create", ..] => Some("runtime.tasks.create"),
+        ["runtime", "tasks", "list", ..] => Some("runtime.tasks.list"),
+        ["runtime", "tasks", "get", ..] => Some("runtime.tasks.get"),
+        ["runtime", "tasks", "resume", ..] => Some("runtime.tasks.resume"),
+        ["runtime", "tasks", "cancel", ..] => Some("runtime.tasks.cancel"),
+        ["mcp", "list", ..] => Some("mcp.list"),
+        ["mcp", "call", ..] => Some("mcp.call"),
+        ["mcp", "list-tools", ..] => Some("mcp.listTools"),
+        ["mcp", "list-resources", ..] => Some("mcp.listResources"),
+        ["mcp", "disconnect", ..] => Some("mcp.disconnect"),
+        ["skills", "list", ..] => Some("skills.list"),
+        ["skills", "invoke", ..] => {
+            if let Some(name) = extract_flag_value(&tokens, &["--name"]) {
+                translated_payload.insert("name".to_string(), json!(name));
+            }
+            Some("skills.invoke")
+        }
+        ["image", "generate", ..] => Some("image.generate"),
+        ["video", "generate", ..] => Some("video.generate"),
+        _ => None,
+    };
+    match translated_action {
+        Some(action) => app_cli_action_call(
+            action,
+            Value::Object(translated_payload),
+            Some("app_cli"),
+            Some(command),
+        ),
+        None => {
+            app_cli_legacy_command_call(command, payload.clone(), Some("app_cli"), Some(command))
+        }
+    }
+}
+
+fn extract_flag_value(tokens: &[String], names: &[&str]) -> Option<String> {
+    for (index, token) in tokens.iter().enumerate() {
+        if names.iter().any(|name| *name == token) {
+            return tokens.get(index + 1).cloned();
+        }
+        for name in names {
+            let prefix = format!("{name}=");
+            if let Some(value) = token.strip_prefix(&prefix) {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn legacy_skill_command(action: &str) -> String {
+    match action {
+        "market_install" => "skills market-install".to_string(),
+        "ai_roles_list" => "ai roles-list".to_string(),
+        "detect_protocol" => "ai detect-protocol".to_string(),
+        "test_connection" => "ai test-connection".to_string(),
+        "fetch_models" => "ai fetch-models".to_string(),
+        other => format!("skills {}", other.replace('_', "-")),
+    }
+}
+
+fn legacy_runtime_command(action: &str) -> String {
+    match action {
+        "runtime_resume" => "runtime resume".to_string(),
+        "runtime_fork_session" => "runtime fork-session".to_string(),
+        "runtime_get_trace" => "runtime get-trace".to_string(),
+        "background_tasks_list" => "runtime background list".to_string(),
+        "background_tasks_get" => "runtime background get".to_string(),
+        "background_tasks_cancel" => "runtime background cancel".to_string(),
+        "session_enter_diagnostics" => "runtime session-enter-diagnostics".to_string(),
+        "session_bridge_status" => "runtime session-bridge status".to_string(),
+        "session_bridge_list_sessions" => "runtime session-bridge list-sessions".to_string(),
+        "session_bridge_get_session" => "runtime session-bridge get-session".to_string(),
+        other => format!("runtime {}", other.replace('_', "-")),
     }
 }
 
@@ -293,8 +639,8 @@ mod tests {
 
         assert_eq!(normalized.name, "app_cli");
         assert_eq!(
-            normalized.arguments.get("command"),
-            Some(&json!("runtime tasks list"))
+            normalized.arguments.get("action"),
+            Some(&json!("runtime.tasks.list"))
         );
     }
 
@@ -307,8 +653,8 @@ mod tests {
 
         assert_eq!(normalized.name, "app_cli");
         assert_eq!(
-            normalized.arguments.get("command"),
-            Some(&json!("redclaw profile-read"))
+            normalized.arguments.get("action"),
+            Some(&json!("redclaw.profile.read"))
         );
         assert_eq!(
             normalized
@@ -317,6 +663,7 @@ mod tests {
                 .and_then(|value| value.get("docType")),
             Some(&json!("user"))
         );
+        assert!(normalized.arguments.get("__compat").is_some());
     }
 
     #[test]
@@ -331,5 +678,42 @@ mod tests {
             normalized.arguments.get("command"),
             Some(&json!("mcp oauth-status"))
         );
+    }
+
+    #[test]
+    fn translates_legacy_app_cli_command_into_structured_action() {
+        let normalized = normalize_tool_call(
+            "app_cli",
+            &json!({ "command": "memory search --query creator" }),
+        );
+
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("memory.search"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("query")),
+            Some(&json!("creator"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("__compat")
+                .and_then(|value| value.get("legacyCommand")),
+            Some(&json!("memory search --query creator"))
+        );
+    }
+
+    #[test]
+    fn normalizes_editor_legacy_action_names() {
+        let normalized = normalize_tool_call("redbox_editor", &json!({ "action": "project-read" }));
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("project_read"))
+        );
+        assert!(normalized.arguments.get("__compat").is_some());
     }
 }

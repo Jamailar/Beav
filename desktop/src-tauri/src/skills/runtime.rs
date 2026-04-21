@@ -195,9 +195,9 @@ mod tests {
         );
         assert_eq!(state.active_skills.len(), 2);
         assert_eq!(state.allowed_tools, vec!["app_cli".to_string()]);
-        assert!(state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert!(state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
 
@@ -275,9 +275,9 @@ mod tests {
             None,
             &["redbox_fs".to_string()],
         );
-        assert!(!state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert!(!state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
         assert!(state.skills_section.contains("writing-style [inline]"));
     }
 
@@ -323,10 +323,10 @@ mod tests {
             .contains("image-prompt-optimizer: image desc"));
         assert!(state
             .skills_section
-            .contains("Before any `app_cli(command=\"image generate ...\")`"));
-        assert!(state
-            .skills_section
-            .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
+        assert!(state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {
@@ -348,6 +348,6 @@ mod tests {
             .contains("image-prompt-optimizer: image desc"));
         assert!(redclaw_state
             .skills_section
-            .contains("Before any `app_cli(command=\"image generate ...\")`"));
+            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
     }
 }

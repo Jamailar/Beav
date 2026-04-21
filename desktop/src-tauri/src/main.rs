@@ -1415,7 +1415,7 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         guess_mime_and_kind, interactive_tool_panic_message, manuscript_save_result_path,
-        redbox_fs_profile_read_completed,
+        redbox_fs_profile_read_completed, structured_tool_error_code,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1472,6 +1472,22 @@ mod tests {
     fn interactive_tool_panic_message_handles_unknown_payload() {
         let message = interactive_tool_panic_message("app_cli", Box::new(42usize));
         assert_eq!(message, "工具 app_cli 执行时发生 panic");
+    }
+
+    #[test]
+    fn structured_tool_error_code_reads_envelope_code() {
+        let code = structured_tool_error_code(
+            r#"{
+                "ok": false,
+                "action": "memory.search",
+                "error": {
+                    "code": "ACTION_FAILED",
+                    "message": "backend unavailable",
+                    "retryable": true
+                }
+            }"#,
+        );
+        assert_eq!(code.as_deref(), Some("ACTION_FAILED"));
     }
 }
 
@@ -4037,11 +4053,26 @@ fn build_interactive_tool_outcome_digest(
     )
 }
 
+fn interactive_tool_call_description(tool_name: &str, arguments: &Value) -> String {
+    let action = payload_string(arguments, "action")
+        .or_else(|| {
+            payload_field(arguments, "__compat")
+                .and_then(|value| value.get("translatedAction"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .filter(|value| !value.trim().is_empty());
+    match action {
+        Some(action) => format!("Interactive tool call: {tool_name} · {action}"),
+        None => format!("Interactive tool call: {tool_name}"),
+    }
+}
+
 fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<String> {
     if tool_name != "app_cli" {
         return Vec::new();
     }
-    let Some(transition) = result.get("activationTransition") else {
+    let Some(transition) = tool_result_data(result).get("activationTransition") else {
         return Vec::new();
     };
     if !transition
@@ -4067,6 +4098,25 @@ fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<St
     activated.sort_by_key(|name| name.to_ascii_lowercase());
     activated.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     activated
+}
+
+fn tool_result_data<'a>(result: &'a Value) -> &'a Value {
+    result.get("data").unwrap_or(result)
+}
+
+fn structured_tool_payload_from_text(text: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(|value| value.is_object())
+}
+
+fn structured_tool_error_code(text: &str) -> Option<String> {
+    structured_tool_payload_from_text(text)
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(|value| value.get("code"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn interactive_skill_activation_continuation(names: &[String]) -> Option<String> {
@@ -4143,11 +4193,11 @@ fn redbox_fs_profile_read_completed(arguments: &Value) -> bool {
 }
 
 fn manuscript_save_result_path(result: &Value) -> Option<&str> {
+    let data = tool_result_data(result);
     ["filePath", "newPath", "path", "projectPath", "contentPath"]
         .into_iter()
         .find_map(|key| {
-            result
-                .get(key)
+            data.get(key)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -4273,7 +4323,9 @@ fn interactive_execution_progress_observe_success(
                 .to_ascii_lowercase();
             let action_key = normalized_app_cli_action_key(arguments);
             if contract.require_profile_read
-                && (command.starts_with("redclaw profile-read")
+                && (action_key == "redclawprofileread"
+                    || action_key == "redclawprofilebundle"
+                    || command.starts_with("redclaw profile-read")
                     || command.starts_with("redclaw profile-bundle"))
             {
                 progress.profile_read_completed = true;
@@ -4372,12 +4424,13 @@ fn interactive_authoring_continuation_instruction(
         return None;
     }
     let target = interactive_authoring_session_target(state, session_id)?;
-    let project_path = result
+    let result_data = tool_result_data(result);
+    let project_path = result_data
         .get("projectPath")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
-    let content_path = result
+    let content_path = result_data
         .get("contentPath")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
@@ -4393,7 +4446,14 @@ fn interactive_authoring_error_correction_instruction(
     tool_name: &str,
     error: &str,
 ) -> Option<String> {
-    if tool_name != "app_cli" || error.trim() != "command is required" {
+    if tool_name != "app_cli" {
+        return None;
+    }
+    let error_code = structured_tool_error_code(error);
+    if !matches!(
+        error_code.as_deref(),
+        Some("ACTION_REQUIRED") | Some("LEGACY_COMMAND_REQUIRED")
+    ) {
         return None;
     }
     let target = interactive_authoring_session_target(state, session_id)?;
@@ -4507,6 +4567,13 @@ fn generated_media_kind_from_tool_result(
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
+    let action_key = normalized_app_cli_action_key(tool_arguments);
+    if action_key == "imagegenerate" {
+        return Some("image");
+    }
+    if action_key == "videogenerate" {
+        return Some("video");
+    }
     if command.starts_with("image generate") {
         return Some("image");
     }
@@ -5253,7 +5320,7 @@ fn run_anthropic_interactive_chat_runtime(
         let mut skill_activation_names = Vec::<String>::new();
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         for call in tool_calls {
-            let description = format!("Interactive tool call: {}", call.name);
+            let description = interactive_tool_call_description(&call.name, &call.arguments);
             in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
                 app,
@@ -5827,7 +5894,7 @@ fn run_gemini_interactive_chat_runtime(
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         let mut skill_activation_names = Vec::<String>::new();
         for call in tool_calls {
-            let description = format!("Interactive tool call: {}", call.name);
+            let description = interactive_tool_call_description(&call.name, &call.arguments);
             in_flight_tool_calls.start(&call.id, &call.name);
             emit_runtime_tool_request(
                 app,
@@ -6284,7 +6351,8 @@ fn run_openai_interactive_chat_runtime(
             } else {
                 normalized_tool_call.arguments.clone()
             };
-            let description = format!("Interactive tool call: {}", effective_tool_name);
+            let description =
+                interactive_tool_call_description(effective_tool_name, &effective_arguments);
             in_flight_tool_calls.start(&call.id, effective_tool_name);
             emit_runtime_tool_request(
                 app,
@@ -6375,7 +6443,9 @@ fn run_openai_interactive_chat_runtime(
                             payload: Some(json!({
                                 "arguments": effective_arguments.clone(),
                                 "requestedToolName": call.name,
-                                "result": result_value.clone()
+                                "result": result_value.clone(),
+                                "action": payload_string(&effective_arguments, "action"),
+                                "compat": payload_field(&effective_arguments, "__compat").cloned(),
                             })),
                             created_at: now_i64(),
                             updated_at: now_i64(),
@@ -6478,7 +6548,10 @@ fn run_openai_interactive_chat_runtime(
                             truncated: false,
                             payload: Some(json!({
                                 "arguments": effective_arguments.clone(),
-                                "requestedToolName": call.name
+                                "requestedToolName": call.name,
+                                "structuredError": structured_tool_payload_from_text(&failure_text),
+                                "action": payload_string(&effective_arguments, "action"),
+                                "compat": payload_field(&effective_arguments, "__compat").cloned(),
                             })),
                             created_at: now_i64(),
                             updated_at: now_i64(),

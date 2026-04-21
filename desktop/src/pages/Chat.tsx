@@ -1431,7 +1431,13 @@ export function Chat({
 
         // Update Legacy Tools
         const updatedTools = lastMsg.tools.map(t =>
-          t.callId === toolData.callId ? { ...t, status: 'done', output: toolData.output } as ToolEvent : t
+          t.callId === toolData.callId
+            ? {
+                ...t,
+                status: toolData.output?.success ? 'done' : 'failed',
+                output: toolData.output,
+              } as ToolEvent
+            : t
         );
 
         return [...prev.slice(0, -1), { 

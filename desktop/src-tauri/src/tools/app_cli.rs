@@ -135,6 +135,47 @@ fn normalized_app_cli_action_key(value: &str) -> String {
         .collect()
 }
 
+fn compat_metadata(arguments: &Value) -> Option<Value> {
+    payload_field(arguments, "__compat")
+        .cloned()
+        .filter(|value| value.is_object())
+}
+
+fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("ok".to_string(), json!(true));
+    object.insert("action".to_string(), json!(action));
+    object.insert("data".to_string(), data);
+    if let Some(compat) = compat {
+        object.insert("compat".to_string(), compat);
+    }
+    Value::Object(object)
+}
+
+fn app_cli_error_json(
+    action: Option<&str>,
+    code: &str,
+    message: &str,
+    retryable: bool,
+    details: Option<Value>,
+) -> String {
+    let mut object = serde_json::Map::new();
+    object.insert("ok".to_string(), json!(false));
+    if let Some(action) = action.filter(|item| !item.trim().is_empty()) {
+        object.insert("action".to_string(), json!(action));
+    }
+    let mut error = serde_json::Map::new();
+    error.insert("code".to_string(), json!(code));
+    error.insert("message".to_string(), json!(message));
+    error.insert("retryable".to_string(), json!(retryable));
+    if let Some(details) = details.filter(|value| !value.is_null()) {
+        error.insert("details".to_string(), details);
+    }
+    object.insert("error".to_string(), Value::Object(error));
+    serde_json::to_string_pretty(&Value::Object(object))
+        .unwrap_or_else(|_| format!(r#"{{"ok":false,"error":{{"code":"{code}","message":"{message}","retryable":{retryable}}}}}"#))
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct SkillHostSaveValidatorSet {
@@ -293,13 +334,56 @@ impl<'a> AppCliExecutor<'a> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
         {
-            return self.execute_structured_action(&action, &payload);
+            return self
+                .execute_structured_action(&action, &payload)
+                .map(|data| action_success_envelope(&action, data, compat_metadata(arguments)));
         }
-        let command = payload_string(arguments, "command")
-            .ok_or_else(|| "command is required".to_string())?;
+        let compat = compat_metadata(arguments);
+        if compat.is_none() {
+            return Err(app_cli_error_json(
+                None,
+                "ACTION_REQUIRED",
+                "app_cli requires a structured action",
+                false,
+                None,
+            ));
+        }
+        let command = payload_string(arguments, "command").ok_or_else(|| {
+            app_cli_error_json(
+                None,
+                "LEGACY_COMMAND_REQUIRED",
+                "compat app_cli call requires a legacy command string",
+                false,
+                Some(json!({ "compatOnly": true })),
+            )
+        })?;
+        let result = self
+            .execute_legacy_command(&command, &payload)
+            .map_err(|message| {
+                app_cli_error_json(
+                    compat
+                        .as_ref()
+                        .and_then(|value| value.get("translatedAction"))
+                        .and_then(Value::as_str),
+                    "LEGACY_COMMAND_FAILED",
+                    &message,
+                    false,
+                    compat.clone(),
+                )
+            })?;
+        let compat_action = compat
+            .as_ref()
+            .and_then(|value| value.get("translatedAction"))
+            .and_then(Value::as_str)
+            .unwrap_or("app_cli.legacyCommand")
+            .to_string();
+        Ok(action_success_envelope(&compat_action, result, compat))
+    }
+
+    fn execute_legacy_command(&self, command: &str, payload: &Value) -> Result<Value, String> {
         let tokens = tokenize_command(&command);
         if tokens.is_empty() {
-            return Err("command is empty".to_string());
+            return Err("legacy command is empty".to_string());
         }
 
         match tokens[0].as_str() {
@@ -326,13 +410,144 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     fn execute_structured_action(&self, action: &str, payload: &Value) -> Result<Value, String> {
-        match normalized_app_cli_action_key(action).as_str() {
+        let result = match normalized_app_cli_action_key(action).as_str() {
+            "memorylist" => {
+                let tokens = vec!["list".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memorysearch" => {
+                let tokens = vec!["search".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memoryadd" => {
+                let tokens = vec!["add".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "redclawprofilebundle" => {
+                let tokens = vec!["profile-bundle".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawprofileread" => {
+                let tokens = vec!["profile-read".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawprofileupdate" => {
+                let tokens = vec!["profile-update".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawrunnerstatus" => {
+                let tokens = vec!["runner-status".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawrunnerstart" => {
+                let tokens = vec!["runner-start".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawrunnerstop" => {
+                let tokens = vec!["runner-stop".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawrunnersetconfig" => {
+                let tokens = vec!["runner-set-config".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "manuscriptslist" => {
+                let tokens = vec!["list".to_string()];
+                self.handle_manuscripts(&tokens, payload)
+            }
             "manuscriptscreateproject" => {
                 self.handle_manuscript_create_project(&CliArgs::default(), payload)
             }
             "manuscriptswritecurrent" => self.handle_manuscript_write_current(payload),
-            other => Err(format!("unsupported structured app_cli action: {other}")),
-        }
+            "subjectssearch" => {
+                let tokens = vec!["search".to_string()];
+                self.handle_subjects(&tokens, payload)
+            }
+            "subjectsget" => {
+                let tokens = vec!["get".to_string()];
+                self.handle_subjects(&tokens, payload)
+            }
+            "runtimequery" => {
+                let tokens = vec!["query".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimegetcheckpoints" => {
+                let tokens = vec!["get-checkpoints".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimegettoolresults" => {
+                let tokens = vec!["get-tool-results".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimetaskscreate" => {
+                let tokens = vec!["tasks".to_string(), "create".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimetaskslist" => {
+                let tokens = vec!["tasks".to_string(), "list".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimetasksget" => {
+                let tokens = vec!["tasks".to_string(), "get".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimetasksresume" => {
+                let tokens = vec!["tasks".to_string(), "resume".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "runtimetaskscancel" => {
+                let tokens = vec!["tasks".to_string(), "cancel".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "mcplist" => {
+                let tokens = vec!["list".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpcall" => {
+                let tokens = vec!["call".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcplisttools" => {
+                let tokens = vec!["list-tools".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcplistresources" => {
+                let tokens = vec!["list-resources".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpdisconnect" => {
+                let tokens = vec!["disconnect".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "skillslist" => {
+                let tokens = vec!["list".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
+            "skillsinvoke" => {
+                let tokens = vec!["invoke".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
+            "imagegenerate" => {
+                let tokens = vec!["generate".to_string()];
+                self.handle_image(&tokens, payload)
+            }
+            "videogenerate" => {
+                let tokens = vec!["generate".to_string()];
+                self.handle_video(&tokens, payload)
+            }
+            other => {
+                return Err(app_cli_error_json(
+                    Some(action),
+                    "UNSUPPORTED_ACTION",
+                    &format!("unsupported structured app_cli action: {other}"),
+                    false,
+                    None,
+                ))
+            }
+        };
+        result.map_err(|message| {
+            app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
+        })
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
@@ -1876,14 +2091,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return;
         };
         let call_id = make_id("tool-call");
-        let command = format!("skills invoke --name {name}");
         emit_runtime_tool_request(
             self.app,
             Some(session_id),
             &call_id,
             "app_cli",
             json!({
-                "command": command,
+                "action": "skills.invoke",
+                "payload": { "name": name },
             }),
             Some("Preflight skill activation before image generation"),
         );
@@ -1897,8 +2112,13 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         );
         match invoke_result {
             Ok(result) => {
-                let output =
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                let envelope = json!({
+                    "ok": true,
+                    "action": "skills.invoke",
+                    "data": result,
+                });
+                let output = serde_json::to_string_pretty(&envelope)
+                    .unwrap_or_else(|_| envelope.to_string());
                 emit_runtime_tool_result(
                     self.app,
                     Some(session_id),
@@ -1909,13 +2129,20 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 );
             }
             Err(error) => {
+                let failure = app_cli_error_json(
+                    Some("skills.invoke"),
+                    "ACTION_FAILED",
+                    &error,
+                    false,
+                    Some(json!({ "activationSource": "host.image-generate-preflight" })),
+                );
                 emit_runtime_tool_result(
                     self.app,
                     Some(session_id),
                     &call_id,
                     "app_cli",
                     false,
-                    &error,
+                    &failure,
                 );
                 return;
             }
@@ -2658,7 +2885,18 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             Some(target.project_kind),
             &payload_string(&merged, "content").unwrap_or_default(),
         )?;
-        self.call_channel("manuscripts:save", merged)
+        let saved = self.call_channel("manuscripts:save", merged.clone())?;
+        let saved_bytes = payload_string(&merged, "content")
+            .map(|value| value.as_bytes().len() as i64)
+            .unwrap_or(0);
+        let project_path = target.project_path.clone();
+        let content_path = join_relative(&project_path, get_default_package_entry(&project_path));
+        Ok(json!({
+            "projectPath": project_path,
+            "contentPath": content_path,
+            "savedBytes": saved_bytes,
+            "result": saved,
+        }))
     }
 
     fn normalize_manuscript_target_path(&self, requested_path: &str) -> String {
@@ -4129,5 +4367,21 @@ mod tests {
             normalized_app_cli_action_key("manuscripts/write_current"),
             "manuscriptswritecurrent"
         );
+    }
+
+    #[test]
+    fn app_cli_error_json_is_structured() {
+        let payload = app_cli_error_json(
+            Some("memory.search"),
+            "ACTION_FAILED",
+            "memory backend unavailable",
+            true,
+            Some(json!({ "query": "creator" })),
+        );
+        let parsed: Value = serde_json::from_str(&payload).expect("structured JSON");
+        assert_eq!(parsed.get("ok"), Some(&json!(false)));
+        assert_eq!(parsed.get("action"), Some(&json!("memory.search")));
+        assert_eq!(parsed.pointer("/error/code"), Some(&json!("ACTION_FAILED")));
+        assert_eq!(parsed.pointer("/error/retryable"), Some(&json!(true)));
     }
 }

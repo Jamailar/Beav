@@ -1,7 +1,10 @@
 use serde_json::{json, Value};
 
 use crate::skills::build_skill_runtime_state;
-use crate::tools::catalog::{descriptor_by_name, schema_for_tool, ToolDescriptor};
+use crate::tools::catalog::{
+    descriptor_by_name, schema_for_tool_for_runtime_mode, tool_action_family_summary,
+    ToolDescriptor,
+};
 use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::tool_names_for_runtime_mode;
 use crate::AppStore;
@@ -127,7 +130,7 @@ pub fn descriptor_by_name_for_session(
 pub fn openai_schemas_for_runtime_mode(runtime_mode: &str) -> Value {
     let schemas = tool_names_for_runtime_mode(runtime_mode)
         .iter()
-        .filter_map(|name| schema_for_tool(name))
+        .filter_map(|name| schema_for_tool_for_runtime_mode(name, Some(runtime_mode)))
         .collect::<Vec<_>>();
     json!(schemas)
 }
@@ -139,7 +142,7 @@ pub fn openai_schemas_for_session(
 ) -> Value {
     let schemas = tool_names_for_session(store, runtime_mode, session_id)
         .iter()
-        .filter_map(|name| schema_for_tool(name))
+        .filter_map(|name| schema_for_tool_for_runtime_mode(name, Some(runtime_mode)))
         .collect::<Vec<_>>();
     json!(schemas)
 }
@@ -148,30 +151,41 @@ pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
     descriptors_for_runtime_mode(runtime_mode)
         .iter()
         .map(|item| {
+            let capability_summary = tool_action_family_summary(item.name, Some(runtime_mode))
+                .map(|summary| format!(" | capabilities={summary}"))
+                .unwrap_or_default();
             format!(
-                "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars",
+                "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars{}",
                 item.name,
                 kind_text(item.kind),
                 item.requires_approval,
                 item.concurrency_safe,
-                item.output_budget_chars
+                item.output_budget_chars,
+                capability_summary
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-pub fn prompt_tool_lines_for_tool_names(tool_names: &[String]) -> String {
+pub fn prompt_tool_lines_for_tool_names(
+    tool_names: &[String],
+    runtime_mode: Option<&str>,
+) -> String {
     descriptors_for_tool_names(tool_names)
         .iter()
         .map(|item| {
+            let capability_summary = tool_action_family_summary(item.name, runtime_mode)
+                .map(|summary| format!(" | capabilities={summary}"))
+                .unwrap_or_default();
             format!(
-                "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars",
+                "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars{}",
                 item.name,
                 kind_text(item.kind),
                 item.requires_approval,
                 item.concurrency_safe,
-                item.output_budget_chars
+                item.output_budget_chars,
+                capability_summary
             )
         })
         .collect::<Vec<_>>()
@@ -184,7 +198,7 @@ pub fn prompt_tool_lines_for_session(
     session_id: Option<&str>,
 ) -> String {
     let tool_names = tool_names_for_session(store, runtime_mode, session_id);
-    prompt_tool_lines_for_tool_names(&tool_names)
+    prompt_tool_lines_for_tool_names(&tool_names, Some(runtime_mode))
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
