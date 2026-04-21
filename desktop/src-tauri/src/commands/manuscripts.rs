@@ -77,7 +77,8 @@ struct RichpostAutoPageDraft {
     title_block_ids: Vec<String>,
     body_block_ids: Vec<String>,
     body_fragments: Vec<Value>,
-    line_cost: usize,
+    title_height_px: f64,
+    body_height_px: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2293,6 +2294,10 @@ fn richpost_body_font_size_px(settings: RichpostTypographySettings) -> f64 {
     (RICHPOST_PAGINATION_CANVAS_WIDTH_PX * 0.032).clamp(17.0, 34.0) * settings.font_scale
 }
 
+fn richpost_body_line_height_px(settings: RichpostTypographySettings) -> f64 {
+    richpost_body_font_size_px(settings) * 1.92 * settings.line_height_scale.max(0.1)
+}
+
 fn richpost_heading_font_size_px(level: u8, settings: RichpostTypographySettings) -> f64 {
     let viewport_ratio = match level {
         1 => 0.054,
@@ -2312,6 +2317,14 @@ fn richpost_heading_font_size_px(level: u8, settings: RichpostTypographySettings
     };
     (RICHPOST_PAGINATION_CANVAS_WIDTH_PX * viewport_ratio).clamp(min_px, max_px)
         * settings.font_scale
+}
+
+fn richpost_heading_line_height_px(level: u8, settings: RichpostTypographySettings) -> f64 {
+    richpost_heading_font_size_px(level, settings) * 1.22
+}
+
+fn richpost_block_gap_px() -> f64 {
+    14.0
 }
 
 fn richpost_text_width_units(text: &str) -> f64 {
@@ -2371,14 +2384,13 @@ fn richpost_heading_units_per_line(
     (frame_width_px / (font_size_px * 0.98)).clamp(4.0, 28.0)
 }
 
-fn richpost_page_line_limit(
+fn richpost_page_height_limit_px(
     settings: RichpostTypographySettings,
     frame_height_ratio: f64,
-) -> usize {
+) -> f64 {
     let frame_height_px = RICHPOST_PAGINATION_CANVAS_HEIGHT_PX * frame_height_ratio.clamp(0.1, 1.0);
-    let body_line_height_px =
-        richpost_body_font_size_px(settings) * 1.92 * settings.line_height_scale.max(0.1);
-    ((frame_height_px / body_line_height_px).floor() as i64).clamp(8, 60) as usize
+    (frame_height_px - richpost_block_gap_px() * 0.5)
+        .max(richpost_body_line_height_px(settings) * 6.0)
 }
 
 fn richpost_zone_fragment_value(
@@ -2412,39 +2424,35 @@ fn richpost_estimated_wrapped_line_count(text: &str, units_per_line: f64) -> usi
     line_count.max(1)
 }
 
-fn richpost_block_line_cost_from_parts(
+fn richpost_block_height_px_from_parts(
     kind: &str,
     level: Option<u8>,
     text: &str,
     settings: RichpostTypographySettings,
     frame: &RichpostZoneFrame,
-) -> usize {
+) -> f64 {
     if package_block_is_page_break(kind) {
-        return 0;
+        return 0.0;
     }
     if kind == "heading" {
         let units_per_line = richpost_heading_units_per_line(level.unwrap_or(2), settings, frame.w);
         let wrapped_lines = richpost_estimated_wrapped_line_count(text, units_per_line);
-        let spacing_lines = match level.unwrap_or(2) {
-            1 => 2,
-            2 => 2,
-            _ => 1,
-        };
-        return wrapped_lines + spacing_lines;
+        return wrapped_lines as f64
+            * richpost_heading_line_height_px(level.unwrap_or(2), settings);
     }
     let wrapped_lines = richpost_estimated_wrapped_line_count(
         text,
         richpost_body_units_per_line(settings, frame.w),
     );
-    wrapped_lines + 1
+    wrapped_lines as f64 * richpost_body_line_height_px(settings)
 }
 
-fn richpost_default_block_line_cost(
+fn richpost_default_block_height_px(
     block: &PackageContentBlock,
     settings: RichpostTypographySettings,
     frame: &RichpostZoneFrame,
-) -> usize {
-    richpost_block_line_cost_from_parts(&block.kind, block.level, &block.text, settings, frame)
+) -> f64 {
+    richpost_block_height_px_from_parts(&block.kind, block.level, &block.text, settings, frame)
 }
 
 fn richpost_split_text_for_unit_budget(text: &str, max_units: f64) -> (String, String) {
@@ -2492,11 +2500,15 @@ fn richpost_split_text_for_unit_budget(text: &str, max_units: f64) -> (String, S
 
 fn richpost_split_paragraph_for_available_lines(
     text: &str,
-    available_lines: usize,
+    available_height_px: f64,
     settings: RichpostTypographySettings,
     frame: &RichpostZoneFrame,
 ) -> (String, String) {
-    let content_lines = available_lines.saturating_sub(1).max(1);
+    let content_lines =
+        (available_height_px / richpost_body_line_height_px(settings)).floor() as usize;
+    if content_lines == 0 {
+        return (String::new(), text.trim().to_string());
+    }
     richpost_split_text_for_unit_budget(
         text,
         (content_lines as f64) * richpost_body_units_per_line(settings, frame.w),
@@ -2514,6 +2526,58 @@ fn richpost_push_completed_auto_page(
         return;
     }
     pages.push(std::mem::take(current));
+}
+
+fn richpost_page_has_title_content(page: &RichpostAutoPageDraft) -> bool {
+    !page.title_block_ids.is_empty()
+}
+
+fn richpost_page_has_body_content(page: &RichpostAutoPageDraft) -> bool {
+    !page.body_block_ids.is_empty() || !page.body_fragments.is_empty()
+}
+
+fn richpost_page_has_any_content(page: &RichpostAutoPageDraft) -> bool {
+    richpost_page_has_title_content(page) || richpost_page_has_body_content(page)
+}
+
+fn richpost_page_height_px(page: &RichpostAutoPageDraft) -> f64 {
+    page.title_height_px + page.body_height_px
+}
+
+fn richpost_append_title_block(
+    page: &mut RichpostAutoPageDraft,
+    block_id: String,
+    block_height_px: f64,
+) {
+    if richpost_page_has_title_content(page) {
+        page.title_height_px += richpost_block_gap_px();
+    }
+    page.title_block_ids.push(block_id);
+    page.title_height_px += block_height_px;
+}
+
+fn richpost_append_body_block_id(
+    page: &mut RichpostAutoPageDraft,
+    block_id: String,
+    block_height_px: f64,
+) {
+    if richpost_page_has_any_content(page) {
+        page.body_height_px += richpost_block_gap_px();
+    }
+    page.body_block_ids.push(block_id);
+    page.body_height_px += block_height_px;
+}
+
+fn richpost_append_body_fragment(
+    page: &mut RichpostAutoPageDraft,
+    fragment: Value,
+    fragment_height_px: f64,
+) {
+    if richpost_page_has_any_content(page) {
+        page.body_height_px += richpost_block_gap_px();
+    }
+    page.body_fragments.push(fragment);
+    page.body_height_px += fragment_height_px;
 }
 
 fn richpost_master_for_page_position(
@@ -2557,8 +2621,7 @@ fn richpost_default_segment_pages(
     if segment.is_empty() {
         return vec![RichpostAutoPageDraft::default()];
     }
-    const HEADING_WRAP_GUARD: usize = 5;
-    const MIN_FRAGMENT_LINES: usize = 4;
+    const MIN_FRAGMENT_LINES: usize = 3;
 
     let mut pages = Vec::<RichpostAutoPageDraft>::new();
     let mut current = RichpostAutoPageDraft::default();
@@ -2566,72 +2629,104 @@ fn richpost_default_segment_pages(
     for block in segment {
         let current_page_index = start_page_index + pages.len();
         let frame = richpost_frame_for_page_position(theme, current_page_index, total_pages_hint);
-        let page_line_limit = richpost_page_line_limit(settings, frame.h);
+        let page_height_limit_px = richpost_page_height_limit_px(settings, frame.h);
         if block.kind == "heading" {
-            let line_cost = richpost_default_block_line_cost(block, settings, &frame);
-            let should_wrap = !(current.title_block_ids.is_empty()
-                && current.body_block_ids.is_empty()
-                && current.body_fragments.is_empty())
-                && (current.line_cost + line_cost > page_line_limit
-                    || current.line_cost > page_line_limit.saturating_sub(HEADING_WRAP_GUARD));
+            let block_height_px = richpost_default_block_height_px(block, settings, &frame);
+            let heading_guard_px = richpost_body_line_height_px(settings) * 1.35;
+            let title_gap_px = if richpost_page_has_title_content(&current) {
+                richpost_block_gap_px()
+            } else {
+                0.0
+            };
+            let should_wrap = richpost_page_has_any_content(&current)
+                && (richpost_page_height_px(&current) + title_gap_px + block_height_px
+                    > page_height_limit_px
+                    || page_height_limit_px - richpost_page_height_px(&current)
+                        < block_height_px + heading_guard_px);
             if should_wrap {
                 richpost_push_completed_auto_page(&mut pages, &mut current);
             }
             if current.body_fragments.is_empty() {
-                current.title_block_ids.push(block.id.clone());
+                richpost_append_title_block(&mut current, block.id.clone(), block_height_px);
             } else {
-                current.body_fragments.push(richpost_zone_fragment_value(
+                richpost_append_body_fragment(
+                    &mut current,
+                    richpost_zone_fragment_value(
+                        &block.id,
+                        &block.kind,
+                        block.level,
+                        &block.text,
+                        false,
+                        false,
+                    ),
+                    block_height_px,
+                );
+            }
+            continue;
+        }
+
+        let full_block_height_px = richpost_default_block_height_px(block, settings, &frame);
+        let next_body_gap_px = if richpost_page_has_any_content(&current) {
+            richpost_block_gap_px()
+        } else {
+            0.0
+        };
+        if richpost_page_height_px(&current) + next_body_gap_px + full_block_height_px
+            <= page_height_limit_px
+        {
+            richpost_append_body_fragment(
+                &mut current,
+                richpost_zone_fragment_value(
                     &block.id,
                     &block.kind,
                     block.level,
                     &block.text,
                     false,
                     false,
-                ));
-            }
-            current.line_cost += line_cost;
-            continue;
-        }
-
-        let full_line_cost = richpost_default_block_line_cost(block, settings, &frame);
-        if current.line_cost + full_line_cost <= page_line_limit {
-            current.body_fragments.push(richpost_zone_fragment_value(
-                &block.id,
-                &block.kind,
-                block.level,
-                &block.text,
-                false,
-                false,
-            ));
-            current.line_cost += full_line_cost;
+                ),
+                full_block_height_px,
+            );
             continue;
         }
 
         let mut remaining = block.text.clone();
         let mut continued_from_previous = false;
         loop {
-            let available_lines = page_line_limit.saturating_sub(current.line_cost);
-            let fragment_budget = available_lines;
-            let remaining_line_cost = richpost_block_line_cost_from_parts(
+            let next_gap_px = if richpost_page_has_any_content(&current) {
+                richpost_block_gap_px()
+            } else {
+                0.0
+            };
+            let available_height_px =
+                (page_height_limit_px - richpost_page_height_px(&current) - next_gap_px).max(0.0);
+            let fragment_budget = available_height_px;
+            let remaining_height_px = richpost_block_height_px_from_parts(
                 &block.kind,
                 block.level,
                 &remaining,
                 settings,
                 &frame,
             );
-            if remaining_line_cost <= available_lines {
-                current.body_fragments.push(richpost_zone_fragment_value(
-                    &block.id,
-                    &block.kind,
-                    block.level,
-                    &remaining,
-                    continued_from_previous,
-                    false,
-                ));
-                current.line_cost += remaining_line_cost;
+            if richpost_page_height_px(&current) + next_gap_px + remaining_height_px
+                <= page_height_limit_px
+            {
+                richpost_append_body_fragment(
+                    &mut current,
+                    richpost_zone_fragment_value(
+                        &block.id,
+                        &block.kind,
+                        block.level,
+                        &remaining,
+                        continued_from_previous,
+                        false,
+                    ),
+                    remaining_height_px,
+                );
                 break;
             }
-            if available_lines < MIN_FRAGMENT_LINES {
+            if available_height_px
+                < richpost_body_line_height_px(settings) * MIN_FRAGMENT_LINES as f64
+            {
                 richpost_push_completed_auto_page(&mut pages, &mut current);
                 continue;
             }
@@ -2642,30 +2737,36 @@ fn richpost_default_segment_pages(
                 &frame,
             );
             if head.trim().is_empty() || tail.trim().is_empty() {
-                if current.line_cost == 0 {
-                    current.body_block_ids.push(block.id.clone());
-                    current.line_cost += remaining_line_cost;
+                if !richpost_page_has_any_content(&current) {
+                    richpost_append_body_block_id(
+                        &mut current,
+                        block.id.clone(),
+                        remaining_height_px,
+                    );
                     break;
                 }
                 richpost_push_completed_auto_page(&mut pages, &mut current);
                 continue;
             }
-            let fragment_line_cost = richpost_block_line_cost_from_parts(
+            let fragment_height_px = richpost_block_height_px_from_parts(
                 &block.kind,
                 block.level,
                 &head,
                 settings,
                 &frame,
             );
-            current.body_fragments.push(richpost_zone_fragment_value(
-                &block.id,
-                &block.kind,
-                block.level,
-                &head,
-                continued_from_previous,
-                true,
-            ));
-            current.line_cost += fragment_line_cost;
+            richpost_append_body_fragment(
+                &mut current,
+                richpost_zone_fragment_value(
+                    &block.id,
+                    &block.kind,
+                    block.level,
+                    &head,
+                    continued_from_previous,
+                    true,
+                ),
+                fragment_height_px,
+            );
             richpost_push_completed_auto_page(&mut pages, &mut current);
             remaining = tail;
             continued_from_previous = true;
@@ -2956,6 +3057,11 @@ fn default_richpost_page_plan(
         let master =
             richpost_master_for_page_position(theme, page_index, segment_page_count).to_string();
         let mut page_block_ids = page_draft.title_block_ids.clone();
+        for body_block_id in &page_draft.body_block_ids {
+            if !page_block_ids.iter().any(|item| item == body_block_id) {
+                page_block_ids.push(body_block_id.clone());
+            }
+        }
         for source_block_id in page_draft
             .body_fragments
             .iter()
@@ -2981,6 +3087,11 @@ fn default_richpost_page_plan(
                     Vec::new(),
                     page_draft.body_fragments.clone(),
                 ),
+            );
+        } else if !page_draft.body_block_ids.is_empty() {
+            zones.insert(
+                "body".to_string(),
+                richpost_zone_assignment_value(page_draft.body_block_ids.clone(), Vec::new()),
             );
         }
         if !asset_ids.is_empty() {
