@@ -1,8 +1,9 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     build_market_skill_record, build_user_skill_record, compute_skill_discovery_fingerprint,
-    find_catalog_skill_by_name, normalized_activation_scope, render_invoked_skill_bundle,
-    skill_allows_runtime_mode, skill_catalog_changed, skills_catalog_list_value,
+    find_catalog_skill_by_name, merge_requested_skills_into_session, normalized_activation_scope,
+    render_invoked_skill_bundle, skill_allows_runtime_mode, skill_catalog_changed,
+    skills_catalog_list_value, SkillActivationSource,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -71,34 +72,12 @@ fn merge_active_skill_into_session(
         else {
             return Err(format!("session not found: {session_id}"));
         };
-        let mut metadata = session
-            .metadata
-            .clone()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut active_skills = metadata
-            .get("activeSkills")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !active_skills
-            .iter()
-            .any(|item| item.eq_ignore_ascii_case(skill_name))
-        {
-            active_skills.push(skill_name.to_string());
-            active_skills.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
-        }
-        metadata.insert("activeSkills".to_string(), json!(active_skills.clone()));
-        session.metadata = Some(Value::Object(metadata));
-        session.updated_at = now_iso();
+        let active_skills = merge_requested_skills_into_session(
+            session,
+            &[skill_name.to_string()],
+            SkillActivationSource::Explicit,
+            "skills.invoke",
+        );
         Ok(active_skills)
     })
 }

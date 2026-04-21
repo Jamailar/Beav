@@ -3,10 +3,10 @@ use std::path::Path;
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    apply_skill_tool_permissions, build_skill_catalog_snapshot, build_skill_hook_output,
+    build_skill_catalog_snapshot, build_skill_prompt_bundle,
     build_skill_watcher_snapshot_with_discovery, find_skill_catalog_entry_by_name,
-    load_skill_bundle_sections_from_sources, normalized_activation_scope,
-    skill_allows_runtime_mode, split_skill_body, LoadedSkillRecord, SkillWatcherSnapshot,
+    load_skill_bundle_sections_from_sources, normalized_activation_scope, resolve_skill_set,
+    split_skill_body, LoadedSkillRecord, SkillWatcherSnapshot,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -16,151 +16,14 @@ pub struct SkillRuntimeState {
     pub catalog: Vec<LoadedSkillRecord>,
     pub active_skills: Vec<LoadedSkillRecord>,
     pub allowed_tools: Vec<String>,
+    #[allow(dead_code)]
     pub prompt_prefix: String,
+    #[allow(dead_code)]
     pub prompt_suffix: String,
+    #[allow(dead_code)]
     pub context_note: String,
+    #[allow(dead_code)]
     pub skills_section: String,
-}
-
-fn requested_skill_names(metadata: Option<&Value>) -> Vec<String> {
-    let mut items = Vec::new();
-    for field in ["activeSkills", "skillNames", "skills"] {
-        if let Some(array) = metadata
-            .and_then(|value| value.get(field))
-            .and_then(Value::as_array)
-        {
-            for value in array.iter().filter_map(Value::as_str) {
-                let normalized = value.trim();
-                if !normalized.is_empty() {
-                    items.push(normalized.to_string());
-                }
-            }
-        }
-        if let Some(single) = metadata
-            .and_then(|value| value.get(field))
-            .and_then(Value::as_str)
-        {
-            let normalized = single.trim();
-            if !normalized.is_empty() {
-                items.push(normalized.to_string());
-            }
-        }
-    }
-    items.sort();
-    items.dedup();
-    items
-}
-
-fn resolve_active_skills(
-    catalog: &[LoadedSkillRecord],
-    runtime_mode: &str,
-    metadata: Option<&Value>,
-) -> Vec<LoadedSkillRecord> {
-    let requested = requested_skill_names(metadata);
-    let mut active = Vec::new();
-    for skill in catalog {
-        if !skill_allows_runtime_mode(skill, runtime_mode) {
-            continue;
-        }
-        let requested_match = requested.iter().any(|item| item == &skill.name);
-        let session_scoped =
-            normalized_activation_scope(skill.metadata.activation_scope.as_deref()) == "session";
-        if (requested_match && session_scoped) || skill.metadata.auto_activate {
-            active.push(skill.clone());
-        }
-    }
-    active
-}
-
-fn compatible_catalog(catalog: &[LoadedSkillRecord], runtime_mode: &str) -> Vec<LoadedSkillRecord> {
-    catalog
-        .iter()
-        .filter(|skill| skill_allows_runtime_mode(skill, runtime_mode))
-        .cloned()
-        .collect()
-}
-
-fn build_skill_catalog_prompt_section(
-    catalog: &[LoadedSkillRecord],
-    runtime_mode: &str,
-    can_invoke_skill: bool,
-) -> String {
-    let available = compatible_catalog(catalog, runtime_mode);
-    if available.is_empty() {
-        return "No specialized skills are currently available in this runtime.".to_string();
-    }
-
-    let list = available
-        .iter()
-        .map(|skill| {
-            let mut item = format!("- {}: {}", skill.name, skill.description);
-            if skill.metadata.auto_activate {
-                item.push_str(" [auto]");
-            }
-            item
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let available_names = available
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<Vec<_>>();
-    let mut preflight_rules = Vec::<&str>::new();
-    if available_names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("image-prompt-optimizer"))
-    {
-        preflight_rules.push(
-            "Before any `app_cli(command=\"image generate ...\")`, you must first call `app_cli(command=\"skills invoke --name image-prompt-optimizer\")` in the same turn, then use that skill's instructions to prepare the final image prompt.",
-        );
-    }
-    if available_names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("redbox-video-director"))
-    {
-        preflight_rules.push(
-            "Before any `app_cli(command=\"video generate ...\")`, you must first call `app_cli(command=\"skills invoke --name redbox-video-director\")` in the same turn, then follow its script-confirmation workflow before generating video.",
-        );
-    }
-
-    if can_invoke_skill {
-        let mut sections = vec![
-            "You have access to specialized skills in this runtime.".to_string(),
-            "Keep full skill bodies out of context until they are actually needed.".to_string(),
-            "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
-            "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
-        ];
-        if !preflight_rules.is_empty() {
-            sections.push("Mandatory preflight rules:".to_string());
-            sections.extend(preflight_rules.into_iter().map(ToString::to_string));
-        }
-        sections.push(String::new());
-        sections.push("Available skills:".to_string());
-        sections.push(list);
-        return sections.join("\n");
-    }
-
-    [
-        "You have access to specialized skills in this runtime.",
-        "Manual skill invocation is unavailable here, so rely on the auto-activated skills and the instructions already injected into this session.",
-        "",
-        "Available skills:",
-        &list,
-    ]
-    .join("\n")
-}
-
-fn combine_skills_section(catalog_section: &str, active_section: &str) -> String {
-    if active_section.trim().is_empty() {
-        return catalog_section.trim().to_string();
-    }
-    [
-        catalog_section.trim(),
-        "",
-        "Activated skills for this session:",
-        active_section.trim(),
-    ]
-    .join("\n")
 }
 
 fn format_optional_list(label: &str, values: &[String]) -> Option<String> {
@@ -275,24 +138,16 @@ pub fn build_skill_runtime_state(
     metadata: Option<&Value>,
     base_tools: &[String],
 ) -> SkillRuntimeState {
-    let catalog_snapshot = build_skill_catalog_snapshot(skills);
-    let catalog = catalog_snapshot.entries;
-    let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
-    let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
-    let hooks = build_skill_hook_output(&active_skills);
-    let can_invoke_skill = base_tools
-        .iter()
-        .any(|item| item == "redbox_skill" || item == "app_cli");
-    let catalog_section =
-        build_skill_catalog_prompt_section(&catalog, runtime_mode, can_invoke_skill);
+    let resolved = resolve_skill_set(skills, runtime_mode, metadata, base_tools);
+    let prompt_bundle = build_skill_prompt_bundle(&resolved);
     SkillRuntimeState {
-        catalog,
-        active_skills,
-        allowed_tools,
-        prompt_prefix: hooks.prompt_prefix,
-        prompt_suffix: hooks.prompt_suffix,
-        context_note: hooks.context_note,
-        skills_section: combine_skills_section(&catalog_section, &hooks.skills_section),
+        catalog: resolved.catalog,
+        active_skills: resolved.active_skills,
+        allowed_tools: resolved.allowed_tools,
+        prompt_prefix: prompt_bundle.prompt_prefix,
+        prompt_suffix: prompt_bundle.prompt_suffix,
+        context_note: prompt_bundle.context_note,
+        skills_section: prompt_bundle.skills_section,
     }
 }
 

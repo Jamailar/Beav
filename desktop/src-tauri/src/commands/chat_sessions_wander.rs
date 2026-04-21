@@ -11,6 +11,7 @@ use crate::session_manager::{
     list_context_sessions, list_sessions, resolve_resume_target_session_id, session_detail_value,
     session_list_item_value, session_resume_value, update_metadata,
 };
+use crate::skills::{merge_requested_skills_into_session, SkillActivationSource};
 use crate::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -1606,10 +1607,15 @@ pub fn handle_chat_sessions_wander_channel(
                         "loadWritingStyleSkill".to_string(),
                         json!(load_writing_style_skill),
                     );
-                    if load_writing_style_skill {
-                        metadata.insert("activeSkills".to_string(), json!(["writing-style"]));
-                    }
                     session.metadata = Some(Value::Object(metadata));
+                    if load_writing_style_skill {
+                        merge_requested_skills_into_session(
+                            session,
+                            &["writing-style".to_string()],
+                            SkillActivationSource::RoutePolicy,
+                            "wander.bootstrap",
+                        );
+                    }
                     session.updated_at = now_iso();
                     Ok(())
                 })?;

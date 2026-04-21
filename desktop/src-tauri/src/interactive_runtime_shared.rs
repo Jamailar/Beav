@@ -7,7 +7,7 @@ use tauri::State;
 use crate::persistence::ensure_store_hydrated_for_subjects;
 use crate::persistence::with_store;
 use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
-use crate::skills::{build_skill_runtime_state, normalize_skill_logical_path};
+use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, resolve_skill_set};
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
@@ -50,16 +50,16 @@ pub(crate) fn interactive_runtime_system_prompt(
                 .and_then(|item| item.metadata.as_ref())
         });
         let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
-        let skill_state =
-            build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base_tools);
+        let resolved_skills = resolve_skill_set(&store.skills, runtime_mode, metadata, &base_tools);
+        let skill_prompt = build_skill_prompt_bundle(&resolved_skills);
         let mut project_context = format!("runtime_mode={runtime_mode}");
         let host_context = current_host_runtime_context();
         project_context.push_str("; ");
         project_context.push_str(&compact_host_runtime_context(&host_context));
-        if !skill_state.active_skills.is_empty() {
+        if !resolved_skills.active_skills.is_empty() {
             project_context.push_str("; active_skills=");
             project_context.push_str(
-                &skill_state
+                &resolved_skills
                     .active_skills
                     .iter()
                     .map(|item| item.name.as_str())
@@ -67,16 +67,16 @@ pub(crate) fn interactive_runtime_system_prompt(
                     .join(","),
             );
         }
-        if !skill_state.context_note.trim().is_empty() {
+        if !skill_prompt.context_note.trim().is_empty() {
             project_context.push_str("; skill_context=");
-            project_context.push_str(skill_state.context_note.trim());
+            project_context.push_str(skill_prompt.context_note.trim());
         }
         Ok((
             prompt_tool_lines_for_session(&store, runtime_mode, session_id),
             project_context,
-            skill_state.skills_section,
-            skill_state.prompt_prefix,
-            skill_state.prompt_suffix,
+            skill_prompt.skills_section,
+            skill_prompt.prompt_prefix,
+            skill_prompt.prompt_suffix,
             advisor_runtime_context_section(metadata, &store.advisors),
             render_host_runtime_context_section(&host_context),
         ))

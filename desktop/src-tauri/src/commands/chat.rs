@@ -3,40 +3,21 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn};
 use crate::commands::chat_state::{
-    latest_session_id, request_chat_runtime_cancel, resolve_runtime_mode_for_session,
+    ensure_chat_session_record, latest_session_id, request_chat_runtime_cancel,
+    resolve_runtime_mode_for_session,
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SessionToolResultRecord;
 use crate::session_lineage_fields;
-use crate::skills::active_skill_activation_items;
+use crate::skills::{
+    active_skill_activation_items, merge_requested_skills_into_session,
+    requested_skill_names_from_task_hints, SkillActivationSource,
+};
 use crate::{
     append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
     now_ms, payload_field, payload_string, AppState,
 };
-
-fn requested_skill_names_from_task_hints(task_hints: &Value) -> Vec<String> {
-    let mut items = Vec::<String>::new();
-    for field in ["activeSkills", "skillNames", "skills"] {
-        if let Some(array) = task_hints.get(field).and_then(Value::as_array) {
-            for value in array.iter().filter_map(Value::as_str) {
-                let normalized = value.trim();
-                if !normalized.is_empty() {
-                    items.push(normalized.to_string());
-                }
-            }
-        }
-        if let Some(single) = task_hints.get(field).and_then(Value::as_str) {
-            let normalized = single.trim();
-            if !normalized.is_empty() {
-                items.push(normalized.to_string());
-            }
-        }
-    }
-    items.sort();
-    items.dedup();
-    items
-}
 
 fn merge_task_hints_into_session_metadata(
     state: &State<'_, AppState>,
@@ -80,29 +61,13 @@ fn merge_task_hints_into_session_metadata(
                 }
             }
         }
-        let mut active_skills = metadata
-            .get("activeSkills")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for skill_name in &requested_skills {
-            if !active_skills
-                .iter()
-                .any(|item| item.eq_ignore_ascii_case(skill_name))
-            {
-                active_skills.push(skill_name.clone());
-            }
-        }
-        if !active_skills.is_empty() {
-            active_skills.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
+        if !requested_skills.is_empty() {
+            let active_skills = merge_requested_skills_into_session(
+                session,
+                &requested_skills,
+                SkillActivationSource::TaskHints,
+                "chat.task_hints",
+            );
             metadata.insert("activeSkills".to_string(), json!(active_skills));
         }
         session.metadata = Some(Value::Object(metadata));
@@ -142,7 +107,12 @@ pub fn handle_send_channel(
         }
         "chat:send-message" => {
             let started_at = now_ms();
-            let session_id = payload_string(&payload, "sessionId");
+            let requested_session_id = payload_string(&payload, "sessionId");
+            let session_id = Some(ensure_chat_session_record(
+                state,
+                requested_session_id.clone(),
+                None,
+            )?);
             let message = payload_string(&payload, "message").unwrap_or_default();
             let display_content =
                 payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());

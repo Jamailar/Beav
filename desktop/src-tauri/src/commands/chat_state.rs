@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::persistence::with_store_mut;
 use crate::{
     append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path, AppState,
     AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
@@ -124,6 +125,18 @@ pub fn ensure_chat_session<'a>(
     });
     let last_index = sessions.len() - 1;
     (&mut sessions[last_index], true)
+}
+
+pub fn ensure_chat_session_record(
+    state: &State<'_, AppState>,
+    session_id: Option<String>,
+    title_hint: Option<String>,
+) -> Result<String, String> {
+    with_store_mut(state, |store| {
+        let (session, _) = ensure_chat_session(&mut store.chat_sessions, session_id, title_hint);
+        session.updated_at = now_iso();
+        Ok(session.id.clone())
+    })
 }
 
 pub fn latest_session_id(store: &AppStore) -> String {
