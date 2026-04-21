@@ -141,6 +141,34 @@ fn compat_metadata(arguments: &Value) -> Option<Value> {
         .filter(|value| value.is_object())
 }
 
+fn normalized_structured_arguments(arguments: &Value) -> Value {
+    let Some(action) = payload_string(arguments, "action")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return arguments.clone();
+    };
+    let mut normalized = arguments.as_object().cloned().unwrap_or_default();
+    let mut payload = payload_field(arguments, "payload")
+        .cloned()
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| json!({}));
+    let payload_object = payload
+        .as_object_mut()
+        .expect("normalized structured payload should always be an object");
+    for (key, value) in normalized.iter() {
+        if matches!(key.as_str(), "action" | "payload" | "command" | "__compat") {
+            continue;
+        }
+        payload_object
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
+    }
+    normalized.insert("action".to_string(), json!(action));
+    normalized.insert("payload".to_string(), payload);
+    Value::Object(normalized)
+}
+
 fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> Value {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(true));
@@ -326,19 +354,66 @@ impl<'a> AppCliExecutor<'a> {
         }
     }
 
+    fn session_allowed_structured_actions(&self) -> Option<Vec<String>> {
+        let session_id = self.session_id?;
+        with_store(self.state, |store| {
+            Ok(store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|item| item.metadata.as_ref())
+                .and_then(|metadata| metadata.get("allowedAppCliActions"))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|item| !item.is_empty())
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|items| !items.is_empty()))
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
+        let Some(allowed_actions) = self.session_allowed_structured_actions() else {
+            return Ok(());
+        };
+        if allowed_actions.iter().any(|item| item == action) {
+            return Ok(());
+        }
+        Err(app_cli_error_json(
+            Some(action),
+            "ACTION_NOT_ALLOWED",
+            "app_cli action is not allowed in this session",
+            false,
+            Some(json!({
+                "allowedActions": allowed_actions,
+            })),
+        ))
+    }
+
     pub fn execute(&self, arguments: &Value) -> Result<Value, String> {
-        let payload = payload_field(arguments, "payload")
+        let normalized_arguments = normalized_structured_arguments(arguments);
+        let payload = payload_field(&normalized_arguments, "payload")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        if let Some(action) = payload_string(arguments, "action")
+        if let Some(action) = payload_string(&normalized_arguments, "action")
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
         {
+            self.ensure_action_allowed(&action)?;
             return self
                 .execute_structured_action(&action, &payload)
-                .map(|data| action_success_envelope(&action, data, compat_metadata(arguments)));
+                .map(|data| {
+                    action_success_envelope(&action, data, compat_metadata(&normalized_arguments))
+                });
         }
-        let compat = compat_metadata(arguments);
+        let compat = compat_metadata(&normalized_arguments);
         if compat.is_none() {
             return Err(app_cli_error_json(
                 None,
@@ -348,7 +423,7 @@ impl<'a> AppCliExecutor<'a> {
                 None,
             ));
         }
-        let command = payload_string(arguments, "command").ok_or_else(|| {
+        let command = payload_string(&normalized_arguments, "command").ok_or_else(|| {
             app_cli_error_json(
                 None,
                 "LEGACY_COMMAND_REQUIRED",
@@ -4383,5 +4458,24 @@ mod tests {
         assert_eq!(parsed.get("action"), Some(&json!("memory.search")));
         assert_eq!(parsed.pointer("/error/code"), Some(&json!("ACTION_FAILED")));
         assert_eq!(parsed.pointer("/error/retryable"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn normalized_structured_arguments_lifts_flat_fields_into_payload() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "manuscripts.createProject",
+            "kind": "redpost",
+            "parent": "wander",
+            "title": "测试标题"
+        }));
+        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("redpost")));
+        assert_eq!(
+            normalized.pointer("/payload/parent"),
+            Some(&json!("wander"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/title"),
+            Some(&json!("测试标题"))
+        );
     }
 }

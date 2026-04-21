@@ -1182,6 +1182,15 @@ pub fn tool_action_family_summary(tool_name: &str, runtime_mode: Option<&str>) -
     Some(action_family_summary(&descriptors))
 }
 
+pub fn tool_action_family_summary_for_descriptors(
+    descriptors: &[ActionDescriptor],
+) -> Option<String> {
+    if descriptors.is_empty() {
+        return None;
+    }
+    Some(action_family_summary(descriptors))
+}
+
 #[allow(dead_code)]
 pub fn action_descriptor_by_name(
     tool_name: &str,
@@ -1569,6 +1578,25 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "redbox_editor",
             REDBOX_EDITOR_DESCRIPTION,
             &action_descriptors_for_tool("redbox_editor", runtime_mode, ActionVisibility::Model),
+        )),
+        _ => None,
+    }
+}
+
+pub fn schema_for_tool_from_action_descriptors(
+    name: &str,
+    descriptors: &[ActionDescriptor],
+) -> Option<Value> {
+    match name {
+        "app_cli" => Some(build_action_tool_schema(
+            "app_cli",
+            APP_CLI_DESCRIPTION,
+            descriptors,
+        )),
+        "redbox_editor" => Some(build_action_tool_schema(
+            "redbox_editor",
+            REDBOX_EDITOR_DESCRIPTION,
+            descriptors,
         )),
         _ => None,
     }

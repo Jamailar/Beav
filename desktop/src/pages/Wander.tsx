@@ -3,6 +3,10 @@ import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Pl
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
+import {
+  AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+  AUTHORING_ALLOWED_TOOLS,
+} from '../utils/redclawAuthoring';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
@@ -494,6 +498,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
       taskHints: {
         intent: 'manuscript_creation',
+        allowedTools: AUTHORING_ALLOWED_TOOLS,
+        allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
         requireSourceRead: true,
         requireProfileRead: true,
         requireSave: true,
