@@ -23,6 +23,14 @@ body {
   padding: 14px;
 }
 
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8f8575;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -80,6 +88,29 @@ h1 {
   gap: 8px;
 }
 
+.update-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.update-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b645a;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-meta strong {
+  color: #1f2937;
+}
+
+.update-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .action-hint {
   font-size: 11px;
   line-height: 1.4;
@@ -125,6 +156,17 @@ h1 {
 
 .btn-secondary:hover:not(:disabled) {
   border-color: #c7bcaa;
+}
+
+.btn-ghost {
+  background: #fffaf0;
+  border-color: #d6c2a8;
+  color: #7c2d12;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: #c2410c;
+  background: #fff1e6;
 }
 
 .btn-primary:disabled {

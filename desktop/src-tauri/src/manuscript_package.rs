@@ -3415,8 +3415,10 @@ fn choose_generated_manuscript_package_relative(
         } else {
             format!("{base_id}-{}", attempt + 1)
         };
-        let candidate_relative =
-            normalize_relative_path(&join_relative(&normalized_parent, &format!("{stem}{target_extension}")));
+        let candidate_relative = normalize_relative_path(&join_relative(
+            &normalized_parent,
+            &format!("{stem}{target_extension}"),
+        ));
         let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
         if !candidate_path.exists() {
             return Ok(candidate_relative);

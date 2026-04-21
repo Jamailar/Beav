@@ -966,8 +966,11 @@ mod tests {
             .expect("manifest should be written");
         fs::write(package_root.join("content.md"), "# Demo\n\nBody")
             .expect("content should be written");
-        fs::write(package_root.join("pages").join("page-001.html"), "<html></html>")
-            .expect("page should be written");
+        fs::write(
+            package_root.join("pages").join("page-001.html"),
+            "<html></html>",
+        )
+        .expect("page should be written");
 
         let nodes = list_tree(&root, &root).expect("tree should load");
         assert_eq!(nodes.len(), 1);
@@ -975,7 +978,8 @@ mod tests {
         assert!(!nodes[0].is_directory);
         assert!(nodes[0].children.is_none());
 
-        let package_children = list_tree_internal(&root, &package_root, 1).expect("package children");
+        let package_children =
+            list_tree_internal(&root, &package_root, 1).expect("package children");
         assert!(package_children.is_empty());
 
         let _ = fs::remove_dir_all(&root);
@@ -983,7 +987,8 @@ mod tests {
 
     #[test]
     fn list_tree_ignores_hidden_and_non_markdown_files() {
-        let root = std::env::temp_dir().join(format!("redbox-list-tree-filter-{}", crate::now_ms()));
+        let root =
+            std::env::temp_dir().join(format!("redbox-list-tree-filter-{}", crate::now_ms()));
         fs::create_dir_all(&root).expect("root should exist");
         fs::write(root.join(".DS_Store"), "ignored").expect("hidden file should be written");
         fs::write(root.join("notes.txt"), "ignored").expect("txt file should be written");

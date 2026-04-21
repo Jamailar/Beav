@@ -7819,7 +7819,9 @@ pub fn handle_manuscripts_channel(
                         });
                     }
                     write_json_value(&manifest_path, &manifest)?;
-                    return Ok(json!({ "success": true, "newPath": normalize_relative_path(&old_path) }));
+                    return Ok(
+                        json!({ "success": true, "newPath": normalize_relative_path(&old_path) }),
+                    );
                 }
                 let parent_rel = normalize_relative_path(
                     old_path
@@ -11009,11 +11011,8 @@ Remotion 读取结果 JSON：{}\n\
                     .map(slug_from_relative_path)
                     .unwrap_or_else(|| "redbox-richpost".to_string());
                 let archive_name = format!("{file_stem}-{}.zip", now_ms());
-                let picked = pick_save_file_native(
-                    "选择导出压缩包位置",
-                    &archive_name,
-                    Some(&export_dir),
-                )?;
+                let picked =
+                    pick_save_file_native("选择导出压缩包位置", &archive_name, Some(&export_dir))?;
                 let Some(path) = picked else {
                     return Ok(json!({ "success": true, "canceled": true }));
                 };

@@ -581,14 +581,12 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
 
 pub(crate) fn official_ai_api_key_from_settings(settings: &Value) -> Option<String> {
     let session = official_settings_session(settings)?;
-    payload_string(&session, "apiKey")
-        .filter(|value| !value.trim().is_empty())
+    payload_string(&session, "apiKey").filter(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn official_access_token_from_settings(settings: &Value) -> Option<String> {
     let session = official_settings_session(settings)?;
-    payload_string(&session, "accessToken")
-        .filter(|value| !value.trim().is_empty())
+    payload_string(&session, "accessToken").filter(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn official_response_items(response: &Value) -> Vec<Value> {
@@ -685,7 +683,8 @@ pub(crate) fn run_official_ai_json_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    run_official_ai_json_request_response(settings, method, path, body).map(|response| response.body)
+    run_official_ai_json_request_response(settings, method, path, body)
+        .map(|response| response.body)
 }
 
 pub(crate) fn run_official_ai_json_request_response(

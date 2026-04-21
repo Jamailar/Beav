@@ -12,7 +12,11 @@
     "tauri:build": "tauri build",
     "version:sync": "node ./scripts/sync-version.mjs",
     "ipc:inventory": "node ./scripts/extract-ipc-inventory.mjs",
-    "remotion:render": "node ./remotion/render.mjs"
+    "remotion:render": "node ./remotion/render.mjs",
+    "release:mac": "node ./scripts/build-mac-release.mjs",
+    "release:mac:setup-notary": "node ./scripts/setup-mac-notary-profile.mjs",
+    "release:win": "node ./scripts/build-windows-release.mjs",
+    "release:all": "node ./scripts/build-all-release.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.5",

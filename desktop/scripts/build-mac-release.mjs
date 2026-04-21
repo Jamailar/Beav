@@ -20,6 +20,9 @@ import {
   runCommand,
 } from './release-utils.mjs';
 
+const DEFAULT_NOTARY_RETRIES = 3;
+const DEFAULT_NOTARY_RETRY_DELAY_MS = 5000;
+
 function dedupe(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -108,6 +111,73 @@ function buildSigningOnlyEnv(signingIdentity) {
   return env;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isTransientNotaryFailure(output) {
+  const normalized = String(output || '').toLowerCase();
+  return [
+    'connection reset by peer',
+    'network.nwerror',
+    'abortedupload',
+    'timed out',
+    'timeout',
+    'temporarily unavailable',
+    'network connection was lost',
+    'connection interrupted',
+    'broken pipe',
+  ].some((token) => normalized.includes(token));
+}
+
+async function submitForNotarization({ dmgPath, cliArgs, retries, retryDelayMs }) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    logStep(`Submitting dmg for notarization (attempt ${attempt}/${retries})`);
+    const result = await captureCommand(
+      'xcrun',
+      ['notarytool', 'submit', dmgPath, '--wait', '--output-format', 'json', ...cliArgs],
+      { cwd: repoRoot, allowFailure: true },
+    );
+
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+      if (!result.stdout.endsWith('\n')) {
+        process.stdout.write('\n');
+      }
+    }
+
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+      if (!result.stderr.endsWith('\n')) {
+        process.stderr.write('\n');
+      }
+    }
+
+    if (result.code === 0) {
+      return;
+    }
+
+    const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
+    lastError = new Error(
+      combinedOutput ||
+        `Command failed: xcrun notarytool submit ${dmgPath} --wait --output-format json`,
+    );
+
+    if (attempt >= retries || !isTransientNotaryFailure(combinedOutput)) {
+      throw lastError;
+    }
+
+    logStep(`Notarization upload hit a transient network error. Retrying in ${retryDelayMs}ms`);
+    await sleep(retryDelayMs);
+  }
+
+  throw lastError || new Error('Notarization submission failed.');
+}
+
 async function resolveArtifacts({ productName, version, target }) {
   const bundleRoot = bundleRootForTarget(target);
   const macosDir = path.join(bundleRoot, 'macos');
@@ -131,7 +201,7 @@ async function resolveArtifacts({ productName, version, target }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help === true) {
-    console.log('Usage: pnpm release:mac [-- --target universal-apple-darwin] [-- --identity "Developer ID Application: ..."] [-- --notary-profile redbox-notary] [-- --skip-notarize]');
+    console.log('Usage: pnpm release:mac [-- --target universal-apple-darwin] [-- --identity "Developer ID Application: ..."] [-- --notary-profile redbox-notary] [-- --skip-notarize] [-- --notary-retries 3] [-- --notary-retry-delay-ms 5000]');
     return;
   }
   const packageJson = await readPackageJson();
@@ -141,6 +211,14 @@ async function main() {
   const version = String(packageJson.version);
   const target = String(args.target || process.env.REDBOX_MAC_TARGET || '').trim();
   const skipNotarize = args['skip-notarize'] === true || envFlag('REDBOX_SKIP_NOTARIZE', false);
+  const notaryRetries = Number(
+    args['notary-retries'] || process.env.REDBOX_NOTARY_RETRIES || DEFAULT_NOTARY_RETRIES,
+  );
+  const notaryRetryDelayMs = Number(
+    args['notary-retry-delay-ms'] ||
+      process.env.REDBOX_NOTARY_RETRY_DELAY_MS ||
+      DEFAULT_NOTARY_RETRY_DELAY_MS,
+  );
 
   if (process.platform !== 'darwin') {
     throw new Error('The mac release script must run on macOS.');
@@ -201,12 +279,18 @@ async function main() {
   }
 
   if (!skipNotarize) {
-    logStep('Submitting dmg for notarization');
-    await runCommand(
-      'xcrun',
-      ['notarytool', 'submit', dmgPath, '--wait', '--output-format', 'json', ...notaryAuth.cliArgs],
-      { cwd: repoRoot },
-    );
+    await submitForNotarization({
+      dmgPath,
+      cliArgs: notaryAuth.cliArgs,
+      retries:
+        Number.isFinite(notaryRetries) && notaryRetries > 0
+          ? Math.floor(notaryRetries)
+          : DEFAULT_NOTARY_RETRIES,
+      retryDelayMs:
+        Number.isFinite(notaryRetryDelayMs) && notaryRetryDelayMs >= 0
+          ? Math.floor(notaryRetryDelayMs)
+          : DEFAULT_NOTARY_RETRY_DELAY_MS,
+    });
 
     logStep('Stapling notarization ticket to dmg');
     await runCommand('xcrun', ['stapler', 'staple', dmgPath], { cwd: repoRoot });

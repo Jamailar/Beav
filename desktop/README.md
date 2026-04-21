@@ -16,6 +16,10 @@
 - `pnpm build`
 - `pnpm tauri:dev`
 - `pnpm tauri:build`
+- `pnpm release:mac`
+- `pnpm release:mac:setup-notary`
+- `pnpm release:win`
+- `pnpm release:all`
 - 修改应用版本号时，只改根 `package.json` 的 `version`；Tauri 配置与 Rust 元数据会自动同步
 - `pnpm ipc:inventory`
 
@@ -60,4 +64,5 @@
 
 - 开发文档总入口见 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/README.md)
 - 协作规则见 [CONTRIBUTING.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/CONTRIBUTING.md)
+- 发布与签名见 [docs/release-packaging.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/release-packaging.md)
 - 模块级说明优先查看对应目录旁边的 `README.md` 或 `*.README.md`

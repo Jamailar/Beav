@@ -602,18 +602,23 @@ pub(crate) fn sync_richpost_theme_root_from_package(
 
     let package_tokens = package_layout_tokens_path(package_path);
     let theme_tokens = package_richpost_theme_tokens_path(package_path, &theme_id);
-    if !theme_tokens.exists() && !create_from_blank && package_tokens.is_file() {
-        copy_if_exists(&package_tokens, &theme_tokens)?;
-    } else if !theme_tokens.exists() {
-        write_json_value(
+    let raw_theme_tokens = if theme_tokens.is_file() {
+        read_json_value_or(
             &theme_tokens,
-            &normalize_richpost_layout_tokens_value(
-                &default_richpost_layout_tokens(Some(package_path), theme),
-                theme,
-                Some(package_path),
-            ),
-        )?;
-    }
+            default_richpost_layout_tokens(Some(package_path), theme),
+        )
+    } else if !create_from_blank && package_tokens.is_file() {
+        read_json_value_or(
+            &package_tokens,
+            default_richpost_layout_tokens(Some(package_path), theme),
+        )
+    } else {
+        default_richpost_layout_tokens(Some(package_path), theme)
+    };
+    write_json_value(
+        &theme_tokens,
+        &normalize_richpost_layout_tokens_value(&raw_theme_tokens, theme, Some(package_path)),
+    )?;
 
     let package_masters_dir = package_richpost_masters_dir(package_path);
     let theme_masters_dir = package_richpost_theme_masters_dir(package_path, &theme_id);
@@ -652,7 +657,19 @@ pub(crate) fn sync_package_from_richpost_theme_root(
 
     let theme_tokens = package_richpost_theme_tokens_path(package_path, &theme_id);
     if theme_tokens.is_file() {
-        copy_if_exists(&theme_tokens, &package_layout_tokens_path(package_path))?;
+        let normalized_tokens = normalize_richpost_layout_tokens_value(
+            &read_json_value_or(
+                &theme_tokens,
+                default_richpost_layout_tokens(Some(package_path), theme),
+            ),
+            theme,
+            Some(package_path),
+        );
+        write_json_value(&theme_tokens, &normalized_tokens)?;
+        write_json_value(
+            &package_layout_tokens_path(package_path),
+            &normalized_tokens,
+        )?;
     } else {
         let _ = write_richpost_layout_tokens_for_theme(package_path, theme)?;
     }
@@ -897,5 +914,114 @@ pub(crate) fn normalize_richpost_theme_draft(
                 .or_else(|| Some(base_theme.ending_background_path.as_str())),
         ),
         source: "custom".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_package_path(label: &str) -> std::path::PathBuf {
+        let unique = format!("redbox-richpost-theme-store-{label}-{}", std::process::id());
+        std::env::temp_dir()
+            .join(unique)
+            .join("workspace")
+            .join("manuscripts")
+            .join("sync-test.post")
+    }
+
+    #[test]
+    fn sync_theme_tokens_refreshes_frame_mapping_for_theme_root_and_package() {
+        let package_path = test_package_path("frame-sync");
+        let workspace_root = package_workspace_root_path(&package_path);
+        fs::create_dir_all(&package_path).expect("package dir");
+        fs::create_dir_all(workspace_root.join("themes")).expect("themes dir");
+
+        let mut theme = default_richpost_theme_spec();
+        theme.id = "custom-frame-sync".to_string();
+        theme.label = "Custom Frame Sync".to_string();
+        theme.body_frame = RichpostZoneFrame {
+            x: 0.31,
+            y: 0.22,
+            w: 0.52,
+            h: 0.44,
+        };
+
+        let stale_tokens = json!({
+            "version": 1,
+            "themeId": theme.id,
+            "cssVars": {
+                "--rb-accent": "#123456"
+            },
+            "roleCssVars": {
+                "body": {
+                    "--rb-frame-left": "8.000%",
+                    "--rb-frame-top": "10.000%",
+                    "--rb-frame-width": "84.000%",
+                    "--rb-frame-height": "78.000%"
+                }
+            }
+        });
+        write_json_value(&package_layout_tokens_path(&package_path), &stale_tokens)
+            .expect("package tokens");
+        write_json_value(
+            &package_richpost_theme_tokens_path(&package_path, &theme.id),
+            &stale_tokens,
+        )
+        .expect("theme tokens");
+
+        sync_richpost_theme_root_from_package(&package_path, &theme, false)
+            .expect("sync theme root");
+        sync_package_from_richpost_theme_root(&package_path, &theme).expect("sync package");
+
+        let expected_left = format!("{:.3}%", theme.body_frame.x * 100.0);
+        let expected_top = format!("{:.3}%", theme.body_frame.y * 100.0);
+        let expected_width = format!("{:.3}%", theme.body_frame.w * 100.0);
+        let expected_height = format!("{:.3}%", theme.body_frame.h * 100.0);
+
+        for path in [
+            package_richpost_theme_tokens_path(&package_path, &theme.id),
+            package_layout_tokens_path(&package_path),
+        ] {
+            let tokens = read_json_value_or(&path, Value::Null);
+            assert_eq!(
+                tokens
+                    .pointer("/roleCssVars/body/--rb-frame-left")
+                    .and_then(Value::as_str),
+                Some(expected_left.as_str())
+            );
+            assert_eq!(
+                tokens
+                    .pointer("/roleCssVars/body/--rb-frame-top")
+                    .and_then(Value::as_str),
+                Some(expected_top.as_str())
+            );
+            assert_eq!(
+                tokens
+                    .pointer("/roleCssVars/body/--rb-frame-width")
+                    .and_then(Value::as_str),
+                Some(expected_width.as_str())
+            );
+            assert_eq!(
+                tokens
+                    .pointer("/roleCssVars/body/--rb-frame-height")
+                    .and_then(Value::as_str),
+                Some(expected_height.as_str())
+            );
+            assert_eq!(
+                tokens
+                    .pointer("/cssVars/--rb-accent")
+                    .and_then(Value::as_str),
+                Some("#123456")
+            );
+        }
+
+        let _ = fs::remove_dir_all(
+            package_path
+                .ancestors()
+                .nth(3)
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(package_path),
+        );
     }
 }

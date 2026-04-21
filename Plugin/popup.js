@@ -2,8 +2,12 @@ const serverStatusEl = document.getElementById('server-status');
 const pageMetaEl = document.getElementById('page-meta');
 const resultEl = document.getElementById('result');
 const actionHintEl = document.getElementById('action-hint');
+const updateStatusEl = document.getElementById('update-status');
+const updateMetaEl = document.getElementById('update-meta');
 
 const buttons = {
+  checkUpdate: document.getElementById('check-update'),
+  openUpdateSource: document.getElementById('open-update-source'),
   primary: document.getElementById('save-primary'),
 };
 
@@ -40,10 +44,13 @@ async function init() {
   }
 
   ensureCaptureTypeElement();
+  await refreshUpdateStatus(false);
   await refreshPageInfo();
   startRefreshLoop();
 
   buttons.primary.addEventListener('click', () => runAction(primaryActionType));
+  buttons.checkUpdate.addEventListener('click', () => void runUpdateCheck());
+  buttons.openUpdateSource.addEventListener('click', () => void openUpdateSource());
   window.addEventListener('unload', stopRefreshLoop, { once: true });
 }
 
@@ -128,6 +135,31 @@ async function runAction(type) {
   }
 }
 
+async function runUpdateCheck() {
+  setUpdateButtonsBusy(true);
+  updateStatusEl.textContent = '正在检查插件更新...';
+  updateStatusEl.className = 'status';
+  try {
+    await refreshUpdateStatus(true);
+  } finally {
+    setUpdateButtonsBusy(false);
+  }
+}
+
+async function openUpdateSource() {
+  buttons.openUpdateSource.disabled = true;
+  try {
+    await sendMessage({ type: 'plugin-update:open-source' });
+  } finally {
+    buttons.openUpdateSource.disabled = false;
+  }
+}
+
+function setUpdateButtonsBusy(busy) {
+  buttons.checkUpdate.disabled = busy;
+  buttons.openUpdateSource.disabled = busy;
+}
+
 function setBusy(busy) {
   applyButtonState(buttons.primary, !busy && actionSupport.primary);
 }
@@ -141,6 +173,46 @@ function ensureCaptureTypeElement() {
   captureTypeEl = document.createElement('div');
   captureTypeEl.className = 'capture-type';
   pageMetaEl.insertAdjacentElement('afterend', captureTypeEl);
+}
+
+async function refreshUpdateStatus(forceRefresh) {
+  const response = await sendMessage({
+    type: forceRefresh ? 'plugin-update:check' : 'plugin-update:get-status',
+    refresh: forceRefresh,
+  }).catch(() => null);
+
+  const update = normalizeUpdateState(response?.update);
+  const hasFailed = response?.success === false && update.lastError;
+
+  if (update.hasUpdate) {
+    updateStatusEl.textContent = `发现新版本 ${update.latestVersion}，当前版本 ${update.currentVersion}`;
+    updateStatusEl.className = 'status error';
+  } else if (hasFailed) {
+    updateStatusEl.textContent = `更新检查失败：${update.lastError}`;
+    updateStatusEl.className = 'status error';
+  } else if (update.checkStatus === 'checking') {
+    updateStatusEl.textContent = '正在检查插件更新...';
+    updateStatusEl.className = 'status';
+  } else {
+    updateStatusEl.textContent = `当前已是最新版本 ${update.currentVersion}`;
+    updateStatusEl.className = 'status ok';
+  }
+
+  const lines = [
+    `当前版本：${update.currentVersion}`,
+    `开源仓库版本：${update.latestVersion}`,
+  ];
+  if (update.lastCheckedAt) {
+    lines.push(`最近检查：${formatDateTime(update.lastCheckedAt)}`);
+  }
+  if (update.hasUpdate) {
+    lines.push('更新方式：打开开源仓库 Plugin 目录，重新加载扩展。');
+  } else if (update.lastError) {
+    lines.push(`最近错误：${update.lastError}`);
+  }
+
+  updateMetaEl.textContent = lines.join('\n');
+  updateMetaEl.classList.remove('hidden');
 }
 
 async function refreshPageInfo() {
@@ -211,6 +283,46 @@ function createLinkFallbackPageInfo(overrides = {}) {
     statusText: '未检测到内容',
     ...overrides,
   };
+}
+
+function normalizeUpdateState(value) {
+  const currentVersion = normalizeText(chrome.runtime.getManifest()?.version) || '0.0.0';
+  if (!value || typeof value !== 'object') {
+    return {
+      currentVersion,
+      latestVersion: currentVersion,
+      hasUpdate: false,
+      lastCheckedAt: null,
+      sourceUrl: '',
+      lastError: '',
+      checkStatus: 'idle',
+    };
+  }
+  const latestVersion = normalizeText(value.latestVersion) || currentVersion;
+  return {
+    currentVersion: normalizeText(value.currentVersion) || currentVersion,
+    latestVersion,
+    hasUpdate: Boolean(value.hasUpdate),
+    lastCheckedAt: normalizeText(value.lastCheckedAt) || null,
+    sourceUrl: normalizeText(value.sourceUrl),
+    lastError: normalizeText(value.lastError),
+    checkStatus: normalizeText(value.checkStatus) || 'idle',
+  };
+}
+
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function formatDateTime(value) {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) {
+    return '未知';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date);
 }
 
 function showResult(message, type) {

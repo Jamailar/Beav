@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use normalized_line_endings::Normalized;
 use serde::{Deserialize, Serialize};
 
-use crate::{redbox_project_root, slug_from_relative_path};
 use crate::runtime::SkillRecord;
+use crate::{redbox_project_root, slug_from_relative_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -314,7 +314,8 @@ pub fn discover_skill_records_from_root(
         if !skill_file.is_file() {
             continue;
         }
-        let Ok(raw_body) = fs::read_to_string(&skill_file).map(|value| normalize_skill_text(&value))
+        let Ok(raw_body) =
+            fs::read_to_string(&skill_file).map(|value| normalize_skill_text(&value))
         else {
             continue;
         };
@@ -344,7 +345,11 @@ pub fn discover_skill_records_from_root(
 }
 
 pub fn discover_builtin_skill_records() -> Vec<SkillRecord> {
-    discover_skill_records_from_root(&redbox_project_root().join("builtin-skills"), "builtin", true)
+    discover_skill_records_from_root(
+        &redbox_project_root().join("builtin-skills"),
+        "builtin",
+        true,
+    )
 }
 
 pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {

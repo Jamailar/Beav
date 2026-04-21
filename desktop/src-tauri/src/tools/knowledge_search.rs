@@ -204,7 +204,9 @@ fn resolve_scope(
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
     if !has_workspace_target {
-        return Err("knowledge tool requires advisorId, or a session bound to one advisor".to_string());
+        return Err(
+            "knowledge tool requires advisorId, or a session bound to one advisor".to_string(),
+        );
     }
 
     Ok(KnowledgeScope {
@@ -239,7 +241,9 @@ fn list_pattern_for_scope(scope: &KnowledgeScope, arguments: &Value) -> Result<S
 }
 
 fn search_pattern_for_scope(scope: &KnowledgeScope, arguments: &Value) -> Result<String, String> {
-    if let Some(pattern) = payload_string(arguments, "pattern").filter(|value| !value.trim().is_empty()) {
+    if let Some(pattern) =
+        payload_string(arguments, "pattern").filter(|value| !value.trim().is_empty())
+    {
         return normalize_scope_pattern(scope, &pattern);
     }
     if let Some(path) = payload_string(arguments, "path").filter(|value| !value.trim().is_empty()) {

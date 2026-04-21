@@ -107,11 +107,8 @@ mod tests {
 
     #[test]
     fn qwen_profiles_disable_thinking_for_required_tool_choice() {
-        let profile = provider_profile_from_parts(
-            "openai",
-            "https://api.ziz.hk/redbox/v1",
-            "qwen3.5-plus",
-        );
+        let profile =
+            provider_profile_from_parts("openai", "https://api.ziz.hk/redbox/v1", "qwen3.5-plus");
         assert_eq!(profile.provider_family, ProviderFamily::OpenAiCompat);
         assert!(
             profile

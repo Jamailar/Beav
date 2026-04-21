@@ -12,7 +12,12 @@ fn canonical_richpost_role_css_vars(
     theme: &RichpostThemeSpec,
     role: &str,
 ) -> serde_json::Map<String, Value> {
-    let mut vars = richpost_zone_frame_css_vars(&default_richpost_zone_frame(role));
+    let frame = match role {
+        RICHPOST_MASTER_COVER => &theme.cover_frame,
+        RICHPOST_MASTER_ENDING => &theme.ending_frame,
+        _ => &theme.body_frame,
+    };
+    let mut vars = richpost_zone_frame_css_vars(frame);
     vars.extend(richpost_theme_background_css_vars(
         package_path,
         theme,

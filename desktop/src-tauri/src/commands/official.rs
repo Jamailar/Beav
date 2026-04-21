@@ -8,8 +8,7 @@ use crate::{
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
     normalize_base_url, normalize_official_auth_session, now_iso, now_ms,
     official_account_summary_local, official_ai_api_key_from_settings,
-    official_base_url_from_settings,
-    official_fallback_products, official_points_snapshot,
+    official_base_url_from_settings, official_fallback_products, official_points_snapshot,
     official_response_items, official_settings_api_keys, official_settings_call_records_list,
     official_settings_models, official_settings_orders, official_settings_points,
     official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
@@ -208,8 +207,16 @@ fn extract_official_api_key_value(response: &Value) -> Option<String> {
     let payload = official_unwrap_response_payload(response);
     payload_string(&payload, "key")
         .or_else(|| payload_string(&payload, "api_key"))
-        .or_else(|| payload.get("api_key").and_then(|value| payload_string(value, "key")))
-        .or_else(|| payload.get("apiKey").and_then(|value| payload_string(value, "key")))
+        .or_else(|| {
+            payload
+                .get("api_key")
+                .and_then(|value| payload_string(value, "key"))
+        })
+        .or_else(|| {
+            payload
+                .get("apiKey")
+                .and_then(|value| payload_string(value, "key"))
+        })
         .filter(|value| !value.trim().is_empty())
 }
 
@@ -252,8 +259,8 @@ fn merge_official_api_key_records(settings: &mut Value, record: Option<Value>) {
     let record_last4 = payload_string(&record, "key_last4").unwrap_or_default();
     let mut keys = official_settings_api_keys(settings);
     if let Some(existing) = keys.iter_mut().find(|item| {
-        let id_matches = !record_id.is_empty()
-            && payload_string(item, "id").unwrap_or_default() == record_id;
+        let id_matches =
+            !record_id.is_empty() && payload_string(item, "id").unwrap_or_default() == record_id;
         let prefix_matches = !record_prefix.is_empty()
             && payload_string(item, "key_prefix").unwrap_or_default() == record_prefix;
         let last4_matches = !record_last4.is_empty()
@@ -283,16 +290,19 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
     if let Some(existing) = official_ai_api_key_from_settings(settings) {
         return Ok(Some(existing));
     }
-    if let Some(local_plaintext) = official_settings_api_keys(settings).iter().find_map(|item| {
-        let is_current = payload_field(item, "isCurrent")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if is_current {
-            payload_string(item, "apiKey")
-        } else {
-            None
-        }
-    }) {
+    if let Some(local_plaintext) = official_settings_api_keys(settings)
+        .iter()
+        .find_map(|item| {
+            let is_current = payload_field(item, "isCurrent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if is_current {
+                payload_string(item, "apiKey")
+            } else {
+                None
+            }
+        })
+    {
         if let Some(mut session) = official_settings_session(settings) {
             upsert_session_api_key(&mut session, &local_plaintext);
             upsert_official_settings_session(settings, Some(&session));
@@ -307,7 +317,10 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
         Some(json!({ "name": "Default API Key" })),
     )?;
     let mut resolved_key = extract_official_api_key_value(&ensure_response.body);
-    merge_official_api_key_records(settings, normalize_official_api_key_record(&ensure_response.body));
+    merge_official_api_key_records(
+        settings,
+        normalize_official_api_key_record(&ensure_response.body),
+    );
 
     if resolved_key.is_none() {
         let created = crate::run_official_json_request_response(
@@ -2055,12 +2068,14 @@ pub fn handle_official_channel(
                                 .or_else(|| payload_string(&item, "keyLast4"))
                                 .unwrap_or_default();
                             let local_plaintext = local_items.iter().find_map(|local| {
-                                let id_matches =
-                                    !id.is_empty() && payload_string(local, "id").unwrap_or_default() == id;
+                                let id_matches = !id.is_empty()
+                                    && payload_string(local, "id").unwrap_or_default() == id;
                                 let prefix_matches = !prefix.is_empty()
-                                    && payload_string(local, "key_prefix").unwrap_or_default() == prefix;
+                                    && payload_string(local, "key_prefix").unwrap_or_default()
+                                        == prefix;
                                 let last4_matches = !last4.is_empty()
-                                    && payload_string(local, "key_last4").unwrap_or_default() == last4;
+                                    && payload_string(local, "key_last4").unwrap_or_default()
+                                        == last4;
                                 if id_matches || (prefix_matches && last4_matches) {
                                     payload_string(local, "apiKey")
                                 } else {
@@ -2100,8 +2115,8 @@ pub fn handle_official_channel(
                     }))
                 }),
                 "redbox-auth:api-keys:create" => {
-                    let name =
-                        payload_string(payload, "name").unwrap_or_else(|| "Default API Key".to_string());
+                    let name = payload_string(payload, "name")
+                        .unwrap_or_else(|| "Default API Key".to_string());
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let mut settings = settings_snapshot.clone();
                     let response = crate::run_official_json_request(
@@ -2137,7 +2152,11 @@ pub fn handle_official_channel(
                         }
                     }
                     let models = fetch_official_models_for_settings(&settings);
-                    write_settings_json_array(&mut settings, "redbox_official_models_json", &models);
+                    write_settings_json_array(
+                        &mut settings,
+                        "redbox_official_models_json",
+                        &models,
+                    );
                     sync_official_route_credentials(&mut settings);
                     if !models.is_empty() {
                         official_sync_source_into_settings(&mut settings, &models);
@@ -2959,7 +2978,10 @@ mod tests {
             payload_string(&settings, "api_endpoint").as_deref(),
             Some("https://api.ziz.hk/redbox/v1")
         );
-        assert_eq!(payload_string(&settings, "api_key").as_deref(), Some("rbx-live-1"));
+        assert_eq!(
+            payload_string(&settings, "api_key").as_deref(),
+            Some("rbx-live-1")
+        );
         let sources = payload_string(&settings, "ai_sources_json")
             .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
             .unwrap_or_default();
@@ -2995,8 +3017,14 @@ mod tests {
 
         let summary = official_account_summary_local(&settings, &[]);
         assert_eq!(summary.get("loggedIn").and_then(Value::as_bool), Some(true));
-        assert_eq!(summary.get("apiKeyPresent").and_then(Value::as_bool), Some(true));
-        assert_eq!(summary.get("displayName").and_then(Value::as_str), Some("Jam"));
+        assert_eq!(
+            summary.get("apiKeyPresent").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary.get("displayName").and_then(Value::as_str),
+            Some("Jam")
+        );
     }
 
     #[test]

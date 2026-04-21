@@ -98,7 +98,8 @@ fn merge_discovered_with_existing(
 pub fn refresh_skill_store_catalog(state: &State<'_, AppState>) -> Result<bool, String> {
     let existing = with_store(state, |store| Ok(store.skills.clone()))?;
     let workspace = workspace_root(state).ok();
-    let merged = merge_discovered_with_existing(&existing, discover_all_skill_records(workspace.as_deref()));
+    let merged =
+        merge_discovered_with_existing(&existing, discover_all_skill_records(workspace.as_deref()));
     if existing == merged {
         return Ok(false);
     }
@@ -110,7 +111,8 @@ pub fn refresh_skill_store_catalog(state: &State<'_, AppState>) -> Result<bool, 
 }
 
 fn skill_file_path_for_root(root: &Path, skill_name: &str) -> PathBuf {
-    root.join(slug_from_relative_path(skill_name)).join("SKILL.md")
+    root.join(slug_from_relative_path(skill_name))
+        .join("SKILL.md")
 }
 
 pub fn resolve_skill_file_path(
@@ -122,7 +124,9 @@ pub fn resolve_skill_file_path(
             &redbox_project_root().join("builtin-skills"),
             &record.name,
         )),
-        Some("workspace") => workspace_root.map(|root| skill_file_path_for_root(&root.join("skills"), &record.name)),
+        Some("workspace") => {
+            workspace_root.map(|root| skill_file_path_for_root(&root.join("skills"), &record.name))
+        }
         Some("user") | Some("market") | None => {
             let preferred = skill_file_path_for_root(&preferred_user_skill_root(), &record.name);
             if preferred.is_file() {
@@ -136,7 +140,10 @@ pub fn resolve_skill_file_path(
             }
             Some(preferred)
         }
-        Some(_) => Some(skill_file_path_for_root(&preferred_user_skill_root(), &record.name)),
+        Some(_) => Some(skill_file_path_for_root(
+            &preferred_user_skill_root(),
+            &record.name,
+        )),
     }
 }
 
@@ -178,7 +185,8 @@ mod tests {
     #[test]
     fn merge_discovered_with_existing_preserves_disabled_state() {
         let existing = vec![skill("writer", "workspace", true)];
-        let merged = merge_discovered_with_existing(&existing, vec![skill("writer", "workspace", false)]);
+        let merged =
+            merge_discovered_with_existing(&existing, vec![skill("writer", "workspace", false)]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].disabled, Some(true));
     }

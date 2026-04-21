@@ -124,9 +124,7 @@ pub(super) fn bundled_richpost_theme_ids() -> &'static [&'static str] {
     &["crossroads-mint"]
 }
 
-pub(super) fn ensure_bundled_richpost_themes(
-    package_path: &std::path::Path,
-) -> Result<(), String> {
+pub(super) fn ensure_bundled_richpost_themes(package_path: &std::path::Path) -> Result<(), String> {
     for theme in BUNDLED_RICHPOST_THEMES {
         if should_preserve_existing_theme(package_path, theme.id) {
             continue;

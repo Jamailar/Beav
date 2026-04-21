@@ -11,13 +11,16 @@
   },
   "permissions": [
     "activeTab",
+    "alarms",
     "contextMenus",
     "scripting",
+    "storage",
     "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1:31937/*",
-    "http://localhost:31937/*"
+    "http://localhost:31937/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "background": {
     "service_worker": "background.js"

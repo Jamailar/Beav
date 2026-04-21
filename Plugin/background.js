@@ -19,6 +19,11 @@ const KNOWLEDGE_API_CANDIDATES = [
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
 const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+const UPDATE_STATE_KEY = 'pluginUpdateState';
+const UPDATE_ALARM_NAME = 'redbox-plugin-auto-update-check';
+const UPDATE_CHECK_INTERVAL_MINUTES = 360;
+const UPDATE_SOURCE_MANIFEST_URL = 'https://raw.githubusercontent.com/Jamailar/RedBox/main/Plugin/manifest.json';
+const UPDATE_SOURCE_REPO_URL = 'https://github.com/Jamailar/RedBox/tree/main/Plugin';
 const MENU_ROOT_ID = 'redbox-root';
 const MENU_PAGE_ID = 'redbox-save-page-auto';
 const MENU_SELECTION_ID = 'redbox-save-selection';
@@ -103,10 +108,17 @@ function ensureContextMenus() {
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureContextMenus();
+  void initializeUpdateChecks(true);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureContextMenus();
+  void initializeUpdateChecks(false);
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== UPDATE_ALARM_NAME) return;
+  void checkForPluginUpdates({ force: true, reason: 'alarm' });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -191,6 +203,13 @@ async function handleMessage(message, sender) {
       return { success: true };
     case 'healthcheck':
       return await checkDesktopServer();
+    case 'plugin-update:get-status':
+      return await getPluginUpdateStatus(message?.refresh === true);
+    case 'plugin-update:check':
+      return await checkForPluginUpdates({ force: true, reason: 'manual' });
+    case 'plugin-update:open-source':
+      await chrome.tabs.create({ url: UPDATE_SOURCE_REPO_URL });
+      return { success: true };
     case 'inspect-page':
       return await inspectPage(tabId);
     case 'save-xhs':
@@ -314,6 +333,224 @@ function detectCaptureTargetFromUrl(rawUrl) {
   }
 
   return createLinkFallbackPageInfo();
+}
+
+function getCurrentPluginVersion() {
+  const manifest = chrome.runtime.getManifest();
+  return normalizeText(manifest?.version) || '0.0.0';
+}
+
+function compareVersions(left, right) {
+  const leftParts = String(left || '')
+    .split('.')
+    .map((item) => Number.parseInt(item, 10))
+    .map((item) => (Number.isFinite(item) ? item : 0));
+  const rightParts = String(right || '')
+    .split('.')
+    .map((item) => Number.parseInt(item, 10))
+    .map((item) => (Number.isFinite(item) ? item : 0));
+  const maxLength = Math.max(leftParts.length, rightParts.length, 1);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftValue = leftParts[index] || 0;
+    const rightValue = rightParts[index] || 0;
+    if (leftValue > rightValue) return 1;
+    if (leftValue < rightValue) return -1;
+  }
+  return 0;
+}
+
+function createDefaultUpdateState() {
+  const currentVersion = getCurrentPluginVersion();
+  return {
+    currentVersion,
+    latestVersion: currentVersion,
+    hasUpdate: false,
+    lastCheckedAt: null,
+    sourceUrl: UPDATE_SOURCE_REPO_URL,
+    lastError: '',
+    checkStatus: 'idle',
+  };
+}
+
+function sanitizeUpdateState(input) {
+  const fallback = createDefaultUpdateState();
+  if (!input || typeof input !== 'object') {
+    return fallback;
+  }
+  const currentVersion = normalizeText(input.currentVersion) || fallback.currentVersion;
+  const latestVersion = normalizeText(input.latestVersion) || currentVersion;
+  return {
+    currentVersion,
+    latestVersion,
+    hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+    lastCheckedAt: normalizeText(input.lastCheckedAt) || null,
+    sourceUrl: normalizeText(input.sourceUrl) || UPDATE_SOURCE_REPO_URL,
+    lastError: normalizeText(input.lastError),
+    checkStatus: normalizeText(input.checkStatus) || fallback.checkStatus,
+  };
+}
+
+function getStorageLocal(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, (result) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+function setStorageLocal(values) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(values, () => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function readPluginUpdateState() {
+  const stored = await getStorageLocal([UPDATE_STATE_KEY]).catch(() => ({}));
+  return sanitizeUpdateState(stored?.[UPDATE_STATE_KEY]);
+}
+
+async function writePluginUpdateState(nextState) {
+  const state = sanitizeUpdateState(nextState);
+  await setStorageLocal({ [UPDATE_STATE_KEY]: state });
+  await applyUpdateBadge(state);
+  return state;
+}
+
+async function applyUpdateBadge(stateInput) {
+  const state = sanitizeUpdateState(stateInput);
+  const badgeText = state.hasUpdate ? 'NEW' : '';
+  await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' }).catch(() => {});
+  if (typeof chrome.action.setBadgeTextColor === 'function') {
+    await chrome.action.setBadgeTextColor({ color: '#fff7ed' }).catch(() => {});
+  }
+  await chrome.action.setBadgeText({ text: badgeText }).catch(() => {});
+  const title = state.hasUpdate
+    ? `RedBox Capture：发现新版本 ${state.latestVersion}`
+    : `RedBox Capture ${state.currentVersion}`;
+  await chrome.action.setTitle({ title }).catch(() => {});
+}
+
+async function initializeUpdateChecks(forceImmediateCheck) {
+  await writePluginUpdateState(await readPluginUpdateState());
+  await chrome.alarms.create(UPDATE_ALARM_NAME, {
+    periodInMinutes: UPDATE_CHECK_INTERVAL_MINUTES,
+    delayInMinutes: 1,
+  });
+  if (forceImmediateCheck) {
+    await checkForPluginUpdates({ force: true, reason: 'install' });
+    return;
+  }
+  const currentState = await readPluginUpdateState();
+  if (!currentState.lastCheckedAt) {
+    await checkForPluginUpdates({ force: false, reason: 'startup-empty-cache' });
+  }
+}
+
+async function fetchRemotePluginManifest() {
+  const response = await fetch(UPDATE_SOURCE_MANIFEST_URL, {
+    cache: 'no-store',
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`更新源请求失败：HTTP ${response.status}`);
+  }
+  const data = await response.json();
+  if (!data || typeof data !== 'object') {
+    throw new Error('更新源返回了无效的 manifest');
+  }
+  return data;
+}
+
+async function getPluginUpdateStatus(refresh = false) {
+  if (refresh) {
+    return await checkForPluginUpdates({ force: true, reason: 'popup-refresh' });
+  }
+  const state = await readPluginUpdateState();
+  return {
+    success: true,
+    update: state,
+  };
+}
+
+async function checkForPluginUpdates(options = {}) {
+  const force = options?.force === true;
+  const reason = normalizeText(options?.reason) || 'unknown';
+  const currentState = await readPluginUpdateState();
+  if (!force && currentState.checkStatus === 'checking') {
+    return {
+      success: true,
+      update: currentState,
+    };
+  }
+
+  const checkingState = await writePluginUpdateState({
+    ...currentState,
+    checkStatus: 'checking',
+    lastError: '',
+  });
+
+  try {
+    pluginLog('plugin-update-check-start', {
+      reason,
+      source: UPDATE_SOURCE_MANIFEST_URL,
+    });
+    const remoteManifest = await fetchRemotePluginManifest();
+    const currentVersion = getCurrentPluginVersion();
+    const latestVersion = normalizeText(remoteManifest?.version) || currentVersion;
+    const nextState = await writePluginUpdateState({
+      ...checkingState,
+      currentVersion,
+      latestVersion,
+      hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+      lastCheckedAt: new Date().toISOString(),
+      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      lastError: '',
+      checkStatus: 'idle',
+    });
+    pluginLog('plugin-update-check-success', {
+      reason,
+      currentVersion,
+      latestVersion,
+      hasUpdate: nextState.hasUpdate,
+    });
+    return {
+      success: true,
+      update: nextState,
+    };
+  } catch (error) {
+    const nextState = await writePluginUpdateState({
+      ...checkingState,
+      currentVersion: getCurrentPluginVersion(),
+      latestVersion: currentState.latestVersion,
+      lastCheckedAt: new Date().toISOString(),
+      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      lastError: error instanceof Error ? error.message : String(error),
+      checkStatus: 'idle',
+    });
+    pluginWarn('plugin-update-check-failed', {
+      reason,
+      error: describeError(error),
+    });
+    return {
+      success: false,
+      error: nextState.lastError || '检查更新失败',
+      update: nextState,
+    };
+  }
 }
 
 async function checkDesktopServer() {
