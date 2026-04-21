@@ -846,9 +846,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     || officialAuthStatus === 'restoring'
     || officialAuthStatus === 'refreshing';
   const officialAuthLoggedIn = officialAuthKnown
-    && !officialAuthPending
     && officialAuthStatus !== 'anonymous'
     && officialAuthStatus !== 'reauthRequired'
+    && officialAuthStatus !== 'restoring'
     && Boolean((officialAuthState as { loggedIn?: boolean } | null)?.loggedIn);
   const officialAuthNeedsLogin = officialAuthKnown && !officialAuthPending && !officialAuthLoggedIn;
 
