@@ -137,6 +137,19 @@ select {
   color: rgb(var(--color-text-primary) / 1) !important;
 }
 
+.manuscript-editor-shell,
+.manuscript-editor-shell * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.manuscript-editor-shell .cm-editor,
+.manuscript-editor-shell .cm-scroller,
+.manuscript-editor-shell .cm-content,
+.manuscript-editor-shell .cm-line {
+  cursor: text !important;
+}
+
 .manuscript-editor-shell .cm-activeLine {
   background-color: rgb(var(--color-surface-secondary) / 0.55) !important;
 }
