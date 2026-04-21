@@ -12,6 +12,7 @@ export interface AuthoringTaskHints {
     requireProfileRead?: boolean;
     requireSave?: boolean;
     saveArtifact?: 'redpost' | 'redarticle';
+    saveSubdir?: string;
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
     formatTarget?: AuthoringFormatTarget;

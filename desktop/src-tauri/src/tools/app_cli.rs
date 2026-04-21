@@ -53,6 +53,21 @@ struct BoundWritingSessionTarget {
 #[derive(Debug, Clone)]
 struct AuthoringTargetPreference {
     preferred_extension: &'static str,
+    preferred_subdir: Option<String>,
+}
+
+fn normalize_authoring_target_subdir(requested_path: &str, preferred_subdir: Option<&str>) -> String {
+    let normalized = normalize_relative_path(requested_path);
+    let subdir = preferred_subdir
+        .map(normalize_relative_path)
+        .unwrap_or_default();
+    if normalized.trim().is_empty() || subdir.trim().is_empty() {
+        return normalized;
+    }
+    if normalized == subdir || normalized.starts_with(&(subdir.clone() + "/")) {
+        return normalized;
+    }
+    format!("{}/{}", subdir.trim_end_matches('/'), normalized)
 }
 
 impl CliArgs {
@@ -2093,6 +2108,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             };
             return Some(AuthoringTargetPreference {
                 preferred_extension,
+                preferred_subdir: None,
             });
         }
 
@@ -2121,15 +2137,30 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     .get("taskHints")
                     .and_then(|value| payload_string(value, "platform"))
             });
+            let preferred_subdir = payload_string(metadata, "saveSubdir").or_else(|| {
+                metadata
+                    .get("taskHints")
+                    .and_then(|value| payload_string(value, "saveSubdir"))
+            }).or_else(|| {
+                let context_type = payload_string(metadata, "contextType").unwrap_or_default();
+                if context_type == "wander" {
+                    Some("wander".to_string())
+                } else {
+                    None
+                }
+            });
             let preference = match platform.as_deref() {
                 Some("wechat_official_account") => AuthoringTargetPreference {
                     preferred_extension: ARTICLE_DRAFT_EXTENSION,
+                    preferred_subdir,
                 },
                 Some("xiaohongshu") => AuthoringTargetPreference {
                     preferred_extension: POST_DRAFT_EXTENSION,
+                    preferred_subdir,
                 },
                 _ => AuthoringTargetPreference {
                     preferred_extension: POST_DRAFT_EXTENSION,
+                    preferred_subdir,
                 },
             };
             Ok(Some(preference))
@@ -2146,6 +2177,10 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let Some(preference) = self.current_authoring_target_preference() else {
             return ensure_manuscript_file_name(&normalized, ".md");
         };
+        let normalized = normalize_authoring_target_subdir(
+            &normalized,
+            preference.preferred_subdir.as_deref(),
+        );
         let resolved = resolve_manuscript_path(self.state, &normalized).ok();
         let target_exists = resolved.as_ref().map(|path| path.exists()).unwrap_or(false);
         if normalized.ends_with(preference.preferred_extension) {
@@ -3333,6 +3368,18 @@ mod tests {
             .trim_end_matches(VIDEO_DRAFT_EXTENSION)
             .chars()
             .all(|ch| ch.is_ascii_digit()));
+    }
+
+    #[test]
+    fn normalize_authoring_target_subdir_prefixes_wander_folder() {
+        assert_eq!(
+            normalize_authoring_target_subdir("第一篇稿子.redpost", Some("wander")),
+            "wander/第一篇稿子.redpost"
+        );
+        assert_eq!(
+            normalize_authoring_target_subdir("wander/第一篇稿子.redpost", Some("wander")),
+            "wander/第一篇稿子.redpost"
+        );
     }
 
     #[test]

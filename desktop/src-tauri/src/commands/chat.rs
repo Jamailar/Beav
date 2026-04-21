@@ -48,6 +48,7 @@ fn merge_task_hints_into_session_metadata(
                 "platform",
                 "taskType",
                 "formatTarget",
+                "saveSubdir",
                 "sourcePlatform",
                 "sourceNoteId",
                 "sourceMode",

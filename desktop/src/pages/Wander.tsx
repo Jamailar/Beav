@@ -496,6 +496,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         requireProfileRead: true,
         requireSave: true,
         saveArtifact: 'redpost',
+        saveSubdir: 'wander',
         platform: 'xiaohongshu',
         taskType: 'direct_write',
         formatTarget: 'markdown',
