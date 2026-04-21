@@ -1705,6 +1705,7 @@ fn browser_plugin_bundled_candidates(app: &AppHandle) -> Vec<PathBuf> {
     for root in bundled_resource_roots(app) {
         push(root.join("Plugin"));
         push(root.join("browser-extension"));
+        collect_browser_plugin_candidates_from_root(&root, 3, &mut push);
     }
 
     if cfg!(debug_assertions) {
@@ -1716,6 +1717,30 @@ fn browser_plugin_bundled_candidates(app: &AppHandle) -> Vec<PathBuf> {
     }
 
     candidates
+}
+
+fn collect_browser_plugin_candidates_from_root(
+    root: &Path,
+    remaining_depth: usize,
+    push: &mut impl FnMut(PathBuf),
+) {
+    if remaining_depth == 0 || !root.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+        if matches!(file_name, "Plugin" | "browser-extension") {
+            push(path.clone());
+        }
+        collect_browser_plugin_candidates_from_root(&path, remaining_depth - 1, push);
+    }
 }
 
 fn browser_plugin_bundled_root(app: &AppHandle) -> Option<PathBuf> {
