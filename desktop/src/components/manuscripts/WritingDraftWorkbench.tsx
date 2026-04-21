@@ -1322,7 +1322,7 @@ function RichPostPreview({
           <div className="rounded-2xl border border-dashed border-border bg-surface-primary px-6 py-10 text-center">
             <div className="text-sm font-medium text-text-primary">图文预览尚未渲染</div>
             <div className="mt-2 text-sm leading-6 text-text-tertiary">
-              生成分页方案后会在这里渲染多页预览。
+              保存正文或调整图文样式后，这里会自动刷新多页预览。
             </div>
           </div>
         ) : !hasRenderedPages && previewFrameUrl ? (

@@ -957,6 +957,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const editorBodyDirtyRef = useRef(false);
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
     const richpostTypographyRequestIdRef = useRef(0);
+    const richpostAutoRenderRequestKeyRef = useRef<string | null>(null);
     const richpostPreviewGenerationRef = useRef<Set<string>>(new Set());
     const richpostCardPreviewTimerRef = useRef<number | null>(null);
     const richpostCardPreviewRenderedAtRef = useRef<Record<string, number>>({});
@@ -1876,31 +1877,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         return resolvedState;
     }, []);
 
-    const handleGenerateRichpostPagePlan = useCallback(async () => {
-        if (!editorFile) return;
-        const workingKey = 'richpost-page-plan';
-        setWorkingId(workingKey);
-        try {
-            const saved = await ensureLatestEditorContentSaved();
-            if (!saved) return;
-            const result = await window.ipcRenderer.invoke('manuscripts:generate-richpost-page-plan', {
-                filePath: editorFile,
-            }) as { success?: boolean; error?: string; state?: PackageState };
-            if (!result?.success || !result.state) {
-                throw new Error(result?.error || '生成分页方案失败');
-            }
-            const resolvedState = await resolveRichpostState(editorFile, result.state, (result as { plan?: unknown }).plan);
-            setPackageState(resolvedState);
-            if ((resolvedState.richpostPages?.length || 0) > 0) {
-                scheduleRichpostCardPreviewFromState(editorFile, resolvedState, 120);
-            }
-        } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '生成分页方案失败');
-        } finally {
-            setWorkingId((current) => current === workingKey ? null : current);
-        }
-    }, [editorFile, ensureLatestEditorContentSaved, resolveRichpostState, scheduleRichpostCardPreviewFromState]);
-
     const handleSelectRichpostTheme = useCallback(async (themeId: string) => {
         if (!editorFile || !themeId.trim()) return;
         if (packageState?.richpostThemeId === themeId) return;
@@ -1965,6 +1941,66 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             void appAlert(error instanceof Error ? error.message : '更新图文排版失败');
         }
     }, [editorFile, ensureLatestEditorContentSaved, resolveRichpostState, scheduleRichpostCardPreviewFromState]);
+
+    useEffect(() => {
+        if (!editorFile || !editorFile.endsWith(POST_DRAFT_EXTENSION)) {
+            return;
+        }
+        if (editorBodyDirty || isSavingEditorBody) {
+            return;
+        }
+        if ((packageState?.richpostPages?.length || 0) > 0) {
+            return;
+        }
+        const requestKey = [
+            editorFile,
+            String(packageState?.contentMapUpdatedAt || 0),
+            String(packageState?.layoutTokensUpdatedAt || 0),
+            String(packageState?.richpostPagePlanUpdatedAt || 0),
+        ].join('::');
+        if (richpostAutoRenderRequestKeyRef.current === requestKey) {
+            return;
+        }
+        richpostAutoRenderRequestKeyRef.current = requestKey;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.invoke('manuscripts:render-richpost-pages', {
+                    filePath: editorFile,
+                }) as { success?: boolean; error?: string; state?: PackageState };
+                if (!result?.success || !result.state) {
+                    throw new Error(result?.error || '自动刷新图文分页失败');
+                }
+                const resolvedState = await resolveRichpostState(editorFile, result.state);
+                if (cancelled || editorFileRef.current !== editorFile) {
+                    return;
+                }
+                setPackageState(resolvedState);
+                if ((resolvedState.richpostPages?.length || 0) > 0) {
+                    scheduleRichpostCardPreviewFromState(editorFile, resolvedState, 120);
+                }
+            } catch (error) {
+                if (cancelled || editorFileRef.current !== editorFile) {
+                    return;
+                }
+                console.error('Failed to auto render richpost pages:', error);
+                richpostAutoRenderRequestKeyRef.current = null;
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        editorBodyDirty,
+        editorFile,
+        isSavingEditorBody,
+        packageState?.contentMapUpdatedAt,
+        packageState?.layoutTokensUpdatedAt,
+        packageState?.richpostPagePlanUpdatedAt,
+        packageState?.richpostPages?.length,
+        resolveRichpostState,
+        scheduleRichpostCardPreviewFromState,
+    ]);
 
     const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
         if (!editorFile || !presetId.trim()) return;
@@ -2887,7 +2923,6 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             : [];
         const isGeneratingLayoutHtml = workingId === 'package-html:layout';
         const isGeneratingWechatHtml = workingId === 'package-html:wechat';
-        const isGeneratingRichpostPagePlan = workingId === 'richpost-page-plan';
         const packageCoverAsset = packagePreviewAssets.find((asset) => asset.id === packageCoverId) || null;
         const packageImageAssets = packagePreviewAssets.filter((asset) => (
             inferAssetKind(asset) === 'image' && asset.id !== packageCoverId

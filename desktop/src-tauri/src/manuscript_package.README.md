@@ -59,7 +59,7 @@
    - `layout.tokens.json`
    - `masters/*.master.html`
    - `richpost-page-plan.json`
-6. AI 点击生成时，只输出一次性的分页规划 JSON，不输出最终 HTML；后续正文再编辑，仍会被自动重排覆盖。
+6. 如果走 AI 分页规划，AI 只输出一次性的分页规划 JSON，不输出最终 HTML；后续正文再编辑，仍会被自动重排覆盖。
 7. 宿主根据当前母版、token 和分页方案渲染每个 `pages/page-xxx.html`。
 8. 宿主再生成一个 `layout.html` 作为多页预览壳，iframe 读取每一页。
 9. 图文主题通过 `manifest.richpostThemeId` 控制默认 token 基线，只改样式层，不改正文层。
@@ -151,10 +151,10 @@
   - 自动重写全部 `pages/page-xxx.html`
 - 图文绑定封面 / 配图后：
   - 自动重渲染页面和预览壳
-- 图文点击“生成分页方案”时：
-  - AI 重新输出 `richpost-page-plan.json`
-  - 宿主重写全部 `pages/page-xxx.html`
-  - 后续再编辑正文时，这份 AI 方案会被自动重排覆盖
+- 图文需要补渲染分页时：
+  - 前端自动触发一次分页与页面重建
+  - 宿主重写 `richpost-page-plan.json` 和全部 `pages/page-xxx.html`
+  - 用户不需要手动点“生成分页方案”
 - 图文切换预设主题时：
   - 只更新 `manifest.richpostThemeId`
   - 同步重写 `layout.tokens.json`
