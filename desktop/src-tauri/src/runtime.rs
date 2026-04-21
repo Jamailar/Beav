@@ -413,7 +413,7 @@ mod tests {
     fn resolve_chat_config_treats_empty_override_fields_as_missing() {
         let config = resolve_chat_config(
             &json!({
-                "api_endpoint": "https://private.api.ziz.hk/v1",
+                "api_endpoint": "https://example.invalid/v1",
                 "api_key": "rbx-live-1",
                 "model_name": "gpt-5.3-codex"
             }),
@@ -430,7 +430,7 @@ mod tests {
             config,
             ResolvedChatConfig {
                 protocol: "openai".to_string(),
-                base_url: "https://private.api.ziz.hk/v1".to_string(),
+                base_url: "https://example.invalid/v1".to_string(),
                 api_key: Some("rbx-live-1".to_string()),
                 model_name: "gpt-5.3-codex".to_string(),
             }
