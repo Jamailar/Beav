@@ -18,10 +18,6 @@ fn bundled_html_resource_path(
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join(file_name);
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
     let resource_dir = app
         .path()
         .resource_dir()
@@ -45,6 +41,11 @@ fn bundled_html_resource_path(
             return Ok(candidate);
         }
     }
+
+    if cfg!(debug_assertions) && dev_path.exists() {
+        return Ok(dev_path);
+    }
+
     Err(missing_message.to_string())
 }
 
