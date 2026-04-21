@@ -7,8 +7,9 @@ use crate::{
     append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
     normalize_base_url, normalize_official_auth_session, now_iso, now_ms,
-    official_account_summary_local, official_auth_token_from_settings,
-    official_base_url_from_settings, official_fallback_products, official_points_snapshot,
+    official_account_summary_local, official_ai_api_key_from_settings,
+    official_base_url_from_settings,
+    official_fallback_products, official_points_snapshot,
     official_response_items, official_settings_api_keys, official_settings_call_records_list,
     official_settings_models, official_settings_orders, official_settings_points,
     official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
@@ -192,6 +193,144 @@ fn official_session_logged_in(settings: &Value) -> bool {
     session_access_token(settings).is_some() || official_session_recoverable(settings)
 }
 
+fn upsert_session_api_key(session: &mut Value, api_key: &str) {
+    let normalized = api_key.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    if let Some(object) = session.as_object_mut() {
+        object.insert("apiKey".to_string(), json!(normalized));
+        object.insert("updatedAt".to_string(), json!(now_ms() as i64));
+    }
+}
+
+fn extract_official_api_key_value(response: &Value) -> Option<String> {
+    let payload = official_unwrap_response_payload(response);
+    payload_string(&payload, "key")
+        .or_else(|| payload_string(&payload, "api_key"))
+        .or_else(|| payload.get("api_key").and_then(|value| payload_string(value, "key")))
+        .or_else(|| payload.get("apiKey").and_then(|value| payload_string(value, "key")))
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn normalize_official_api_key_record(response: &Value) -> Option<Value> {
+    let payload = official_unwrap_response_payload(response);
+    let api_key = payload
+        .get("api_key")
+        .cloned()
+        .or_else(|| payload.get("apiKey").cloned())?;
+    Some(json!({
+        "id": payload_string(&api_key, "id").unwrap_or_default(),
+        "name": payload_string(&api_key, "name").unwrap_or_else(|| "Default API Key".to_string()),
+        "key_prefix": payload_string(&api_key, "key_prefix")
+            .or_else(|| payload_string(&api_key, "keyPrefix"))
+            .unwrap_or_default(),
+        "key_last4": payload_string(&api_key, "key_last4")
+            .or_else(|| payload_string(&api_key, "keyLast4"))
+            .unwrap_or_default(),
+        "is_active": payload_field(&api_key, "is_active")
+            .or_else(|| payload_field(&api_key, "isActive"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        "created_at": payload_field(&api_key, "created_at")
+            .cloned()
+            .or_else(|| payload_field(&api_key, "createdAt").cloned())
+            .unwrap_or_else(|| json!(now_iso())),
+        "last_used_at": payload_field(&api_key, "last_used_at")
+            .cloned()
+            .or_else(|| payload_field(&api_key, "lastUsedAt").cloned())
+            .unwrap_or(Value::Null),
+    }))
+}
+
+fn merge_official_api_key_records(settings: &mut Value, record: Option<Value>) {
+    let Some(record) = record else {
+        return;
+    };
+    let record_id = payload_string(&record, "id").unwrap_or_default();
+    let record_prefix = payload_string(&record, "key_prefix").unwrap_or_default();
+    let record_last4 = payload_string(&record, "key_last4").unwrap_or_default();
+    let mut keys = official_settings_api_keys(settings);
+    if let Some(existing) = keys.iter_mut().find(|item| {
+        let id_matches = !record_id.is_empty()
+            && payload_string(item, "id").unwrap_or_default() == record_id;
+        let prefix_matches = !record_prefix.is_empty()
+            && payload_string(item, "key_prefix").unwrap_or_default() == record_prefix;
+        let last4_matches = !record_last4.is_empty()
+            && payload_string(item, "key_last4").unwrap_or_default() == record_last4;
+        id_matches || (prefix_matches && last4_matches)
+    }) {
+        if let Some(existing_object) = existing.as_object_mut() {
+            let new_object = record.as_object().cloned().unwrap_or_default();
+            let current_plaintext = existing_object
+                .get("apiKey")
+                .cloned()
+                .unwrap_or(Value::Null);
+            *existing_object = new_object;
+            if !current_plaintext.is_null() {
+                existing_object.insert("apiKey".to_string(), current_plaintext);
+            }
+        } else {
+            *existing = record;
+        }
+    } else {
+        keys.insert(0, record);
+    }
+    write_settings_json_array(settings, "redbox_auth_api_keys_json", &keys);
+}
+
+fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option<String>, String> {
+    if let Some(existing) = official_ai_api_key_from_settings(settings) {
+        return Ok(Some(existing));
+    }
+    if let Some(local_plaintext) = official_settings_api_keys(settings).iter().find_map(|item| {
+        let is_current = payload_field(item, "isCurrent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if is_current {
+            payload_string(item, "apiKey")
+        } else {
+            None
+        }
+    }) {
+        if let Some(mut session) = official_settings_session(settings) {
+            upsert_session_api_key(&mut session, &local_plaintext);
+            upsert_official_settings_session(settings, Some(&session));
+        }
+        sync_official_route_credentials(settings);
+        return Ok(Some(local_plaintext));
+    }
+    let ensure_response = crate::run_official_json_request_response(
+        settings,
+        "POST",
+        "/users/me/api-keys/ensure-default",
+        Some(json!({ "name": "Default API Key" })),
+    )?;
+    let mut resolved_key = extract_official_api_key_value(&ensure_response.body);
+    merge_official_api_key_records(settings, normalize_official_api_key_record(&ensure_response.body));
+
+    if resolved_key.is_none() {
+        let created = crate::run_official_json_request_response(
+            settings,
+            "POST",
+            "/users/me/api-keys",
+            Some(json!({ "name": format!("RedBox Desktop {}", now_iso()) })),
+        )?;
+        resolved_key = extract_official_api_key_value(&created.body);
+        merge_official_api_key_records(settings, normalize_official_api_key_record(&created.body));
+    }
+
+    if let Some(api_key) = resolved_key.clone() {
+        if let Some(mut session) = official_settings_session(settings) {
+            upsert_session_api_key(&mut session, &api_key);
+            upsert_official_settings_session(settings, Some(&session));
+        }
+        sync_official_route_credentials(settings);
+    }
+
+    Ok(resolved_key)
+}
+
 fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&str>) -> bool {
     let official_base_url = normalize_base_url(&official_base_url_from_settings(settings));
     let request_url = normalize_base_url(request_url);
@@ -201,7 +340,7 @@ fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&
     if !request_url.starts_with(&official_base_url) {
         return false;
     }
-    let official_token = official_auth_token_from_settings(settings).unwrap_or_default();
+    let official_token = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let provided_token = api_key.unwrap_or_default().trim();
     !official_token.trim().is_empty()
         && (provided_token.is_empty() || provided_token == official_token)
@@ -491,7 +630,7 @@ fn merge_session_with_existing(existing: Option<&Value>, session: &mut Value) {
 }
 
 fn sync_official_route_credentials(settings: &mut Value) {
-    let token = official_auth_token_from_settings(settings).unwrap_or_default();
+    let token = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let base_url = official_base_url_from_settings(settings);
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
@@ -623,7 +762,7 @@ fn clear_official_source_binding(settings: &mut Value, previous_official_token: 
 }
 
 fn clear_official_auth_state(settings: &mut Value) {
-    let previous_official_token = official_auth_token_from_settings(settings).unwrap_or_default();
+    let previous_official_token = official_ai_api_key_from_settings(settings).unwrap_or_default();
     upsert_official_settings_session(settings, None);
     clear_official_source_binding(settings, &previous_official_token);
     if let Some(object) = settings.as_object_mut() {
@@ -677,7 +816,7 @@ pub(crate) fn refresh_official_auth_for_ai_request(
     ) {
         Ok(_) => {
             let latest_settings = with_store(state, |store| Ok(store.settings.clone()))?;
-            let refreshed_token = official_auth_token_from_settings(&latest_settings)
+            let refreshed_token = official_ai_api_key_from_settings(&latest_settings)
                 .filter(|value| !value.trim().is_empty());
             if refreshed_token.is_some() {
                 log_official_auth(
@@ -773,6 +912,7 @@ fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Val
                     Ok(mut session) => {
                         merge_session_with_existing(existing_session.as_ref(), &mut session);
                         upsert_official_settings_session(settings, Some(&session));
+                        let _ = ensure_official_ai_api_key_in_settings(settings)?;
                         sync_official_route_credentials(settings);
                         return Ok(session);
                     }
@@ -1575,6 +1715,7 @@ pub fn handle_official_channel(
                     )?;
                     let session = normalize_official_auth_session(&response)?;
                     upsert_official_settings_session(&mut settings, Some(&session));
+                    let _ = ensure_official_ai_api_key_in_settings(&mut settings)?;
                     sync_official_route_credentials(&mut settings);
                     seed_official_models_from_cache(&mut settings);
                     let login_generation = auth::bump_auth_generation(
@@ -1723,6 +1864,7 @@ pub fn handle_official_channel(
                     };
                     if let Some(ref session_value) = session {
                         upsert_official_settings_session(&mut settings, Some(session_value));
+                        let _ = ensure_official_ai_api_key_in_settings(&mut settings)?;
                         sync_official_route_credentials(&mut settings);
                         seed_official_models_from_cache(&mut settings);
                     }
@@ -1796,6 +1938,7 @@ pub fn handle_official_channel(
                     )?;
                     let session = normalize_official_auth_session(&response)?;
                     upsert_official_settings_session(&mut settings, Some(&session));
+                    let _ = ensure_official_ai_api_key_in_settings(&mut settings)?;
                     sync_official_route_credentials(&mut settings);
                     seed_official_models_from_cache(&mut settings);
                     let login_generation = auth::bump_auth_generation(state, "login-wechat-code")?;
@@ -1892,41 +2035,113 @@ pub fn handle_official_channel(
                     }))
                 }),
                 "redbox-auth:api-keys:list" => with_store(state, |store| {
+                    let mut settings = store.settings.clone();
+                    let remote = crate::run_official_json_request(
+                        &settings,
+                        "GET",
+                        "/users/me/api-keys",
+                        None,
+                    )?;
+                    let remote_items = official_response_items(&remote);
+                    let local_items = official_settings_api_keys(&settings);
+                    let merged = remote_items
+                        .into_iter()
+                        .map(|item| {
+                            let id = payload_string(&item, "id").unwrap_or_default();
+                            let prefix = payload_string(&item, "key_prefix")
+                                .or_else(|| payload_string(&item, "keyPrefix"))
+                                .unwrap_or_default();
+                            let last4 = payload_string(&item, "key_last4")
+                                .or_else(|| payload_string(&item, "keyLast4"))
+                                .unwrap_or_default();
+                            let local_plaintext = local_items.iter().find_map(|local| {
+                                let id_matches =
+                                    !id.is_empty() && payload_string(local, "id").unwrap_or_default() == id;
+                                let prefix_matches = !prefix.is_empty()
+                                    && payload_string(local, "key_prefix").unwrap_or_default() == prefix;
+                                let last4_matches = !last4.is_empty()
+                                    && payload_string(local, "key_last4").unwrap_or_default() == last4;
+                                if id_matches || (prefix_matches && last4_matches) {
+                                    payload_string(local, "apiKey")
+                                } else {
+                                    None
+                                }
+                            });
+                            let mut object = item.as_object().cloned().unwrap_or_default();
+                            if let Some(api_key) = local_plaintext {
+                                object.insert("apiKey".to_string(), json!(api_key));
+                            }
+                            Value::Object(object)
+                        })
+                        .collect::<Vec<_>>();
+                    write_settings_json_array(&mut settings, "redbox_auth_api_keys_json", &merged);
                     Ok(json!({
                         "success": true,
-                        "keys": official_settings_api_keys(&store.settings)
+                        "keys": merged,
+                        "settings": settings,
+                    }))
+                })
+                .and_then(|response| {
+                    let next_settings = response
+                        .get("settings")
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &next_settings,
+                        "official-api-key-list",
+                        None,
+                        request_generation,
+                    )?;
+                    Ok(json!({
+                        "success": true,
+                        "keys": response.get("keys").cloned().unwrap_or_else(|| json!([]))
                     }))
                 }),
-                "redbox-auth:api-keys:create" => with_store_mut(state, |store| {
+                "redbox-auth:api-keys:create" => {
                     let name =
-                        payload_string(payload, "name").unwrap_or_else(|| "默认 Key".to_string());
-                    let mut settings = store.settings.clone();
-                    let mut keys = official_settings_api_keys(&settings);
-                    let key_value = format!("rbx_{}", make_id("key"));
-                    let item = json!({
-                        "id": make_id("api-key"),
-                        "name": name,
-                        "apiKey": key_value,
-                        "createdAt": now_iso(),
-                        "isCurrent": keys.is_empty(),
-                    });
-                    if keys.is_empty() {
-                        if let Some(session) =
-                            official_settings_session(&settings).map(|mut session| {
-                                if let Some(object) = session.as_object_mut() {
-                                    object.insert("apiKey".to_string(), json!(key_value));
-                                }
-                                session
+                        payload_string(payload, "name").unwrap_or_else(|| "Default API Key".to_string());
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    let response = crate::run_official_json_request(
+                        &settings,
+                        "POST",
+                        "/users/me/api-keys",
+                        Some(json!({ "name": name })),
+                    )?;
+                    let mut item =
+                        normalize_official_api_key_record(&response).unwrap_or_else(|| {
+                            json!({
+                                "id": "",
+                                "name": "Default API Key",
+                                "key_prefix": "",
+                                "key_last4": "",
+                                "is_active": true,
+                                "created_at": now_iso(),
+                                "last_used_at": Value::Null,
                             })
-                        {
+                        });
+                    if let Some(object) = item.as_object_mut() {
+                        object.insert(
+                            "apiKey".to_string(),
+                            json!(extract_official_api_key_value(&response).unwrap_or_default()),
+                        );
+                        object.insert("isCurrent".to_string(), json!(true));
+                    }
+                    merge_official_api_key_records(&mut settings, Some(item.clone()));
+                    if let Some(mut session) = official_settings_session(&settings) {
+                        if let Some(api_key) = payload_string(&item, "apiKey") {
+                            upsert_session_api_key(&mut session, &api_key);
                             upsert_official_settings_session(&mut settings, Some(&session));
                         }
                     }
-                    keys.insert(0, item.clone());
-                    write_settings_json_array(&mut settings, "redbox_auth_api_keys_json", &keys);
-                    Ok((settings, item))
-                })
-                .and_then(|(settings, item)| {
+                    let models = fetch_official_models_for_settings(&settings);
+                    write_settings_json_array(&mut settings, "redbox_official_models_json", &models);
+                    sync_official_route_credentials(&mut settings);
+                    if !models.is_empty() {
+                        official_sync_source_into_settings(&mut settings, &models);
+                    }
                     apply_official_settings_update(
                         app,
                         state,
@@ -1936,7 +2151,7 @@ pub fn handle_official_channel(
                         request_generation,
                     )?;
                     Ok(json!({ "success": true, "data": item }))
-                }),
+                }
                 "redbox-auth:api-keys:set-current" => {
                     let api_key = payload_string(payload, "apiKey").unwrap_or_default();
                     if api_key.trim().is_empty() {
@@ -1946,6 +2161,17 @@ pub fn handle_official_channel(
                     let response = {
                         let mut settings = settings_snapshot.clone();
                         let mut keys = official_settings_api_keys(&settings);
+                        let key_present_locally = keys.iter().any(|item| {
+                            payload_string(item, "apiKey")
+                                .map(|value| value == api_key)
+                                .unwrap_or(false)
+                        });
+                        if !key_present_locally {
+                            return Ok(json!({
+                                "success": false,
+                                "error": "当前设备没有该 API Key 明文，无法切换为当前使用 Key。请新建一个 API Key。"
+                            }));
+                        }
                         for item in &mut keys {
                             let is_match = payload_string(item, "apiKey")
                                 .map(|value| value == api_key)
@@ -2715,7 +2941,8 @@ mod tests {
         let mut settings = json!({
             "redbox_official_base_url": "https://api.ziz.hk",
             "redbox_auth_session_json": serde_json::to_string(&json!({
-                "accessToken": "access-1"
+                "accessToken": "access-1",
+                "apiKey": "rbx-live-1",
             }))
             .unwrap(),
             "ai_sources_json": serde_json::to_string(&vec![json!({
@@ -2732,6 +2959,7 @@ mod tests {
             payload_string(&settings, "api_endpoint").as_deref(),
             Some("https://api.ziz.hk/redbox/v1")
         );
+        assert_eq!(payload_string(&settings, "api_key").as_deref(), Some("rbx-live-1"));
         let sources = payload_string(&settings, "ai_sources_json")
             .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
             .unwrap_or_default();
@@ -2742,6 +2970,33 @@ mod tests {
                 .as_deref(),
             Some("https://api.ziz.hk/redbox/v1")
         );
+        assert_eq!(
+            sources
+                .first()
+                .and_then(|item| payload_string(item, "apiKey"))
+                .as_deref(),
+            Some("rbx-live-1")
+        );
+    }
+
+    #[test]
+    fn official_account_summary_separates_login_state_and_ai_key_presence() {
+        let settings = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1",
+                "refreshToken": "refresh-1",
+                "apiKey": "rbx-live-1",
+                "user": {
+                    "name": "Jam"
+                }
+            }))
+            .unwrap(),
+        });
+
+        let summary = official_account_summary_local(&settings, &[]);
+        assert_eq!(summary.get("loggedIn").and_then(Value::as_bool), Some(true));
+        assert_eq!(summary.get("apiKeyPresent").and_then(Value::as_bool), Some(true));
+        assert_eq!(summary.get("displayName").and_then(Value::as_str), Some("Jam"));
     }
 
     #[test]

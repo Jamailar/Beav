@@ -579,10 +579,15 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
     )
 }
 
-pub(crate) fn official_auth_token_from_settings(settings: &Value) -> Option<String> {
+pub(crate) fn official_ai_api_key_from_settings(settings: &Value) -> Option<String> {
     let session = official_settings_session(settings)?;
     payload_string(&session, "apiKey")
-        .or_else(|| payload_string(&session, "accessToken"))
+        .filter(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn official_access_token_from_settings(settings: &Value) -> Option<String> {
+    let session = official_settings_session(settings)?;
+    payload_string(&session, "accessToken")
         .filter(|value| !value.trim().is_empty())
 }
 
@@ -648,7 +653,49 @@ pub(crate) fn run_official_json_request_response(
     body: Option<Value>,
 ) -> Result<crate::HttpJsonResponse, String> {
     let base_url = official_base_url_from_settings(settings);
-    let api_key = official_auth_token_from_settings(settings);
+    let access_token = official_access_token_from_settings(settings);
+    let endpoint = format!(
+        "{}/{}",
+        normalize_base_url(&base_url),
+        path.trim_start_matches('/')
+    );
+    let response = crate::run_curl_json_response(
+        method,
+        &endpoint,
+        access_token.as_deref(),
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn run_official_ai_json_request(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_official_ai_json_request_response(settings, method, path, body).map(|response| response.body)
+}
+
+pub(crate) fn run_official_ai_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
+    let base_url = official_base_url_from_settings(settings);
+    let api_key = official_ai_api_key_from_settings(settings);
     let endpoint = format!(
         "{}/{}",
         normalize_base_url(&base_url),
@@ -779,10 +826,10 @@ pub(crate) fn official_account_summary_local(settings: &Value, models: &[Value])
     let session = official_settings_session(settings).unwrap_or_else(|| json!({}));
     let user = session.get("user").cloned().unwrap_or_else(|| json!({}));
     json!({
-        "loggedIn": official_auth_token_from_settings(settings).is_some(),
+        "loggedIn": official_access_token_from_settings(settings).is_some(),
         "displayName": user.get("displayName").cloned().or_else(|| user.get("name").cloned()).unwrap_or(Value::Null),
         "email": user.get("email").cloned().unwrap_or(Value::Null),
-        "apiKeyPresent": official_auth_token_from_settings(settings).is_some(),
+        "apiKeyPresent": official_ai_api_key_from_settings(settings).is_some(),
         "planName": user.get("planName").cloned().unwrap_or(json!("RedBox Official")),
         "pointsBalance": user.get("pointsBalance").cloned().unwrap_or(json!(0)),
         "officialBaseUrl": official_base_url_from_settings(settings),
@@ -859,7 +906,7 @@ pub(crate) fn choose_preferred_official_chat_model(
 }
 
 pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &[Value]) {
-    let api_key = official_auth_token_from_settings(settings).unwrap_or_default();
+    let api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
@@ -923,7 +970,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         fallback_chat_model,
     );
     let official_base_url = official_base_url_from_settings(settings);
-    let official_video_api_key = official_auth_token_from_settings(settings).unwrap_or_default();
+    let official_video_api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let existing_models = existing_source
         .as_ref()
         .and_then(|value| value.get("models"))
@@ -1012,7 +1059,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
 }
 
 pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value> {
-    run_official_json_request(settings, "GET", "/models", None)
+    run_official_ai_json_request(settings, "GET", "/models", None)
         .map(|remote| official_response_items(&remote))
         .unwrap_or_else(|_| official_settings_models(settings))
 }
