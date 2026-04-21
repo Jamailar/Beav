@@ -1,12 +1,10 @@
 use serde_json::{json, Value};
-use std::path::Path;
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
     build_skill_catalog_snapshot, build_skill_prompt_bundle,
     build_skill_watcher_snapshot_with_discovery, find_skill_catalog_entry_by_name,
-    load_skill_bundle_sections_from_sources, normalized_activation_scope, resolve_skill_set,
-    split_skill_body, LoadedSkillRecord, SkillWatcherSnapshot,
+    resolve_skill_set, LoadedSkillRecord, SkillWatcherSnapshot,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -26,115 +24,9 @@ pub struct SkillRuntimeState {
     pub skills_section: String,
 }
 
-fn format_optional_list(label: &str, values: &[String]) -> Option<String> {
-    if values.is_empty() {
-        return None;
-    }
-    Some(format!("<{}>{}</{}>", label, values.join(", "), label))
-}
-
 pub fn find_catalog_skill_by_name(skills: &[SkillRecord], name: &str) -> Option<LoadedSkillRecord> {
     let snapshot = build_skill_catalog_snapshot(skills);
     find_skill_catalog_entry_by_name(&snapshot, name)
-}
-
-pub fn render_invoked_skill_bundle(
-    skill: &LoadedSkillRecord,
-    workspace_root: Option<&Path>,
-) -> String {
-    let bundle = load_skill_bundle_sections_from_sources(&skill.name, workspace_root);
-    let source_body = if bundle.body.trim().is_empty() {
-        skill.body.as_str()
-    } else {
-        bundle.body.as_str()
-    };
-    let (_, instructions) = split_skill_body(source_body);
-    let rules = bundle
-        .rules
-        .iter()
-        .filter_map(|(name, body)| {
-            let (_, content) = split_skill_body(body);
-            if content.trim().is_empty() {
-                None
-            } else {
-                Some(format!("## {name}\n{content}"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    let metadata_lines = [
-        Some(format!("<name>{}</name>", skill.name)),
-        Some(format!("<description>{}</description>", skill.description)),
-        skill
-            .metadata
-            .hook_mode
-            .as_ref()
-            .map(|value| format!("<hook_mode>{value}</hook_mode>")),
-        Some(format!(
-            "<activation_scope>{}</activation_scope>",
-            normalized_activation_scope(skill.metadata.activation_scope.as_deref())
-        )),
-        skill
-            .source_scope
-            .as_ref()
-            .map(|value| format!("<source_scope>{value}</source_scope>")),
-        Some(format!("<is_builtin>{}</is_builtin>", skill.is_builtin)),
-        Some(format!("<disabled>{}</disabled>", skill.disabled)),
-        format_optional_list(
-            "allowed_runtime_modes",
-            &skill.metadata.allowed_runtime_modes,
-        ),
-        skill
-            .metadata
-            .allowed_tool_pack
-            .as_ref()
-            .map(|value| format!("<allowed_tool_pack>{value}</allowed_tool_pack>")),
-        format_optional_list("allowed_tools", &skill.metadata.allowed_tools),
-        format_optional_list("blocked_tools", &skill.metadata.blocked_tools),
-        skill
-            .metadata
-            .context_note
-            .as_ref()
-            .map(|value| format!("<context_note>{value}</context_note>")),
-        skill
-            .metadata
-            .activation_hint
-            .as_ref()
-            .map(|value| format!("<activation_hint>{value}</activation_hint>")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join("\n");
-
-    let mut parts = vec![
-        format!("<activated_skill name=\"{}\">", skill.name),
-        "<metadata>".to_string(),
-        metadata_lines,
-        "</metadata>".to_string(),
-        "<instructions>".to_string(),
-        instructions,
-        "</instructions>".to_string(),
-    ];
-
-    if !bundle.references.trim().is_empty() {
-        parts.push("<references>".to_string());
-        parts.push(bundle.references.trim().to_string());
-        parts.push("</references>".to_string());
-    }
-    if !bundle.scripts.trim().is_empty() {
-        parts.push("<scripts>".to_string());
-        parts.push(bundle.scripts.trim().to_string());
-        parts.push("</scripts>".to_string());
-    }
-    if !rules.trim().is_empty() {
-        parts.push("<rules>".to_string());
-        parts.push(rules);
-        parts.push("</rules>".to_string());
-    }
-    parts.push("</activated_skill>".to_string());
-    parts.join("\n")
 }
 
 pub fn build_skill_runtime_state(

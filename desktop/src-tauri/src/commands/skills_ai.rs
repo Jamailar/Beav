@@ -119,14 +119,12 @@ pub fn handle_skills_ai_channel(
                 }
                 let session_id = payload_string(payload, "sessionId");
                 let runtime_mode_hint = payload_string(payload, "runtimeMode");
-                let workspace = workspace_root(state).ok();
                 let outcome = invoke_skill(
                     state,
                     SkillInvokeRequest {
                         skill_name: &requested_name,
                         session_id: session_id.as_deref(),
                         runtime_mode_hint: runtime_mode_hint.as_deref(),
-                        workspace_root: workspace.as_deref(),
                     },
                 )?;
                 let _ = record_skill_invocation_metric(
@@ -166,7 +164,13 @@ pub fn handle_skills_ai_channel(
                     "runtimeMode": outcome.runtime_mode,
                     "sessionId": session_id,
                     "activeSkills": outcome.active_skills,
-                    "activatedSkill": outcome.rendered_bundle
+                    "activationTransition": {
+                        "kind": "skillActivation",
+                        "continueWithUpdatedContext": true,
+                        "suppressActivationNarration": true,
+                        "doNotRepeatInvocation": true,
+                        "activatedSkillNames": [outcome.skill_name.clone()]
+                    }
                 }))
             }
             "skills:create" => {

@@ -60,13 +60,24 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
     }
 
     if resolved.can_invoke_skill {
+        let active_names = resolved
+            .active_skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>();
         let mut sections = vec![
             "You have access to specialized skills in this runtime.".to_string(),
             "Keep full skill bodies out of context until they are actually needed.".to_string(),
-            "Visible skills below are not active by default unless marked `[auto]`.".to_string(),
+            "Skills listed later in the activated-skills section are already active; all other visible skills are not active by default unless marked `[auto]`.".to_string(),
             "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
             "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
         ];
+        if !active_names.is_empty() {
+            sections.push(format!(
+                "Already active in this session: {}. Do not invoke those skills again unless activation failed.",
+                active_names.join(", ")
+            ));
+        }
         if !preflight_rules.is_empty() {
             sections.push("Mandatory preflight rules:".to_string());
             sections.extend(preflight_rules.into_iter().map(ToString::to_string));
@@ -126,7 +137,7 @@ mod tests {
                 name: "writing-style".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/writing-style".to_string(),
-                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationScope: session\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -141,9 +152,39 @@ mod tests {
             .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
         assert!(bundle
             .catalog_section
-            .contains("Visible skills below are not active by default"));
+            .contains("all other visible skills are not active by default"));
         assert!(bundle
             .catalog_section
             .contains("Activate when: when writing"));
+    }
+
+    #[test]
+    fn build_skill_prompt_bundle_marks_existing_active_skills() {
+        let resolved = resolve_skill_set(
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationScope: session\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "wander",
+            Some(&serde_json::json!({
+                "sessionSkillState": {
+                    "requested": [{ "skillName": "writing-style", "requestedScope": "session" }],
+                    "active": [{ "skillName": "writing-style", "requestedScope": "session" }]
+                }
+            })),
+            &["app_cli".to_string()],
+        );
+        let bundle = build_skill_prompt_bundle(&resolved);
+        assert!(bundle
+            .catalog_section
+            .contains("Already active in this session: writing-style"));
+        assert!(bundle
+            .catalog_section
+            .contains("Do not invoke those skills again unless activation failed"));
     }
 }

@@ -3651,22 +3651,29 @@ struct StreamingChatCompletion {
 fn interactive_runtime_message_bundle(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
-    runtime_mode: &str,
     message: &str,
-) -> Result<(String, Vec<Value>, Vec<Value>), String> {
-    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
-    system_prompt.push_str(&editor_session_prompt_context(
-        state,
-        session_id,
-        runtime_mode,
-    ));
+) -> Result<(Vec<Value>, Vec<Value>), String> {
     let history_messages = load_runtime_history_messages(state, session_id)?;
     let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
     let user_message = canonical_text_message("user", message.to_string());
     prompt_messages.push(user_message.clone());
     let mut full_history_messages = history_messages;
     full_history_messages.push(user_message);
-    Ok((system_prompt, prompt_messages, full_history_messages))
+    Ok((prompt_messages, full_history_messages))
+}
+
+fn interactive_runtime_turn_system_prompt(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    runtime_mode: &str,
+) -> String {
+    let mut system_prompt = interactive_runtime_system_prompt(state, runtime_mode, session_id);
+    system_prompt.push_str(&editor_session_prompt_context(
+        state,
+        session_id,
+        runtime_mode,
+    ));
+    system_prompt
 }
 
 fn load_runtime_history_messages(
@@ -3940,20 +3947,25 @@ fn finalize_interactive_runtime_state(
     );
 }
 
-fn append_internal_runtime_user_message(
+fn append_prompt_and_canonical_message(
+    prompt_messages: &mut Vec<Value>,
     canonical_messages: &mut Vec<Value>,
-    provider_messages: &mut Vec<Value>,
-    instruction: String,
-    map_messages: fn(&[Value]) -> Vec<Value>,
+    message: Value,
 ) {
-    let internal_message = canonical_text_message("user", instruction);
-    canonical_messages.push(internal_message.clone());
-    if let Some(provider_message) = map_messages(std::slice::from_ref(&internal_message))
-        .into_iter()
-        .next()
-    {
-        provider_messages.push(provider_message);
-    }
+    prompt_messages.push(message.clone());
+    canonical_messages.push(message);
+}
+
+fn append_internal_runtime_user_message(
+    prompt_messages: &mut Vec<Value>,
+    canonical_messages: &mut Vec<Value>,
+    instruction: String,
+) {
+    append_prompt_and_canonical_message(
+        prompt_messages,
+        canonical_messages,
+        canonical_text_message("user", instruction),
+    );
 }
 
 fn build_interactive_tool_outcome_digest(
@@ -3968,6 +3980,48 @@ fn build_interactive_tool_outcome_digest(
         success,
         text_snippet(content, 240),
     )
+}
+
+fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<String> {
+    if tool_name != "app_cli" {
+        return Vec::new();
+    }
+    let Some(transition) = result.get("activationTransition") else {
+        return Vec::new();
+    };
+    if !transition
+        .get("continueWithUpdatedContext")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Vec::new();
+    }
+    let mut activated = transition
+        .get("activatedSkillNames")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    activated.sort_by_key(|name| name.to_ascii_lowercase());
+    activated.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    activated
+}
+
+fn interactive_skill_activation_continuation(names: &[String]) -> Option<String> {
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "系统状态更新：以下技能已激活并写入当前会话：{}。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
+        names.join(", ")
+    ))
 }
 
 fn emit_loop_guard_checkpoint(
@@ -4580,9 +4634,8 @@ fn run_anthropic_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
-    let mut messages = canonical_messages_to_anthropic_messages(&prompt_messages);
+    let (mut prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, message)?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -4619,17 +4672,15 @@ fn run_anthropic_interactive_chat_runtime(
 
         if let Some(instruction) = forced_toolless_instruction {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut messages,
                 instruction,
-                canonical_messages_to_anthropic_messages,
             );
         } else if tool_turn_limit_reached {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut messages,
                 TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
-                canonical_messages_to_anthropic_messages,
             );
         }
 
@@ -4638,6 +4689,8 @@ fn run_anthropic_interactive_chat_runtime(
         } else {
             anthropic_tools_for_session(state, runtime_mode, session_id)
         };
+        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let messages = canonical_messages_to_anthropic_messages(&prompt_messages);
 
         let mut body = json!({
             "model": config.model_name,
@@ -5003,31 +5056,12 @@ fn run_anthropic_interactive_chat_runtime(
                 None,
             );
         }
-        canonical_messages.push(canonical_assistant_message(
-            assistant_text.clone(),
-            &tool_calls,
-        ));
-
-        let mut assistant_blocks = Vec::<Value>::new();
-        if !assistant_text.trim().is_empty() {
-            assistant_blocks.push(json!({
-                "type": "text",
-                "text": assistant_text
-            }));
-        }
-        for call in &tool_calls {
-            assistant_blocks.push(json!({
-                "type": "tool_use",
-                "id": call.id,
-                "name": call.name,
-                "input": call.arguments
-            }));
-        }
-        messages.push(json!({
-            "role": "assistant",
-            "content": assistant_blocks
-        }));
-
+        append_prompt_and_canonical_message(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            canonical_assistant_message(assistant_text.clone(), &tool_calls),
+        );
+        let mut skill_activation_names = Vec::<String>::new();
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         for call in tool_calls {
             let description = format!("Interactive tool call: {}", call.name);
@@ -5052,6 +5086,8 @@ fn run_anthropic_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let activated_skills =
+                        interactive_skill_activation_names(&call.name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             &call.name,
@@ -5077,14 +5113,6 @@ fn run_anthropic_interactive_chat_runtime(
                         true,
                         &result_text,
                     );
-                    messages.push(json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": call.id,
-                            "content": result_text
-                        }]
-                    }));
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
                             let (runtime_id, parent_runtime_id, source_task_id) =
@@ -5105,19 +5133,25 @@ fn run_anthropic_interactive_chat_runtime(
                                 original_chars: Some(raw_result_text.chars().count() as i64),
                                 prompt_chars: Some(result_text.chars().count() as i64),
                                 truncated: result_truncated,
-                                payload: Some(result_value),
+                                payload: Some(result_value.clone()),
                                 created_at: now_i64(),
                                 updated_at: now_i64(),
                             });
                             Ok(())
                         });
                     }
-                    canonical_messages.push(canonical_tool_result_message(
+                    let tool_message = canonical_tool_result_message(
                         &call.id,
                         &call.name,
                         result_text.clone(),
                         true,
-                    ));
+                    );
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        tool_message,
+                    );
+                    skill_activation_names.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -5127,21 +5161,11 @@ fn run_anthropic_interactive_chat_runtime(
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
-                    canonical_messages.push(canonical_tool_result_message(
-                        &call.id,
-                        &call.name,
-                        error.clone(),
-                        false,
-                    ));
-                    messages.push(json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": call.id,
-                            "content": error.clone(),
-                            "is_error": true
-                        }]
-                    }));
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        canonical_tool_result_message(&call.id, &call.name, error.clone(), false),
+                    );
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -5159,6 +5183,15 @@ fn run_anthropic_interactive_chat_runtime(
                     call.name,
                     now_ms().saturating_sub(tool_started_at)
                 ),
+            );
+        }
+        if let Some(instruction) =
+            interactive_skill_activation_continuation(&skill_activation_names)
+        {
+            append_internal_runtime_user_message(
+                &mut prompt_messages,
+                &mut canonical_messages,
+                instruction,
             );
         }
         save_runtime_session_bundle(
@@ -5187,9 +5220,8 @@ fn run_gemini_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
-    let mut contents = canonical_messages_to_gemini_contents(&prompt_messages);
+    let (mut prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, message)?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -5226,17 +5258,15 @@ fn run_gemini_interactive_chat_runtime(
 
         if let Some(instruction) = forced_toolless_instruction {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut contents,
                 instruction,
-                canonical_messages_to_gemini_contents,
             );
         } else if tool_turn_limit_reached {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut contents,
                 TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
-                canonical_messages_to_gemini_contents,
             );
         }
 
@@ -5245,6 +5275,8 @@ fn run_gemini_interactive_chat_runtime(
         } else {
             gemini_tools_for_session(state, runtime_mode, session_id)
         };
+        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let contents = canonical_messages_to_gemini_contents(&prompt_messages);
 
         let mut body = json!({
             "system_instruction": {
@@ -5602,31 +5634,13 @@ fn run_gemini_interactive_chat_runtime(
                 None,
             );
         }
-        canonical_messages.push(canonical_assistant_message(
-            assistant_text.clone(),
-            &tool_calls,
-        ));
-
-        let mut assistant_parts = Vec::<Value>::new();
-        if !assistant_text.trim().is_empty() {
-            assistant_parts.push(json!({ "text": assistant_text }));
-        }
-        for call in &tool_calls {
-            assistant_parts.push(json!({
-                "functionCall": {
-                    "id": call.id,
-                    "name": call.name,
-                    "args": call.arguments
-                }
-            }));
-        }
-        contents.push(json!({
-            "role": "model",
-            "parts": assistant_parts
-        }));
-
+        append_prompt_and_canonical_message(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            canonical_assistant_message(assistant_text.clone(), &tool_calls),
+        );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
-        let mut response_parts = Vec::<Value>::new();
+        let mut skill_activation_names = Vec::<String>::new();
         for call in tool_calls {
             let description = format!("Interactive tool call: {}", call.name);
             emit_runtime_tool_request(
@@ -5650,6 +5664,8 @@ fn run_gemini_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let activated_skills =
+                        interactive_skill_activation_names(&call.name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             &call.name,
@@ -5675,13 +5691,6 @@ fn run_gemini_interactive_chat_runtime(
                         true,
                         &result_text,
                     );
-                    response_parts.push(json!({
-                        "functionResponse": {
-                            "id": call.id,
-                            "name": call.name,
-                            "response": if result_value.is_object() { result_value.clone() } else { json!({ "result": result_value }) }
-                        }
-                    }));
                     if let Some(session_id) = session_id {
                         let _ = with_store_mut(state, |store| {
                             let (runtime_id, parent_runtime_id, source_task_id) =
@@ -5702,19 +5711,24 @@ fn run_gemini_interactive_chat_runtime(
                                 original_chars: Some(raw_result_text.chars().count() as i64),
                                 prompt_chars: Some(result_text.chars().count() as i64),
                                 truncated: result_truncated,
-                                payload: Some(result_value),
+                                payload: Some(result_value.clone()),
                                 created_at: now_i64(),
                                 updated_at: now_i64(),
                             });
                             Ok(())
                         });
                     }
-                    canonical_messages.push(canonical_tool_result_message(
-                        &call.id,
-                        &call.name,
-                        result_text.clone(),
-                        true,
-                    ));
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        canonical_tool_result_message(
+                            &call.id,
+                            &call.name,
+                            result_text.clone(),
+                            true,
+                        ),
+                    );
+                    skill_activation_names.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -5724,19 +5738,11 @@ fn run_gemini_interactive_chat_runtime(
                 }
                 Err(error) => {
                     emit_runtime_tool_result(app, session_id, &call.id, &call.name, false, &error);
-                    canonical_messages.push(canonical_tool_result_message(
-                        &call.id,
-                        &call.name,
-                        error.clone(),
-                        false,
-                    ));
-                    response_parts.push(json!({
-                        "functionResponse": {
-                            "id": call.id,
-                            "name": call.name,
-                            "response": { "error": error }
-                        }
-                    }));
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        canonical_tool_result_message(&call.id, &call.name, error.clone(), false),
+                    );
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -5756,6 +5762,15 @@ fn run_gemini_interactive_chat_runtime(
                 ),
             );
         }
+        if let Some(instruction) =
+            interactive_skill_activation_continuation(&skill_activation_names)
+        {
+            append_internal_runtime_user_message(
+                &mut prompt_messages,
+                &mut canonical_messages,
+                instruction,
+            );
+        }
         save_runtime_session_bundle(
             state,
             session_id,
@@ -5764,10 +5779,6 @@ fn run_gemini_interactive_chat_runtime(
             &config.model_name,
             &canonical_messages,
         )?;
-        contents.push(json!({
-            "role": "user",
-            "parts": response_parts
-        }));
         if let Some(reason) = loop_guard.observe_tool_round(&tool_round_digests) {
             emit_loop_guard_checkpoint(app, session_id, &reason, &tool_round_digests);
         }
@@ -5784,17 +5795,8 @@ fn run_openai_interactive_chat_runtime(
     message: &str,
     runtime_mode: &str,
 ) -> Result<String, String> {
-    let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
-    let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
-    messages.insert(
-        0,
-        json!({
-            "role": "system",
-            "content": system_prompt
-        }),
-    );
-
+    let (mut prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, message)?;
     let is_wander = runtime_mode == "wander";
     let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
     let disable_qwen_thinking =
@@ -5845,19 +5847,26 @@ fn run_openai_interactive_chat_runtime(
         );
         if let Some(instruction) = forced_toolless_instruction {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut messages,
                 instruction,
-                canonical_messages_to_openai_messages,
             );
         } else if tool_turn_limit_reached {
             append_internal_runtime_user_message(
+                &mut prompt_messages,
                 &mut canonical_messages,
-                &mut messages,
                 TOOL_BUDGET_EXHAUSTED_MESSAGE.to_string(),
-                canonical_messages_to_openai_messages,
             );
         }
+        let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
+        messages.insert(
+            0,
+            json!({
+                "role": "system",
+                "content": system_prompt
+            }),
+        );
         let tool_choice = if forcing_toolless_turn {
             json!("none")
         } else if is_wander && tool_turn == 1 {
@@ -5982,10 +5991,9 @@ fn run_openai_interactive_chat_runtime(
             if is_wander && !wander_saw_tool_call && tool_turn < INTERACTIVE_MAX_TOOL_TURNS {
                 let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 append_internal_runtime_user_message(
+                    &mut prompt_messages,
                     &mut canonical_messages,
-                    &mut messages,
                     correction.to_string(),
-                    canonical_messages_to_openai_messages,
                 );
                 continue;
             }
@@ -6069,17 +6077,13 @@ fn run_openai_interactive_chat_runtime(
                 );
             }
         }
-        canonical_messages.push(canonical_assistant_message(
-            assistant_content.clone(),
-            &tool_calls,
-        ));
-        messages.push(json!({
-            "role": "assistant",
-            "content": assistant_content,
-            "tool_calls": tool_calls.iter().map(|call| call.raw.clone()).collect::<Vec<_>>()
-        }));
-
+        append_prompt_and_canonical_message(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            canonical_assistant_message(assistant_content.clone(), &tool_calls),
+        );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
+        let mut skill_activation_names = Vec::<String>::new();
         for call in tool_calls {
             let tool_started_at = now_ms();
             let normalized_tool_call =
@@ -6115,6 +6119,8 @@ fn run_openai_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
+                    let activated_skills =
+                        interactive_skill_activation_names(effective_tool_name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             effective_tool_name,
@@ -6179,9 +6185,9 @@ fn run_openai_interactive_chat_runtime(
                             prompt_chars: None,
                             truncated: result_truncated,
                             payload: Some(json!({
-                                "arguments": effective_arguments,
+                                "arguments": effective_arguments.clone(),
                                 "requestedToolName": call.name,
-                                "result": result_value
+                                "result": result_value.clone()
                             })),
                             created_at: now_i64(),
                             updated_at: now_i64(),
@@ -6203,17 +6209,17 @@ fn run_openai_interactive_chat_runtime(
                         );
                         Ok(())
                     })?;
-                    canonical_messages.push(canonical_tool_result_message(
-                        &call.id,
-                        effective_tool_name,
-                        result_text.clone(),
-                        true,
-                    ));
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result_text
-                    }));
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        canonical_tool_result_message(
+                            &call.id,
+                            effective_tool_name,
+                            result_text.clone(),
+                            true,
+                        ),
+                    );
+                    skill_activation_names.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
                         &effective_arguments,
@@ -6264,7 +6270,7 @@ fn run_openai_interactive_chat_runtime(
                             prompt_chars: None,
                             truncated: false,
                             payload: Some(json!({
-                                "arguments": effective_arguments,
+                                "arguments": effective_arguments.clone(),
                                 "requestedToolName": call.name
                             })),
                             created_at: now_i64(),
@@ -6289,17 +6295,16 @@ fn run_openai_interactive_chat_runtime(
                         );
                         Ok(())
                     })?;
-                    canonical_messages.push(canonical_tool_result_message(
-                        &call.id,
-                        effective_tool_name,
-                        failure_text.clone(),
-                        false,
-                    ));
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": failure_text
-                    }));
+                    append_prompt_and_canonical_message(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        canonical_tool_result_message(
+                            &call.id,
+                            effective_tool_name,
+                            failure_text.clone(),
+                            false,
+                        ),
+                    );
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
                         &effective_arguments,
@@ -6308,6 +6313,15 @@ fn run_openai_interactive_chat_runtime(
                     ));
                 }
             }
+        }
+        if let Some(instruction) =
+            interactive_skill_activation_continuation(&skill_activation_names)
+        {
+            append_internal_runtime_user_message(
+                &mut prompt_messages,
+                &mut canonical_messages,
+                instruction,
+            );
         }
         save_runtime_session_bundle(
             state,
@@ -6336,8 +6350,9 @@ fn run_openai_prompted_streaming_fallback(
     message: &str,
     runtime_mode: &str,
 ) -> Result<String, String> {
-    let (system_prompt, prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, runtime_mode, message)?;
+    let (prompt_messages, mut canonical_messages) =
+        interactive_runtime_message_bundle(state, session_id, message)?;
+    let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
     let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
     messages.insert(
         0,

@@ -1,11 +1,9 @@
-use std::path::Path;
-
 use tauri::State;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     find_catalog_skill_by_name, merge_requested_skills_into_session, normalized_activation_scope,
-    render_invoked_skill_bundle, skill_allows_runtime_mode, SkillActivationSource,
+    skill_allows_runtime_mode, SkillActivationSource,
 };
 use crate::AppState;
 
@@ -14,7 +12,6 @@ pub struct SkillInvokeRequest<'a> {
     pub skill_name: &'a str,
     pub session_id: Option<&'a str>,
     pub runtime_mode_hint: Option<&'a str>,
-    pub workspace_root: Option<&'a Path>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +22,6 @@ pub struct SkillInvokeOutcome {
     pub runtime_mode: String,
     pub active_skills: Vec<String>,
     pub persisted_to_session: bool,
-    pub rendered_bundle: String,
 }
 
 fn merge_active_skill_into_session(
@@ -101,7 +97,6 @@ pub fn invoke_skill(
     let activation_scope = normalized_activation_scope(skill.metadata.activation_scope.as_deref());
     let (active_skills, persisted_to_session) =
         effective_active_skill_names(state, request.session_id, &skill.name, activation_scope)?;
-    let rendered_bundle = render_invoked_skill_bundle(&skill, request.workspace_root);
     Ok(SkillInvokeOutcome {
         skill_name: skill.name,
         description: skill.description,
@@ -109,6 +104,5 @@ pub fn invoke_skill(
         runtime_mode,
         active_skills,
         persisted_to_session,
-        rendered_bundle,
     })
 }

@@ -47,6 +47,19 @@ const isVideoAssetUrl = (value: string): boolean => {
   return ['.mp4', '.webm', '.mov', '.m4v'].some((ext) => normalized.includes(ext));
 };
 
+const INTERNAL_PROTOCOL_BLOCKS = [
+  /<tool_call>[\s\S]*?<\/tool_call>/gi,
+  /<activated_skill\b[\s\S]*?<\/activated_skill>/gi,
+];
+
+const stripInternalProtocolMarkup = (value: string): string => {
+  let sanitized = String(value || '');
+  for (const pattern of INTERNAL_PROTOCOL_BLOCKS) {
+    sanitized = sanitized.replace(pattern, '');
+  }
+  return sanitized.replace(/\n{3,}/g, '\n\n').trim();
+};
+
 function InlineCopyButton({ text, label = '复制' }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -310,6 +323,9 @@ export const MessageItem = memo(({
   workflowEmphasis = 'default',
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
+  const sanitizedAssistantContent = !isUser
+    ? stripInternalProtocolMarkup(String(msg.content || ''))
+    : String(msg.content || '');
   const aiContentRef = useRef<HTMLDivElement | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [imageMenu, setImageMenu] = useState<ImageContextMenuState>({
@@ -318,7 +334,7 @@ export const MessageItem = memo(({
     y: 0,
     src: '',
   });
-  const hasAssistantResponseContent = !isUser && Boolean(String(msg.content || '').trim());
+  const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
   const showPendingThinkingIndicator = !isUser && Boolean(msg.isStreaming && !hasAssistantResponseContent);
   const showProcessingTimer = !isUser && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
   const hasRenderableMessageContent = isUser
@@ -333,7 +349,7 @@ export const MessageItem = memo(({
         .find((item) => item.type === 'thought' && String(item.content || '').trim())
     : undefined;
   const activeThoughtContent = !isUser
-    ? String(latestTimelineThought?.content || msg.thinking || '').trim()
+    ? stripInternalProtocolMarkup(String(latestTimelineThought?.content || msg.thinking || ''))
     : '';
   const showStreamingThought = !isUser && Boolean(msg.isStreaming && activeThoughtContent);
 
@@ -558,7 +574,7 @@ export const MessageItem = memo(({
         <div className="mb-4 w-full max-w-3xl space-y-3">
           {/* Thinking Bubble */}
           {msg.thinking && (
-            renderThoughtText(msg.thinking)
+            renderThoughtText(stripInternalProtocolMarkup(msg.thinking))
           )}
 
           {/* Activated Skill */}
@@ -637,14 +653,14 @@ export const MessageItem = memo(({
                 {showPendingThinkingIndicator ? (
                   <ThinkingIndicator />
                 ) : msg.isStreaming ? (
-                  <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                  <div className="whitespace-pre-wrap break-words">{sanitizedAssistantContent}</div>
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={markdownComponents}
                     urlTransform={transformMarkdownUrl}
                   >
-                    {msg.content}
+                    {sanitizedAssistantContent}
                   </ReactMarkdown>
                 )}
                 {msg.isStreaming && !showPendingThinkingIndicator && (
@@ -653,10 +669,10 @@ export const MessageItem = memo(({
               </div>
             </div>
             {/* 复制按钮 */}
-            {!msg.isStreaming && msg.content && (
+            {!msg.isStreaming && sanitizedAssistantContent && (
               <div className="chat-ai-actions opacity-0 transition-opacity group-hover:opacity-100">
                 <button
-                  onClick={() => onCopyMessage(msg.id, msg.content)}
+                  onClick={() => onCopyMessage(msg.id, sanitizedAssistantContent)}
                   className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
                   title="复制内容"
                 >
@@ -686,7 +702,7 @@ export const MessageItem = memo(({
       {!showWorkflowOnTop && showLegacyWorkflow && (
         <div className="mt-3 w-full max-w-3xl space-y-3">
           {msg.thinking && (
-            renderThoughtText(msg.thinking)
+            renderThoughtText(stripInternalProtocolMarkup(msg.thinking))
           )}
           {msg.activatedSkill && (
             <SkillActivatedBadge
