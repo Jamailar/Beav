@@ -1188,7 +1188,7 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
-            "list" => self.call_channel("skills:list", json!({})),
+            "list" => self.call_channel("skills:list", json!({ "includeBody": false })),
             "invoke" => self.call_channel(
                 "skills:invoke",
                 json!({

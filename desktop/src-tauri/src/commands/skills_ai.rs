@@ -83,6 +83,10 @@ pub fn handle_skills_ai_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "skills:list" => {
+                let include_body = payload
+                    .get("includeBody")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
                 let workspace = workspace_root(state).ok();
                 let discovery_fingerprint =
                     compute_skill_discovery_fingerprint(workspace.as_deref());
@@ -90,6 +94,7 @@ pub fn handle_skills_ai_channel(
                     Ok(skills_catalog_list_value(
                         &store.skills,
                         Some(discovery_fingerprint.as_str()),
+                        include_body,
                     ))
                 })?;
                 let changed = {

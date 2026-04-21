@@ -170,6 +170,7 @@ pub fn active_skill_activation_items(
 pub fn skills_catalog_list_value(
     skills: &[SkillRecord],
     discovery_fingerprint: Option<&str>,
+    include_body: bool,
 ) -> (Value, SkillWatcherSnapshot) {
     let state = build_skill_runtime_state(skills, "default", None, &[]);
     let watcher = build_skill_watcher_snapshot_with_discovery(
@@ -181,11 +182,10 @@ pub fn skills_catalog_list_value(
             .iter()
             .zip(state.catalog.iter())
             .map(|(record, skill)| {
-                json!({
+                let mut item = json!({
                     "name": skill.name,
                     "description": skill.description,
                     "location": skill.location,
-                    "body": record.body,
                     "sourceScope": skill.source_scope,
                     "isBuiltin": skill.is_builtin,
                     "disabled": skill.disabled,
@@ -193,7 +193,11 @@ pub fn skills_catalog_list_value(
                     "watchFingerprint": skill.fingerprint,
                     "catalogFingerprint": watcher.fingerprint,
                     "discoveryFingerprint": watcher.discovery_fingerprint,
-                })
+                });
+                if include_body {
+                    item["body"] = json!(record.body);
+                }
+                item
             })
             .collect::<Vec<_>>()),
         watcher,
@@ -329,6 +333,14 @@ mod tests {
             ],
         );
         assert!(default_state.active_skills.is_empty());
+    }
+
+    #[test]
+    fn skills_catalog_list_value_can_omit_large_bodies() {
+        let (list, _) = skills_catalog_list_value(&skills(), None, false);
+        let items = list.as_array().expect("skills list should be an array");
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|item| item.get("body").is_none()));
     }
 
     #[test]
