@@ -6083,8 +6083,8 @@ fn run_openai_interactive_chat_runtime(
         interactive_runtime_message_bundle(state, session_id, message)?;
     let is_wander = runtime_mode == "wander";
     let lower_model_hint = format!("{} {}", config.model_name, config.base_url).to_lowercase();
-    let disable_qwen_thinking =
-        is_wander && (lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope"));
+    let is_qwen_compatible_model =
+        lower_model_hint.contains("qwen") || lower_model_hint.contains("dashscope");
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut wander_saw_tool_call = false;
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -6112,6 +6112,10 @@ fn run_openai_interactive_chat_runtime(
         if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
+        let requires_forced_tool_choice =
+            ((is_wander && tool_turn == 1) || must_force_first_tool_turn) && !forcing_toolless_turn;
+        let disable_thinking_for_turn = (is_wander && is_qwen_compatible_model)
+            || (is_qwen_compatible_model && requires_forced_tool_choice);
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
         if let Some(current_session_id) = session_id {
             emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
@@ -6139,7 +6143,7 @@ fn run_openai_interactive_chat_runtime(
                 } else {
                     "auto"
                 },
-                disable_qwen_thinking
+                disable_thinking_for_turn
             ),
         );
         if let Some(instruction) = forced_toolless_instruction {
@@ -6184,7 +6188,7 @@ fn run_openai_interactive_chat_runtime(
             "tool_choice": tool_choice,
             "stream": !is_wander
         });
-        if disable_qwen_thinking {
+        if disable_thinking_for_turn {
             body["enable_thinking"] = json!(false);
         }
         if is_wander {
