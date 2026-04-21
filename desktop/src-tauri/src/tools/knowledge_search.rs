@@ -18,9 +18,16 @@ const DEFAULT_READ_MAX_CHARS: usize = 8000;
 const DEFAULT_SNIPPET_CHARS: usize = 220;
 
 #[derive(Debug, Clone)]
-struct AdvisorKnowledgeScope {
-    advisor_id: String,
-    advisor_name: String,
+enum KnowledgeScopeKind {
+    Advisor,
+    Workspace,
+}
+
+#[derive(Debug, Clone)]
+struct KnowledgeScope {
+    kind: KnowledgeScopeKind,
+    advisor_id: Option<String>,
+    advisor_name: Option<String>,
     root: PathBuf,
 }
 
@@ -31,7 +38,7 @@ pub fn execute_glob(
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
-    let pattern_text = payload_string(arguments, "pattern").unwrap_or_else(|| "**/*".to_string());
+    let pattern_text = list_pattern_for_scope(&scope, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;
     let mut matched = collect_matching_files(&scope.root, &pattern)?;
     matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -39,6 +46,7 @@ pub fn execute_glob(
     matched.truncate(limit);
 
     Ok(json!({
+        "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "rootPath": scope.root.display().to_string(),
@@ -65,7 +73,7 @@ pub fn execute_grep(
     let query = payload_string(arguments, "query")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "knowledge_grep requires query".to_string())?;
-    let pattern_text = payload_string(arguments, "pattern").unwrap_or_else(|| "**/*".to_string());
+    let pattern_text = search_pattern_for_scope(&scope, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
     let snippet_chars = parse_usize(arguments, "snippetChars", DEFAULT_SNIPPET_CHARS, 800);
@@ -101,6 +109,7 @@ pub fn execute_grep(
     }
 
     Ok(json!({
+        "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "rootPath": scope.root.display().to_string(),
@@ -119,7 +128,8 @@ pub fn execute_read(
     let scope = resolve_scope(state, session_id, arguments)?;
     let relative_path = payload_string(arguments, "path")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "knowledge_read requires path".to_string())?;
+        .ok_or_else(|| "knowledge_read requires path".to_string())
+        .and_then(|value| normalize_scope_relative_path(&scope, &value))?;
     let offset = parse_usize(arguments, "offset", 0, usize::MAX);
     let limit = parse_usize(arguments, "limit", DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
     let max_chars = parse_usize(arguments, "maxChars", DEFAULT_READ_MAX_CHARS, 20_000);
@@ -138,6 +148,7 @@ pub fn execute_read(
     let truncated = sliced.chars().count() > max_chars;
 
     Ok(json!({
+        "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "rootPath": scope.root.display().to_string(),
@@ -165,26 +176,125 @@ fn resolve_scope(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     arguments: &Value,
-) -> Result<AdvisorKnowledgeScope, String> {
+) -> Result<KnowledgeScope, String> {
     let advisor_id = payload_string(arguments, "advisorId")
-        .or_else(|| resolve_session_advisor_id(state, session_id))
-        .ok_or_else(|| {
-            "knowledge tool requires advisorId, or a session bound to one advisor".to_string()
-        })?;
-    let advisor = with_store(state, |store| {
-        Ok(store
-            .advisors
-            .iter()
-            .find(|item| item.id == advisor_id)
-            .map(|item| (item.id.clone(), item.name.clone())))
-    })?
-    .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
-    let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
-    Ok(AdvisorKnowledgeScope {
-        advisor_id: advisor.0,
-        advisor_name: advisor.1,
-        root,
+        .or_else(|| resolve_session_advisor_id(state, session_id));
+    if let Some(advisor_id) = advisor_id {
+        let advisor = with_store(state, |store| {
+            Ok(store
+                .advisors
+                .iter()
+                .find(|item| item.id == advisor_id)
+                .map(|item| (item.id.clone(), item.name.clone())))
+        })?
+        .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
+        let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
+        return Ok(KnowledgeScope {
+            kind: KnowledgeScopeKind::Advisor,
+            advisor_id: Some(advisor.0),
+            advisor_name: Some(advisor.1),
+            root,
+        });
+    }
+
+    let has_workspace_target = payload_string(arguments, "path")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || payload_string(arguments, "pattern")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+    if !has_workspace_target {
+        return Err("knowledge tool requires advisorId, or a session bound to one advisor".to_string());
+    }
+
+    Ok(KnowledgeScope {
+        kind: KnowledgeScopeKind::Workspace,
+        advisor_id: None,
+        advisor_name: None,
+        root: crate::workspace_root(state)?.join("knowledge"),
     })
+}
+
+fn list_pattern_for_scope(scope: &KnowledgeScope, arguments: &Value) -> Result<String, String> {
+    if let Some(path) = payload_string(arguments, "path").filter(|value| !value.trim().is_empty()) {
+        let normalized = normalize_scope_relative_path(scope, &path)?;
+        let target = resolve_relative_path(&scope.root, &normalized)?;
+        if !target.exists() {
+            return Err(format!("knowledge path does not exist: {normalized}"));
+        }
+        return Ok(if target.is_dir() {
+            if normalized.is_empty() {
+                "**/*".to_string()
+            } else {
+                format!("{}/**/*", normalized.trim_end_matches('/'))
+            }
+        } else {
+            normalized
+        });
+    }
+    payload_string(arguments, "pattern")
+        .map(|value| normalize_scope_pattern(scope, &value))
+        .transpose()
+        .map(|value| value.unwrap_or_else(|| "**/*".to_string()))
+}
+
+fn search_pattern_for_scope(scope: &KnowledgeScope, arguments: &Value) -> Result<String, String> {
+    if let Some(pattern) = payload_string(arguments, "pattern").filter(|value| !value.trim().is_empty()) {
+        return normalize_scope_pattern(scope, &pattern);
+    }
+    if let Some(path) = payload_string(arguments, "path").filter(|value| !value.trim().is_empty()) {
+        let normalized = normalize_scope_relative_path(scope, &path)?;
+        let target = resolve_relative_path(&scope.root, &normalized)?;
+        if !target.exists() {
+            return Err(format!("knowledge path does not exist: {normalized}"));
+        }
+        return Ok(if target.is_dir() {
+            if normalized.is_empty() {
+                "**/*".to_string()
+            } else {
+                format!("{}/**/*", normalized.trim_end_matches('/'))
+            }
+        } else {
+            normalized
+        });
+    }
+    Ok("**/*".to_string())
+}
+
+fn normalize_scope_pattern(scope: &KnowledgeScope, value: &str) -> Result<String, String> {
+    normalize_scope_relative_path(scope, value)
+}
+
+fn normalize_scope_relative_path(scope: &KnowledgeScope, value: &str) -> Result<String, String> {
+    let normalized = normalize_relative_display(value.trim().to_string());
+    if normalized.is_empty() {
+        return Ok(String::new());
+    }
+    match scope.kind {
+        KnowledgeScopeKind::Advisor => Ok(normalized),
+        KnowledgeScopeKind::Workspace => {
+            let stripped = normalized
+                .strip_prefix("knowledge/")
+                .or_else(|| normalized.strip_prefix("knowledge\\"))
+                .unwrap_or(normalized.as_str())
+                .trim_matches('/')
+                .to_string();
+            if stripped.is_empty() {
+                return Ok(String::new());
+            }
+            if stripped == "knowledge" {
+                return Ok(String::new());
+            }
+            Ok(stripped)
+        }
+    }
+}
+
+fn scope_kind_label(scope: &KnowledgeScope) -> &'static str {
+    match scope.kind {
+        KnowledgeScopeKind::Advisor => "advisor",
+        KnowledgeScopeKind::Workspace => "workspace",
+    }
 }
 
 fn resolve_session_advisor_id(
@@ -352,4 +462,61 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
         return value.to_string();
     }
     chars.into_iter().take(max_chars).collect::<String>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace_scope() -> KnowledgeScope {
+        KnowledgeScope {
+            kind: KnowledgeScopeKind::Workspace,
+            advisor_id: None,
+            advisor_name: None,
+            root: PathBuf::from("/tmp/workspace/knowledge"),
+        }
+    }
+
+    #[test]
+    fn normalize_workspace_knowledge_path_strips_prefix() {
+        let normalized = normalize_scope_relative_path(
+            &workspace_scope(),
+            "knowledge/redbook/knowledge-123/meta.json",
+        )
+        .unwrap();
+        assert_eq!(normalized, "redbook/knowledge-123/meta.json");
+    }
+
+    #[test]
+    fn normalize_workspace_knowledge_root_to_empty_relative_path() {
+        let normalized = normalize_scope_relative_path(&workspace_scope(), "knowledge").unwrap();
+        assert_eq!(normalized, "");
+    }
+
+    #[test]
+    fn list_pattern_uses_directory_path_as_glob_root() {
+        let unique = format!(
+            "redbox-knowledge-search-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique).join("knowledge");
+        let temp_root = root.parent().unwrap_or(root.as_path()).to_path_buf();
+        let folder = root.join("redbook").join("knowledge-123");
+        fs::create_dir_all(&folder).unwrap();
+        let scope = KnowledgeScope {
+            kind: KnowledgeScopeKind::Workspace,
+            advisor_id: None,
+            advisor_name: None,
+            root,
+        };
+        let arguments = json!({
+            "path": "knowledge/redbook/knowledge-123"
+        });
+        let pattern = list_pattern_for_scope(&scope, &arguments).unwrap();
+        assert_eq!(pattern, "redbook/knowledge-123/**/*");
+        let _ = fs::remove_dir_all(temp_root);
+    }
 }
