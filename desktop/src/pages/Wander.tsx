@@ -448,18 +448,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     });
     const materialText = items.map((item, index) => {
       const order = index + 1;
-      const connectedTag = connectedSet.has(order) ? '核心关联素材' : '辅助素材';
       const folderRef = buildKnowledgeFolderReference(item);
       return [
-        `素材${order}（${connectedTag}）`,
+        `素材${order}`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
         `标题：${item.title || '(无标题)'}`,
-        `素材名：${folderRef.folderName}`,
         `素材路径：${folderRef.folderPath}`,
-        `先探索目录：${folderRef.metaPath}`,
-        `探索提示：${folderRef.contentHint}`,
       ].join('\n');
-    }).join('\n\n---\n\n');
+    }).join('\n\n');
 
     const content = [
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
