@@ -695,7 +695,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [mcpInspectingId, setMcpInspectingId] = useState('');
 
   // Update State
-  const [appVersion, setAppVersion] = useState('');
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
@@ -1569,9 +1569,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const loadAppVersion = useCallback(async () => {
     try {
       const version = await window.ipcRenderer.getAppVersion();
-      setAppVersion(version || '');
+      const normalizedVersion = typeof version === 'string'
+        ? version.trim()
+        : String(version || '').trim();
+      setAppVersion(normalizedVersion || '未读取到版本号');
     } catch (e) {
       console.error('Failed to load app version:', e);
+      setAppVersion('读取失败');
     }
   }, []);
 
@@ -2572,6 +2576,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     let backgroundTaskPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
+    }
+    if (activeTab === 'general') {
+      void ensureTabResourcesLoaded('general');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');

@@ -251,7 +251,7 @@ type AssistantDaemonWeixinLoginState = {
 };
 
 interface GeneralSettingsSectionProps {
-    appVersion: string;
+    appVersion: string | null;
     formData: SettingsFormData;
     setFormData: Dispatch<SetStateAction<any>>;
     handlePickWorkspaceDir: () => Promise<void>;
@@ -305,7 +305,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
                             <Info className="w-4 h-4" />
-                            红盒子 RedBox
+                            应用版本
                         </h3>
                         <p className="text-xs text-text-tertiary mt-1">
                             当前版本:{' '}
@@ -314,7 +314,7 @@ function GeneralSettingsSectionInner({
                                 onClick={handleVersionTap}
                                 className="font-mono hover:text-text-primary transition-colors"
                             >
-                                {appVersion || '加载中...'}
+                                {appVersion ?? '加载中...'}
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
