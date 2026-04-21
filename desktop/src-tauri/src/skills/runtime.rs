@@ -3,10 +3,10 @@ use std::path::Path;
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    apply_skill_tool_permissions, build_skill_hook_output,
-    build_skill_watcher_snapshot_with_discovery, load_skill_bundle_sections_from_sources,
-    load_skill_catalog, normalized_activation_scope, skill_allows_runtime_mode, split_skill_body,
-    LoadedSkillRecord, SkillWatcherSnapshot,
+    apply_skill_tool_permissions, build_skill_catalog_snapshot, build_skill_hook_output,
+    build_skill_watcher_snapshot_with_discovery, find_skill_catalog_entry_by_name,
+    load_skill_bundle_sections_from_sources, normalized_activation_scope,
+    skill_allows_runtime_mode, split_skill_body, LoadedSkillRecord, SkillWatcherSnapshot,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -171,13 +171,8 @@ fn format_optional_list(label: &str, values: &[String]) -> Option<String> {
 }
 
 pub fn find_catalog_skill_by_name(skills: &[SkillRecord], name: &str) -> Option<LoadedSkillRecord> {
-    let lookup = name.trim();
-    if lookup.is_empty() {
-        return None;
-    }
-    load_skill_catalog(skills)
-        .into_iter()
-        .find(|skill| skill.name.eq_ignore_ascii_case(lookup))
+    let snapshot = build_skill_catalog_snapshot(skills);
+    find_skill_catalog_entry_by_name(&snapshot, name)
 }
 
 pub fn render_invoked_skill_bundle(
@@ -280,7 +275,8 @@ pub fn build_skill_runtime_state(
     metadata: Option<&Value>,
     base_tools: &[String],
 ) -> SkillRuntimeState {
-    let catalog = load_skill_catalog(skills);
+    let catalog_snapshot = build_skill_catalog_snapshot(skills);
+    let catalog = catalog_snapshot.entries;
     let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
     let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
     let hooks = build_skill_hook_output(&active_skills);
