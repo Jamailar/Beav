@@ -2371,7 +2371,7 @@ fn richpost_body_units_per_line(
 ) -> f64 {
     let frame_width_px = RICHPOST_PAGINATION_CANVAS_WIDTH_PX * frame_width_ratio.clamp(0.1, 1.0);
     let font_size_px = richpost_body_font_size_px(settings).max(1.0);
-    (frame_width_px / (font_size_px * 0.92)).clamp(6.0, 44.0)
+    (frame_width_px / (font_size_px * 1.02)).clamp(6.0, 44.0)
 }
 
 fn richpost_heading_units_per_line(
@@ -2381,7 +2381,7 @@ fn richpost_heading_units_per_line(
 ) -> f64 {
     let frame_width_px = RICHPOST_PAGINATION_CANVAS_WIDTH_PX * frame_width_ratio.clamp(0.1, 1.0);
     let font_size_px = richpost_heading_font_size_px(level, settings).max(1.0);
-    (frame_width_px / (font_size_px * 0.98)).clamp(4.0, 28.0)
+    (frame_width_px / (font_size_px * 1.08)).clamp(4.0, 28.0)
 }
 
 fn richpost_page_height_limit_px(
@@ -2389,8 +2389,9 @@ fn richpost_page_height_limit_px(
     frame_height_ratio: f64,
 ) -> f64 {
     let frame_height_px = RICHPOST_PAGINATION_CANVAS_HEIGHT_PX * frame_height_ratio.clamp(0.1, 1.0);
-    (frame_height_px - richpost_block_gap_px() * 0.5)
-        .max(richpost_body_line_height_px(settings) * 6.0)
+    let safe_bottom_padding_px =
+        richpost_body_line_height_px(settings) * 0.85 + richpost_block_gap_px() * 0.5;
+    (frame_height_px - safe_bottom_padding_px).max(richpost_body_line_height_px(settings) * 6.0)
 }
 
 fn richpost_zone_fragment_value(
@@ -2435,16 +2436,23 @@ fn richpost_block_height_px_from_parts(
         return 0.0;
     }
     if kind == "heading" {
-        let units_per_line = richpost_heading_units_per_line(level.unwrap_or(2), settings, frame.w);
+        let level = level.unwrap_or(2);
+        let units_per_line = richpost_heading_units_per_line(level, settings, frame.w);
         let wrapped_lines = richpost_estimated_wrapped_line_count(text, units_per_line);
-        return wrapped_lines as f64
-            * richpost_heading_line_height_px(level.unwrap_or(2), settings);
+        let line_height_px = richpost_heading_line_height_px(level, settings);
+        let block_margin_px = match level {
+            1 => line_height_px * 0.52,
+            2 => line_height_px * 0.42,
+            _ => line_height_px * 0.24,
+        };
+        return wrapped_lines as f64 * line_height_px + block_margin_px;
     }
     let wrapped_lines = richpost_estimated_wrapped_line_count(
         text,
         richpost_body_units_per_line(settings, frame.w),
     );
-    wrapped_lines as f64 * richpost_body_line_height_px(settings)
+    let line_height_px = richpost_body_line_height_px(settings);
+    wrapped_lines as f64 * line_height_px + line_height_px * 0.12
 }
 
 fn richpost_default_block_height_px(
