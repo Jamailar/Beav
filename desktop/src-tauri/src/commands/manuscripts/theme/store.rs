@@ -246,10 +246,6 @@ fn migrate_legacy_richpost_theme_store(package_path: &std::path::Path) -> Result
                 &legacy_root.join("layout.tokens.json"),
                 &package_richpost_theme_tokens_path(package_path, &target_theme_id),
             )?;
-            copy_if_exists(
-                &legacy_root.join("page-plan.json"),
-                &package_richpost_theme_page_plan_path(package_path, &target_theme_id),
-            )?;
             copy_dir_contents_if_exists(
                 &legacy_root.join("masters"),
                 &package_richpost_theme_masters_dir(package_path, &target_theme_id),
@@ -585,44 +581,6 @@ pub(crate) fn copy_if_exists(
     fs::write(target, content).map_err(|error| error.to_string())
 }
 
-fn default_richpost_theme_page_plan_from_package(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-) -> Value {
-    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let file_name = package_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Untitled");
-    let title = manifest
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| title_from_relative_path(file_name));
-    let typography = richpost_typography_settings_from_manifest(&manifest);
-    let content = fs::read_to_string(package_entry_path(package_path, file_name, Some(&manifest)))
-        .unwrap_or_default();
-    let blocks = build_package_content_blocks(&package_content_map_path(package_path), &content);
-    let has_manual_page_breaks = blocks
-        .iter()
-        .any(|block| package_block_is_page_break(&block.kind));
-    default_richpost_page_plan(
-        &title,
-        &blocks,
-        None,
-        &[],
-        if has_manual_page_breaks {
-            "markdown-page-break"
-        } else {
-            "markdown-auto-reflow"
-        },
-        typography,
-        theme,
-    )
-}
-
 pub(crate) fn sync_richpost_theme_root_from_package(
     package_path: &std::path::Path,
     theme: &RichpostThemeSpec,
@@ -648,17 +606,6 @@ pub(crate) fn sync_richpost_theme_root_from_package(
                 theme,
                 Some(package_path),
             ),
-        )?;
-    }
-
-    let package_page_plan = package_richpost_page_plan_path(package_path);
-    let theme_page_plan = package_richpost_theme_page_plan_path(package_path, &theme_id);
-    if !theme_page_plan.exists() && !create_from_blank && package_page_plan.is_file() {
-        copy_if_exists(&package_page_plan, &theme_page_plan)?;
-    } else if !theme_page_plan.exists() && create_from_blank {
-        write_json_value(
-            &theme_page_plan,
-            &default_richpost_theme_page_plan_from_package(package_path, theme),
         )?;
     }
 

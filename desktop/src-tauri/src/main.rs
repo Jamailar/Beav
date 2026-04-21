@@ -3353,7 +3353,6 @@ themeLabel: {theme_label}\n\
 themeRecordFile: {theme_file}\n\
 themeTemplateGuideFile: {template_file}\n\
 layoutTokensFile: {layout_tokens_file}\n\
-pagePlanFile: {page_plan_file}\n\
 masterFiles: {}\n\
 themeAssetsDir: {theme_assets_dir}\n\
 \n\
@@ -3361,7 +3360,7 @@ themeAssetsDir: {theme_assets_dir}\n\
 - 当前主题有自己的 theme root，当前正在编辑的是工作区 `themes/<themeId>/` 下这一整套文件。\n\
 - 当前会话只允许处理当前绑定主题 root；不要顺手改其他 theme root。\n\
 - 如果 `themeRecordFile` 为空，先创建或保存当前工作区主题，再继续编辑。\n\
-- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `<themeId>.json`、layout tokens、母版 HTML 还是 page plan。\n\
+- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `<themeId>.json`、layout tokens 还是母版 HTML。\n\
 - 添加渐变背景、背景图、容器、颜色、圆角、阴影、文字区域时，优先修改当前 theme root 里的 `<themeId>.json`、`layout.tokens.json` 和 `masters/*.master.html`。\n\
 - 不要扫描其他 richpost 工程来猜当前模板；以上这些文件就是当前主题编辑页绑定的真实目标。\n\
 - 不要改正文，不要手改渲染产物作为最终来源。\n\

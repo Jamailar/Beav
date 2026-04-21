@@ -233,13 +233,6 @@ pub(crate) fn package_richpost_theme_tokens_path(package_path: &Path, theme_id: 
     package_richpost_theme_root_dir(package_path, theme_id).join("layout.tokens.json")
 }
 
-pub(crate) fn package_richpost_theme_page_plan_path(
-    package_path: &Path,
-    theme_id: &str,
-) -> PathBuf {
-    package_richpost_theme_root_dir(package_path, theme_id).join("page-plan.json")
-}
-
 pub(crate) fn package_richpost_theme_masters_dir(package_path: &Path, theme_id: &str) -> PathBuf {
     package_richpost_theme_root_dir(package_path, theme_id).join("masters")
 }

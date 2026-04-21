@@ -23,7 +23,7 @@ use crate::{
     package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
     package_richpost_pages_dir, package_richpost_theme_assets_dir,
     package_richpost_theme_config_path, package_richpost_theme_master_path,
-    package_richpost_theme_masters_dir, package_richpost_theme_page_plan_path,
+    package_richpost_theme_masters_dir,
     package_richpost_theme_root_dir, package_richpost_theme_store_dir,
     package_richpost_theme_template_path, package_richpost_theme_tokens_path,
     package_richpost_themes_path, package_scene_ui_path, package_timeline_path,
@@ -2879,9 +2879,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     let active_richpost_theme_tokens = active_richpost_theme_id
         .as_ref()
         .map(|theme_id| package_richpost_theme_tokens_path(package_path, theme_id));
-    let active_richpost_theme_page_plan = active_richpost_theme_id
-        .as_ref()
-        .map(|theme_id| package_richpost_theme_page_plan_path(package_path, theme_id));
     let active_richpost_theme_assets = active_richpost_theme_id
         .as_ref()
         .map(|theme_id| package_richpost_theme_assets_dir(package_path, theme_id));
@@ -3248,11 +3245,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             .map(|path| json!(path.display().to_string()))
             .unwrap_or(Value::Null),
         "richpostThemeTokensFile": active_richpost_theme_tokens
-            .as_ref()
-            .filter(|path| path.exists())
-            .map(|path| json!(path.display().to_string()))
-            .unwrap_or(Value::Null),
-        "richpostThemePagePlanFile": active_richpost_theme_page_plan
             .as_ref()
             .filter(|path| path.exists())
             .map(|path| json!(path.display().to_string()))

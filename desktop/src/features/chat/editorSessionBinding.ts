@@ -31,7 +31,6 @@ type PackageStateLike = {
   richpostThemeTokensFile?: string | null;
   richpostThemeMastersDir?: string | null;
   richpostThemeMasters?: MasterRecordLike[] | null;
-  richpostThemePagePlanFile?: string | null;
   richpostPagesDir?: string | null;
   contentMapFile?: string | null;
   layoutTokensFile?: string | null;
@@ -202,7 +201,6 @@ export function buildEditorSessionBinding(
       )
     : null;
   const themeEditingTokensFile = themeEditing && themeEditingRoot ? `${themeEditingRoot}/layout.tokens.json` : null;
-  const themeEditingPagePlanFile = themeEditing && themeEditingRoot ? `${themeEditingRoot}/page-plan.json` : null;
   const themeEditingAssetsDir = themeEditing && themeEditingRoot ? `${themeEditingRoot}/assets` : null;
   const themeEditingMasterFiles = themeEditing && themeEditingRoot
     ? [
@@ -286,7 +284,6 @@ export function buildEditorSessionBinding(
             themeFile: themeEditingFile,
             templateGuideFile: themeEditingTemplateFile,
             layoutTokensFile: themeEditingTokensFile,
-            pagePlanFile: themeEditingPagePlanFile,
             assetsDir: themeEditingAssetsDir,
             masterFiles: themeEditingMasterFiles,
           }
@@ -309,7 +306,6 @@ export function buildEditorSessionBinding(
                 '<workspace>/themes/<theme-id>/masters/body.master.html',
                 '<workspace>/themes/<theme-id>/masters/ending.master.html',
               ]),
-              String(themeEditingPagePlanFile || '<workspace>/themes/<theme-id>/page-plan.json'),
               String(themeEditingAssetsDir || '<workspace>/themes/<theme-id>/assets'),
             ]
           : [
@@ -326,7 +322,7 @@ export function buildEditorSessionBinding(
     associatedPackageStyleEditRule:
       draftType === 'richpost'
         ? themeEditing
-          ? '当前处于图文主题编辑模式。先阅读 richpost-theme-template.md 里的规则，再修改当前工作区主题 root 里的 <theme-id>.json。优先修改 <workspace>/themes/<theme-id>/<theme-id>.json、layout.tokens.json 与首页、内容页、尾页母版；只有在母版、tokens 和 frame 不足以达成目标时，才调整 page-plan.json。不要改正文，也不要手写渲染产物。'
+          ? '当前处于图文主题编辑模式。先阅读 richpost-theme-template.md 里的规则，再修改当前工作区主题 root 里的 <theme-id>.json。优先修改 <workspace>/themes/<theme-id>/<theme-id>.json、layout.tokens.json 与首页、内容页、尾页母版。不要改正文，也不要手写渲染产物。'
           : '修改图文主题或排版时，只能改 richpostThemeId、layout.tokens.json、masters、richpost-page-plan.json 或生成后的图文页面 HTML，不能改 content.md 的正文内容。'
         : draftType === 'longform'
           ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
@@ -345,7 +341,6 @@ export function buildEditorSessionBinding(
               coverMaster: text(themeEditingRoot ? `${themeEditingRoot}/masters/cover.master.html` : '<workspace>/themes/<theme-id>/masters/cover.master.html'),
               bodyMaster: text(themeEditingRoot ? `${themeEditingRoot}/masters/body.master.html` : '<workspace>/themes/<theme-id>/masters/body.master.html'),
               endingMaster: text(themeEditingRoot ? `${themeEditingRoot}/masters/ending.master.html` : '<workspace>/themes/<theme-id>/masters/ending.master.html'),
-              pagePlan: text(themeEditingPagePlanFile || '<workspace>/themes/<theme-id>/page-plan.json'),
               themeEditableFrames: ['coverFrame', 'bodyFrame', 'endingFrame'],
               templateEditingFocus: ['cover', 'body', 'ending'],
               currentMasters,
@@ -366,7 +361,7 @@ export function buildEditorSessionBinding(
                 findMasterFile(params.packageState?.richpostMasters, 'body', '<workspace>/themes/<theme-id>/masters/body.master.html')),
               endingMaster: findMasterFile(params.packageState?.richpostThemeMasters, 'ending',
                 findMasterFile(params.packageState?.richpostMasters, 'ending', '<workspace>/themes/<theme-id>/masters/ending.master.html')),
-              pagePlan: text(params.packageState?.richpostThemePagePlanFile || params.packageState?.richpostPagePlanFile || '<workspace>/themes/<theme-id>/page-plan.json'),
+              pagePlan: text(params.packageState?.richpostPagePlanFile || 'richpost-page-plan.json'),
               previewShell: 'layout.html',
               pagesDir: text(params.packageState?.richpostPagesDir || 'pages/page-xxx.html'),
               themeSource: 'manifest.richpostThemeId',
