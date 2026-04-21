@@ -14,7 +14,7 @@ use crate::helpers::{
     AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
-use crate::persistence::with_store;
+use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{McpServerRecord, SkillRecord};
 use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
 use crate::{
@@ -51,6 +51,12 @@ struct BoundWritingSessionTarget {
     file_path: String,
     draft_type: String,
     title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentAuthoringSessionTarget {
+    project_path: String,
+    project_kind: AuthoringProjectKind,
 }
 
 #[derive(Debug, Clone)]
@@ -455,6 +461,25 @@ impl<'a> AppCliExecutor<'a> {
                     .or_else(|| args.positionals.first().cloned())
                     .ok_or_else(|| "manuscripts read requires --path".to_string())?),
             ),
+            "write-current" => {
+                let target = self
+                    .current_authoring_session_target()
+                    .ok_or_else(|| {
+                        "manuscripts write-current requires an active authoring project"
+                            .to_string()
+                    })?;
+                let mut merged = merge_payload(&args.options, payload);
+                if let Some(object) = merged.as_object_mut() {
+                    object.insert("path".to_string(), json!(target.project_path.clone()));
+                    if !object.contains_key("content") {
+                        object.insert(
+                            "content".to_string(),
+                            json!(args.string(&["content"]).unwrap_or_default()),
+                        );
+                    }
+                }
+                self.call_channel("manuscripts:save", merged)
+            }
             "write" | "save" => {
                 let path = args
                     .string(&["path"])
@@ -2144,6 +2169,12 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
     }
 
     fn current_authoring_target_preference(&self) -> Option<AuthoringTargetPreference> {
+        if let Some(target) = self.current_authoring_session_target() {
+            return Some(AuthoringTargetPreference {
+                preferred_extension: authoring_project_extension(target.project_kind),
+                preferred_subdir: Some(split_parent_and_name(&target.project_path).0),
+            });
+        }
         if let Some(target) = self.bound_writing_session_target() {
             let draft_type = target.draft_type.to_ascii_lowercase();
             let preferred_extension = match draft_type.as_str() {
@@ -2216,6 +2247,108 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         .flatten()
     }
 
+    fn current_authoring_session_target(&self) -> Option<CurrentAuthoringSessionTarget> {
+        let session_id = self.session_id?;
+        with_store(self.state, |store| {
+            let metadata = store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|session| session.metadata.as_ref());
+            let Some(metadata) = metadata else {
+                return Ok(None);
+            };
+            let project_path =
+                payload_string(metadata, "currentAuthoringProjectPath").unwrap_or_default();
+            let content_path =
+                payload_string(metadata, "currentAuthoringContentPath").unwrap_or_default();
+            if project_path.trim().is_empty() || content_path.trim().is_empty() {
+                return Ok(None);
+            }
+            let project_kind = authoring_project_kind_from_value(
+                payload_string(metadata, "currentAuthoringProjectKind").as_deref(),
+            )
+            .unwrap_or_else(|| {
+                if project_path.ends_with(ARTICLE_DRAFT_EXTENSION) {
+                    AuthoringProjectKind::Redarticle
+                } else {
+                    AuthoringProjectKind::Redpost
+                }
+            });
+            Ok(Some(CurrentAuthoringSessionTarget {
+                project_path,
+                project_kind,
+            }))
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn persist_current_authoring_session_target(
+        &self,
+        project_path: &str,
+        content_path: &str,
+        entry_path: &str,
+        project_kind: AuthoringProjectKind,
+        title: &str,
+    ) -> Result<(), String> {
+        let Some(session_id) = self.session_id else {
+            return Ok(());
+        };
+        with_store_mut(self.state, |store| {
+            let Some(session) = store
+                .chat_sessions
+                .iter_mut()
+                .find(|item| item.id == session_id)
+            else {
+                return Ok(());
+            };
+            let mut metadata = session
+                .metadata
+                .clone()
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            metadata.insert(
+                "currentAuthoringProjectPath".to_string(),
+                json!(project_path),
+            );
+            metadata.insert(
+                "currentAuthoringContentPath".to_string(),
+                json!(content_path),
+            );
+            metadata.insert("currentAuthoringEntryPath".to_string(), json!(entry_path));
+            metadata.insert(
+                "currentAuthoringProjectKind".to_string(),
+                json!(match project_kind {
+                    AuthoringProjectKind::Redpost => "redpost",
+                    AuthoringProjectKind::Redarticle => "redarticle",
+                }),
+            );
+            metadata.insert("currentAuthoringTitle".to_string(), json!(title));
+            session.metadata = Some(Value::Object(metadata));
+            session.updated_at = now_iso();
+            Ok(())
+        })?;
+        emit_runtime_task_checkpoint_saved(
+            self.app,
+            None,
+            Some(session_id),
+            "chat.authoring_target_bound",
+            "authoring target bound",
+            Some(json!({
+                "projectPath": project_path,
+                "contentPath": content_path,
+                "entryPath": entry_path,
+                "kind": match project_kind {
+                    AuthoringProjectKind::Redpost => "redpost",
+                    AuthoringProjectKind::Redarticle => "redarticle",
+                },
+                "title": title,
+            })),
+        );
+        Ok(())
+    }
+
     fn default_authoring_project_kind(&self) -> AuthoringProjectKind {
         let Some(preference) = self.current_authoring_target_preference() else {
             return AuthoringProjectKind::Redpost;
@@ -2275,12 +2408,20 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }),
         )?;
         let entry_name = get_default_package_entry(&relative);
+        let content_path = join_relative(&relative, entry_name);
+        self.persist_current_authoring_session_target(
+            &relative,
+            &content_path,
+            &content_path,
+            project_kind,
+            &title,
+        )?;
         Ok(json!({
             "success": created.get("success").and_then(Value::as_bool).unwrap_or(true),
             "path": created.get("path").cloned().unwrap_or_else(|| json!(relative.clone())),
             "projectPath": created.get("path").cloned().unwrap_or_else(|| json!(relative.clone())),
-            "contentPath": join_relative(&relative, entry_name),
-            "entryPath": join_relative(&relative, entry_name),
+            "contentPath": content_path.clone(),
+            "entryPath": content_path,
             "projectId": project_id,
             "title": title,
             "kind": match project_kind {
@@ -3276,6 +3417,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "manuscripts list",
             "manuscripts read --path <relativePath>",
             "manuscripts create-project --title <title> [--kind redpost|redarticle] [--parent <folder>]",
+            "manuscripts write-current [payload.content]",
             "manuscripts write --path <relativePath> [payload.content]",
             "manuscripts create --path <relativePath>",
             "manuscripts delete --path <relativePath>",

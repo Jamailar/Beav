@@ -46,8 +46,8 @@ const TASK_LABEL: Record<AuthoringTaskType, string> = {
 };
 
 const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
-    xiaohongshu: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redpost --title <标题>` 获取规范工程路径，再用该路径写入内容；不要把标题直接当文件名。正文禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行。',
-    wechat_official_account: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redarticle --title <标题>` 获取规范工程路径，再用该路径写入内容；不要把标题直接当文件名。正文禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行。',
+    xiaohongshu: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redpost --title <标题>` 获取规范工程路径。创建成功后，直接用 `app_cli(command="manuscripts write-current", payload={ "content": "<完整正文>" })` 保存，不要把标题直接当文件名，也不要重复传 path。正文禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行。',
+    wechat_official_account: '如需新建稿件工程，先用 `app_cli` 调用 `manuscripts create-project --kind redarticle --title <标题>` 获取规范工程路径。创建成功后，直接用 `app_cli(command="manuscripts write-current", payload={ "content": "<完整正文>" })` 保存，不要把标题直接当文件名，也不要重复传 path。正文禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行。',
 };
 
 export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) {

@@ -484,8 +484,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '2. 给出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。',
       '3. 这是小红书图文任务，必须保存成 `.redpost` 工程。',
       '4. 如目标工程不存在，先调用 `app_cli(command=\"manuscripts create-project --kind redpost --parent wander --title <最终标题>\")` 获取规范工程路径。不要把标题直接当成工程文件名。',
-      '5. 创建成功后，只需要围绕返回的工程路径写正文，正文内容由宿主写入工程内部的 `content.md`，不要自己管理其他工程文件。',
-      '6. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：',
+      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标，正文内容由宿主写入工程内部的 `content.md`，不要自己管理其他工程文件。',
+      '6. 完成后必须调用 `app_cli(command="manuscripts write-current", payload={ "content": "<完整正文>" })` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
       '7. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
     ].join('\n');
 
