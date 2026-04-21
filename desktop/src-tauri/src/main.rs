@@ -2269,10 +2269,7 @@ fn derive_workspace_material_path(
         .replace('\\', "/")
         .trim_matches('/')
         .to_string();
-    let normalized_folder = folder_path
-        .unwrap_or_default()
-        .trim()
-        .replace('\\', "/");
+    let normalized_folder = folder_path.unwrap_or_default().trim().replace('\\', "/");
 
     if !normalized_root.is_empty() {
         if normalized_folder == normalized_root
@@ -3308,6 +3305,9 @@ fn execute_interactive_tool_call(
                 }
                 "read" if scope == "knowledge" => {
                     crate::tools::knowledge_search::execute_read(state, session_id, arguments)
+                }
+                "search" => {
+                    crate::tools::workspace_search::execute_search(state, session_id, arguments)
                 }
                 "list" => {
                     if raw_path.trim().is_empty() {

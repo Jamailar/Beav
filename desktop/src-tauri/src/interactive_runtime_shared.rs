@@ -223,6 +223,9 @@ pub(crate) fn interactive_runtime_system_prompt(
                 rendered.push_str(&truncate_chars(&bundle.creator_profile, 10000));
                 rendered.push_str("\n</redclaw_creator_profile_md>\n");
                 rendered.push_str("文档职责与更新规则：\n");
+                rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/identity.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
+                rendered.push_str("- 查询长期档案优先使用 `app_cli(command=\"redclaw profile-read --doc-type ...\")` 或 `app_cli(command=\"redclaw profile-bundle\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
+                rendered.push_str("- 查询长期记忆优先使用 `app_cli(command=\"memory list\")` / `app_cli(command=\"memory search --query \\\"...\\\"\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
                 rendered.push_str("- Agent.md：RedClaw 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n");
                 rendered.push_str("- Soul.md：RedClaw 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n");
                 rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");
@@ -253,7 +256,7 @@ pub(crate) fn interactive_runtime_system_prompt(
             }
         }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for advisors, chat sessions, spaces, subjects, manuscripts, theme/layout workflows, media, image generation, video generation, projects, RedClaw, runtime/tasks/background control, settings, memory, skills, AI config, and MCP.\n- When `redbox_fs` is available, use it as the default structured file tool. For advisor/member knowledge, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` instead of broad `bash` scanning.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` and `knowledge_*` tool names may still exist in compatibility flows, but they are no longer the default mental model.\n",
+            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- When `app_cli` is available, use it as the default business tool for advisors, chat sessions, spaces, subjects, manuscripts, theme/layout workflows, media, image generation, video generation, projects, RedClaw, runtime/tasks/background control, settings, memory, skills, AI config, and MCP.\n- When reading durable RedClaw profile docs or user memory, prefer `app_cli` commands such as `redclaw profile-read`, `redclaw profile-bundle`, `memory list`, and `memory search` before falling back to filesystem inspection.\n- When `redbox_fs` is available, use it as the default structured file tool. For advisor/member knowledge, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` instead of broad `bash` scanning.\n- For workspace file discovery, prefer `redbox_fs(scope=\"workspace\", action=\"search\")` or exact relative paths instead of `bash find` when the path is known or can be narrowed.\n- When `bash` is available, use it for read-only listing, search, and file inspection inside currentSpaceRoot.\n- `redbox_editor` remains the editor-only tool for bound video/audio manuscript packages.\n- Legacy `redbox_*` and `knowledge_*` tool names may still exist in compatibility flows, but they are no longer the default mental model.\n",
         );
         if !prompt_suffix.trim().is_empty() {
             rendered.push_str("\n\n");
