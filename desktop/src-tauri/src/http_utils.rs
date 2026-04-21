@@ -32,12 +32,16 @@ fn build_curl_json_command(
     has_body: bool,
     max_time_seconds: Option<u64>,
     no_buffer: bool,
+    force_http1_1: bool,
 ) -> Result<std::process::Command, String> {
     let mut command = std::process::Command::new("curl");
     configure_background_command(&mut command);
     command.arg("-sS").arg("-X").arg(method).arg(url);
     if no_buffer {
         command.arg("-N");
+    }
+    if force_http1_1 {
+        command.arg("--http1.1");
     }
     if let Some(seconds) = max_time_seconds.filter(|value| *value > 0) {
         command.arg("--max-time").arg(seconds.to_string());
@@ -191,6 +195,7 @@ pub(crate) fn spawn_curl_json_process(
         serialized_body.is_some(),
         max_time_seconds,
         no_buffer,
+        false,
     )?;
     command
         .arg("-w")
@@ -254,6 +259,65 @@ fn run_curl_json_response_inner(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
 ) -> Result<HttpJsonResponse, String> {
+    run_curl_json_response_attempt(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body,
+        max_time_seconds,
+        allow_official_reauth_retry,
+        true,
+    )
+}
+
+fn run_curl_json_response_attempt(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+    allow_http1_retry: bool,
+) -> Result<HttpJsonResponse, String> {
+    execute_curl_json_response_once(
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body.clone(),
+        max_time_seconds,
+        allow_official_reauth_retry,
+        false,
+    )
+    .or_else(|error| {
+        if allow_http1_retry && should_retry_with_http1_1(&error) {
+            return execute_curl_json_response_once(
+                method,
+                url,
+                api_key,
+                extra_headers,
+                body,
+                max_time_seconds,
+                allow_official_reauth_retry,
+                true,
+            );
+        }
+        Err(error)
+    })
+}
+
+fn execute_curl_json_response_once(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    max_time_seconds: Option<u64>,
+    allow_official_reauth_retry: bool,
+    force_http1_1: bool,
+) -> Result<HttpJsonResponse, String> {
     let serialized_body = serialized_json_body(body.as_ref())?;
     let mut command = build_curl_json_command(
         method,
@@ -263,6 +327,7 @@ fn run_curl_json_response_inner(
         serialized_body.is_some(),
         max_time_seconds,
         false,
+        force_http1_1,
     )?;
     command
         .arg("-w")
@@ -322,7 +387,7 @@ fn run_curl_json_response_inner(
         if let Some(refreshed_api_key) =
             crate::try_refresh_official_auth_for_ai_request(url, api_key, "json-http-401")?
         {
-            return run_curl_json_response_inner(
+            return run_curl_json_response_attempt(
                 method,
                 url,
                 Some(refreshed_api_key.as_str()),
@@ -330,10 +395,20 @@ fn run_curl_json_response_inner(
                 body,
                 max_time_seconds,
                 false,
+                !force_http1_1,
             );
         }
     }
     Ok(response)
+}
+
+fn should_retry_with_http1_1(error: &str) -> bool {
+    let normalized = error.trim().to_ascii_lowercase();
+    normalized.contains("curl: (16)")
+        || normalized.contains("http2 framing layer")
+        || normalized.contains("http/2 framing layer")
+        || normalized.contains("http2 stream")
+        || normalized.contains("http/2 stream")
 }
 
 pub(crate) fn run_curl_json(
@@ -531,6 +606,7 @@ mod tests {
             true,
             Some(30),
             false,
+            false,
         )
         .expect("command");
         let args = command
@@ -552,6 +628,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect("command");
         let args = command
@@ -560,5 +637,36 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!args.iter().any(|value| value == "--data-binary"));
         assert!(!args.iter().any(|value| value == "@-"));
+    }
+
+    #[test]
+    fn build_curl_json_command_enables_http1_when_requested() {
+        let command = build_curl_json_command(
+            "POST",
+            "https://example.com/v1/chat/completions",
+            None,
+            &[],
+            true,
+            None,
+            false,
+            true,
+        )
+        .expect("command");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|value| value == "--http1.1"));
+    }
+
+    #[test]
+    fn retries_on_http2_framing_errors() {
+        assert!(should_retry_with_http1_1(
+            "curl: (16) Error in the HTTP2 framing layer"
+        ));
+        assert!(should_retry_with_http1_1(
+            "curl: (16) HTTP/2 stream 0 was not closed cleanly"
+        ));
+        assert!(!should_retry_with_http1_1("curl: (28) Operation timed out"));
     }
 }
