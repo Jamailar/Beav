@@ -787,6 +787,20 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
     if depth > MANUSCRIPTS_TREE_MAX_DEPTH {
         return Ok(Vec::new());
     }
+    if current != root {
+        if let Ok(relative) = current.strip_prefix(root) {
+            let inside_package = relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .map(is_manuscript_package_name)
+                    .unwrap_or(false)
+            });
+            if inside_package {
+                return Ok(Vec::new());
+            }
+        }
+    }
 
     let Ok(entries_iter) = fs::read_dir(current) else {
         return Ok(Vec::new());
@@ -799,6 +813,9 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
     for entry in entries {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
+        if file_name.starts_with('.') {
+            continue;
+        }
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -838,24 +855,6 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
         } else if file_type.is_file() {
             if file_name.ends_with(".md") {
                 nodes.push(file_node_from_markdown(&path, &file_name, relative));
-            } else {
-                nodes.push(FileNode {
-                    name: file_name,
-                    path: relative,
-                    is_directory: false,
-                    children: None,
-                    status: None,
-                    title: None,
-                    draft_type: None,
-                    updated_at: path_updated_at_ms(&path),
-                    summary: None,
-                    richpost_preview_file: None,
-                    richpost_preview_file_url: None,
-                    richpost_preview_updated_at: None,
-                    richpost_preview_page_file: None,
-                    richpost_preview_page_file_url: None,
-                    richpost_preview_page_updated_at: None,
-                });
             }
         }
     }
@@ -956,5 +955,44 @@ mod tests {
         assert!(section.contains("Path style: windows"));
         assert!(section.contains("Preferred shell syntax hint: powershell"));
         assert!(section.contains("Default line ending: crlf"));
+    }
+
+    #[test]
+    fn list_tree_treats_package_directory_as_single_manuscript_node() {
+        let root = std::env::temp_dir().join(format!("redbox-list-tree-{}", crate::now_ms()));
+        let package_root = root.join("demo.redpost");
+        fs::create_dir_all(package_root.join("pages")).expect("package pages dir");
+        fs::write(package_root.join("manifest.json"), r#"{"title":"Demo"}"#)
+            .expect("manifest should be written");
+        fs::write(package_root.join("content.md"), "# Demo\n\nBody")
+            .expect("content should be written");
+        fs::write(package_root.join("pages").join("page-001.html"), "<html></html>")
+            .expect("page should be written");
+
+        let nodes = list_tree(&root, &root).expect("tree should load");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "demo.redpost");
+        assert!(!nodes[0].is_directory);
+        assert!(nodes[0].children.is_none());
+
+        let package_children = list_tree_internal(&root, &package_root, 1).expect("package children");
+        assert!(package_children.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_tree_ignores_hidden_and_non_markdown_files() {
+        let root = std::env::temp_dir().join(format!("redbox-list-tree-filter-{}", crate::now_ms()));
+        fs::create_dir_all(&root).expect("root should exist");
+        fs::write(root.join(".DS_Store"), "ignored").expect("hidden file should be written");
+        fs::write(root.join("notes.txt"), "ignored").expect("txt file should be written");
+        fs::write(root.join("draft.md"), "# Draft").expect("markdown should be written");
+
+        let nodes = list_tree(&root, &root).expect("tree should load");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "draft.md");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
