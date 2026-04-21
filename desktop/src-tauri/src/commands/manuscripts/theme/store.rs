@@ -704,14 +704,6 @@ pub(crate) fn sync_package_from_richpost_theme_root(
         let _ = write_richpost_layout_tokens_for_theme(package_path, theme)?;
     }
 
-    let theme_page_plan = package_richpost_theme_page_plan_path(package_path, &theme_id);
-    if theme_page_plan.is_file() {
-        copy_if_exists(
-            &theme_page_plan,
-            &package_richpost_page_plan_path(package_path),
-        )?;
-    }
-
     let theme_masters_dir = package_richpost_theme_masters_dir(package_path, &theme_id);
     if theme_masters_dir.is_dir() {
         for master_name in RICHPOST_DEFAULT_MASTER_NAMES {

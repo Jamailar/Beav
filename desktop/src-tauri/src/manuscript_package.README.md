@@ -66,9 +66,9 @@
 10. 图文工具栏里的字体大小和行间距调整会写入 `manifest.richpostTypography`，并立即触发整套分页重排；主题提供基础值，用户调整是叠加覆盖值。
 11. 稿件画廊里的 `*.redpost` 卡片不会再伪造缩略图；只要正文非空且第一页 HTML 已生成，画廊就直接读取 `pages/` 里的第一页作为真实预览。
 12. 工作区级 `themes/richpost-themes.json` 用来保存当前空间共享的自定义图文主题；图文主题抽屉展示的是这份全局主题目录，不再内置预设主题库。
-13. `themes/richpost-themes.json` 里的每个主题都包含 `coverFrame / bodyFrame / endingFrame`，它们分别定义首页、内容页、尾页的真实文字区域；主题编辑页左侧的矩形就是这三个字段的可视化编辑层。
+13. 主题可以改颜色、背景、字体、母版装饰，但分页与真实文字区域使用宿主固定规则，不跟随主题变化。
 14. `themes/richpost-themes.json` 里的每个主题还可以包含 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`；这些路径指向工作区级 `themes/richpost-theme-assets/<theme-id>/` 下的背景图资产，并直接驱动三种母版的背景层。
-15. 默认自动分页生成 page plan 时，多页稿件会把第一页映射到 `cover`、中间页映射到 `body`、最后一页映射到 `ending`，这样主题编辑页的三种文字区域会和真实稿件对应。
+15. 默认自动分页生成 page plan 时，多页稿件会把第一页映射到 `cover`、中间页映射到 `body`、最后一页映射到 `ending`；母版角色会变，但内容区域尺寸保持固定。
 
 ### 长文工程 `*.redarticle`
 
@@ -153,8 +153,8 @@
   - 自动重渲染页面和预览壳
 - 图文需要补渲染分页时：
   - 前端自动触发一次分页与页面重建
-  - 宿主重写 `richpost-page-plan.json` 和全部 `pages/page-xxx.html`
-  - 用户不需要手动点“生成分页方案”
+  - 宿主重写稿件自己的 `richpost-page-plan.json` 和全部 `pages/page-xxx.html`
+  - 主题目录里的 `page-plan.json` 不再覆盖当前稿件分页
 - 图文切换预设主题时：
   - 只更新 `manifest.richpostThemeId`
   - 同步重写 `layout.tokens.json`
@@ -172,8 +172,8 @@
   - 当前 AI 会话会绑定这条新主题的 `themeId / label / themes/richpost-themes.json` 文件路径
   - 当前文件会话会切到 `图文主题编辑` 模式
   - 会强制激活 `richpost-layout-designer` + `richpost-theme-editor`
-  - 左侧 `首页 / 内容页 / 尾页` 预览上的矩形会直接编辑当前主题的 `coverFrame / bodyFrame / endingFrame`
-  - 这三个 frame 决定最终真实文字区域；主题的字体、字号、行高、颜色仍然由 `layout.tokens.json` 与母版控制
+  - 主题编辑时优先改背景、颜色、字体、母版装饰
+  - 分页和真实文字区域不再由主题 frame 决定
   - 每张预览下都可以单独上传背景图，图片会复制进当前工作区的 `themes/richpost-theme-assets/<theme-id>/`，文件名使用时间戳重命名，并写回当前主题的 `coverBackgroundPath / bodyBackgroundPath / endingBackgroundPath`
   - 矩形调整会自动写回当前主题文件并立即重渲染当前工程页面
   - AI 必须优先按 `layout.tokens.json`、`masters/cover.master.html`、`masters/body.master.html`、`masters/ending.master.html` 的顺序理解和修改模板层

@@ -7,37 +7,30 @@ use super::store::{
 use serde_json::{json, Value};
 use std::fs;
 
+fn canonical_richpost_role_css_vars(
+    package_path: Option<&std::path::Path>,
+    theme: &RichpostThemeSpec,
+    role: &str,
+) -> serde_json::Map<String, Value> {
+    let mut vars = richpost_zone_frame_css_vars(&default_richpost_zone_frame(role));
+    vars.extend(richpost_theme_background_css_vars(
+        package_path,
+        theme,
+        role,
+    ));
+    vars
+}
+
 pub(crate) fn default_richpost_layout_tokens(
     package_path: Option<&std::path::Path>,
     theme: &RichpostThemeSpec,
 ) -> Value {
-    let cover_role_vars = {
-        let mut vars = richpost_zone_frame_css_vars(&theme.cover_frame);
-        vars.extend(richpost_theme_background_css_vars(
-            package_path,
-            theme,
-            RICHPOST_MASTER_COVER,
-        ));
-        vars
-    };
-    let body_role_vars = {
-        let mut vars = richpost_zone_frame_css_vars(&theme.body_frame);
-        vars.extend(richpost_theme_background_css_vars(
-            package_path,
-            theme,
-            RICHPOST_MASTER_BODY,
-        ));
-        vars
-    };
-    let ending_role_vars = {
-        let mut vars = richpost_zone_frame_css_vars(&theme.ending_frame);
-        vars.extend(richpost_theme_background_css_vars(
-            package_path,
-            theme,
-            RICHPOST_MASTER_ENDING,
-        ));
-        vars
-    };
+    let cover_role_vars =
+        canonical_richpost_role_css_vars(package_path, theme, RICHPOST_MASTER_COVER);
+    let body_role_vars =
+        canonical_richpost_role_css_vars(package_path, theme, RICHPOST_MASTER_BODY);
+    let ending_role_vars =
+        canonical_richpost_role_css_vars(package_path, theme, RICHPOST_MASTER_ENDING);
     json!({
         "version": 1,
         "themeId": theme.id,
@@ -105,6 +98,23 @@ pub(crate) fn normalize_richpost_layout_tokens_value(
                         role_entry.as_object_mut().unwrap(),
                         Some(role_value),
                     );
+                }
+            }
+            for role in [
+                RICHPOST_MASTER_COVER,
+                RICHPOST_MASTER_BODY,
+                RICHPOST_MASTER_ENDING,
+            ] {
+                let role_entry = role_target
+                    .entry(role.to_string())
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Some(role_object) = role_entry.as_object_mut() {
+                    for (key, value) in canonical_richpost_role_css_vars(package_path, theme, role)
+                    {
+                        if key.starts_with("--rb-frame-") || key == "--rb-background-image" {
+                            role_object.insert(key, value);
+                        }
+                    }
                 }
             }
         }

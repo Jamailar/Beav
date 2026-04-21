@@ -215,7 +215,6 @@ fn default_richpost_theme_template_guide() -> String {
 - `richpost-themes.json`
   - 当前主题记录保存在这里
   - 重点字段：
-    - `coverFrame` / `bodyFrame` / `endingFrame`
     - `coverBackgroundPath` / `bodyBackgroundPath` / `endingBackgroundPath`
     - `headingColor` / `bodyColor` / `accentColor` / `mutedColor`
     - `headingFont` / `bodyFont`
@@ -228,21 +227,22 @@ fn default_richpost_theme_template_guide() -> String {
 - `masters/ending.master.html`
   - 尾页母版
 - `richpost-page-plan.json`
-  - 决定每一页使用哪张母版和哪些 zones
+  - 稿件自己的分页方案文件
+  - 主题不要把它当成可移植模板去改写
 
 ## 规则
 
 1. 不要改 `content.md`
 2. 不要把正文直接硬编码进母版 HTML
 3. 背景图必须落在背景层，文字在其上
-4. 文字真实区域由 `coverFrame` / `bodyFrame` / `endingFrame` 控制
-5. 首页、内容页、尾页可以各自有不同背景、容器和颜色
+4. 分页和文字真实区域由宿主固定规则控制，不跟随主题变化
+5. 首页、内容页、尾页可以各自有不同背景、容器和颜色，但不要改内容流的可用区域
 
 ## 推荐做法
 
 - 想改颜色、字体、基础视觉：优先改 `richpost-themes.json` 和 `layout.tokens.json`
 - 想改背景层、容器、遮罩、装饰：优先改 `masters/*.master.html`
-- 想改哪页用哪种母版：再改 `richpost-page-plan.json`
+- 不要在主题里持久化稿件自己的 `richpost-page-plan.json`
 
 ## 兼容性边界
 
@@ -506,14 +506,6 @@ fn normalize_richpost_zone_frame(
         y: ((y * 1000.0).round() / 1000.0),
         w: ((w * 1000.0).round() / 1000.0),
         h: ((h * 1000.0).round() / 1000.0),
-    }
-}
-
-fn richpost_theme_frame(theme: &RichpostThemeSpec, role: &str) -> RichpostZoneFrame {
-    match role {
-        RICHPOST_MASTER_COVER => theme.cover_frame.clone(),
-        RICHPOST_MASTER_ENDING => theme.ending_frame.clone(),
-        _ => theme.body_frame.clone(),
     }
 }
 
@@ -2613,10 +2605,11 @@ fn richpost_frame_for_page_position(
     page_index: usize,
     total_pages: usize,
 ) -> RichpostZoneFrame {
-    richpost_theme_frame(
+    default_richpost_zone_frame(richpost_master_for_page_position(
         theme,
-        richpost_master_for_page_position(theme, page_index, total_pages),
-    )
+        page_index,
+        total_pages,
+    ))
 }
 
 fn richpost_default_segment_pages(
