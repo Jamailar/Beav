@@ -39,6 +39,7 @@
     "targets": ["app", "dmg", "nsis"],
     "resources": [
       "resources/knowledge-api-guide.html",
+      "resources/richpost-theme-guide.html",
       "../builtin-skills",
       "../../Plugin"
     ],

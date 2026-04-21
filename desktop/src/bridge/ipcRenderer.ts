@@ -645,6 +645,7 @@ function createIpcRenderer() {
     openPath: (path: string) => invokeChannel('app:open-path', { path }),
     clipboardReadText: () => invokeChannel('clipboard:read-text'),
     openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
+    openRichpostThemeGuide: () => invokeChannel('app:open-richpost-theme-guide'),
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
       prepare: () => invokeChannel('plugin:prepare-browser-extension'),

@@ -836,6 +836,7 @@ declare global {
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
+      openRichpostThemeGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
         getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; pluginPath?: string; checkedPaths?: string[]; error?: string }>;
         prepare: () => Promise<{ success: boolean; path: string; pluginPath?: string; bundledPath?: string; alreadyPrepared?: boolean; error?: string }>;

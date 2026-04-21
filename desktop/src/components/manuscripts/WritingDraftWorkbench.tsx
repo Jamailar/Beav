@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Columns,
   Download,
+  ExternalLink,
   Image as ImageIcon,
   Loader2,
   MessageSquare,
@@ -753,6 +754,17 @@ function RichpostThemeEditorOverlay({
   };
 
   const typographyEditor = richpostTypographyPreviewEditorState(themeDraft, selectedTypographyTarget);
+  const handleOpenThemeGuide = async () => {
+    try {
+      const result = await window.ipcRenderer.openRichpostThemeGuide();
+      if (!result?.success) {
+        void appAlert(`打开主题编辑指南失败：${result?.error || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('Failed to open richpost theme guide', error);
+      void appAlert(`打开主题编辑指南失败：${String(error)}`);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[120] isolate overflow-hidden bg-background text-text-primary">
@@ -810,6 +822,16 @@ function RichpostThemeEditorOverlay({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void handleOpenThemeGuide();
+              }}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[12px] font-medium text-text-secondary transition hover:bg-surface-secondary hover:text-text-primary"
+            >
+              <span>主题编辑指南</span>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
             <div className="rounded-full border border-border bg-surface-elevated px-3 py-1.5 text-[12px] font-medium text-text-secondary">编辑首页、内容页和尾页风格</div>
             <button
               type="button"
