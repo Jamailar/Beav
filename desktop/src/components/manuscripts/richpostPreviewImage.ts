@@ -7,6 +7,24 @@ const RICHPOST_LINE_HEIGHT_SCALE_MAX = 1.4;
 export const RICHPOST_RENDER_VIEWPORT_WIDTH = 560;
 export const RICHPOST_RENDER_VIEWPORT_HEIGHT = RICHPOST_RENDER_VIEWPORT_WIDTH * 4 / 3;
 
+export type RichpostZoneLayoutInspection = {
+  widthPx: number;
+  heightPx: number;
+  scrollWidthPx: number;
+  scrollHeightPx: number;
+  overflowX: boolean;
+  overflowY: boolean;
+  font: string;
+  lineHeightPx: number;
+  paragraphFont: string;
+  paragraphLineHeightPx: number;
+};
+
+export type RichpostLayoutInspection = {
+  title: RichpostZoneLayoutInspection | null;
+  body: RichpostZoneLayoutInspection | null;
+};
+
 function clampScale(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Number(value)));
@@ -46,6 +64,53 @@ function materializeRichpostBackgroundInHtml(html: string): string {
   backgroundZone.setAttribute('style', 'background-image:none;');
   backgroundZone.replaceChildren(img);
   return serializeRichpostHtml(doc);
+}
+
+function buildCanvasFont(style: CSSStyleDeclaration | null | undefined): string {
+  if (!style) return '400 16px sans-serif';
+  const fontStyle = style.fontStyle && style.fontStyle !== 'normal' ? `${style.fontStyle} ` : '';
+  const fontVariant = style.fontVariant && style.fontVariant !== 'normal' ? `${style.fontVariant} ` : '';
+  const fontWeight = style.fontWeight || '400';
+  const fontSize = style.fontSize || '16px';
+  const fontFamily = style.fontFamily || 'sans-serif';
+  return `${fontStyle}${fontVariant}${fontWeight} ${fontSize} ${fontFamily}`.replace(/\s+/g, ' ').trim();
+}
+
+function parseLineHeightPx(style: CSSStyleDeclaration | null | undefined): number {
+  if (!style) return 24;
+  const explicit = Number.parseFloat(style.lineHeight || '');
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+  const fontSize = Number.parseFloat(style.fontSize || '');
+  if (Number.isFinite(fontSize) && fontSize > 0) {
+    return fontSize * 1.6;
+  }
+  return 24;
+}
+
+function inspectZoneLayout(zone: HTMLElement | null, paragraphSelector: string): RichpostZoneLayoutInspection | null {
+  if (!zone) return null;
+  const view = zone.ownerDocument.defaultView || window;
+  const zoneStyle = view.getComputedStyle(zone);
+  const paragraph = zone.querySelector(paragraphSelector) as HTMLElement | null;
+  const paragraphStyle = paragraph ? view.getComputedStyle(paragraph) : zoneStyle;
+  const widthPx = Math.max(zone.clientWidth, Math.round(zone.getBoundingClientRect().width));
+  const heightPx = Math.max(zone.clientHeight, Math.round(zone.getBoundingClientRect().height));
+  const scrollWidthPx = Math.max(zone.scrollWidth, widthPx);
+  const scrollHeightPx = Math.max(zone.scrollHeight, heightPx);
+  return {
+    widthPx,
+    heightPx,
+    scrollWidthPx,
+    scrollHeightPx,
+    overflowX: scrollWidthPx > widthPx + 1,
+    overflowY: scrollHeightPx > heightPx + 1,
+    font: buildCanvasFont(zoneStyle),
+    lineHeightPx: parseLineHeightPx(zoneStyle),
+    paragraphFont: buildCanvasFont(paragraphStyle),
+    paragraphLineHeightPx: parseLineHeightPx(paragraphStyle),
+  };
 }
 
 export function injectRichpostPreviewScale(
@@ -288,6 +353,51 @@ async function renderRichpostFrameToPng(
     return foregroundDataUrl;
   }
   return await composeRichpostExportLayers(backgroundSource, foregroundDataUrl, width, height);
+}
+
+export async function inspectRichpostHtmlLayout(
+  html: string,
+  options?: {
+    viewportWidth?: number;
+    viewportHeight?: number;
+  }
+): Promise<RichpostLayoutInspection> {
+  const viewportWidth = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportWidth))
+      ? Number(options?.viewportWidth)
+      : RICHPOST_RENDER_VIEWPORT_WIDTH
+  );
+  const viewportHeight = Math.max(
+    1,
+    Number.isFinite(Number(options?.viewportHeight))
+      ? Number(options?.viewportHeight)
+      : RICHPOST_RENDER_VIEWPORT_HEIGHT
+  );
+  const frame = document.createElement('iframe');
+  frame.srcdoc = materializeRichpostBackgroundInHtml(html);
+  frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
+  frame.style.position = 'fixed';
+  frame.style.left = '-20000px';
+  frame.style.top = '0';
+  frame.style.width = `${viewportWidth}px`;
+  frame.style.height = `${viewportHeight}px`;
+  frame.style.border = '0';
+  frame.style.opacity = '0';
+  frame.style.pointerEvents = 'none';
+  frame.style.background = '#ffffff';
+  document.body.appendChild(frame);
+  try {
+    const doc = await waitForIframeContentReady(frame);
+    const titleZone = doc.querySelector('.rb-zone-title') as HTMLElement | null;
+    const bodyZone = doc.querySelector('.rb-zone-body') as HTMLElement | null;
+    return {
+      title: inspectZoneLayout(titleZone, '.rb-block.rb-heading h1, .rb-block.rb-heading h2, .rb-block.rb-heading h3, .rb-block.rb-heading h4, .rb-block.rb-heading h5, .rb-block.rb-heading h6'),
+      body: inspectZoneLayout(bodyZone, '.rb-block.rb-paragraph p, .rb-block.rb-paragraph'),
+    };
+  } finally {
+    frame.remove();
+  }
 }
 
 export async function loadRichpostPreviewHtml(

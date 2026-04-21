@@ -8052,6 +8052,63 @@ pub fn handle_manuscripts_channel(
                     )?,
                 }))
             }
+            "manuscripts:apply-richpost-page-plan" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let raw_plan = payload_field(&payload, "plan")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                if !raw_plan.is_object() {
+                    return Ok(json!({ "success": false, "error": "plan is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                if !full_path.is_dir() {
+                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+                }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
+                if get_package_kind_from_file_name(file_name) != Some("post") {
+                    return Ok(
+                        json!({ "success": false, "error": "Only richpost packages support page plans" }),
+                    );
+                }
+                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
+                let title = manifest
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| title_from_relative_path(file_name));
+                let content =
+                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
+                        .unwrap_or_default();
+                let blocks =
+                    build_package_content_blocks(&package_content_map_path(&full_path), &content);
+                let (cover_asset, image_assets) =
+                    collect_package_bound_assets(Some(state), &full_path)?;
+                let next_state = persist_richpost_page_plan(
+                    &full_path,
+                    &title,
+                    &blocks,
+                    cover_asset.as_ref(),
+                    &image_assets,
+                    &raw_plan,
+                    "ui-corrected",
+                )?;
+                let normalized_plan =
+                    read_json_value_or(&package_richpost_page_plan_path(&full_path), json!({}));
+                Ok(json!({
+                    "success": true,
+                    "plan": normalized_plan,
+                    "state": next_state,
+                }))
+            }
             "manuscripts:set-richpost-theme" => {
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))

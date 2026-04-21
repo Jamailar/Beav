@@ -35,6 +35,7 @@ import {
     renderRichpostHtmlToPng,
     renderRichpostPageUrlToPng,
 } from '../components/manuscripts/richpostPreviewImage';
+import { stabilizeRichpostPagination } from '../components/manuscripts/richpostPaginationGuard';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
@@ -1858,6 +1859,23 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
     }, [editorFile, ensureLatestEditorContentSaved]);
 
+    const resolveRichpostState = useCallback(async (
+        filePath: string,
+        nextState: PackageState,
+        plan?: unknown,
+    ) => {
+        let resolvedState = nextState;
+        if ((nextState.richpostPages?.length || 0) > 0) {
+            const corrected = await stabilizeRichpostPagination({
+                filePath,
+                state: nextState,
+                plan,
+            });
+            resolvedState = corrected.state;
+        }
+        return resolvedState;
+    }, []);
+
     const handleGenerateRichpostPagePlan = useCallback(async () => {
         if (!editorFile) return;
         const workingKey = 'richpost-page-plan';
@@ -1871,16 +1889,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (!result?.success || !result.state) {
                 throw new Error(result?.error || '生成分页方案失败');
             }
-            setPackageState(result.state);
-            if ((result.state.richpostPages?.length || 0) > 0) {
-                scheduleRichpostCardPreviewFromState(editorFile, result.state, 120);
+            const resolvedState = await resolveRichpostState(editorFile, result.state, (result as { plan?: unknown }).plan);
+            setPackageState(resolvedState);
+            if ((resolvedState.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(editorFile, resolvedState, 120);
             }
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '生成分页方案失败');
         } finally {
             setWorkingId((current) => current === workingKey ? null : current);
         }
-    }, [editorFile, ensureLatestEditorContentSaved, scheduleRichpostCardPreviewFromState]);
+    }, [editorFile, ensureLatestEditorContentSaved, resolveRichpostState, scheduleRichpostCardPreviewFromState]);
 
     const handleSelectRichpostTheme = useCallback(async (themeId: string) => {
         if (!editorFile || !themeId.trim()) return;
@@ -1897,16 +1916,17 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (!result?.success || !result.state) {
                 throw new Error(result?.error || '切换图文主题失败');
             }
-            setPackageState(result.state);
-            if ((result.state.richpostPages?.length || 0) > 0) {
-                scheduleRichpostCardPreviewFromState(editorFile, result.state, 120);
+            const resolvedState = await resolveRichpostState(editorFile, result.state);
+            setPackageState(resolvedState);
+            if ((resolvedState.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(editorFile, resolvedState, 120);
             }
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '切换图文主题失败');
         } finally {
             setWorkingId((current) => current === workingKey ? null : current);
         }
-    }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId, scheduleRichpostCardPreviewFromState]);
+    }, [editorFile, ensureLatestEditorContentSaved, packageState?.richpostThemeId, resolveRichpostState, scheduleRichpostCardPreviewFromState]);
 
     const handleUpdateRichpostTypography = useCallback(async (settings: {
         fontScale: number;
@@ -1929,9 +1949,13 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
                 return;
             }
-            setPackageState(result.state);
-            if ((result.state.richpostPages?.length || 0) > 0) {
-                scheduleRichpostCardPreviewFromState(requestFile, result.state, 120);
+            const resolvedState = await resolveRichpostState(requestFile, result.state);
+            if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
+                return;
+            }
+            setPackageState(resolvedState);
+            if ((resolvedState.richpostPages?.length || 0) > 0) {
+                scheduleRichpostCardPreviewFromState(requestFile, resolvedState, 120);
             }
         } catch (error) {
             if (richpostTypographyRequestIdRef.current !== requestId || editorFileRef.current !== requestFile) {
@@ -1940,7 +1964,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             console.error('Failed to update richpost typography:', error);
             void appAlert(error instanceof Error ? error.message : '更新图文排版失败');
         }
-    }, [editorFile, ensureLatestEditorContentSaved, scheduleRichpostCardPreviewFromState]);
+    }, [editorFile, ensureLatestEditorContentSaved, resolveRichpostState, scheduleRichpostCardPreviewFromState]);
 
     const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
         if (!editorFile || !presetId.trim()) return;
