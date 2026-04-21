@@ -35,6 +35,7 @@
 - `layout.html` 不再是单页长文模板，而是多页预览壳文件
 - `pages/` 下每个 HTML 都是一张独立的 3:4 图文页
 - `layout.template.html` 如果存在，只视为旧链路兼容资产，不是图文主链路必需文件
+- 新建 `*.redpost` 时只要求先落最小工程骨架；`content-map.json`、`layout.tokens.json`、`masters/`、`richpost-page-plan.json`、`layout.html`、`pages/` 都改成按首次保存正文、首次补渲染或首次进入图文预览时再生成
 
 ### 长文工程 `*.redarticle`
 
@@ -137,14 +138,21 @@
 ## 触发规则
 
 - 新建图文工程时，默认写入：
-  - `content-map.json`
-  - `layout.tokens.json`
-  - `masters/cover.master.html`
-  - `masters/body.master.html`
-  - `masters/ending.master.html`
-  - `richpost-page-plan.json`
-  - `layout.html`
-  - `pages/` 下首版分页 HTML
+  - `manifest.json`
+  - `content.md`
+  - `cover.json`
+  - `images.json`
+  - `assets.json`
+- 新建图文工程时，不再立刻写入分页、母版、主题模板说明或预览产物
+- 图文首次保存正文、首次显式补渲染，或首次进入需要 richpost 预览的编辑态时：
+  - 自动补齐 `content-map.json`
+  - 自动补齐 `layout.tokens.json`
+  - 自动补齐 `masters/cover.master.html`
+  - 自动补齐 `masters/body.master.html`
+  - 自动补齐 `masters/ending.master.html`
+  - 自动生成 `richpost-page-plan.json`
+  - 自动生成 `layout.html`
+  - 自动生成 `pages/` 下分页 HTML
 - 图文保存正文时：
   - 自动重建 `content-map.json`
   - 自动按当前 Markdown 全量重排分页方案
