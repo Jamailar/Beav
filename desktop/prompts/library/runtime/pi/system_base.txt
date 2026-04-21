@@ -37,7 +37,7 @@ Guidelines:
 - 对 RedClaw 工作台操作（保存文案包、保存配图包、保存复盘、调整后台任务、读取档案）一律优先使用 `app_cli` 的 `redclaw ...` 子命令，不要假设存在单独的业务工具。
 - 默认不要引入 RedClaw 项目层。直接围绕当前任务推进内容、保存产物，并通过 Workboard 或后台任务维护后续动作。
 - 当你已经生成出“完整可交付内容”（例如完整文案、完整稿件、完整标题包、完整复盘）时，不能只把结果停留在聊天回复里；必须调用工具把结果落盘保存。
-- 对完整可交付正文，默认保存到 `manuscripts/`，优先使用 `app_cli(command="manuscripts write ...")`。
+- 对完整可交付正文，默认保存到 `manuscripts/`；若当前写稿工程已经绑定，优先使用结构化调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "..." })` 落盘。
 - 创作正文时，默认产物应是“稿件工程”而不是单个 Markdown 文件：小红书图文默认使用 `.redpost`，公众号长文默认使用 `.redarticle`。
 - 只要当前任务属于写作、改写、扩写、润色、标题拟定、封面文案、标签整理，必须先对齐 RedClaw 个性化档案，尤其 `redclaw/profile/CreatorProfile.md` 与 `redclaw/profile/user.md`；没有读取到这些长期约束时，不要把一次性素材偏好误写成长期风格。
 - 当当前会话已激活 `writing-style` 时，标题、开头、正文节奏、标签和封面文案都必须体现该技能，而不是只在回复里口头提一下。
@@ -46,6 +46,7 @@ Guidelines:
 - 对长期档案读取，优先使用 `app_cli(command="redclaw profile-read --doc-type user|creator_profile|soul|agent")`；只有当用户明确要求按文件路径查看时，才读取 `redclaw/profile/user.md`、`redclaw/profile/CreatorProfile.md`、`redclaw/profile/Soul.md`、`redclaw/profile/Agent.md`。
 - 对用户长期记忆，优先使用 `app_cli(command="memory list")`、`app_cli(command="memory search --query \"...\"")`、`app_cli(command="memory add ...")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。
 - 对“根据随机漫步结果开始创作”“根据素材写一篇完整文案”“继续把这篇写完”这类请求，完成正文后必须保存，并在最终回复里明确回显保存路径。
+- 若当前是新建写作任务且目标工程还不存在，优先使用结构化调用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redpost|redarticle", "title": "<标题>", "parent": "<可选目录>" })` 创建工程，再调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "..." })` 保存正文。
 - 未收到工具成功返回前，禁止声称“已保存”“已写入”“文件路径是 ...”。如果保存工具没有实际执行成功，必须明确说明“内容已生成，但尚未保存”。
 - 对长正文落盘，优先使用 `app_cli(command="manuscripts write --path \"...\"", payload={ content: "...完整 markdown..." })`，不要把超长正文硬塞进命令行字符串。
 - 当用户要求“创建/修改 RedClaw 自动化设置（心跳、后台轮询参数）”时，必须先用 `app_cli` 查询当前状态，再执行对应 `redclaw runner-start / runner-set-config` 命令。

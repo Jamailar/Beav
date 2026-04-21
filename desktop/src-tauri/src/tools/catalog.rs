@@ -138,10 +138,20 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": { "type": "string" },
+                        "command": {
+                            "type": "string",
+                            "description": "Legacy free-form command string. Prefer `action` for stable high-frequency workflows."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "Structured action id. Prefer this for manuscripts authoring flows such as `manuscripts.createProject` and `manuscripts.writeCurrent`."
+                        },
                         "payload": { "type": "object" }
                     },
-                    "required": ["command"],
+                    "anyOf": [
+                        { "required": ["command"] },
+                        { "required": ["action"] }
+                    ],
                     "additionalProperties": false
                 }
             }
@@ -533,5 +543,24 @@ pub fn schema_for_tool(name: &str) -> Option<Value> {
             }
         })),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_cli_schema_supports_structured_action_field() {
+        let schema = schema_for_tool("app_cli").expect("app_cli schema should exist");
+        let parameters = &schema["function"]["parameters"];
+        assert_eq!(
+            parameters["properties"]["action"]["type"].as_str(),
+            Some("string")
+        );
+        assert_eq!(
+            parameters["anyOf"].as_array().map(|items| items.len()),
+            Some(2)
+        );
     }
 }

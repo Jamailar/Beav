@@ -4119,6 +4119,15 @@ fn manuscript_save_result_path(result: &Value) -> Option<&str> {
         })
 }
 
+fn normalized_app_cli_action_key(arguments: &Value) -> String {
+    payload_string(arguments, "action")
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
 fn interactive_execution_contract(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -4227,13 +4236,17 @@ fn interactive_execution_progress_observe_success(
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_lowercase();
+            let action_key = normalized_app_cli_action_key(arguments);
             if contract.require_profile_read
                 && (command.starts_with("redclaw profile-read")
                     || command.starts_with("redclaw profile-bundle"))
             {
                 progress.profile_read_completed = true;
             }
-            if contract.require_save && command.starts_with("manuscripts write") {
+            if contract.require_save
+                && (command.starts_with("manuscripts write")
+                    || action_key == "manuscriptswritecurrent")
+            {
                 let artifact_suffix = contract
                     .save_artifact
                     .as_deref()
@@ -4317,7 +4330,10 @@ fn interactive_authoring_continuation_instruction(
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    if !command.starts_with("manuscripts create-project") {
+    let action_key = normalized_app_cli_action_key(arguments);
+    if !command.starts_with("manuscripts create-project")
+        && action_key != "manuscriptscreateproject"
+    {
         return None;
     }
     let target = interactive_authoring_session_target(state, session_id)?;
@@ -4332,7 +4348,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.content_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步直接调用 `app_cli(command=\"manuscripts write-current\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文。不要重新创建工程，不要重复传 path，也不要先输出口头说明。"
+        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步直接调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文。不要重新创建工程，不要重复传 path，也不要先输出口头说明。"
     ))
 }
 
@@ -4347,7 +4363,7 @@ fn interactive_authoring_error_correction_instruction(
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `{}`。现在直接调用 `app_cli(command=\"manuscripts write-current\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文；不要再次发送空的 app_cli，也不要重新创建工程。",
+        "你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `{}`。现在直接调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文；不要再次发送空的 app_cli，也不要重新创建工程。",
         target.project_path
     ))
 }

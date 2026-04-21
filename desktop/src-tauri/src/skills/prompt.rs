@@ -17,8 +17,23 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         return "No specialized skills are currently available in this runtime.".to_string();
     }
 
-    let list = resolved
+    let active_names = resolved
+        .active_skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<Vec<_>>();
+    let inactive_visible_skills = resolved
         .visible_skills
+        .iter()
+        .filter(|skill| {
+            !active_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&skill.name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let list = inactive_visible_skills
         .iter()
         .map(|skill| {
             let mut item = format!("- {}: {}", skill.name, skill.description);
@@ -60,21 +75,17 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
     }
 
     if resolved.can_invoke_skill {
-        let active_names = resolved
-            .active_skills
-            .iter()
-            .map(|skill| skill.name.as_str())
-            .collect::<Vec<_>>();
         let mut sections = vec![
             "You have access to specialized skills in this runtime.".to_string(),
             "Keep full skill bodies out of context until they are actually needed.".to_string(),
-            "Skills listed later in the activated-skills section are already active; all other visible skills are not active by default unless marked `[auto]`.".to_string(),
-            "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
+            "Skills listed later in the activated-skills section are already active. Do not invoke them again unless activation explicitly failed.".to_string(),
+            "Only the inactive skills listed below may need manual invocation.".to_string(),
+            "When a task clearly matches one of the inactive skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
             "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
         ];
         if !active_names.is_empty() {
             sections.push(format!(
-                "Already active in this session: {}. Do not invoke those skills again unless activation failed.",
+                "Already active in this session: {}.",
                 active_names.join(", ")
             ));
         }
@@ -82,9 +93,13 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
             sections.push("Mandatory preflight rules:".to_string());
             sections.extend(preflight_rules.into_iter().map(ToString::to_string));
         }
-        sections.push(String::new());
-        sections.push("Available skills:".to_string());
-        sections.push(list);
+        if inactive_visible_skills.is_empty() {
+            sections.push("All visible skills for this runtime are already active.".to_string());
+        } else {
+            sections.push(String::new());
+            sections.push("Inactive skills available for manual invocation:".to_string());
+            sections.push(list);
+        }
         return sections.join("\n");
     }
 
@@ -152,7 +167,7 @@ mod tests {
             .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
         assert!(bundle
             .catalog_section
-            .contains("all other visible skills are not active by default"));
+            .contains("Only the inactive skills listed below may need manual invocation"));
         assert!(bundle
             .catalog_section
             .contains("Activate when: when writing"));
@@ -185,6 +200,6 @@ mod tests {
             .contains("Already active in this session: writing-style"));
         assert!(bundle
             .catalog_section
-            .contains("Do not invoke those skills again unless activation failed"));
+            .contains("All visible skills for this runtime are already active"));
     }
 }

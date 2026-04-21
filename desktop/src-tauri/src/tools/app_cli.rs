@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
@@ -16,10 +17,13 @@ use crate::helpers::{
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{McpServerRecord, SkillRecord};
-use crate::skills::{find_catalog_skill_by_name, skill_allows_runtime_mode};
+use crate::skills::{
+    find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
+    skill_allows_runtime_mode, LoadedSkillRecord,
+};
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
-    AppState,
+    workspace_root, AppState,
 };
 
 const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
@@ -116,29 +120,101 @@ fn authoring_project_kind_from_target_path(path: &str) -> Option<AuthoringProjec
     None
 }
 
-fn content_has_isolated_separator_line(content: &str) -> bool {
+fn authoring_project_kind_label(kind: AuthoringProjectKind) -> &'static str {
+    match kind {
+        AuthoringProjectKind::Redpost => "redpost",
+        AuthoringProjectKind::Redarticle => "redarticle",
+    }
+}
+
+fn normalized_app_cli_action_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SkillHostSaveValidatorSet {
+    applies_to: Vec<String>,
+    rules: Vec<SkillHostSaveRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SkillHostSaveRule {
+    rule_type: String,
+    message: String,
+    values: Vec<String>,
+    count: Option<usize>,
+    case_insensitive: bool,
+}
+
+fn blank_line_run_at_least(content: &str, count: usize) -> bool {
+    if count <= 1 {
+        return content.contains('\n');
+    }
+    let normalized = content.replace("\r\n", "\n");
+    let mut run = 0usize;
+    for ch in normalized.chars() {
+        if ch == '\n' {
+            run += 1;
+            if run >= count {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+fn content_has_line_equal_to_any(content: &str, values: &[String], case_insensitive: bool) -> bool {
+    if values.is_empty() {
+        return false;
+    }
     content.lines().any(|line| {
-        matches!(
-            line.trim(),
-            "---" | "***" | "___" | "<page-break>" | "[page-break]"
-        )
+        let trimmed = line.trim();
+        values.iter().any(|value| {
+            if case_insensitive {
+                trimmed.eq_ignore_ascii_case(value.trim())
+            } else {
+                trimmed == value.trim()
+            }
+        })
     })
 }
 
-fn writing_style_save_violations(content: &str) -> Vec<&'static str> {
-    let mut violations = Vec::<&'static str>::new();
-    let normalized = content.replace("\r\n", "\n");
-    let lower = normalized.to_ascii_lowercase();
-    if lower.contains("page-break") || normalized.contains('\u{000C}') {
-        violations.push("正文包含分页符或 page-break 标记");
+fn content_contains_any(content: &str, values: &[String], case_insensitive: bool) -> bool {
+    if values.is_empty() {
+        return false;
     }
-    if content_has_isolated_separator_line(&normalized) {
-        violations.push("正文包含孤立分隔线 `---` / `***` / `___`");
+    if case_insensitive {
+        let normalized = content.to_ascii_lowercase();
+        values
+            .iter()
+            .map(|value| value.to_ascii_lowercase())
+            .any(|value| normalized.contains(&value))
+    } else {
+        values.iter().any(|value| content.contains(value))
     }
-    if normalized.contains("\n\n\n") {
-        violations.push("正文包含连续三个空行");
+}
+
+fn evaluate_skill_host_save_rule(rule: &SkillHostSaveRule, content: &str) -> bool {
+    match rule.rule_type.trim().to_ascii_lowercase().as_str() {
+        "lineequalsany" | "line_equals_any" | "line-equals-any" => {
+            content_has_line_equal_to_any(content, &rule.values, rule.case_insensitive)
+        }
+        "containsany" | "contains_any" | "contains-any" => {
+            content_contains_any(content, &rule.values, rule.case_insensitive)
+        }
+        "blanklinerunatleast" | "blank_line_run_at_least" | "blank-line-run-at-least" => {
+            blank_line_run_at_least(content, rule.count.unwrap_or(3))
+        }
+        _ => false,
     }
-    violations
 }
 
 fn build_authoring_project_relative_path(
@@ -210,11 +286,17 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     pub fn execute(&self, arguments: &Value) -> Result<Value, String> {
-        let command = payload_string(arguments, "command")
-            .ok_or_else(|| "command is required".to_string())?;
         let payload = payload_field(arguments, "payload")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        if let Some(action) = payload_string(arguments, "action")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return self.execute_structured_action(&action, &payload);
+        }
+        let command = payload_string(arguments, "command")
+            .ok_or_else(|| "command is required".to_string())?;
         let tokens = tokenize_command(&command);
         if tokens.is_empty() {
             return Err("command is empty".to_string());
@@ -240,6 +322,16 @@ impl<'a> AppCliExecutor<'a> {
             "mcp" => self.handle_mcp(&tokens[1..], &payload),
             "ai" => self.handle_ai(&tokens[1..], &payload),
             other => Err(format!("unsupported app_cli namespace: {other}")),
+        }
+    }
+
+    fn execute_structured_action(&self, action: &str, payload: &Value) -> Result<Value, String> {
+        match normalized_app_cli_action_key(action).as_str() {
+            "manuscriptscreateproject" => {
+                self.handle_manuscript_create_project(&CliArgs::default(), payload)
+            }
+            "manuscriptswritecurrent" => self.handle_manuscript_write_current(payload),
+            other => Err(format!("unsupported structured app_cli action: {other}")),
         }
     }
 
@@ -498,24 +590,13 @@ impl<'a> AppCliExecutor<'a> {
                     .ok_or_else(|| "manuscripts read requires --path".to_string())?),
             ),
             "write-current" => {
-                let target = self.current_authoring_session_target().ok_or_else(|| {
-                    "manuscripts write-current requires an active authoring project".to_string()
-                })?;
                 let mut merged = merge_payload(&args.options, payload);
                 if let Some(object) = merged.as_object_mut() {
-                    object.insert("path".to_string(), json!(target.project_path.clone()));
-                    if !object.contains_key("content") {
-                        object.insert(
-                            "content".to_string(),
-                            json!(args.string(&["content"]).unwrap_or_default()),
-                        );
-                    }
+                    object
+                        .entry("content".to_string())
+                        .or_insert(json!(args.string(&["content"]).unwrap_or_default()));
                 }
-                self.validate_authoring_save_content(
-                    Some(target.project_kind),
-                    &payload_string(&merged, "content").unwrap_or_default(),
-                )?;
-                self.call_channel("manuscripts:save", merged)
+                self.handle_manuscript_write_current(&merged)
             }
             "write" | "save" => {
                 let path = args
@@ -2325,9 +2406,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         .flatten()
     }
 
-    fn current_session_has_skill(&self, skill_name: &str) -> bool {
+    fn active_session_skills(&self) -> Vec<LoadedSkillRecord> {
         let Some(session_id) = self.session_id else {
-            return false;
+            return Vec::new();
         };
         with_store(self.state, |store| {
             let metadata = store
@@ -2336,47 +2417,33 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 .find(|item| item.id == session_id)
                 .and_then(|session| session.metadata.as_ref());
             let Some(metadata) = metadata else {
-                return Ok(false);
+                return Ok(Vec::new());
             };
-            let mut names = Vec::<String>::new();
-            if let Some(items) = metadata.get("activeSkills").and_then(Value::as_array) {
-                names.extend(
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string),
-                );
-            }
-            if let Some(items) = metadata
-                .get("taskHints")
-                .and_then(|value| value.get("activeSkills"))
-                .and_then(Value::as_array)
-            {
-                names.extend(
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string),
-                );
-            }
-            if let Some(items) = metadata
-                .get("sessionSkillState")
-                .and_then(|value| value.get("active"))
-                .and_then(Value::as_array)
-            {
-                names.extend(
-                    items
-                        .iter()
-                        .filter_map(|item| item.get("skillName"))
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string),
-                );
-            }
-            Ok(names
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(skill_name)))
+            Ok(
+                resolve_skill_set(&store.skills, self.runtime_mode, Some(metadata), &[])
+                    .active_skills,
+            )
         })
-        .unwrap_or(false)
+        .unwrap_or_default()
+    }
+
+    fn load_skill_host_save_validators(
+        &self,
+        skill: &LoadedSkillRecord,
+    ) -> Result<Option<SkillHostSaveValidatorSet>, String> {
+        let workspace = workspace_root(self.state).ok();
+        let bundle = load_skill_bundle_sections_from_sources(&skill.name, workspace.as_deref());
+        let Some(raw_rules) = bundle.rules.get("host-save-validators.json") else {
+            return Ok(None);
+        };
+        let parsed =
+            serde_json::from_str::<SkillHostSaveValidatorSet>(raw_rules).map_err(|error| {
+                format!(
+                    "技能 {} 的 host-save-validators.json 无法解析：{error}",
+                    skill.name
+                )
+            })?;
+        Ok(Some(parsed))
     }
 
     fn validate_authoring_save_content(
@@ -2393,15 +2460,36 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         ) {
             return Ok(());
         }
-        if !self.current_session_has_skill("writing-style") {
-            return Ok(());
+        let project_kind = project_kind.expect("project kind should exist after match");
+        let project_kind_label = authoring_project_kind_label(project_kind);
+        let mut violations = Vec::<String>::new();
+        for skill in self.active_session_skills() {
+            let Some(validators) = self.load_skill_host_save_validators(&skill)? else {
+                continue;
+            };
+            if !validators.applies_to.is_empty()
+                && !validators
+                    .applies_to
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(project_kind_label))
+            {
+                continue;
+            }
+            for rule in validators
+                .rules
+                .iter()
+                .filter(|rule| !rule.message.trim().is_empty())
+            {
+                if evaluate_skill_host_save_rule(rule, content) {
+                    violations.push(format!("{}: {}", skill.name, rule.message.trim()));
+                }
+            }
         }
-        let violations = writing_style_save_violations(content);
         if violations.is_empty() {
             return Ok(());
         }
         Err(format!(
-            "writing-style 保存前校验未通过：{}。请先修正文案后再保存。",
+            "保存前校验未通过：{}。请先修正文案后再保存。",
             violations.join("；")
         ))
     }
@@ -2551,6 +2639,26 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 AuthoringProjectKind::Redarticle => "redarticle",
             },
         }))
+    }
+
+    fn handle_manuscript_write_current(&self, payload: &Value) -> Result<Value, String> {
+        let target = self.current_authoring_session_target().ok_or_else(|| {
+            "manuscripts write-current requires an active authoring project".to_string()
+        })?;
+        let mut merged = payload.clone();
+        let content = payload_string(&merged, "content").unwrap_or_default();
+        let object = merged
+            .as_object_mut()
+            .ok_or_else(|| "manuscripts write-current payload must be an object".to_string())?;
+        object.insert("path".to_string(), json!(target.project_path.clone()));
+        object
+            .entry("content".to_string())
+            .or_insert(json!(content));
+        self.validate_authoring_save_content(
+            Some(target.project_kind),
+            &payload_string(&merged, "content").unwrap_or_default(),
+        )?;
+        self.call_channel("manuscripts:save", merged)
     }
 
     fn normalize_manuscript_target_path(&self, requested_path: &str) -> String {
@@ -3959,18 +4067,67 @@ mod tests {
     }
 
     #[test]
-    fn writing_style_save_violations_reject_forbidden_markers() {
-        let violations =
-            writing_style_save_violations("## 标题\n\n---\n\n正文第一段。\n\n\n正文第二段。\n");
+    fn evaluate_skill_host_save_rule_matches_isolated_separator_only() {
+        let rule = SkillHostSaveRule {
+            rule_type: "line_equals_any".to_string(),
+            message: "正文包含孤立分隔线".to_string(),
+            values: vec!["---".to_string(), "***".to_string()],
+            count: None,
+            case_insensitive: false,
+        };
 
-        assert!(violations.contains(&"正文包含孤立分隔线 `---` / `***` / `___`"));
-        assert!(violations.contains(&"正文包含连续三个空行"));
+        assert!(evaluate_skill_host_save_rule(&rule, "标题\n---\n正文"));
+        assert!(!evaluate_skill_host_save_rule(&rule, "标题 --- 正文"));
+        assert!(!evaluate_skill_host_save_rule(&rule, "| --- | --- |"));
     }
 
     #[test]
-    fn content_has_isolated_separator_line_ignores_normal_text_lines() {
-        assert!(content_has_isolated_separator_line("标题\n---\n正文"));
-        assert!(!content_has_isolated_separator_line("标题 --- 正文"));
-        assert!(!content_has_isolated_separator_line("| --- | --- |"));
+    fn evaluate_skill_host_save_rule_detects_blank_line_run() {
+        let rule = SkillHostSaveRule {
+            rule_type: "blank_line_run_at_least".to_string(),
+            message: "正文包含连续三个空行".to_string(),
+            values: Vec::new(),
+            count: Some(3),
+            case_insensitive: false,
+        };
+
+        assert!(evaluate_skill_host_save_rule(&rule, "第一段\n\n\n第二段"));
+        assert!(!evaluate_skill_host_save_rule(&rule, "第一段\n\n第二段"));
+    }
+
+    #[test]
+    fn writing_style_host_save_validators_are_machine_readable() {
+        let workspace = crate::redbox_project_root();
+        let bundle =
+            load_skill_bundle_sections_from_sources("writing-style", Some(workspace.as_path()));
+        let raw = bundle
+            .rules
+            .get("host-save-validators.json")
+            .expect("writing-style should define host save validators");
+        let parsed: SkillHostSaveValidatorSet =
+            serde_json::from_str(raw).expect("validator json should parse");
+
+        assert_eq!(parsed.applies_to, vec!["redpost", "redarticle"]);
+        assert_eq!(parsed.rules.len(), 3);
+        assert!(parsed
+            .rules
+            .iter()
+            .any(|rule| rule.rule_type == "line_equals_any"));
+    }
+
+    #[test]
+    fn normalized_app_cli_action_key_accepts_common_variants() {
+        assert_eq!(
+            normalized_app_cli_action_key("manuscripts.writeCurrent"),
+            "manuscriptswritecurrent"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("manuscripts.write-current"),
+            "manuscriptswritecurrent"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("manuscripts/write_current"),
+            "manuscriptswritecurrent"
+        );
     }
 }
