@@ -761,10 +761,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         | OfficialAuthStateSnapshot
         | null
         | undefined,
+      payloadArg?: OfficialAuthStateSnapshot | null,
     ) => {
-      const payload = (event && typeof event === 'object' && 'payload' in event)
-        ? (event as { payload?: OfficialAuthStateSnapshot | null }).payload
-        : (event as OfficialAuthStateSnapshot | null | undefined);
+      const payload = payloadArg !== undefined
+        ? payloadArg
+        : (event && typeof event === 'object' && 'payload' in event)
+          ? (event as { payload?: OfficialAuthStateSnapshot | null }).payload
+          : (event as OfficialAuthStateSnapshot | null | undefined);
       applyOfficialAuthState(payload);
     };
 
