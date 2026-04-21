@@ -3401,6 +3401,30 @@ pub(crate) fn create_manuscript_package(
     Ok(())
 }
 
+fn choose_generated_manuscript_package_relative(
+    state: &State<'_, AppState>,
+    parent_rel: &str,
+    target_extension: &str,
+) -> Result<String, String> {
+    let normalized_parent = normalize_relative_path(parent_rel);
+    let base_id = make_id("manuscript");
+    let mut attempt = 0usize;
+    loop {
+        let stem = if attempt == 0 {
+            base_id.clone()
+        } else {
+            format!("{base_id}-{}", attempt + 1)
+        };
+        let candidate_relative =
+            normalize_relative_path(&join_relative(&normalized_parent, &format!("{stem}{target_extension}")));
+        let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
+        if !candidate_path.exists() {
+            return Ok(candidate_relative);
+        }
+        attempt += 1;
+    }
+}
+
 pub(crate) fn upgrade_markdown_manuscript_to_package(
     state: &State<'_, AppState>,
     source_path: &str,
@@ -3414,22 +3438,12 @@ pub(crate) fn upgrade_markdown_manuscript_to_package(
     if !source.exists() || !source.is_file() {
         return Err("Source manuscript not found".to_string());
     }
-    let file_name = Path::new(&source_relative)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid manuscript source".to_string())?;
-    let stem = Path::new(file_name)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid manuscript source".to_string())?;
     let parent_rel = source_relative
         .rsplit_once('/')
         .map(|(parent, _)| parent)
         .unwrap_or("");
-    let target_relative = normalize_relative_path(&join_relative(
-        parent_rel,
-        &format!("{stem}{target_extension}"),
-    ));
+    let target_relative =
+        choose_generated_manuscript_package_relative(state, parent_rel, target_extension)?;
     let target = resolve_manuscript_path(state, &target_relative)?;
     if target.exists() {
         return Err("Target package already exists".to_string());

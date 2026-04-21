@@ -4505,11 +4505,12 @@ pub(crate) fn save_manuscript_content(
         .unwrap_or("")
         .to_string();
     let current_stem = title_from_relative_path(&current_relative);
-    let should_auto_name = active_title
-        .as_deref()
-        .map(is_untitled_manuscript_label)
-        .unwrap_or(false)
-        || is_auto_generated_manuscript_stem(&current_stem);
+    let should_auto_name = !is_manuscript_package_name(&current_file_name)
+        && (active_title
+            .as_deref()
+            .map(is_untitled_manuscript_label)
+            .unwrap_or(false)
+            || is_auto_generated_manuscript_stem(&current_stem));
     if should_auto_name {
         if let Some(next_title) = first_markdown_heading_text(content) {
             let next_relative = choose_auto_named_manuscript_relative(
@@ -7801,6 +7802,25 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("");
+                if source.is_dir() && is_manuscript_package_name(source_name) {
+                    let manifest_path = package_manifest_path(&source);
+                    let mut manifest = read_json_value_or(&manifest_path, json!({}));
+                    let next_title = new_name.trim();
+                    if next_title.is_empty() {
+                        return Ok(json!({ "success": false, "error": "缺少新名称" }));
+                    }
+                    if let Some(object) = manifest.as_object_mut() {
+                        object.insert("title".to_string(), json!(next_title));
+                        object.insert("updatedAt".to_string(), json!(now_i64()));
+                    } else {
+                        manifest = json!({
+                            "title": next_title,
+                            "updatedAt": now_i64(),
+                        });
+                    }
+                    write_json_value(&manifest_path, &manifest)?;
+                    return Ok(json!({ "success": true, "newPath": normalize_relative_path(&old_path) }));
+                }
                 let parent_rel = normalize_relative_path(
                     old_path
                         .rsplit_once('/')

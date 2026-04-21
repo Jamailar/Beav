@@ -685,7 +685,7 @@ function normalizeDraftFileName(input: string): string {
 }
 
 function buildDraftStorageName(): string {
-    return `${Date.now()}`;
+    return `manuscript-${Date.now()}`;
 }
 
 function pathBasenameSafe(rawPath: string): string {
