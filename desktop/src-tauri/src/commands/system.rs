@@ -10,6 +10,66 @@ use crate::{
     refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
 
+fn normalize_default_ai_route_settings(settings: &mut Value) {
+    let default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let Some(raw_sources) = payload_string(settings, "ai_sources_json") else {
+        return;
+    };
+    let sources = serde_json::from_str::<Vec<Value>>(&raw_sources).unwrap_or_default();
+    let default_source = sources.iter().find(|source| {
+        source
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|value| value.trim() == default_source_id)
+            .unwrap_or(false)
+    });
+    let Some(source) = default_source else {
+        return;
+    };
+
+    let base_url = source
+        .get("baseURL")
+        .or_else(|| source.get("baseUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let api_key = source
+        .get("apiKey")
+        .or_else(|| source.get("key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let model_name = source
+        .get("model")
+        .or_else(|| source.get("modelName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+
+    if let Some(object) = settings.as_object_mut() {
+        if !base_url.is_empty() {
+            object.insert("api_endpoint".to_string(), json!(base_url));
+        }
+        if !api_key.is_empty() {
+            object.insert("api_key".to_string(), json!(api_key.clone()));
+            let current_video_api_key = object
+                .get("video_api_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            if current_video_api_key.is_empty() {
+                object.insert("video_api_key".to_string(), json!(api_key));
+            }
+        }
+        if !model_name.is_empty() {
+            object.insert("model_name".to_string(), json!(model_name));
+        }
+    }
+}
+
 fn bundled_html_resource_path(
     app: &AppHandle,
     file_name: &str,
@@ -130,8 +190,9 @@ pub fn handle_system_channel(
                         .auth_runtime
                         .lock()
                         .map_err(|_| "Auth runtime lock is poisoned".to_string())?;
-                    let projected =
+                    let mut projected =
                         crate::auth::project_settings_for_runtime(&store.settings, &runtime);
+                    normalize_default_ai_route_settings(&mut projected);
                     Ok(projected)
                 }),
                 "db:save-settings" => {
@@ -141,17 +202,16 @@ pub fn handle_system_channel(
                         {
                             let mut merged = current.clone();
                             for (key, value) in next {
-                                if matches!(
-                                    key.as_str(),
-                                    "redbox_auth_session_json" | "api_key" | "video_api_key"
-                                ) {
+                                if matches!(key.as_str(), "redbox_auth_session_json") {
                                     continue;
                                 }
                                 merged.insert(key.to_string(), value.clone());
                             }
                             store.settings = Value::Object(merged);
+                            normalize_default_ai_route_settings(&mut store.settings);
                         } else {
                             store.settings = payload.clone();
+                            normalize_default_ai_route_settings(&mut store.settings);
                         }
                         Ok(store.active_space_id.clone())
                     })?;
