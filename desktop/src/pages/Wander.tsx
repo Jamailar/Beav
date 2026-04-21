@@ -492,6 +492,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
       taskHints: {
         intent: 'manuscript_creation',
+        requireSourceRead: true,
+        requireProfileRead: true,
+        requireSave: true,
+        saveArtifact: 'redpost',
         platform: 'xiaohongshu',
         taskType: 'direct_write',
         formatTarget: 'markdown',

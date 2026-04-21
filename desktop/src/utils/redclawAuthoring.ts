@@ -8,6 +8,10 @@ export interface AuthoringTaskHints {
     forceMultiAgent?: boolean;
     forceLongRunningTask?: boolean;
     activeSkills?: string[];
+    requireSourceRead?: boolean;
+    requireProfileRead?: boolean;
+    requireSave?: boolean;
+    saveArtifact?: 'redpost' | 'redarticle';
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
     formatTarget?: AuthoringFormatTarget;
@@ -78,6 +82,8 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
         displayContent,
         taskHints: {
             intent: 'manuscript_creation',
+            requireSave: true,
+            saveArtifact: input.platform === 'xiaohongshu' ? 'redpost' : 'redarticle',
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

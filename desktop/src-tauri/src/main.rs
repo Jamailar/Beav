@@ -4083,6 +4083,179 @@ fn interactive_skill_activation_continuation(names: &[String]) -> Option<String>
     ))
 }
 
+#[derive(Debug, Clone, Default)]
+struct InteractiveExecutionContract {
+    require_source_read: bool,
+    require_profile_read: bool,
+    require_save: bool,
+    save_artifact: Option<String>,
+}
+
+impl InteractiveExecutionContract {
+    fn requires_tool_turn(&self) -> bool {
+        self.require_source_read || self.require_profile_read || self.require_save
+    }
+
+    fn missing_steps(&self, progress: &InteractiveExecutionProgress) -> Vec<&'static str> {
+        let mut missing = Vec::<&'static str>::new();
+        if self.require_source_read && !progress.source_read_completed {
+            missing.push("读取素材真实文件");
+        }
+        if self.require_profile_read && !progress.profile_read_completed {
+            missing.push("读取 RedClaw 用户档案");
+        }
+        if self.require_save && !progress.save_completed {
+            missing.push("调用 manuscripts write 保存稿件");
+        }
+        missing
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct InteractiveExecutionProgress {
+    source_read_completed: bool,
+    profile_read_completed: bool,
+    save_completed: bool,
+}
+
+fn interactive_execution_contract(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> InteractiveExecutionContract {
+    let Some(session_id) = session_id else {
+        return InteractiveExecutionContract::default();
+    };
+    with_store(state, |store| {
+        let task_hints = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref())
+            .and_then(|metadata| metadata.get("taskHints"));
+        Ok(InteractiveExecutionContract {
+            require_source_read: task_hints
+                .and_then(|value| value.get("requireSourceRead"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            require_profile_read: task_hints
+                .and_then(|value| value.get("requireProfileRead"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            require_save: task_hints
+                .and_then(|value| value.get("requireSave"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            save_artifact: task_hints
+                .and_then(|value| value.get("saveArtifact"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string),
+        })
+    })
+    .unwrap_or_default()
+}
+
+fn interactive_execution_contract_instruction(
+    contract: &InteractiveExecutionContract,
+) -> Option<String> {
+    if !contract.requires_tool_turn() {
+        return None;
+    }
+    let mut lines = vec![
+        "当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。".to_string(),
+        "先直接发起真实工具调用，完成必要读取/保存后再给最终回复。".to_string(),
+    ];
+    if contract.require_source_read {
+        lines.push("必须先读取素材目录中的真实文件内容。".to_string());
+    }
+    if contract.require_profile_read {
+        lines.push("必须先读取 RedClaw 用户档案。".to_string());
+    }
+    if contract.require_save {
+        let save_target = contract
+            .save_artifact
+            .as_deref()
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| "目标稿件".to_string());
+        lines.push(format!(
+            "必须先调用 `manuscripts write` 把完整内容保存到 {save_target} 工程，再汇报结果。"
+        ));
+    }
+    Some(lines.join(" "))
+}
+
+fn interactive_execution_contract_followup(
+    contract: &InteractiveExecutionContract,
+    progress: &InteractiveExecutionProgress,
+) -> Option<String> {
+    let missing = contract.missing_steps(progress);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "当前任务还没有完成这些必需动作：{}。不要继续口头描述“我会去做”或“接下来要做什么”。现在直接发起真实工具调用补齐这些动作，完成后再输出最终结果。",
+        missing.join("、")
+    ))
+}
+
+fn interactive_execution_progress_observe_success(
+    progress: &mut InteractiveExecutionProgress,
+    contract: &InteractiveExecutionContract,
+    tool_name: &str,
+    arguments: &Value,
+    result: &Value,
+) {
+    match tool_name {
+        "redbox_fs" => {
+            let action = payload_string(arguments, "action")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let scope = payload_string(arguments, "scope")
+                .unwrap_or_else(|| "workspace".to_string())
+                .to_ascii_lowercase();
+            if contract.require_source_read && scope == "workspace" && action == "read" {
+                progress.source_read_completed = true;
+            }
+        }
+        "app_cli" => {
+            let command = payload_string(arguments, "command")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            if contract.require_profile_read
+                && (command.starts_with("redclaw profile-read")
+                    || command.starts_with("redclaw profile-bundle"))
+            {
+                progress.profile_read_completed = true;
+            }
+            if contract.require_save && command.starts_with("manuscripts write") {
+                let artifact_suffix = contract
+                    .save_artifact
+                    .as_deref()
+                    .map(|value| format!(".{value}"));
+                let command_matches = artifact_suffix
+                    .as_deref()
+                    .map(|suffix| command.contains(suffix))
+                    .unwrap_or(true);
+                let result_matches = artifact_suffix
+                    .as_deref()
+                    .and_then(|suffix| {
+                        result
+                            .get("filePath")
+                            .and_then(Value::as_str)
+                            .map(|path| path.ends_with(suffix))
+                    })
+                    .unwrap_or(command_matches);
+                if command_matches || result_matches {
+                    progress.save_completed = true;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn emit_loop_guard_checkpoint(
     app: &AppHandle,
     session_id: Option<&str>,
@@ -5918,11 +6091,24 @@ fn run_openai_interactive_chat_runtime(
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut tool_turn = 0usize;
+    let execution_contract = interactive_execution_contract(state, session_id);
+    let mut execution_progress = InteractiveExecutionProgress::default();
+    let mut execution_contract_nudge_count = 0usize;
+
+    if let Some(instruction) = interactive_execution_contract_instruction(&execution_contract) {
+        append_internal_runtime_user_message(
+            &mut prompt_messages,
+            &mut canonical_messages,
+            instruction,
+        );
+    }
 
     while tool_turn < usize::MAX || loop_guard.has_pending_toolless_turn() {
         let forced_toolless_instruction = loop_guard.take_toolless_turn_message();
         let forcing_toolless_turn = forced_toolless_instruction.is_some();
         let tool_turn_limit_reached = tool_turn >= INTERACTIVE_MAX_TOOL_TURNS;
+        let must_force_first_tool_turn =
+            execution_contract.requires_tool_turn() && !forcing_toolless_turn && tool_turn == 0;
         if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
@@ -5946,7 +6132,7 @@ fn run_openai_interactive_chat_runtime(
                 turn_index,
                 if forcing_toolless_turn {
                     "none"
-                } else if is_wander && tool_turn == 1 {
+                } else if (is_wander && tool_turn == 1) || must_force_first_tool_turn {
                     "required"
                 } else if tool_turn_limit_reached {
                     "none"
@@ -5980,7 +6166,7 @@ fn run_openai_interactive_chat_runtime(
         );
         let tool_choice = if forcing_toolless_turn {
             json!("none")
-        } else if is_wander && tool_turn == 1 {
+        } else if (is_wander && tool_turn == 1) || must_force_first_tool_turn {
             json!("required")
         } else if tool_turn_limit_reached {
             json!("none")
@@ -6099,6 +6285,31 @@ fn run_openai_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
+            if let Some(correction) =
+                interactive_execution_contract_followup(&execution_contract, &execution_progress)
+            {
+                execution_contract_nudge_count += 1;
+                if execution_contract_nudge_count >= 3 {
+                    finalize_interactive_runtime_state(
+                        state,
+                        session_id,
+                        &assistant_content,
+                        Some("required tool execution was not completed"),
+                    );
+                    return Err(format!(
+                        "interactive runtime ended before completing required execution steps: {}",
+                        execution_contract
+                            .missing_steps(&execution_progress)
+                            .join("、")
+                    ));
+                }
+                append_internal_runtime_user_message(
+                    &mut prompt_messages,
+                    &mut canonical_messages,
+                    correction,
+                );
+                continue;
+            }
             if is_wander && !wander_saw_tool_call && tool_turn < INTERACTIVE_MAX_TOOL_TURNS {
                 let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 append_internal_runtime_user_message(
@@ -6330,6 +6541,14 @@ fn run_openai_interactive_chat_runtime(
                             true,
                         ),
                     );
+                    interactive_execution_progress_observe_success(
+                        &mut execution_progress,
+                        &execution_contract,
+                        effective_tool_name,
+                        &effective_arguments,
+                        &result_value,
+                    );
+                    execution_contract_nudge_count = 0;
                     skill_activation_names.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
