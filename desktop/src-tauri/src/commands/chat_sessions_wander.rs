@@ -410,46 +410,43 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .unwrap_or("");
             let material_ref = meta.get("materialRef").and_then(Value::as_object);
             if source_type == "document" {
-                let entry_path = material_ref
-                    .and_then(|value| value.get("entryPath"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
                 let root_path = material_ref
                     .and_then(|value| value.get("folderPath"))
                     .and_then(Value::as_str)
+                    .or_else(|| meta.get("filePath").and_then(Value::as_str))
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let relative_path = material_ref
-                    .and_then(|value| value.get("entryFile"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(|value| value.trim().to_string())
-                    .or_else(|| {
-                        meta.get("relativePath")
-                            .and_then(Value::as_str)
-                            .map(|value| value.trim().to_string())
+                let naming_rules = material_ref
+                    .and_then(|value| value.get("namingRules"))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("；")
                     })
-                    .unwrap_or_default();
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        let sample = meta
+                            .get("relativePath")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())?;
+                        Some(format!("样例文件：{sample}"))
+                    })
+                    .unwrap_or_else(|| "先从目录中最像正文的文件开始探索。".to_string());
                 return format!(
-                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 用 redbox_fs 直接读取文件: {}\n- 读取策略: {}\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
+                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 先探索目录: {}\n- 识别规则: {}\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
                     index + 1,
                     title,
                     item_type,
                     source_type,
-                    if !entry_path.is_empty() {
-                        entry_path
-                    } else if !relative_path.is_empty() {
-                        relative_path
-                    } else {
-                        root_path
-                    },
-                    material_ref
-                        .and_then(|value| value.get("readHint"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("直接读取样例文件本身。")
+                    root_path,
+                    naming_rules
                 );
             }
 
@@ -460,29 +457,37 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let entry_path = material_ref
-                .and_then(|value| value.get("entryPath"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let read_hint = material_ref
-                .and_then(|value| value.get("readHint"))
+            let exploration_hint = material_ref
+                .and_then(|value| value.get("explorationHint"))
                 .and_then(Value::as_str)
                 .unwrap_or(if source_type == "youtube" || item_type == "video" {
-                    "先 list 目录，再优先读取 meta.json；若 meta 中存在 transcriptFile / subtitle 线索，再读取对应转录文件。"
+                    "先 list 目录，再优先读取 meta.json，然后根据 transcript / subtitle / content / description 等命名线索自行选择要读的文件。"
                 } else {
-                    "先 list 目录，再优先读取 meta.json；如果目录中存在 content.md，再继续读取 content.md。"
+                    "先 list 目录，再优先读取 meta.json，然后根据 content / body / article / note 等命名线索自行选择要读的正文文件。"
                 });
+            let naming_rules = material_ref
+                .and_then(|value| value.get("namingRules"))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("；")
+                })
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "优先 meta.json，再按命名线索继续探索。".to_string());
             format!(
-                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 素材路径: {}\n- 入口文件: {}\n- 读取顺序: {}",
+                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 先探索目录: {}\n- 探索顺序: {}\n- 识别规则: {}",
                 index + 1,
                 title,
                 item_type,
                 source_type,
                 folder_path,
-                if entry_path.is_empty() { "(未提供)" } else { &entry_path },
-                read_hint
+                exploration_hint,
+                naming_rules
             )
         })
         .collect::<Vec<_>>()

@@ -2099,28 +2099,31 @@ fn knowledge_source_texts(store: &AppStore) -> Vec<(String, String, Value)> {
 }
 
 fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
-    let mut content_candidates = Vec::<String>::new();
-    if note.transcript.is_some() {
-        content_candidates.push("transcript.md".to_string());
-    }
-    if note.html_file.is_some() {
-        content_candidates.push("content.html".to_string());
-    }
-    content_candidates.push("content.md".to_string());
     let source_type = note
         .capture_kind
         .clone()
         .unwrap_or_else(|| "note".to_string());
     let is_video_note = note.video.is_some() || note.video_url.is_some();
-    let read_strategy = if is_video_note {
-        "meta_then_transcript_or_description"
+    let exploration_hint = if is_video_note {
+        "先列出素材目录，再优先读取 meta.json。随后根据目录和 meta 中出现的字段，自主寻找 transcript / subtitle / content / description / video 等相关文件；不要预设固定后缀。"
     } else {
-        "meta_then_content"
+        "先列出素材目录，再优先读取 meta.json。随后根据目录和 meta 中出现的字段，自主寻找 content / body / article / html / markdown 等正文文件；不要预设固定文件名。"
     };
-    let read_hint = if is_video_note {
-        "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 transcript.md，则继续读取转录文件，否则回退到 meta.json 内的 description。"
+    let naming_rules = if is_video_note {
+        vec![
+            "优先识别 meta.json".to_string(),
+            "转录/字幕常见命名可能包含 transcript / subtitle / captions".to_string(),
+            "正文或描述可能直接在 meta.json 字段里，也可能在 content / description / note 文件中"
+                .to_string(),
+            "视频素材文件常见命名可能包含 video，扩展名可能是 mp4 / mov / webm / mkv".to_string(),
+        ]
     } else {
-        "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 content.md 或 content.html，再继续读取正文文件。"
+        vec![
+            "优先识别 meta.json".to_string(),
+            "正文常见命名可能包含 content / body / article / note".to_string(),
+            "正文扩展名可能是 md / markdown / html / txt".to_string(),
+            "如果 meta.json 已包含 description / excerpt / transcript，也要一并利用".to_string(),
+        ]
     };
     json!({
         "id": note.id,
@@ -2139,10 +2142,8 @@ fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
                 &source_type,
                 "knowledge/redbook",
                 note.folder_path.as_deref(),
-                Some("meta.json"),
-                content_candidates,
-                read_strategy,
-                read_hint,
+                exploration_hint,
+                naming_rules,
                 &note.title,
                 note.source_link.as_deref().or(note.source_url.as_deref()),
             )
@@ -2151,10 +2152,6 @@ fn wander_item_from_note(note: &KnowledgeNoteRecord) -> Value {
 }
 
 fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
-    let mut content_candidates = Vec::<String>::new();
-    if video.has_subtitle {
-        content_candidates.push("subtitle.txt".to_string());
-    }
     json!({
         "id": video.id,
         "type": "video",
@@ -2171,10 +2168,13 @@ fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
                 "youtube",
                 "knowledge/youtube",
                 video.folder_path.as_deref(),
-                Some("meta.json"),
-                content_candidates,
-                "meta_then_subtitle_or_description",
-                "先读取 entryPath 指向的 meta.json；若 contentCandidates 中存在 subtitle.txt，再读取字幕文件，否则回退到 meta.json 内的 description。",
+                "先列出素材目录，再优先读取 meta.json。随后根据目录和 meta 中出现的字段，自主寻找 subtitle / transcript / captions / description 等相关文件；不要预设固定后缀。",
+                vec![
+                    "优先识别 meta.json".to_string(),
+                    "字幕/转录常见命名可能包含 subtitle / transcript / captions".to_string(),
+                    "字幕文件扩展名可能是 txt / md / srt / vtt / json".to_string(),
+                    "如果没有独立字幕文件，就回退使用 meta.json 中的 description / summary / transcript 字段".to_string(),
+                ],
                 &video.title,
                 Some(video.video_url.as_str()),
             )
@@ -2183,10 +2183,6 @@ fn wander_item_from_youtube(video: &YoutubeVideoRecord) -> Value {
 }
 
 fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
-    let primary_entry = source
-        .sample_files
-        .first()
-        .map(|value| normalize_relative_path(value));
     json!({
         "id": source.id,
         "type": "note",
@@ -2204,14 +2200,12 @@ fn wander_item_from_doc(source: &DocumentKnowledgeSourceRecord) -> Value {
                 "document",
                 "knowledge/docs",
                 Some(source.root_path.as_str()),
-                primary_entry.as_deref(),
+                "先列出文档源目录，再优先从样例文件入手。如果样例文件不存在或信息不足，再按目录结构自行选择最相关的正文文件继续读取。",
                 source
                     .sample_files
                     .iter()
-                    .map(|value| normalize_relative_path(value))
+                    .map(|value| format!("样例文件：{}", normalize_relative_path(value)))
                     .collect::<Vec<_>>(),
-                "direct_file_or_sample",
-                "优先读取 entryPath 指向的样例文件；若 entryPath 不存在，再根据 contentCandidates 选择一个真实文件继续读取。",
                 &source.name,
                 None,
             )
@@ -2224,25 +2218,14 @@ fn build_wander_material_ref(
     source_type: &str,
     storage_root: &str,
     folder_path: Option<&str>,
-    entry_file: Option<&str>,
-    content_candidates: Vec<String>,
-    read_strategy: &str,
-    read_hint: &str,
+    exploration_hint: &str,
+    naming_rules: Vec<String>,
     display_title: &str,
     source_url: Option<&str>,
 ) -> Value {
-    let normalized_entry_file = entry_file
-        .map(normalize_relative_path)
-        .filter(|value| !value.trim().is_empty());
-    let entry_path = match (folder_path, normalized_entry_file.as_deref()) {
-        (Some(folder), Some(entry)) => Some(Path::new(folder).join(entry).display().to_string()),
-        (Some(folder), None) => Some(folder.to_string()),
-        (None, Some(entry)) => Some(entry.to_string()),
-        (None, None) => None,
-    };
-    let normalized_candidates = content_candidates
+    let normalized_rules = naming_rules
         .into_iter()
-        .map(|value| normalize_relative_path(&value))
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.trim().is_empty())
         .fold(Vec::<String>::new(), |mut acc, value| {
             if !acc.iter().any(|item| item == &value) {
@@ -2250,21 +2233,14 @@ fn build_wander_material_ref(
             }
             acc
         });
-    let exists = entry_path
-        .as_deref()
-        .map(Path::new)
-        .is_some_and(Path::exists)
-        || folder_path.map(Path::new).is_some_and(Path::exists);
+    let exists = folder_path.map(Path::new).is_some_and(Path::exists);
     json!({
         "kind": kind,
         "sourceType": source_type,
         "storageRoot": storage_root,
         "folderPath": folder_path,
-        "entryFile": normalized_entry_file,
-        "entryPath": entry_path,
-        "contentCandidates": normalized_candidates,
-        "readStrategy": read_strategy,
-        "readHint": read_hint,
+        "explorationHint": exploration_hint,
+        "namingRules": normalized_rules,
         "displayTitle": display_title,
         "sourceUrl": source_url,
         "exists": exists,
