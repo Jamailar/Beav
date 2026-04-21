@@ -1,9 +1,7 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     build_market_skill_record, build_user_skill_record, compute_skill_discovery_fingerprint,
-    find_catalog_skill_by_name, merge_requested_skills_into_session, normalized_activation_scope,
-    render_invoked_skill_bundle, skill_allows_runtime_mode, skill_catalog_changed,
-    skills_catalog_list_value, SkillActivationSource,
+    invoke_skill, skill_catalog_changed, skills_catalog_list_value, SkillInvokeRequest,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -57,46 +55,6 @@ fn requested_skill_name(payload: &Value) -> String {
     payload_string(payload, "name")
         .or_else(|| payload_string(payload, "skill"))
         .unwrap_or_default()
-}
-
-fn merge_active_skill_into_session(
-    state: &State<'_, AppState>,
-    session_id: &str,
-    skill_name: &str,
-) -> Result<Vec<String>, String> {
-    with_store_mut(state, |store| {
-        let Some(session) = store
-            .chat_sessions
-            .iter_mut()
-            .find(|item| item.id == session_id)
-        else {
-            return Err(format!("session not found: {session_id}"));
-        };
-        let active_skills = merge_requested_skills_into_session(
-            session,
-            &[skill_name.to_string()],
-            SkillActivationSource::Explicit,
-            "skills.invoke",
-        );
-        Ok(active_skills)
-    })
-}
-
-fn effective_active_skill_names(
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
-    skill_name: &str,
-    activation_scope: &str,
-) -> Result<(Vec<String>, bool), String> {
-    if activation_scope == "turn" {
-        return Ok((vec![skill_name.to_string()], false));
-    }
-    let active = if let Some(session_id) = session_id {
-        merge_active_skill_into_session(state, session_id, skill_name)?
-    } else {
-        vec![skill_name.to_string()]
-    };
-    Ok((active, session_id.is_some()))
 }
 
 pub fn handle_skills_ai_channel(
@@ -155,47 +113,26 @@ pub fn handle_skills_ai_channel(
                     return Err("技能名称不能为空".to_string());
                 }
                 let session_id = payload_string(payload, "sessionId");
+                let runtime_mode_hint = payload_string(payload, "runtimeMode");
                 let workspace = workspace_root(state).ok();
-                let (skill, runtime_mode) = with_store(state, |store| {
-                    let runtime_mode = session_id
-                        .as_deref()
-                        .map(|value| {
-                            super::chat_state::resolve_runtime_mode_for_session(&store, value)
-                        })
-                        .or_else(|| payload_string(payload, "runtimeMode"))
-                        .unwrap_or_else(|| "default".to_string());
-                    let Some(skill) = find_catalog_skill_by_name(&store.skills, &requested_name)
-                    else {
-                        return Err(format!("技能不存在: {requested_name}"));
-                    };
-                    Ok((skill, runtime_mode))
-                })?;
-                if skill.disabled {
-                    return Err(format!("技能已禁用: {}", skill.name));
-                }
-                if !skill_allows_runtime_mode(&skill, &runtime_mode) {
-                    return Err(format!(
-                        "技能 `{}` 不允许在 runtime mode `{}` 中激活",
-                        skill.name, runtime_mode
-                    ));
-                }
-                let activation_scope =
-                    normalized_activation_scope(skill.metadata.activation_scope.as_deref());
-                let (active_skills, persisted_to_session) = effective_active_skill_names(
+                let outcome = invoke_skill(
                     state,
-                    session_id.as_deref(),
-                    &skill.name,
-                    activation_scope,
+                    SkillInvokeRequest {
+                        skill_name: &requested_name,
+                        session_id: session_id.as_deref(),
+                        runtime_mode_hint: runtime_mode_hint.as_deref(),
+                        workspace_root: workspace.as_deref(),
+                    },
                 )?;
                 let _ = record_skill_invocation_metric(
                     state,
                     SkillInvocationMetric {
                         session_id: session_id.clone(),
-                        runtime_mode: runtime_mode.clone(),
-                        skill_name: skill.name.clone(),
-                        activation_scope: activation_scope.to_string(),
-                        persisted_to_session,
-                        active_skill_count: active_skills.len() as i64,
+                        runtime_mode: outcome.runtime_mode.clone(),
+                        skill_name: outcome.skill_name.clone(),
+                        activation_scope: outcome.activation_scope.clone(),
+                        persisted_to_session: outcome.persisted_to_session,
+                        active_skill_count: outcome.active_skills.len() as i64,
                         elapsed_ms: now_ms().saturating_sub(started_at) as i64,
                         created_at: now_i64(),
                     },
@@ -203,29 +140,28 @@ pub fn handle_skills_ai_channel(
                 log_timing_event(
                     state,
                     "skills",
-                    &format!("skills:invoke:{}", skill.name),
+                    &format!("skills:invoke:{}", outcome.skill_name),
                     "skills:invoke",
                     started_at,
                     Some(format!(
                         "runtimeMode={} activationScope={} activeSkills={} persistedToSession={}",
-                        runtime_mode,
-                        activation_scope,
-                        active_skills.len(),
-                        persisted_to_session
+                        outcome.runtime_mode,
+                        outcome.activation_scope,
+                        outcome.active_skills.len(),
+                        outcome.persisted_to_session
                     )),
                 );
-                let rendered = render_invoked_skill_bundle(&skill, workspace.as_deref());
                 Ok(json!({
                     "success": true,
                     "action": "invoke",
-                    "name": skill.name,
-                    "description": skill.description,
-                    "activationScope": activation_scope,
-                    "persistedToSession": persisted_to_session,
-                    "runtimeMode": runtime_mode,
+                    "name": outcome.skill_name,
+                    "description": outcome.description,
+                    "activationScope": outcome.activation_scope,
+                    "persistedToSession": outcome.persisted_to_session,
+                    "runtimeMode": outcome.runtime_mode,
                     "sessionId": session_id,
-                    "activeSkills": active_skills,
-                    "activatedSkill": rendered
+                    "activeSkills": outcome.active_skills,
+                    "activatedSkill": outcome.rendered_bundle
                 }))
             }
             "skills:create" => {

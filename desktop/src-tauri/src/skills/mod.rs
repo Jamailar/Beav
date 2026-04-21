@@ -4,6 +4,8 @@ mod activation;
 mod bundled;
 #[path = "catalog.rs"]
 mod catalog;
+#[path = "executor.rs"]
+mod executor;
 #[path = "hooks.rs"]
 mod hooks;
 #[path = "loader.rs"]
@@ -22,6 +24,7 @@ mod watcher;
 pub use activation::*;
 pub use bundled::*;
 pub use catalog::*;
+pub use executor::*;
 pub use hooks::*;
 pub use loader::*;
 pub use permissions::*;
