@@ -81,6 +81,7 @@ mod tests {
                 prompt_prefix: None,
                 prompt_suffix: None,
                 context_note: None,
+                activation_hint: None,
                 max_prompt_chars: None,
             },
             body: "# Skill".to_string(),

@@ -25,6 +25,13 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
             if skill.metadata.auto_activate {
                 item.push_str(" [auto]");
             }
+            if let Some(hint) = skill.metadata.activation_hint.as_deref() {
+                let hint = hint.trim();
+                if !hint.is_empty() {
+                    item.push_str("\n  Activate when: ");
+                    item.push_str(hint);
+                }
+            }
             item
         })
         .collect::<Vec<_>>()
@@ -56,6 +63,7 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         let mut sections = vec![
             "You have access to specialized skills in this runtime.".to_string(),
             "Keep full skill bodies out of context until they are actually needed.".to_string(),
+            "Visible skills below are not active by default unless marked `[auto]`.".to_string(),
             "When a task clearly matches one of the skills below, call `app_cli(command=\"skills invoke --name skill-name\")` to load the full instructions, references, scripts, and rules into the current session.".to_string(),
             "If the user explicitly names a skill, invoke it before proceeding.".to_string(),
         ];
@@ -111,24 +119,18 @@ mod tests {
     use crate::runtime::SkillRecord;
     use crate::skills::resolve_skill_set;
 
-    fn skill(name: &str, runtime_modes: &str, auto_activate: bool) -> SkillRecord {
-        SkillRecord {
-            name: name.to_string(),
-            description: "desc".to_string(),
-            location: format!("redbox://skills/{name}"),
-            body: format!(
-                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: {auto_activate}\nhookMode: inline\n---\n# Skill\n\nBody"
-            ),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled: Some(false),
-        }
-    }
-
     #[test]
     fn build_skill_prompt_bundle_includes_manual_invoke_copy() {
         let resolved = resolve_skill_set(
-            &[skill("writing-style", "[wander]", false)],
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
             "wander",
             None,
             &["app_cli".to_string()],
@@ -137,5 +139,11 @@ mod tests {
         assert!(bundle
             .catalog_section
             .contains("call `app_cli(command=\"skills invoke --name skill-name\")`"));
+        assert!(bundle
+            .catalog_section
+            .contains("Visible skills below are not active by default"));
+        assert!(bundle
+            .catalog_section
+            .contains("Activate when: when writing"));
     }
 }

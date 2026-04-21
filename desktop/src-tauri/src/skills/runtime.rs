@@ -97,6 +97,11 @@ pub fn render_invoked_skill_bundle(
             .context_note
             .as_ref()
             .map(|value| format!("<context_note>{value}</context_note>")),
+        skill
+            .metadata
+            .activation_hint
+            .as_ref()
+            .map(|value| format!("<activation_hint>{value}</activation_hint>")),
     ]
     .into_iter()
     .flatten()

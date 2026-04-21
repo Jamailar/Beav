@@ -23,6 +23,7 @@ pub struct SkillMetadataRecord {
     pub prompt_prefix: Option<String>,
     pub prompt_suffix: Option<String>,
     pub context_note: Option<String>,
+    pub activation_hint: Option<String>,
     pub max_prompt_chars: Option<usize>,
 }
 
@@ -134,6 +135,10 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
                 let normalized = normalize_string(value);
                 metadata.context_note = (!normalized.is_empty()).then_some(normalized);
             }
+            "activationhint" | "activation_hint" | "activation-hint" => {
+                let normalized = normalize_string(value);
+                metadata.activation_hint = (!normalized.is_empty()).then_some(normalized);
+            }
             "maxpromptchars" | "max_prompt_chars" | "max-prompt-chars" => {
                 metadata.max_prompt_chars = value.parse::<usize>().ok();
             }
@@ -207,6 +212,7 @@ fn fingerprint_for_loaded_skill(
     metadata.prompt_prefix.hash(&mut hasher);
     metadata.prompt_suffix.hash(&mut hasher);
     metadata.context_note.hash(&mut hasher);
+    metadata.activation_hint.hash(&mut hasher);
     metadata.max_prompt_chars.hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
