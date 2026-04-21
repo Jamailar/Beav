@@ -4148,7 +4148,7 @@ fn interactive_execution_contract_instruction(
             .map(|value| format!(".{value}"))
             .unwrap_or_else(|| "目标稿件".to_string());
         lines.push(format!(
-            "必须先调用 `manuscripts write` 把完整内容保存到 {save_target} 工程，再汇报结果。"
+            "必须先调用 `manuscripts write-current` 把完整内容保存到 {save_target} 工程，再汇报结果。"
         ));
     }
     Some(lines.join(" "))
@@ -4226,6 +4226,101 @@ fn interactive_execution_progress_observe_success(
         }
         _ => {}
     }
+}
+
+#[derive(Debug, Clone)]
+struct InteractiveAuthoringSessionTarget {
+    project_path: String,
+    content_path: String,
+}
+
+fn interactive_authoring_session_target(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Option<InteractiveAuthoringSessionTarget> {
+    let session_id = session_id?;
+    with_store(state, |store| {
+        let metadata = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref());
+        let Some(metadata) = metadata else {
+            return Ok(None);
+        };
+        let intent = payload_string(metadata, "intent")
+            .or_else(|| {
+                metadata
+                    .get("taskHints")
+                    .and_then(|value| payload_string(value, "intent"))
+            })
+            .unwrap_or_default();
+        if intent != "manuscript_creation" {
+            return Ok(None);
+        }
+        let project_path =
+            payload_string(metadata, "currentAuthoringProjectPath").unwrap_or_default();
+        let content_path =
+            payload_string(metadata, "currentAuthoringContentPath").unwrap_or_default();
+        if project_path.trim().is_empty() || content_path.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(InteractiveAuthoringSessionTarget {
+            project_path,
+            content_path,
+        }))
+    })
+    .ok()
+    .flatten()
+}
+
+fn interactive_authoring_continuation_instruction(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    tool_name: &str,
+    arguments: &Value,
+    result: &Value,
+) -> Option<String> {
+    if tool_name != "app_cli" {
+        return None;
+    }
+    let command = payload_string(arguments, "command")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !command.starts_with("manuscripts create-project") {
+        return None;
+    }
+    let target = interactive_authoring_session_target(state, session_id)?;
+    let project_path = result
+        .get("projectPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(target.project_path.as_str());
+    let content_path = result
+        .get("contentPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(target.content_path.as_str());
+    Some(format!(
+        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步直接调用 `app_cli(command=\"manuscripts write-current\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文。不要重新创建工程，不要重复传 path，也不要先输出口头说明。"
+    ))
+}
+
+fn interactive_authoring_error_correction_instruction(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    tool_name: &str,
+    error: &str,
+) -> Option<String> {
+    if tool_name != "app_cli" || error.trim() != "command is required" {
+        return None;
+    }
+    let target = interactive_authoring_session_target(state, session_id)?;
+    Some(format!(
+        "你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `{}`。现在直接调用 `app_cli(command=\"manuscripts write-current\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文；不要再次发送空的 app_cli，也不要重新创建工程。",
+        target.project_path
+    ))
 }
 
 fn emit_loop_guard_checkpoint(
@@ -5929,6 +6024,9 @@ fn run_openai_interactive_chat_runtime(
         );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         let mut skill_activation_names = Vec::<String>::new();
+        let mut authoring_continuation_instruction = None::<String>;
+        let mut authoring_error_correction_instruction = None::<String>;
+        let mut suppress_loop_guard_for_round = false;
         for call in tool_calls {
             let tool_started_at = now_ms();
             let normalized_tool_call =
@@ -6073,6 +6171,16 @@ fn run_openai_interactive_chat_runtime(
                     );
                     execution_contract_nudge_count = 0;
                     skill_activation_names.extend(activated_skills);
+                    if authoring_continuation_instruction.is_none() {
+                        authoring_continuation_instruction =
+                            interactive_authoring_continuation_instruction(
+                                state,
+                                session_id,
+                                effective_tool_name,
+                                &effective_arguments,
+                                &result_value,
+                            );
+                    }
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
                         &effective_arguments,
@@ -6158,6 +6266,18 @@ fn run_openai_interactive_chat_runtime(
                             false,
                         ),
                     );
+                    if authoring_error_correction_instruction.is_none() {
+                        authoring_error_correction_instruction =
+                            interactive_authoring_error_correction_instruction(
+                                state,
+                                session_id,
+                                effective_tool_name,
+                                &failure_text,
+                            );
+                    }
+                    if authoring_error_correction_instruction.is_some() {
+                        suppress_loop_guard_for_round = true;
+                    }
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
                         &effective_arguments,
@@ -6176,6 +6296,20 @@ fn run_openai_interactive_chat_runtime(
                 instruction,
             );
         }
+        if let Some(instruction) = authoring_continuation_instruction {
+            append_internal_runtime_user_message(
+                &mut prompt_messages,
+                &mut canonical_messages,
+                instruction,
+            );
+        }
+        if let Some(instruction) = authoring_error_correction_instruction {
+            append_internal_runtime_user_message(
+                &mut prompt_messages,
+                &mut canonical_messages,
+                instruction,
+            );
+        }
         save_runtime_session_bundle(
             state,
             session_id,
@@ -6184,8 +6318,10 @@ fn run_openai_interactive_chat_runtime(
             &config.model_name,
             &canonical_messages,
         )?;
-        if let Some(reason) = loop_guard.observe_tool_round(&tool_round_digests) {
-            emit_loop_guard_checkpoint(app, session_id, &reason, &tool_round_digests);
+        if !suppress_loop_guard_for_round {
+            if let Some(reason) = loop_guard.observe_tool_round(&tool_round_digests) {
+                emit_loop_guard_checkpoint(app, session_id, &reason, &tool_round_digests);
+            }
         }
     }
     Err(if is_wander {
