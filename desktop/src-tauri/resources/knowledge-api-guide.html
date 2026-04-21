@@ -832,8 +832,8 @@
               <div class="eyebrow">RedBox Knowledge Import Guide</div>
               <h1>知识库导入指南</h1>
               <p>
-              RedBox 现在支持两种知识库导入方式：浏览器插件导入，以及自建 APP / 第三方 APP 的 API 导入。
-              这里先讲怎么选方式，再展开当前最新版接口格式、限制和请求示例。
+              RedBox 当前支持两种知识库导入方式：浏览器插件导入，以及本地 HTTP API 导入。
+              浏览器插件适合在网页里直接采集；API 适合你自己的脚本、自动化和第三方应用。下面这份页面只保留当前真实可用的插件能力和接口格式。
               </p>
             </div>
           <div class="hero-actions">
@@ -850,7 +850,7 @@
               <div class="module-title-wrap">
                 <span class="module-kicker">方式 1</span>
                 <h2 class="module-title">插件导入</h2>
-                <p class="module-desc">在浏览器里看到内容时，直接导入到 RedBox。</p>
+                <p class="module-desc">在浏览器里看到内容时，直接导入到 RedBox 当前活动空间。</p>
               </div>
               <div class="module-meta">
                 <span>默认折叠</span>
@@ -859,7 +859,7 @@
             </summary>
             <div class="module-body">
               <div class="micro-note">
-                先在 RedBox 的 设置 → 工具 里点击“一键准备插件”，再在 app 里使用复制扩展管理页地址的按钮，把地址粘贴到浏览器地址栏打开。
+                插件会自动探测本地 Knowledge API，无需手动填地址。当前支持小红书图文 / 视频 / 文章、抖音视频、YouTube 视频、网页链接 / 文章、选中文字，以及网页图片导入素材库。
               </div>
               <div class="step-list" id="plugin-install-steps">
                 <div class="step-row">
@@ -872,12 +872,20 @@
                 </div>
                 <div class="step-row">
                   <span class="step-index">3</span>
-                  <div>点击“加载已解压的扩展程序”，选择 RedBox 准备好的插件目录。</div>
+                  <div>把 <code>RedBox Browser Extension</code> 文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹。</div>
                 </div>
                 <div class="step-row">
                   <span class="step-index">4</span>
-                  <div>回到网页后，直接使用插件采集内容，导入结果会进入当前活动空间。</div>
+                  <div>安装完成后，可在插件弹窗或右键菜单里执行“保存当前页面 / 保存选中文字 / 保存图片到素材库”等动作，导入结果会进入当前活动空间。</div>
                 </div>
+              </div>
+              <div class="tag-row" style="margin-top: 14px;">
+                <span class="tag">小红书图文 / 视频 / 文章</span>
+                <span class="tag">抖音视频</span>
+                <span class="tag">YouTube 视频</span>
+                <span class="tag">网页链接 / 文章</span>
+                <span class="tag">选中文字</span>
+                <span class="tag">网页图片 → 素材库</span>
               </div>
             </div>
           </details>
@@ -899,7 +907,7 @@
                 <div class="mini-list" style="margin-bottom: 0; flex: 1;">
                   <div class="mini-item">
                     <strong>支持内容</strong>
-                    <p>知识条目、文档源、图片素材、批量导入。</p>
+                    <p>知识条目、图片素材。当前没有独立文档源接口，也没有混合批量导入接口。</p>
                   </div>
                 </div>
                 <div class="api-head-actions">
@@ -909,33 +917,33 @@
 
               <section class="api-section">
                 <h3>服务入口</h3>
-                <p class="section-desc">复制地址后即可开始接入。</p>
+                <p class="section-desc">浏览器插件会自动探测；你自己接 API 时直接用这个地址。</p>
                   <div class="base-url">
                     <code id="base-url">http://127.0.0.1:31937/api/knowledge</code>
                     <button class="copy-btn" type="button" data-copy-target="base-url">复制地址</button>
                   </div>
-                  <div class="notice" style="margin-top: 14px;">应用保持运行即可使用，导入内容会进入当前空间。</div>
+                  <div class="notice" style="margin-top: 14px;">应用保持运行即可使用；所有写入都会进入当前活动空间。</div>
               </section>
 
               <section class="api-section">
-                <h3>当前限制</h3>
-                <p class="section-desc">提交前先看这三个限制。</p>
+                <h3>当前能力边界</h3>
+                <p class="section-desc">这里写的是当前真实实现，不是规划中的占位接口。</p>
                   <div class="hero-meta">
                     <div class="meta-pill">
-                      <span class="label">Body Limit</span>
-                      <strong>16 MB</strong>
+                      <span class="label">插件采集</span>
+                      <strong>6 类</strong>
                     </div>
                     <div class="meta-pill">
-                      <span class="label">Batch Limit</span>
-                      <strong>64 Items</strong>
+                      <span class="label">API Routes</span>
+                      <strong>3 个</strong>
                     </div>
                     <div class="meta-pill">
-                      <span class="label">Entry Routes</span>
-                      <strong>5 个接口</strong>
+                      <span class="label">写入空间</span>
+                      <strong>当前活动空间</strong>
                     </div>
                     <div class="meta-pill">
                       <span class="label">更新时间</span>
-                      <strong>2026-04-19</strong>
+                      <strong>2026-04-21</strong>
                     </div>
                   </div>
               </section>
@@ -948,40 +956,40 @@
 
           <section class="api-section">
               <h3>可用类型</h3>
-              <p class="section-desc">`POST /entries` 支持这些 `kind`。</p>
+              <p class="section-desc">`POST /entries` 当前建议使用这些 `kind`。</p>
               <div class="tag-row" id="entry-kind-tags"></div>
           </section>
 
           <section class="api-section">
               <h3>Source 字段</h3>
-              <p class="section-desc">常用来源字段说明。</p>
+              <p class="section-desc">插件会自动补齐；自建调用至少建议传 `sourceLink / sourceUrl` 和 `externalId`。</p>
               <div class="mini-list">
                 <div class="mini-item">
                   <strong>source.appId / source.pluginId</strong>
-                  <p>来源标记。</p>
+                  <p>来源标记。插件当前会自动附带；自建调用可选。</p>
                 </div>
                 <div class="mini-item">
                   <strong>source.externalId</strong>
-                  <p>外部内容 ID。</p>
+                  <p>外部内容 ID。建议用于稳定去重和更新。</p>
                 </div>
                 <div class="mini-item">
                   <strong>source.sourceDomain</strong>
-                  <p>来源域名。</p>
+                  <p>来源域名。可不传，服务端可从链接推导。</p>
                 </div>
                 <div class="mini-item">
                   <strong>source.sourceLink / source.sourceUrl</strong>
-                  <p>来源链接。</p>
+                  <p>来源链接。当前优先消费 `sourceLink`，`sourceUrl` 保留兼容。</p>
                 </div>
                 <div class="mini-item">
                   <strong>source.capturedAt</strong>
-                  <p>采集时间，可选。</p>
+                  <p>采集时间，可选；插件当前会自动写入。</p>
                 </div>
               </div>
           </section>
 
           <section class="api-section">
               <h3>响应说明</h3>
-              <p class="section-desc">常见返回字段。</p>
+              <p class="section-desc">当前三个接口最常见的返回字段。</p>
               <div class="mini-list">
                 <div class="mini-item">
                   <strong>success</strong>
@@ -989,15 +997,15 @@
                 </div>
                 <div class="mini-item">
                   <strong>duplicate / updated</strong>
-                  <p>是否命中已有内容。</p>
+                  <p>`/entries` 是否命中已有内容、是否更新了现有条目。</p>
                 </div>
                 <div class="mini-item">
-                  <strong>requestedActions</strong>
-                  <p>回显请求里的处理选项。</p>
+                  <strong>entryId / imported</strong>
+                  <p>`/entries` 返回 `entryId`；`/media-assets` 返回导入数量。</p>
                 </div>
                 <div class="mini-item">
-                  <strong>assets / source / results</strong>
-                  <p>不同接口返回的主要结果数据。</p>
+                  <strong>counts / items</strong>
+                  <p>`/health` 返回当前数量；`/media-assets` 返回导入后的素材列表。</p>
                 </div>
               </div>
           </section>
@@ -1012,26 +1020,21 @@
     <script>
       const guide = {
         title: 'RedBox 知识库导入指南',
-        updatedAt: '2026-04-19',
+        updatedAt: '2026-04-21',
         baseUrl: 'http://127.0.0.1:31937/api/knowledge',
-        limits: {
-          bodyBytes: 16 * 1024 * 1024,
-          bodyText: '16 MB',
-          batchItems: 64
-        },
         importMethods: {
           plugin: {
             title: '插件导入',
-            description: '适合浏览器里直接采集内容，导入动作更轻。',
+            description: '适合浏览器里直接采集内容，插件会自动探测本地 Knowledge API。',
             steps: [
               '在 RedBox 的 设置 → 工具 里点击“一键准备插件”。',
               '打开 Chrome 或 Edge 的扩展管理页，并开启开发者模式。',
-              '点击“加载已解压的扩展程序”，选择 RedBox 准备好的插件目录。',
-              '回到网页后直接用插件采集内容，导入结果会进入当前活动空间。'
+              '把 `RedBox Browser Extension` 文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹。',
+              '安装完成后，可在插件弹窗或右键菜单里执行“保存当前页面 / 保存选中文字 / 保存图片到素材库”等动作，导入结果会进入当前活动空间。'
             ]
           },
           api: {
-            title: '自建 APP / 第三方 APP API 导入',
+            title: '本地 HTTP API 导入',
             description: '适合本地脚本、自动化流程、第三方工具和你自己写的应用接入。'
           }
         },
@@ -1039,11 +1042,10 @@
           'youtube-video',
           'xhs-note',
           'xhs-video',
+          'douyin-video',
           'link-article',
           'wechat-article',
-          'knowledge-note',
           'webpage',
-          'article',
           'text-note'
         ],
         endpoints: [
@@ -1051,8 +1053,8 @@
             method: 'GET',
             path: '/health',
             title: '健康检查',
-            description: '返回当前空间、导入能力、路由和限制值。接入方建议启动前先调用一次。',
-            tags: ['无需请求体', '建议启动自检'],
+            description: '返回当前应用状态和现有内容数量。插件启动时会先探测这个接口。',
+            tags: ['无需请求体', '建议启动自检', '只做连通性检查'],
             examples: [
               {
                 label: 'curl',
@@ -1064,62 +1066,41 @@
                 type: 'json',
                 code: `{
   "success": true,
+  "status": "ok",
+  "app": "RedConvert",
   "counts": {
-    "entries": 128,
-    "youtubeVideos": 14,
-    "documentSources": 3,
-    "mediaAssets": 86
-  },
-  "limits": {
-    "bodyBytes": 16777216,
-    "batchItems": 64
-  },
-  "routes": {
-    "entries": "/api/knowledge/entries",
-    "documentSources": "/api/knowledge/document-sources",
-    "mediaAssets": "/api/knowledge/media-assets",
-    "batchIngest": "/api/knowledge/batch-ingest"
-  },
-  "capabilities": {
-    "sourceFields": ["sourceDomain", "sourceLink", "sourceUrl"],
-    "entryKinds": [
-      "youtube-video",
-      "xhs-note",
-      "xhs-video",
-      "link-article",
-      "wechat-article",
-      "knowledge-note",
-      "webpage",
-      "article",
-      "text-note"
-    ],
-    "mediaAssetKinds": ["image"]
-  },
-  "spaceId": "default"
+    "redbook": 128,
+    "youtube": 14,
+    "media": 86
+  }
 }`
               }
+            ],
+            notes: [
+              '当前健康检查只返回状态和数量，不返回 routes、limits 或 spaceId。',
+              '如果这里返回失败，插件不会继续提交 `/entries` 或 `/media-assets`。'
             ]
           },
           {
             method: 'POST',
             path: '/entries',
             title: '导入知识条目',
-            description: '用于网页内容、笔记、视频元数据、纯文本和 YouTube 记录导入。当前仅 `youtube-video` 与普通 note 类 entry 两条写入链路。',
-            tags: ['支持去重', '默认 allowUpdate=true', '仅活动空间'],
+            description: '用于网页内容、平台内容、纯文本摘录和 YouTube 记录导入。当前 `youtube-video` 走 YouTube 专用落盘链路，其它 kind 走结构化知识条目落盘链路。',
+            tags: ['支持去重', '支持媒体本地化', '仅活动空间'],
             examples: [
               {
-                label: '普通网页 / 笔记类 entry',
+                label: '网页 / 文章类 entry',
                 type: 'json',
                 code: `{
   "kind": "link-article",
   "source": {
-    "appId": "browser-extension",
-    "pluginId": "redbox-capture",
+    "appId": "redbox-capture",
+    "pluginId": "redbox-browser-extension",
     "externalId": "article-001",
     "sourceDomain": "example.com",
     "sourceLink": "https://example.com/post/1",
     "sourceUrl": "https://example.com/post/1",
-    "capturedAt": "2026-04-19T10:00:00+08:00"
+    "capturedAt": "2026-04-21T10:00:00+08:00"
   },
   "content": {
     "title": "标题",
@@ -1128,9 +1109,7 @@
     "excerpt": "摘要摘录",
     "html": "<article>...</article>",
     "description": "描述",
-    "summary": "现成摘要",
     "siteName": "Example",
-    "transcript": "",
     "tags": ["案例", "抓取"],
     "stats": {
       "likes": 12,
@@ -1142,15 +1121,62 @@
     "imageUrls": [
       "https://example.com/1.jpg",
       "https://example.com/2.jpg"
-    ],
-    "videoUrl": "",
-    "thumbnailUrl": ""
+    ]
   },
   "options": {
-    "dedupeKey": "article-001",
     "allowUpdate": true,
-    "summarize": false,
     "transcribe": false
+  }
+}`
+              },
+              {
+                label: '抖音视频 entry',
+                type: 'json',
+                code: `{
+  "kind": "douyin-video",
+  "source": {
+    "appId": "redbox-capture",
+    "pluginId": "redbox-browser-extension",
+    "externalId": "7626731433209466162",
+    "sourceDomain": "www.douyin.com",
+    "sourceLink": "https://www.douyin.com/video/7626731433209466162",
+    "capturedAt": "2026-04-21T10:05:00+08:00"
+  },
+  "content": {
+    "title": "292.就是“捧” #展呈 #一人之下",
+    "author": "展呈",
+    "authorProfileUrl": "https://www.douyin.com/user/MS4wLjABAAAAAR...",
+    "text": "292.就是“捧” #展呈 #一人之下",
+    "excerpt": "292.就是“捧” #展呈 #一人之下",
+    "description": "292.就是“捧” #展呈 #一人之下",
+    "siteName": "www.douyin.com",
+    "publishedAt": "2026-04-13 16:55",
+    "tags": ["抖音", "展呈", "一人之下"],
+    "commentsSnapshot": [
+      {
+        "author": "酌酒一杯夜幽幽",
+        "text": "风正豪:拘灵遣将，拘的是人心！",
+        "likes": 11,
+        "replies": 0,
+        "createdAt": "1周前",
+        "location": "河南"
+      }
+    ],
+    "indexText": "标题、正文、发布时间和评论快照的拼接索引文本",
+    "stats": {
+      "likes": 6889,
+      "collects": 445,
+      "comments": 268,
+      "shares": 102
+    }
+  },
+  "assets": {
+    "coverUrl": "https://p3-pc-sign.douyinpic.com/image-cut-tos/cover.jpeg",
+    "videoUrl": "https://aweme.snssdk.com/aweme/v1/play/..."
+  },
+  "options": {
+    "allowUpdate": true,
+    "transcribe": true
   }
 }`
               },
@@ -1160,22 +1186,21 @@
                 code: `{
   "kind": "youtube-video",
   "source": {
+    "appId": "redbox-capture",
+    "pluginId": "redbox-browser-extension",
     "externalId": "dQw4w9WgXcQ",
     "sourceLink": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "sourceUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
   },
   "content": {
     "title": "视频标题",
-    "description": "视频描述",
-    "summary": "可选摘要",
-    "transcript": "可选字幕文本"
+    "description": "视频描述"
   },
   "assets": {
     "thumbnailUrl": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
   },
   "options": {
     "allowUpdate": true,
-    "summarize": false,
     "transcribe": false
   }
 }`
@@ -1185,120 +1210,38 @@
                 type: 'json',
                 code: `{
   "success": true,
-  "kind": "link-article",
   "duplicate": false,
   "updated": false,
-  "entryId": "knowledge-example-post-1",
-  "requestedActions": {
-    "summarize": false,
-    "transcribe": false
-  }
+  "entryId": "douyin_7626731433209466162"
 }`
               }
             ],
             notes: [
-              '`kind: "text"` 会被自动归一化为 `text-note`。',
-              '普通 note 类支持：`xhs-note`、`xhs-video`、`link-article`、`wechat-article`、`knowledge-note`、`webpage`、`article`、`text-note`。',
-              '`youtube-video` 必须提供 `source.externalId` 和 `content.title`。',
-              '普通 note 会把 `text` / `description` / `excerpt` 里的内容写为 Markdown；如提供 `html` 和 `transcript` 也会落盘。'
-            ]
-          },
-          {
-            method: 'POST',
-            path: '/document-sources',
-            title: '导入文档源',
-            description: '把本地目录或本地文件批量注册为知识文档源。目录类直接引用原路径，`copied-file` 会复制到 workspace 内部。',
-            tags: ['tracked-folder', 'obsidian-vault', 'copied-file'],
-            examples: [
-              {
-                label: 'tracked-folder',
-                type: 'json',
-                code: `{
-  "kind": "tracked-folder",
-  "name": "产品资料库",
-  "rootPath": "/absolute/path/to/folder",
-  "options": {
-    "copyIntoWorkspace": true,
-    "allowUpdate": true
-  }
-}`
-              },
-              {
-                label: 'copied-file',
-                type: 'json',
-                code: `{
-  "kind": "copied-file",
-  "name": "本次导入文件",
-  "paths": [
-    "/absolute/path/to/spec-a.md",
-    "/absolute/path/to/spec-b.pdf"
-  ],
-  "options": {
-    "copyIntoWorkspace": true,
-    "allowUpdate": true
-  }
-}`
-              },
-              {
-                label: '成功响应示例',
-                type: 'json',
-                code: `{
-  "success": true,
-  "source": {
-    "id": "doc-source_xxx",
-    "kind": "tracked-folder",
-    "name": "产品资料库",
-    "rootPath": "/absolute/path/to/folder",
-    "locked": false,
-    "indexing": false,
-    "indexError": null,
-    "fileCount": 128,
-    "sampleFiles": ["README.md", "spec/intro.md"],
-    "createdAt": "2026-04-19T10:20:00+08:00",
-    "updatedAt": "2026-04-19T10:20:00+08:00"
-  },
-  "requestedOptions": {
-    "allowUpdate": true,
-    "copyIntoWorkspace": true
-  }
-}`
-              }
-            ],
-            notes: [
-              '`tracked-folder` 和 `obsidian-vault` 必须传有效目录。',
-              '`copied-file` 当前强制要求 `copyIntoWorkspace=true`。',
-              '`paths` 可传多个文件；`rootPath` 也可作为单文件或目录入口。'
+              '当前插件实测使用的 kind：`youtube-video`、`xhs-note`、`xhs-video`、`douyin-video`、`link-article`、`wechat-article`、`webpage`、`text-note`。',
+              '`youtube-video` 会走 YouTube 专用保存链路，建议总是传 `source.externalId` 和 `content.title`。',
+              '除 YouTube 外，其它结构化 entry 会把 `text` / `description` 写为 Markdown；如果提供 `html` 会额外落盘为 `content.html`。',
+              '`options` 当前核心只消费 `allowUpdate` 和 `transcribe`；其它兼容字段可传，但不会影响写入结果。'
             ]
           },
           {
             method: 'POST',
             path: '/media-assets',
             title: '导入图片素材',
-            description: '图片会进入 workspace 的素材库，而不是知识条目区。当前不接受视频或音频。',
-            tags: ['仅图片', '支持 URL / data URL / 本地路径'],
+            description: '图片会进入 workspace 的素材库，而不是知识条目区。当前不接受视频、音频，也不接受本地绝对路径。',
+            tags: ['仅图片', '支持 URL / data URL', '返回素材列表'],
             examples: [
               {
                 label: '请求体示例',
                 type: 'json',
                 code: `{
-  "source": {
-    "sourceDomain": "www.xiaohongshu.com",
-    "sourceLink": "https://www.xiaohongshu.com/explore/abc",
-    "sourceUrl": "https://www.xiaohongshu.com/explore/abc"
-  },
   "items": [
     {
       "title": "封面图",
-      "source": "https://example.com/cover.webp",
-      "mimeType": "image/webp"
+      "source": "https://example.com/cover.webp"
     },
     {
       "title": "截图",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
-    },
-    {
-      "title": "本地文件",
-      "source": "/absolute/path/to/local-image.jpg"
     }
   ]
 }`
@@ -1308,86 +1251,22 @@
                 type: 'json',
                 code: `{
   "success": true,
-  "kind": "media-assets",
-  "imported": 3,
-  "assets": [
+  "imported": 2,
+  "items": [
     {
       "id": "media_xxx",
-      "source": "knowledge-api",
-      "sourceDomain": "www.xiaohongshu.com",
-      "sourceLink": "https://www.xiaohongshu.com/explore/abc",
       "title": "封面图",
       "mimeType": "image/webp",
-      "relativePath": "imports/knowledge-api/...",
-      "absolutePath": "/Users/...",
-      "previewUrl": "file:///Users/...",
-      "exists": true
+      "relativePath": "imported/media_xxx_cover.webp"
     }
   ]
 }`
               }
             ],
             notes: [
-              '每次请求至少要有一个 `items`，且单次最多 64 项。',
-              '`mimeType` 可选；如果没传会按文件内容或 URL 后缀推断。',
-              '如果 source 不是图片，接口会直接返回错误。'
-            ]
-          },
-          {
-            method: 'POST',
-            path: '/batch-ingest',
-            title: '批量混合导入',
-            description: '把 `entries`、`documentSources` 和 `mediaAssets` 放在同一个请求里顺序执行。',
-            tags: ['总数上限 64', '逐项返回结果'],
-            examples: [
-              {
-                label: '请求体示例',
-                type: 'json',
-                code: `{
-  "entries": [
-    {
-      "kind": "text-note",
-      "content": {
-        "title": "摘录",
-        "text": "一段纯文字"
-      }
-    }
-  ],
-  "documentSources": [
-    {
-      "kind": "tracked-folder",
-      "name": "资料夹",
-      "rootPath": "/absolute/path/to/folder"
-    }
-  ],
-  "mediaAssets": [
-    {
-      "items": [
-        {
-          "source": "https://example.com/image.png"
-        }
-      ]
-    }
-  ]
-}`
-              },
-              {
-                label: '成功响应示例',
-                type: 'json',
-                code: `{
-  "success": true,
-  "count": 3,
-  "results": [
-    { "type": "entry", "result": { "success": true, "entryId": "knowledge_xxx" } },
-    { "type": "document-source", "result": { "success": true, "source": { "id": "doc-source_xxx" } } },
-    { "type": "media-assets", "result": { "success": true, "imported": 1 } }
-  ]
-}`
-              }
-            ],
-            notes: [
-              '总项目数 = `entries.length + documentSources.length + mediaAssets.length`。',
-              '任一子项失败时，请求会直接报错，不会继续执行后续项。'
+              '请求体至少要有一个 `items`，且每个 item 至少要有 `source`。',
+              '当前 `source` 只支持 `http(s)` 图片地址和 `data:image/...;base64,...`。',
+              '本地绝对路径、视频地址、音频地址和空 payload 都会直接报错。'
             ]
           }
         ]
@@ -1476,17 +1355,17 @@
           '',
           `- Base URL：\`${guide.baseUrl}\``,
           '- 默认无需额外 Token，但应用必须正在运行。',
-          '- 当前仅允许写入活动空间；传入其他 `spaceId` 会报错。',
-          `- 单次请求体大小上限：${guide.limits.bodyText}`,
-          `- 单次 batch 总项目上限：${guide.limits.batchItems}`,
+          '- 当前所有写入都会进入活动空间，没有单独的 `spaceId` 写入接口。',
+          '- 当前公开的 Knowledge API 路由只有：`GET /health`、`POST /entries`、`POST /media-assets`。',
+          '- 浏览器插件会先调用 `GET /health`，通过后再提交具体导入请求。',
           '',
           '## Source 字段',
           '',
-          '- `source.appId` / `source.pluginId`：请求来源标记。',
-          '- `source.externalId`：外部平台主键，YouTube 导入强依赖它，其他 entry 可用于去重。',
+          '- `source.appId` / `source.pluginId`：请求来源标记；插件会自动附带。',
+          '- `source.externalId`：外部平台主键，建议始终传，用于稳定去重和更新。',
           '- `source.sourceDomain`：可不传；如果 `sourceLink` / `sourceUrl` 是合法 URL，会自动推导域名。',
           '- `source.sourceLink` / `source.sourceUrl`：当前优先使用 `sourceLink`，`sourceUrl` 保留兼容。',
-          '- `source.capturedAt`：可选；会用于落盘记录的创建时间。',
+          '- `source.capturedAt`：可选；插件当前会自动附带。',
           '',
           '## Entry Kinds',
           '',
@@ -1494,8 +1373,6 @@
           '',
           '## 媒体 source 支持形式',
           '',
-          '- 本地绝对路径',
-          '- `file://` 路径',
           '- `http://` / `https://` 图片 URL',
           '- `data:image/...;base64,...`',
           ''
@@ -1530,10 +1407,10 @@
 
         lines.push('## 调用建议');
         lines.push('');
-        lines.push('- 接入前先调用 `GET /health`，读取当前 `limits` 和 `routes`。');
-        lines.push('- `entries` 默认就是更新模式；如果你只想探测是否存在，建议自行先做外部去重。');
-        lines.push('- `media-assets` 只收图片，视频/音频不要走这个接口。');
-        lines.push('- `copied-file` 会复制文件进入 workspace；目录类文档源则保留原路径引用。');
+        lines.push('- 接入前先调用 `GET /health`，确认本地服务已启动。');
+        lines.push('- `entries` 里如果是平台内容，优先补齐 `source.externalId`、`sourceLink` 和稳定标题。');
+        lines.push('- `douyin-video` 建议同时传 `publishedAt`、`commentsSnapshot` 和 `indexText`，方便后续检索。');
+        lines.push('- `media-assets` 只收图片；视频和音频不要走这个接口。');
         lines.push('');
         return lines.join('\n');
       }
