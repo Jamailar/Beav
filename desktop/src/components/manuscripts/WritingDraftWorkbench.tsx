@@ -2294,7 +2294,7 @@ export function WritingDraftWorkbench({
                 <button
                   type="button"
                   onClick={() => setIsRichpostThemeDrawerOpen(false)}
-                  className="rounded-full border border-border p-1.5 text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-primary text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary"
                   aria-label="关闭图文主题抽屉"
                   title="关闭"
                 >

@@ -825,13 +825,6 @@ fn merge_richpost_css_var_object(target: &mut serde_json::Map<String, Value>, ra
     }
 }
 
-fn read_richpost_layout_tokens_value_for_theme(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-) -> Value {
-    theme::scaffold::read_richpost_layout_tokens_value_for_theme(package_path, theme)
-}
-
 fn default_richpost_master_fragment(master_name: &str) -> &'static str {
     let _ = master_name;
     r#"<!--
@@ -3775,6 +3768,209 @@ fn render_richpost_theme_preview_html(
     )
 }
 
+fn read_richpost_preview_layout_tokens_value_for_theme(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+) -> Value {
+    let default_tokens = theme::scaffold::default_richpost_layout_tokens(Some(package_path), theme);
+    let raw = theme::store::richpost_theme_root_tokens_path_for_theme(package_path, theme)
+        .map(|path| read_json_value_or(&path, default_tokens.clone()))
+        .unwrap_or(default_tokens);
+    theme::scaffold::normalize_richpost_layout_tokens_value(&raw, theme, Some(package_path))
+}
+
+fn read_richpost_preview_master_fragment(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    master_name: &str,
+    template: &str,
+) -> String {
+    let sanitized = sanitize_richpost_master_name(master_name)
+        .unwrap_or_else(|| richpost_master_name_from_template(template));
+    let role = richpost_master_role(&sanitized, template);
+    if let Some(theme_path) =
+        theme::store::richpost_theme_root_master_path_for_theme(package_path, theme, &sanitized)
+    {
+        if let Some(content) = fs::read_to_string(&theme_path)
+            .ok()
+            .map(|content| content.trim().to_string())
+            .filter(|content| !content.is_empty())
+        {
+            return content;
+        }
+    }
+    default_richpost_master_fragment(role).to_string()
+}
+
+fn render_richpost_isolated_preview_page_html(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    title: &str,
+    page: &Value,
+    page_index: usize,
+    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
+    assets_by_id: &BTreeMap<String, PackageBoundAsset>,
+    tokens: &Value,
+    typography: RichpostTypographySettings,
+) -> String {
+    let template = normalize_richpost_template(
+        page.get("template")
+            .and_then(Value::as_str)
+            .unwrap_or("text-stack"),
+    );
+    let master_name = page
+        .get("master")
+        .and_then(Value::as_str)
+        .and_then(sanitize_richpost_master_name)
+        .unwrap_or_else(|| richpost_master_name_from_template(template));
+    let master_role = richpost_master_role(&master_name, template);
+    let page_css_vars =
+        richpost_css_var_map_from_tokens(tokens, master_role, page.get("styleOverrides"));
+    let page_style_attr = richpost_css_var_style_attr(&page_css_vars);
+    let page_id = page
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("preview-page-{:03}", page_index + 1));
+    let page_title = page
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("{title} - 第 {} 页", page_index + 1));
+    let master_fragment =
+        read_richpost_preview_master_fragment(package_path, theme, &master_name, template);
+    let page_markup =
+        render_richpost_master_fragment(&master_fragment, page, blocks_by_id, assets_by_id);
+
+    format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{}</title>
+  <style>
+    :root {{ --rb-font-scale: 1; --rb-line-height-scale: 1; }}
+    html, body {{ width: 100%; height: 100%; margin: 0; }}
+    body {{
+      background: transparent;
+      overflow: hidden;
+    }}
+    .rb-page-host {{
+      position: relative;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      color: var(--rb-text, #111111);
+      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
+      font-size: var(--rb-body-font-size, calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale)));
+      line-height: var(--rb-runtime-body-line-height, calc(var(--rb-body-line-height, 1.9) * var(--rb-line-height-scale)));
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }}
+    .rb-page-host *, .rb-page-host *::before, .rb-page-host *::after {{ box-sizing: border-box; }}
+    .rb-page-host h1, .rb-page-host h2, .rb-page-host h3, .rb-page-host h4, .rb-page-host h5, .rb-page-host h6 {{
+      margin: 0;
+      color: var(--rb-heading-text, var(--rb-text, #111111));
+      font-family: var(--rb-heading-font, var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif));
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+    }}
+    .rb-page-host h1 {{ font-size: var(--rb-heading-h1-size, calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale))); }}
+    .rb-page-host h2 {{ font-size: var(--rb-heading-h2-size, calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale))); }}
+    .rb-page-host h3 {{ font-size: var(--rb-heading-h3-size, calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale))); }}
+    .rb-page-host h4 {{ font-size: var(--rb-heading-h4-size, calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale))); }}
+    .rb-page-host h5 {{ font-size: var(--rb-heading-h5-size, calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale))); }}
+    .rb-page-host h6 {{ font-size: var(--rb-heading-h6-size, calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale))); }}
+    .rb-page-host p {{
+      margin: 0;
+      color: var(--rb-body-text, var(--rb-text, #111111));
+      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
+      font-size: inherit;
+      line-height: inherit;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }}
+    .rb-page-host a {{
+      color: var(--rb-accent, #111111);
+      text-decoration: var(--rb-link-decoration, underline);
+    }}
+    .rb-page-host strong {{
+      font-weight: var(--rb-strong-weight, 700);
+    }}
+    .rb-page-host img {{
+      max-width: 100%;
+      display: block;
+      border-radius: var(--rb-image-radius, 0px);
+    }}
+    .rb-page-host ul, .rb-page-host ol {{
+      margin: 0;
+      padding-left: 1.25em;
+    }}
+    .rb-page-host blockquote {{
+      margin: 0;
+      padding-left: 1em;
+      border-left: 3px solid var(--rb-accent, #111111);
+      color: var(--rb-muted, #666666);
+    }}
+    .rb-page-host table {{
+      margin: 0;
+      border-collapse: collapse;
+    }}
+    .rb-page-host hr {{
+      border: 0;
+      border-top: 1px solid var(--rb-surface-border, rgba(17,17,17,0.08));
+      margin: calc(var(--rb-zone-gap, 16px) * 1.1) 0;
+    }}
+  </style>
+  <script>
+    (() => {{
+      const applyRuntimeTypography = (fontScale, lineHeightScale) => {{
+        document.documentElement.style.setProperty('--rb-font-scale', String(fontScale));
+        document.documentElement.style.setProperty('--rb-line-height-scale', String(lineHeightScale));
+        const host = document.querySelector('.rb-page-host');
+        if (!host) return;
+        const computed = window.getComputedStyle(host);
+        const rawBaseLineHeight = Number.parseFloat(computed.getPropertyValue('--rb-body-line-height').trim() || '1.9');
+        const baseLineHeight = Number.isFinite(rawBaseLineHeight) ? rawBaseLineHeight : 1.9;
+        host.style.setProperty('--rb-runtime-body-line-height', String((baseLineHeight * lineHeightScale).toFixed(3)));
+      }};
+      const params = new URLSearchParams(window.location.search);
+      const defaultFontScale = {};
+      const defaultLineHeightScale = {};
+      const rawFontScale = Number(params.get('fontScale') || String(defaultFontScale));
+      const fontScale = Number.isFinite(rawFontScale) ? Math.min(1.6, Math.max(0.8, rawFontScale)) : defaultFontScale;
+      const rawLineHeightScale = Number(params.get('lineHeightScale') || String(defaultLineHeightScale));
+      const lineHeightScale = Number.isFinite(rawLineHeightScale) ? Math.min(1.4, Math.max(0.8, rawLineHeightScale)) : defaultLineHeightScale;
+      const run = () => applyRuntimeTypography(fontScale, lineHeightScale);
+      if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', run, {{ once: true }});
+      }} else {{
+        run();
+      }}
+    }})();
+  </script>
+</head>
+<body>
+  <section class="rb-page-host" data-page-id="{}" data-master="{}" data-template="{}" style="{}">
+    {}
+  </section>
+</body>
+</html>"#,
+        escape_html(&page_title),
+        typography.font_scale,
+        typography.line_height_scale,
+        escape_html(&page_id),
+        escape_html(master_role),
+        escape_html(template),
+        page_style_attr,
+        page_markup,
+    )
+}
+
 fn render_richpost_theme_preview_page_html(
     package_path: &std::path::Path,
     theme: &RichpostThemeSpec,
@@ -3821,14 +4017,13 @@ fn render_richpost_theme_preview_page_html(
         },
         "styleOverrides": {}
     });
-    let tokens = read_richpost_layout_tokens_value_for_theme(package_path, theme);
-    render_richpost_page_html(
+    let tokens = read_richpost_preview_layout_tokens_value_for_theme(package_path, theme);
+    render_richpost_isolated_preview_page_html(
         package_path,
         theme,
         RICHPOST_THEME_PREVIEW_TITLE,
         &preview_page,
         0,
-        1,
         &blocks_by_id,
         &BTreeMap::new(),
         &tokens,
