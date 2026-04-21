@@ -1,5 +1,6 @@
 use arboard::Clipboard;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -20,13 +21,29 @@ fn bundled_html_resource_path(
     if dev_path.exists() {
         return Ok(dev_path);
     }
+
     let resource_dir = app
         .path()
         .resource_dir()
         .map_err(|error| error.to_string())?;
-    let bundled = resource_dir.join(file_name);
-    if bundled.exists() {
-        return Ok(bundled);
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            candidates.push(path);
+        }
+    };
+
+    push(resource_dir.join(file_name));
+    push(resource_dir.join("resources").join(file_name));
+    push(resource_dir.join("_up_").join(file_name));
+    push(resource_dir.join("_up_").join("resources").join(file_name));
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
     }
     Err(missing_message.to_string())
 }
