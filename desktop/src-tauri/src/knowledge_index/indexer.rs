@@ -6,8 +6,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     knowledge_index::{
-        catalog::{replace_catalog, KnowledgeCatalogSummary},
         canonical_store::replace_documents,
+        catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors},
         document_blocks::{build_blocks_for_source, replace_blocks},
         fingerprint::fingerprint_file,

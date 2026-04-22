@@ -3,7 +3,9 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::{
-    knowledge_index::{catalog_db_path, document_blocks::DocumentBlockRecord, schema::ensure_catalog_ready},
+    knowledge_index::{
+        catalog_db_path, document_blocks::DocumentBlockRecord, schema::ensure_catalog_ready,
+    },
     AppState,
 };
 
@@ -119,7 +121,9 @@ pub(crate) fn replace_anchors(
     tx.commit().map_err(|error| error.to_string())
 }
 
-pub(crate) fn build_anchors_for_blocks(blocks: &[DocumentBlockRecord]) -> Vec<CitationAnchorRecord> {
+pub(crate) fn build_anchors_for_blocks(
+    blocks: &[DocumentBlockRecord],
+) -> Vec<CitationAnchorRecord> {
     let mut anchors = Vec::new();
     for block in blocks {
         anchors.extend(build_anchors_for_block(block));
@@ -177,7 +181,10 @@ pub(crate) fn anchors_for_block_query(
         )
         .map_err(|error| error.to_string())?;
     let anchors = stmt
-        .query_map(params![block_id, format!("%{normalized_query}%"), limit.max(1)], row_to_anchor)
+        .query_map(
+            params![block_id, format!("%{normalized_query}%"), limit.max(1)],
+            row_to_anchor,
+        )
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -242,9 +249,16 @@ fn build_anchors_for_block(block: &DocumentBlockRecord) -> Vec<CitationAnchorRec
         .into_iter()
         .enumerate()
         .map(|(index, span)| {
-            let line_offsets = estimate_line_offsets(&block.text, span.char_start as usize, span.char_end as usize);
+            let line_offsets = estimate_line_offsets(
+                &block.text,
+                span.char_start as usize,
+                span.char_end as usize,
+            );
             CitationAnchorRecord {
-                anchor_id: format!("{}@{}-{}-{}", block.block_id, span.char_start, span.char_end, index),
+                anchor_id: format!(
+                    "{}@{}-{}-{}",
+                    block.block_id, span.char_start, span.char_end, index
+                ),
                 block_id: block.block_id.clone(),
                 document_id: block.document_id.clone(),
                 source_id: block.source_id.clone(),
@@ -364,6 +378,13 @@ mod tests {
             file_extension: Some("txt".to_string()),
             title: Some("file".to_string()),
             language: Some("en".to_string()),
+            jurisdiction: None,
+            authority: None,
+            authority_level: None,
+            effective_date: None,
+            expiry_date: None,
+            document_type: Some("general".to_string()),
+            is_superseded: false,
             page: Some(1),
             block_type: "plain-text".to_string(),
             section_path_json: r#"["body"]"#.to_string(),

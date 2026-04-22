@@ -20,6 +20,13 @@ pub(crate) struct CanonicalDocumentRow {
     pub parser_version: String,
     pub language: Option<String>,
     pub title: Option<String>,
+    pub jurisdiction: Option<String>,
+    pub authority: Option<String>,
+    pub authority_level: Option<i64>,
+    pub effective_date: Option<String>,
+    pub expiry_date: Option<String>,
+    pub document_type: Option<String>,
+    pub is_superseded: bool,
     pub canonical_json: String,
     pub updated_at: String,
 }
@@ -66,11 +73,13 @@ pub(crate) fn replace_documents(
                 INSERT INTO knowledge_canonical_documents (
                     document_id, source_id, absolute_path, relative_path, file_extension,
                     source_type, content_hash, parser_name, parser_version, language, title,
-                    canonical_json, updated_at
+                    jurisdiction, authority, authority_level, effective_date, expiry_date,
+                    document_type, is_superseded, canonical_json, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5,
                     ?6, ?7, ?8, ?9, ?10, ?11,
-                    ?12, ?13
+                    ?12, ?13, ?14, ?15, ?16,
+                    ?17, ?18, ?19, ?20
                 )
                 "#,
             )
@@ -88,6 +97,13 @@ pub(crate) fn replace_documents(
                 row.parser_version,
                 row.language,
                 row.title,
+                row.jurisdiction,
+                row.authority,
+                row.authority_level,
+                row.effective_date,
+                row.expiry_date,
+                row.document_type,
+                row.is_superseded,
                 row.canonical_json,
                 row.updated_at
             ])

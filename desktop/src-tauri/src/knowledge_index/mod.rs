@@ -1,5 +1,5 @@
-pub mod catalog;
 pub mod canonical_store;
+pub mod catalog;
 pub mod citation_anchors;
 pub mod document_blocks;
 pub mod fingerprint;

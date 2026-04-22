@@ -14,6 +14,7 @@
 
 - [architecture/system-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/system-overview.md)
 - [architecture/product-module-breakdown.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/product-module-breakdown.md)
+- [redbox-local-runtime-migration-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/redbox-local-runtime-migration-plan.md)
 - [legal-grade-retrieval-architecture-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-architecture-plan.md)
 - [legal-grade-retrieval-execution-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-execution-plan.md)
 - [aionrs-comparison-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/aionrs-comparison-optimization-plan.md)

@@ -1,11 +1,15 @@
+mod legal_metadata;
+
 use calamine::{open_workbook_auto, Data, Reader};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
+pub(crate) use legal_metadata::LegalMetadata;
+
 const PARSER_NAME: &str = "redbox-canonical";
-const PARSER_VERSION: &str = "stage2-v1";
+const PARSER_VERSION: &str = "stage4-v1";
 const MAX_CANONICAL_BLOCK_CHARS: usize = 1600;
 const MAX_CANONICAL_BLOCK_LINES: usize = 24;
 const MAX_ZIP_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
@@ -50,6 +54,8 @@ pub(crate) struct CanonicalDocument {
     pub source_type: String,
     pub title: Option<String>,
     pub language: Option<String>,
+    #[serde(default)]
+    pub legal_metadata: LegalMetadata,
     pub parser_info: ParserInfo,
     pub blocks: Vec<CanonicalBlock>,
     pub attachments: Vec<CanonicalAttachment>,
@@ -81,11 +87,15 @@ pub(crate) fn parse_path(
             read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
         }
         "html" | "htm" => {
-            read_utf8_sections(path, "html", vec!["body".to_string()])?
-                .map(|value| value.into_iter().map(|section| ParsedSection {
-                    text: strip_xml_tags(&section.text),
-                    ..section
-                }).collect())
+            read_utf8_sections(path, "html", vec!["body".to_string()])?.map(|value| {
+                value
+                    .into_iter()
+                    .map(|section| ParsedSection {
+                        text: strip_xml_tags(&section.text),
+                        ..section
+                    })
+                    .collect()
+            })
         }
         "csv" | "tsv" => parse_delimited_file(path)?,
         "pdf" => parse_pdf(path)?,
@@ -127,6 +137,18 @@ pub(crate) fn parse_path(
         return Ok(None);
     }
     let language = dominant_language(&blocks);
+    let joined_text = blocks
+        .iter()
+        .take(12)
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let legal_metadata = legal_metadata::extract_legal_metadata(
+        title.as_deref(),
+        &relative_path,
+        &extension,
+        &joined_text,
+    );
     Ok(Some(CanonicalDocument {
         document_id: format!("{source_id}:{relative_path}"),
         source_id: source_id.to_string(),
@@ -135,6 +157,7 @@ pub(crate) fn parse_path(
         source_type: extension,
         title,
         language,
+        legal_metadata,
         parser_info: ParserInfo {
             parser_name: PARSER_NAME.to_string(),
             parser_version: PARSER_VERSION.to_string(),
@@ -184,7 +207,11 @@ fn parse_delimited_file(path: &Path) -> Result<Option<Vec<ParsedSection>>, Strin
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("csv");
-    read_utf8_sections(path, extension, vec!["sheet".to_string(), "Sheet1".to_string()])
+    read_utf8_sections(
+        path,
+        extension,
+        vec!["sheet".to_string(), "Sheet1".to_string()],
+    )
 }
 
 fn parse_pdf(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
@@ -372,9 +399,7 @@ fn parse_eml(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             attachment_path: Some(attachment),
         });
     }
-    sections[0]
-        .section_path
-        .insert(0, subject);
+    sections[0].section_path.insert(0, subject);
     Ok(Some(sections))
 }
 
@@ -399,13 +424,27 @@ fn parse_zip(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             .to_ascii_lowercase();
         if !matches!(
             extension.as_str(),
-            "txt" | "md" | "markdown" | "html" | "htm" | "csv" | "tsv" | "json" | "yaml"
-                | "yml" | "xml" | "eml" | "docx" | "pptx"
+            "txt"
+                | "md"
+                | "markdown"
+                | "html"
+                | "htm"
+                | "csv"
+                | "tsv"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "xml"
+                | "eml"
+                | "docx"
+                | "pptx"
         ) {
             continue;
         }
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
         if let Some(inner_sections) = parse_zip_entry_bytes(&name, &bytes)? {
             for mut section in inner_sections {
                 section.section_path.insert(0, "attachment".to_string());
@@ -519,7 +558,9 @@ fn parse_pptx_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection
     slide_names.sort();
     for (index, slide_name) in slide_names.into_iter().enumerate() {
         let mut xml = String::new();
-        let mut entry = archive.by_name(&slide_name).map_err(|error| error.to_string())?;
+        let mut entry = archive
+            .by_name(&slide_name)
+            .map_err(|error| error.to_string())?;
         entry
             .read_to_string(&mut xml)
             .map_err(|error| error.to_string())?;
@@ -669,6 +710,9 @@ fn detect_language(input: &str) -> Option<String> {
     if chinese == 0 && ascii == 0 {
         return None;
     }
+    if chinese >= 4 && ascii >= 12 {
+        return Some("multilingual".to_string());
+    }
     if chinese >= ascii {
         Some("zh".to_string())
     } else {
@@ -683,11 +727,17 @@ fn dominant_language(blocks: &[CanonicalBlock]) -> Option<String> {
         match block.language.as_deref() {
             Some("zh") => zh += 1,
             Some("en") => en += 1,
+            Some("multilingual") => {
+                zh += 1;
+                en += 1;
+            }
             _ => {}
         }
     }
     if zh == 0 && en == 0 {
         None
+    } else if zh > 0 && en > 0 && zh.abs_diff(en) <= 1 {
+        Some("multilingual".to_string())
     } else if zh >= en {
         Some("zh".to_string())
     } else {
@@ -727,7 +777,8 @@ mod tests {
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
         zip.start_file("xl/workbook.xml", options).unwrap();
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
-        zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
         zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
         zip.write_all(
@@ -821,7 +872,41 @@ mod tests {
         zip.finish().unwrap();
 
         let parsed = parse_zip(&path).unwrap().unwrap();
-        assert!(parsed.iter().any(|section| section.text.contains("zip attachment body")));
+        assert!(parsed
+            .iter()
+            .any(|section| section.text.contains("zip attachment body")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_path_extracts_legal_metadata_and_multilingual_language() {
+        let unique = format!(
+            "redbox-legal-meta-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("中华人民共和国民法典.md");
+        fs::write(
+            &path,
+            "全国人民代表大会发布。\n自2021年1月1日起施行。\nContract breach 合同违约规则。",
+        )
+        .unwrap();
+
+        let parsed = parse_path("source-1", &root, &path).unwrap().unwrap();
+        assert_eq!(parsed.language.as_deref(), Some("multilingual"));
+        assert_eq!(parsed.legal_metadata.document_type.as_deref(), Some("law"));
+        assert_eq!(
+            parsed.legal_metadata.authority.as_deref(),
+            Some("全国人民代表大会")
+        );
+        assert_eq!(
+            parsed.legal_metadata.effective_date.as_deref(),
+            Some("2021-01-01")
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

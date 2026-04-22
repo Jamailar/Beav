@@ -5,10 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 
-use crate::knowledge_index::{
-    citation_anchors,
-    document_blocks,
-};
+use crate::knowledge_index::{citation_anchors, document_blocks};
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
 
@@ -146,6 +143,7 @@ pub fn execute_grep(
                 "sectionPath": Value::Null,
                 "page": Value::Null,
                 "lineNumber": index + 1,
+                "legalMetadata": Value::Null,
                 "snippet": truncate_chars(line.trim(), snippet_chars),
             }));
             if hits.len() >= limit {
@@ -221,6 +219,15 @@ pub fn execute_read(
                     "absolutePath": block.absolute_path,
                     "title": block.title,
                     "language": block.language,
+                    "legalMetadata": {
+                        "jurisdiction": block.jurisdiction,
+                        "authority": block.authority,
+                        "authorityLevel": block.authority_level,
+                        "effectiveDate": block.effective_date,
+                        "expiryDate": block.expiry_date,
+                        "documentType": block.document_type,
+                        "isSuperseded": block.is_superseded
+                    },
                     "page": block.page,
                     "blockType": block.block_type,
                     "sectionPath": serde_json::from_str::<Vec<String>>(&block.section_path_json).unwrap_or_default(),
@@ -491,7 +498,8 @@ fn execute_source_search(
             limit,
             snippet_chars,
         )?;
-        let (hit_payloads, evidence_pack) = build_hit_payloads_and_evidence_pack(state, &hits, query)?;
+        let (hit_payloads, evidence_pack) =
+            build_hit_payloads_and_evidence_pack(state, &hits, query)?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -539,6 +547,7 @@ fn execute_source_search(
                 "lineStart": index + 1,
                 "lineEnd": index + 1,
                 "lineNumber": index + 1,
+                "legalMetadata": Value::Null,
                 "snippet": truncate_chars(line.trim(), snippet_chars),
             }));
             if hits.len() >= limit {
@@ -568,7 +577,10 @@ fn build_hit_payloads_and_evidence_pack(
     let mut evidences = Vec::<Value>::new();
     for hit in hits {
         let anchors = citation_anchors::anchors_for_block_query(state, &hit.block_id, query, 3)?;
-        let anchor_ids = anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>();
+        let anchor_ids = anchors
+            .iter()
+            .map(|item| item.anchor_id.clone())
+            .collect::<Vec<_>>();
         hit_payloads.push(json!({
             "blockId": hit.block_id,
             "documentId": hit.document_id,
@@ -580,6 +592,15 @@ fn build_hit_payloads_and_evidence_pack(
             "fileExtension": hit.file_extension,
             "title": hit.title,
             "language": hit.language,
+            "legalMetadata": {
+                "jurisdiction": hit.jurisdiction,
+                "authority": hit.authority,
+                "authorityLevel": hit.authority_level,
+                "effectiveDate": hit.effective_date,
+                "expiryDate": hit.expiry_date,
+                "documentType": hit.document_type,
+                "isSuperseded": hit.is_superseded
+            },
             "page": hit.page,
             "blockType": hit.block_type,
             "sectionPath": hit.section_path,
@@ -588,6 +609,11 @@ fn build_hit_payloads_and_evidence_pack(
             "lineEnd": hit.line_end,
             "snippet": hit.snippet,
             "anchorIds": anchor_ids,
+            "ranking": {
+                "lexicalScore": hit.lexical_score,
+                "legalScore": hit.legal_score,
+                "totalScore": hit.total_score
+            }
         }));
         evidences.push(json!({
             "documentId": hit.document_id,
@@ -596,6 +622,15 @@ fn build_hit_payloads_and_evidence_pack(
             "page": hit.page,
             "blockType": hit.block_type,
             "sectionPath": hit.section_path,
+            "legalMetadata": {
+                "jurisdiction": hit.jurisdiction,
+                "authority": hit.authority,
+                "authorityLevel": hit.authority_level,
+                "effectiveDate": hit.effective_date,
+                "expiryDate": hit.expiry_date,
+                "documentType": hit.document_type,
+                "isSuperseded": hit.is_superseded
+            },
             "anchorIds": anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>(),
             "anchors": anchors,
             "quotePreview": anchors.first().map(|item| item.quote_text.clone())
