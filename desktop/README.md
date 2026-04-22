@@ -20,6 +20,7 @@
 - `pnpm release:mac:setup-notary`
 - `pnpm release:win`
 - `pnpm release:all`
+- `pnpm release:oss`
 - 修改应用版本号时，只改根 `package.json` 的 `version`；Tauri 配置与 Rust 元数据会自动同步
 - `pnpm ipc:inventory`
 
