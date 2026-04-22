@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     knowledge_index::{
         catalog::{replace_catalog, KnowledgeCatalogSummary},
+        document_blocks::{build_blocks_for_source, replace_blocks},
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
@@ -294,6 +295,7 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
     let knowledge_root = workspace_root(state)?.join("knowledge");
     let mut items = Vec::new();
     let mut files = Vec::new();
+    let mut blocks = Vec::new();
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
         let summary = summarize_note(note);
@@ -306,6 +308,15 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
         items.push(summary);
     }
     for source in crate::load_document_sources_from_fs(&knowledge_root) {
+        let root_path = PathBuf::from(&source.root_path);
+        if root_path.exists() {
+            blocks.extend(build_blocks_for_source(
+                &source.id,
+                &source.name,
+                &root_path,
+                &source.updated_at,
+            )?);
+        }
         let summary = summarize_document_source(source);
         files.extend(build_rows_for_doc_source(&summary)?);
         items.push(summary);
@@ -313,6 +324,7 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
 
     finalize_item_hash(&mut items, &files);
     replace_catalog(state, &items, &files)?;
+    replace_blocks(state, &blocks)?;
     mark_indexed_now(state)?;
     let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
     let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
