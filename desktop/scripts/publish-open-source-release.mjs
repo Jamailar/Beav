@@ -163,7 +163,6 @@ async function collectReleaseAssets() {
         'installerPath',
         'portableExeArtifactPath',
         'portableZipArtifactPath',
-        'appImageArtifactPath',
         'debArtifactPath',
       ]) {
         await registerAsset(artifact?.[key]);
@@ -174,7 +173,6 @@ async function collectReleaseAssets() {
       'installerPath',
       'portableExeArtifactPath',
       'portableZipArtifactPath',
-      'appImageArtifactPath',
       'debArtifactPath',
     ]) {
       await registerAsset(summary?.[key]);

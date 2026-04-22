@@ -291,10 +291,7 @@ REDBOX_REQUIRE_WINDOWS_SIGN=1 pnpm release:win
 
 ### 目标
 
-`pnpm release:linux` 默认生成 Linux x64 桌面端安装包：
-
-- `AppImage`
-- `.deb`
+`pnpm release:linux` 默认生成 Linux x64 桌面端 `.deb` 安装包。
 
 在 Linux 主机上默认原生打包；在 macOS / 非 Linux 主机上默认通过 `ssh jamdebian` 远程构建并拉回产物。
 
@@ -311,7 +308,7 @@ pnpm release:linux
 1. `rsync` 当前仓库到 `ssh jamdebian:/home/jam/build/redbox-tauri-linux-release`
 2. 在远端执行 `pnpm install --frozen-lockfile`
 3. 在远端以 `REDBOX_LINUX_MODE=local` 触发 Linux 原生打包
-4. 从远端拉回 `.AppImage` 和 `.deb` 到 `artifacts/installers/linux/`
+4. 从远端拉回 `.deb` 到 `artifacts/installers/linux/`
 5. 本地写入 `artifacts/release/linux-build-summary.json`
 
 ### Linux 主机原生打包
@@ -328,9 +325,7 @@ pnpm release:linux -- --mode local
 
 ### 产物
 
-- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage`
 - `src-tauri/target/<target>/release/bundle/deb/*.deb`
-- `artifacts/installers/linux/*.AppImage`
 - `artifacts/installers/linux/*.deb`
 - `artifacts/release/linux-build-summary.json`
 

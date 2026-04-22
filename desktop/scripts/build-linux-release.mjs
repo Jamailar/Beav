@@ -39,29 +39,31 @@ async function writeSummary(summary) {
   return summaryPath;
 }
 
+async function removeLegacyAppImages(dirPath) {
+  await fs.mkdir(dirPath, { recursive: true });
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.AppImage'))
+      .map((entry) => fs.rm(path.join(dirPath, entry.name), { force: true })),
+  );
+}
+
 async function resolveLinuxArtifacts(bundleRoot) {
-  const appImageDir = path.join(bundleRoot, 'appimage');
   const debDir = path.join(bundleRoot, 'deb');
-  const appImagePath = await findNewestFile(appImageDir, (filePath) => filePath.endsWith('.AppImage'));
   const debPath = await findNewestFile(debDir, (filePath) => filePath.endsWith('.deb'));
-  return { appImagePath, debPath };
+  return { debPath };
 }
 
 async function resolveFetchedLinuxArtifactsForTarget(localDir, target) {
   const bundleRoot = bundleRootForTarget(target);
-  const { appImagePath, debPath } = await resolveLinuxArtifacts(bundleRoot);
-
-  const localAppImagePath =
-    appImagePath && (await pathExists(path.join(localDir, path.basename(appImagePath))))
-      ? path.join(localDir, path.basename(appImagePath))
-      : await findNewestFile(localDir, (filePath) => filePath.endsWith('.AppImage'));
+  const { debPath } = await resolveLinuxArtifacts(bundleRoot);
   const localDebPath =
     debPath && (await pathExists(path.join(localDir, path.basename(debPath))))
       ? path.join(localDir, path.basename(debPath))
       : await findNewestFile(localDir, (filePath) => filePath.endsWith('.deb'));
 
   return {
-    appImagePath: localAppImagePath,
     debPath: localDebPath,
   };
 }
@@ -73,7 +75,7 @@ async function buildLocalTarget(target) {
   const overrideConfig = {
     bundle: {
       ...(tauriConfig.bundle || {}),
-      targets: ['appimage', 'deb'],
+      targets: ['deb'],
     },
   };
 
@@ -88,14 +90,11 @@ async function buildLocalTarget(target) {
     );
 
     const bundleRoot = bundleRootForTarget(target);
-    const { appImagePath, debPath } = await resolveLinuxArtifacts(bundleRoot);
-    if (!appImagePath && !debPath) {
-      throw new Error(`Unable to locate generated Linux artifacts in ${bundleRoot}`);
+    const { debPath } = await resolveLinuxArtifacts(bundleRoot);
+    if (!debPath) {
+      throw new Error(`Unable to locate generated Linux .deb artifact in ${bundleRoot}`);
     }
 
-    const appImageArtifactPath = appImagePath
-      ? await copyArtifactToDir(appImagePath, installerArtifactsDir('linux'))
-      : null;
     const debArtifactPath = debPath
       ? await copyArtifactToDir(debPath, installerArtifactsDir('linux'))
       : null;
@@ -103,9 +102,7 @@ async function buildLocalTarget(target) {
     return {
       target,
       mode: 'native-linux',
-      appImagePath,
       debPath,
-      appImageArtifactPath,
       debArtifactPath,
     };
   } finally {
@@ -122,6 +119,7 @@ async function buildLocally(targets) {
   await ensureCommandExists('rustup');
   await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
   await ensureRustTargets(targets, { cwd: repoRoot });
+  await removeLegacyAppImages(installerArtifactsDir('linux'));
 
   const artifacts = [];
   for (const target of targets) {
@@ -135,11 +133,9 @@ async function buildLocally(targets) {
     requestedTargets: targets,
     target: artifacts[0]?.target || null,
     mode: 'native-linux',
-    appImagePath: artifacts[0]?.appImagePath || null,
     debPath: artifacts[0]?.debPath || null,
-    appImageArtifactPath: artifacts[0]?.appImageArtifactPath || null,
     debArtifactPath: artifacts[0]?.debArtifactPath || null,
-    installerPath: artifacts[0]?.appImageArtifactPath || artifacts[0]?.debArtifactPath || null,
+    installerPath: artifacts[0]?.debArtifactPath || null,
     artifacts,
   };
 
@@ -149,10 +145,6 @@ async function buildLocally(targets) {
   console.log('Linux release completed');
   for (const artifact of artifacts) {
     console.log(`- ${artifact.target}`);
-    if (artifact.appImagePath) {
-      console.log(`  appimage: ${artifact.appImagePath}`);
-      console.log(`  appimage copy: ${artifact.appImageArtifactPath}`);
-    }
     if (artifact.debPath) {
       console.log(`  deb: ${artifact.debPath}`);
       console.log(`  deb copy: ${artifact.debArtifactPath}`);
@@ -166,6 +158,7 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
   await ensureCommandExists('rsync', 'rsync is required for remote Linux builds.');
 
   const localLinuxDir = installerArtifactsDir('linux');
+  await removeLegacyAppImages(localLinuxDir);
   const remoteScriptPath = path.posix.join(remoteWorkdir, 'scripts', 'build-linux-release.mjs');
 
   logStep(`Syncing source to ${remoteHost}:${remoteWorkdir}`);
@@ -212,7 +205,6 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     [
       '-az',
       '--include=*/',
-      '--include=*.AppImage',
       '--include=*.deb',
       '--exclude=*',
       `${remoteHost}:${remoteWorkdir}/artifacts/installers/linux/`,
@@ -223,18 +215,16 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
 
   const artifacts = [];
   for (const target of targets) {
-    const { appImagePath, debPath } = await resolveFetchedLinuxArtifactsForTarget(localLinuxDir, target);
-    if (!appImagePath && !debPath) {
-      throw new Error(`Unable to locate fetched Linux artifacts for ${target} in ${localLinuxDir}`);
+    const { debPath } = await resolveFetchedLinuxArtifactsForTarget(localLinuxDir, target);
+    if (!debPath) {
+      throw new Error(`Unable to locate fetched Linux .deb artifact for ${target} in ${localLinuxDir}`);
     }
     artifacts.push({
       target,
       mode: 'remote-linux',
       remoteHost,
       remoteWorkdir,
-      appImagePath,
       debPath,
-      appImageArtifactPath: appImagePath,
       debArtifactPath: debPath,
     });
   }
@@ -248,11 +238,9 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
     mode: 'remote-linux',
     remoteHost,
     remoteWorkdir,
-    appImagePath: artifacts[0]?.appImagePath || null,
     debPath: artifacts[0]?.debPath || null,
-    appImageArtifactPath: artifacts[0]?.appImageArtifactPath || null,
     debArtifactPath: artifacts[0]?.debArtifactPath || null,
-    installerPath: artifacts[0]?.appImageArtifactPath || artifacts[0]?.debArtifactPath || null,
+    installerPath: artifacts[0]?.debArtifactPath || null,
     artifacts,
   };
 
@@ -262,9 +250,6 @@ async function buildOnRemote({ targets, remoteHost, remoteWorkdir }) {
   console.log('Linux release completed');
   for (const artifact of artifacts) {
     console.log(`- ${artifact.target}`);
-    if (artifact.appImageArtifactPath) {
-      console.log(`  appimage: ${artifact.appImageArtifactPath}`);
-    }
     if (artifact.debArtifactPath) {
       console.log(`  deb: ${artifact.debArtifactPath}`);
     }
