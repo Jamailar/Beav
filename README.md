@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./images/brand-hero.png" alt="RedBox" width="25%">
+  <img src="./images/brand-hero.png" alt="RedBox" width="100%">
 </p>
 
 <p align="center">
