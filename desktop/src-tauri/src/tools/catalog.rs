@@ -1339,6 +1339,7 @@ fn build_action_tool_schema(
             "name": tool_name,
             "description": description,
             "parameters": {
+                "type": "object",
                 "oneOf": variants
             }
         }
@@ -1876,6 +1877,22 @@ mod tests {
         assert!(actions.contains(&"knowledge.list"));
         assert!(actions.contains(&"knowledge.read"));
         assert!(actions.contains(&"knowledge.search"));
+    }
+
+    #[test]
+    fn action_tool_schema_parameters_are_top_level_objects() {
+        for (tool_name, runtime_mode) in [
+            ("app_cli", Some("redclaw")),
+            ("redbox_fs", Some("wander")),
+            ("redbox_editor", Some("video-editor")),
+        ] {
+            let schema = schema_for_tool_for_runtime_mode(tool_name, runtime_mode)
+                .unwrap_or_else(|| panic!("schema should exist for {tool_name}"));
+            assert_eq!(
+                schema["function"]["parameters"]["type"].as_str(),
+                Some("object")
+            );
+        }
     }
 
     #[test]
