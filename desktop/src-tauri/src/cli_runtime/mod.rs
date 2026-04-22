@@ -19,6 +19,8 @@ mod process_store;
 mod runtime_resolver;
 #[path = "types.rs"]
 mod types;
+#[path = "verify.rs"]
+mod verify;
 
 pub use detector::*;
 pub use environment_store::*;
@@ -29,3 +31,4 @@ pub use policy::*;
 pub use process_store::*;
 pub use runtime_resolver::*;
 pub use types::*;
+pub use verify::*;

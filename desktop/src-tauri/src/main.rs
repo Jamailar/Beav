@@ -351,6 +351,7 @@ struct AppStore {
     cli_environments: Vec<cli_runtime::CliEnvironmentRecord>,
     cli_executions: Vec<cli_runtime::CliExecutionRecord>,
     cli_escalations: Vec<cli_runtime::CliEscalationRequestRecord>,
+    cli_verifications: Vec<cli_runtime::CliVerificationRecord>,
     debug_logs: Vec<String>,
     archive_profiles: Vec<ArchiveProfileRecord>,
     archive_samples: Vec<ArchiveSampleRecord>,

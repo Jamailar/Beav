@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::cli_runtime::{
     find_cli_escalation_by_execution_id, CliExecutionRecord, CliExecutionSnapshot,
+    CliVerificationRecord,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::{store_root, AppState, AppStore};
@@ -121,6 +122,42 @@ pub fn list_cli_executions(state: &State<'_, AppState>) -> Result<Vec<CliExecuti
     with_store(state, |store| Ok(store.cli_executions.clone()))
 }
 
+pub fn replace_cli_verification_records(
+    state: &State<'_, AppState>,
+    records: Vec<CliVerificationRecord>,
+) -> Result<Vec<CliVerificationRecord>, String> {
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+    let execution_id = records[0].execution_id.clone();
+    with_store_mut(state, |store| {
+        store
+            .cli_verifications
+            .retain(|item| item.execution_id != execution_id);
+        store.cli_verifications.extend(records.clone());
+        store
+            .cli_verifications
+            .sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        Ok(records)
+    })
+}
+
+pub fn list_cli_verifications_for_execution(
+    state: &State<'_, AppState>,
+    execution_id: &str,
+) -> Result<Vec<CliVerificationRecord>, String> {
+    with_store(state, |store| {
+        let mut records = store
+            .cli_verifications
+            .iter()
+            .filter(|item| item.execution_id == execution_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        Ok(records)
+    })
+}
+
 pub fn find_cli_execution_by_id(
     state: &State<'_, AppState>,
     execution_id: &str,
@@ -160,7 +197,7 @@ pub fn load_cli_execution_snapshot(
         execution,
         stdout_tail,
         stderr_tail,
-        verifications: Vec::new(),
+        verifications: list_cli_verifications_for_execution(state, execution_id)?,
         escalation: find_cli_escalation_by_execution_id(state, execution_id)?,
     }))
 }

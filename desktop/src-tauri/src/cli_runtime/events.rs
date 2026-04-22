@@ -1,7 +1,7 @@
 use serde_json::json;
 use tauri::AppHandle;
 
-use crate::cli_runtime::{CliEscalationRequestRecord, CliExecutionRecord};
+use crate::cli_runtime::{CliEscalationRequestRecord, CliExecutionRecord, CliInstallMethod};
 use crate::events::emit_runtime_event_with_lineage;
 
 fn escalation_metadata_string(record: &CliEscalationRequestRecord, key: &str) -> Option<String> {
@@ -123,6 +123,64 @@ pub fn emit_cli_execution_status(
     );
 }
 
+pub fn emit_cli_install_started(
+    app: &AppHandle,
+    session_id: Option<&str>,
+    task_id: Option<&str>,
+    runtime_id: Option<&str>,
+    install_id: &str,
+    environment_id: Option<&str>,
+    tool_name: &str,
+    install_method: &CliInstallMethod,
+    spec: &str,
+) {
+    emit_runtime_event_with_lineage(
+        app,
+        "runtime:cli-install-started",
+        session_id,
+        task_id,
+        runtime_id,
+        None,
+        json!({
+            "installId": install_id,
+            "environmentId": environment_id,
+            "toolName": tool_name,
+            "installMethod": install_method,
+            "spec": spec,
+        }),
+    );
+}
+
+pub fn emit_cli_install_finished(
+    app: &AppHandle,
+    session_id: Option<&str>,
+    task_id: Option<&str>,
+    runtime_id: Option<&str>,
+    install_id: &str,
+    execution_id: Option<&str>,
+    environment_id: Option<&str>,
+    tool_name: &str,
+    status: &str,
+    summary: &str,
+) {
+    emit_runtime_event_with_lineage(
+        app,
+        "runtime:cli-install-finished",
+        session_id,
+        task_id,
+        runtime_id,
+        None,
+        json!({
+            "installId": install_id,
+            "executionId": execution_id,
+            "environmentId": environment_id,
+            "toolName": tool_name,
+            "status": status,
+            "summary": summary,
+        }),
+    );
+}
+
 pub fn emit_cli_escalation_requested(
     app: &AppHandle,
     execution: &CliExecutionRecord,
@@ -190,6 +248,22 @@ pub fn emit_cli_escalation_resolved(
             "scope": escalation_metadata_string(escalation, "approvedScope"),
             "summary": summary,
             "resolvedAt": escalation.resolved_at,
+        }),
+    );
+}
+
+pub fn emit_cli_verification_finished(app: &AppHandle, record: &CliExecutionRecord, summary: &str) {
+    emit_runtime_event_with_lineage(
+        app,
+        "runtime:cli-verification-finished",
+        Some(&record.session_id),
+        record.task_id.as_deref(),
+        record.runtime_id.as_deref(),
+        None,
+        json!({
+            "executionId": record.id,
+            "status": record.verification_status,
+            "summary": summary,
         }),
     );
 }
