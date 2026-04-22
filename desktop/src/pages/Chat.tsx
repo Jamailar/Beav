@@ -196,6 +196,33 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   return `${current}${incoming}`;
 }
 
+function isThinkingMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType === 'thinking');
+}
+
+function isAssistantReplyMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType !== 'thinking');
+}
+
+function findLastAssistantReplyIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isAssistantReplyMessage(messages[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findLastRunningThinkingIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isThinkingMessage(message) && message.isStreaming) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function parseMessageTimestampMs(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value > 1e12 ? value : value * 1000;
@@ -823,6 +850,7 @@ export function Chat({
       const aiPlaceholder: Message = {
         id: (processingStartedAt + 1).toString(),
         role: 'ai',
+        messageType: 'reply',
         content: '',
         tools: [],
         timeline: (
@@ -961,6 +989,7 @@ export function Chat({
         return {
           id: msg.id,
           role, // Simplified mapping
+          messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
@@ -989,6 +1018,7 @@ export function Chat({
           uiMessages.push({
             id: `streaming_${Date.now()}`,
             role: 'ai',
+            messageType: 'reply',
             content: restoredContent,
             tools: [],
             timeline: [],
@@ -998,6 +1028,7 @@ export function Chat({
         } else {
           uiMessages[uiMessages.length - 1] = {
             ...lastMsg,
+            messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
             processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
@@ -1099,17 +1130,21 @@ export function Chat({
         return prev;
       }
 
-      const lastMsg = prev[prev.length - 1];
-      if (!lastMsg || lastMsg.role !== 'ai') {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) {
         return prev;
       }
+      const lastMsg = prev[lastReplyIndex];
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
-      return [...prev.slice(0, -1), {
+      const next = [...prev];
+      next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
-      }];
+        messageType: 'reply',
+      };
+      return next;
     });
   }, []);
 
@@ -1173,8 +1208,9 @@ export function Chat({
         responseCompletedRef.current = false;
       }
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         const now = Date.now();
         const newTimeline = [...lastMsg.timeline];
@@ -1199,7 +1235,9 @@ export function Chat({
           timestamp: now
         });
 
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, timeline: newTimeline, messageType: 'reply' };
+        return next;
       });
     };
 
@@ -1207,26 +1245,30 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex !== -1) return prev;
 
-        const newTimeline = [...lastMsg.timeline];
-        
-        // Check if we already have a running thought (shouldn't happen with correct agent logic, but safe to check)
-        const lastItem = newTimeline[newTimeline.length - 1];
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            return prev; // Already thinking
-        }
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
 
-        newTimeline.push({
-          id: Math.random().toString(36),
-          type: 'thought',
+        const now = Date.now();
+        const next = [...prev];
+        next[lastReplyIndex] = {
+          ...next[lastReplyIndex],
+          messageType: 'reply',
+          suppressPendingIndicator: true,
+        };
+        next.splice(lastReplyIndex, 0, {
+          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          role: 'ai',
+          messageType: 'thinking',
           content: '',
-          status: 'running',
-          timestamp: Date.now()
+          tools: [],
+          timeline: [],
+          isStreaming: true,
+          processingStartedAt: now,
         });
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        return next;
       });
     };
 
@@ -1236,35 +1278,39 @@ export function Chat({
       const content = data?.content;
       if (!content) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        let next = [...prev];
 
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            // Update existing thought
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                content: mergeThoughtDelta(String(lastItem.content || ''), content)
-            };
-        } else {
-            // No running thought? Create one (fallback)
-            newTimeline.push({
-                id: Math.random().toString(36),
-                type: 'thought',
-                content: content,
-                status: 'running',
-                timestamp: Date.now()
-            });
+        if (runningThinkingIndex === -1) {
+          const lastReplyIndex = findLastAssistantReplyIndex(next);
+          if (lastReplyIndex === -1) return prev;
+          const now = Date.now();
+          next[lastReplyIndex] = {
+            ...next[lastReplyIndex],
+            messageType: 'reply',
+            suppressPendingIndicator: true,
+          };
+          next.splice(lastReplyIndex, 0, {
+            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'ai',
+            messageType: 'thinking',
+            content,
+            tools: [],
+            timeline: [],
+            isStreaming: true,
+            processingStartedAt: now,
+          });
+          return next;
         }
 
-        return [...prev.slice(0, -1), {
-          ...lastMsg,
-          timeline: newTimeline,
-          thinking: mergeThoughtDelta(lastMsg.thinking || '', content),
-        }];
+        const thinkingMessage = next[runningThinkingIndex];
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          content: mergeThoughtDelta(thinkingMessage.content || '', content),
+          isStreaming: true,
+        };
+        return next;
       });
     };
 
@@ -1272,22 +1318,18 @@ export function Chat({
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                status: 'done',
-                duration: Date.now() - lastItem.timestamp
-            };
-        }
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline, thinking: lastMsg.thinking || '' }];
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        const thinkingMessage = next[runningThinkingIndex];
+        const finishedAt = Date.now();
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: finishedAt,
+        };
+        return next;
       });
     };
 
@@ -1299,6 +1341,18 @@ export function Chat({
         return;
       }
       if (!content) return;
+      setMessages(prev => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        next[runningThinkingIndex] = {
+          ...next[runningThinkingIndex],
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: Date.now(),
+        };
+        return next;
+      });
 
       const now = performance.now();
       const lastChunk = lastStreamChunkRef.current;
@@ -1347,8 +1401,19 @@ export function Chat({
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
 
@@ -1376,19 +1441,22 @@ export function Chat({
           status: 'running'
         };
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: [...lastMsg.tools, newTool] 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolEnd = (_: unknown, toolData: { callId: string; name: string; output: { success: boolean; content: string } }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         // Update Timeline
         const newTimeline = [...lastMsg.timeline];
@@ -1440,19 +1508,23 @@ export function Chat({
             : t
         );
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: updatedTools 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolUpdate = (_: unknown, toolData: { callId: string; name: string; partial: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         if (!toolData?.partial) return prev;
 
         const newTimeline = [...lastMsg.timeline];
@@ -1500,18 +1572,22 @@ export function Chat({
           },
         };
 
-        return [...prev.slice(0, -1), {
+        const next = [...prev];
+        next[lastReplyIndex] = {
           ...lastMsg,
+          messageType: 'reply',
           timeline: newTimeline,
-        }];
+        };
+        return next;
       });
     };
 
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         
         // Add to Timeline
         const newTimeline = [...lastMsg.timeline, {
@@ -1523,11 +1599,14 @@ export function Chat({
             skillData: skillData
         }];
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             activatedSkill: skillData 
-        }];
+        };
+        return next;
       });
     };
 
@@ -1590,7 +1669,8 @@ export function Chat({
           source,
         });
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           debugUi('response_end:set_messages', {
             chatInstanceId: chatInstanceIdRef.current,
             sessionId: currentSessionIdRef.current,
@@ -1615,13 +1695,17 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
+              messageType: 'reply',
               content: mergedContent,
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
+            };
+            return next;
           }
           if (finalContent) {
             const now = Date.now();
@@ -1630,6 +1714,7 @@ export function Chat({
               {
                 id: now.toString(),
                 role: 'ai',
+                messageType: 'reply',
                 content: finalContent,
                 tools: [],
                 timeline: [],
@@ -1679,7 +1764,8 @@ export function Chat({
         setConfirmRequest(null);
         setErrorNotice(null);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
           const now = Date.now();
           const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1690,7 +1776,25 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false, processingFinishedAt: now }];
+          const next = [...prev];
+          next[lastReplyIndex] = {
+            ...lastMsg,
+            messageType: 'reply',
+            timeline,
+            isStreaming: false,
+            suppressPendingIndicator: false,
+            processingFinishedAt: now,
+          };
+          const runningThinkingIndex = findLastRunningThinkingIndex(next);
+          if (runningThinkingIndex !== -1) {
+            next[runningThinkingIndex] = {
+              ...next[runningThinkingIndex],
+              messageType: 'thinking',
+              isStreaming: false,
+              processingFinishedAt: now,
+            };
+          }
+          return next;
         });
       });
     };
@@ -1705,10 +1809,12 @@ export function Chat({
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        return [...prev.slice(0, -1), { ...lastMsg, plan: steps }];
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', plan: steps };
+        return next;
       });
     };
 
@@ -1727,7 +1833,8 @@ export function Chat({
         setConfirmRequest(null);
         setErrorNotice(notice);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
             const now = Date.now();
             const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1738,12 +1845,25 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
+              messageType: 'reply',
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
+            };
+            const runningThinkingIndex = findLastRunningThinkingIndex(next);
+            if (runningThinkingIndex !== -1) {
+              next[runningThinkingIndex] = {
+                ...next[runningThinkingIndex],
+                messageType: 'thinking',
+                isStreaming: false,
+                processingFinishedAt: now,
+              };
+            }
+            return next;
           }
           return prev;
         });
@@ -2028,6 +2148,7 @@ export function Chat({
     const aiPlaceholder: Message = {
       id: (processingStartedAt + 1).toString(),
       role: 'ai',
+      messageType: 'reply',
       content: '',
       tools: [],
       timeline: [],

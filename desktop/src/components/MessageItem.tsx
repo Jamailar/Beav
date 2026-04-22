@@ -141,6 +141,7 @@ export interface SkillEvent {
 export interface Message {
   id: string;
   role: 'user' | 'ai';
+  messageType?: 'reply' | 'thinking';
   content: string;
   displayContent?: string;
   attachment?: {
@@ -188,6 +189,7 @@ export interface Message {
   isStreaming?: boolean;
   processingStartedAt?: number;
   processingFinishedAt?: number;
+  suppressPendingIndicator?: boolean;
 }
 
 interface MessageItemProps {
@@ -323,6 +325,7 @@ export const MessageItem = memo(({
   workflowEmphasis = 'default',
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
+  const isThinkingMessage = !isUser && msg.messageType === 'thinking';
   const sanitizedAssistantContent = !isUser
     ? stripInternalProtocolMarkup(String(msg.content || ''))
     : String(msg.content || '');
@@ -335,13 +338,19 @@ export const MessageItem = memo(({
     src: '',
   });
   const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
-  const showPendingThinkingIndicator = !isUser && Boolean(msg.isStreaming && !hasAssistantResponseContent);
-  const showProcessingTimer = !isUser && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
+  const showPendingThinkingIndicator = !isUser
+    && !isThinkingMessage
+    && !msg.suppressPendingIndicator
+    && Boolean(msg.isStreaming && !hasAssistantResponseContent);
+  const showProcessingTimer = !isUser && !isThinkingMessage && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
   const hasRenderableMessageContent = isUser
     ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
-  const showTimeline = !isUser && msg.timeline && msg.timeline.length > 0;
-  const showLegacyWorkflow = !isUser && (!msg.timeline || msg.timeline.length === 0) && (msg.thinking || msg.tools.length > 0 || msg.activatedSkill);
+  const showTimeline = !isUser && !isThinkingMessage && msg.timeline && msg.timeline.length > 0;
+  const showLegacyWorkflow = !isUser
+    && !isThinkingMessage
+    && (!msg.timeline || msg.timeline.length === 0)
+    && (msg.thinking || msg.tools.length > 0 || msg.activatedSkill);
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -351,7 +360,7 @@ export const MessageItem = memo(({
   const activeThoughtContent = !isUser
     ? stripInternalProtocolMarkup(String(latestTimelineThought?.content || msg.thinking || ''))
     : '';
-  const showStreamingThought = !isUser && Boolean(msg.isStreaming && activeThoughtContent);
+  const showStreamingThought = !isUser && !isThinkingMessage && Boolean(msg.isStreaming && activeThoughtContent);
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -649,7 +658,11 @@ export const MessageItem = memo(({
               />
             )}
             <div ref={aiContentRef} className={clsx('chat-ai-content', msg.isStreaming && 'chat-ai-content-streaming')}>
-              <div className={clsx('chat-markdown-body text-text-primary', showPendingThinkingIndicator && 'chat-markdown-body-pending')}>
+              <div className={clsx(
+                'chat-markdown-body',
+                isThinkingMessage ? 'text-text-secondary' : 'text-text-primary',
+                showPendingThinkingIndicator && 'chat-markdown-body-pending',
+              )}>
                 {showPendingThinkingIndicator ? (
                   <ThinkingIndicator />
                 ) : msg.isStreaming ? (
@@ -767,9 +780,11 @@ export const MessageItem = memo(({
   // 忽略父组件其他无关 State 变化导致的重绘
   const msgChanged = 
     prevProps.msg.content !== nextProps.msg.content ||
+    prevProps.msg.messageType !== nextProps.msg.messageType ||
     prevProps.msg.isStreaming !== nextProps.msg.isStreaming ||
     prevProps.msg.processingStartedAt !== nextProps.msg.processingStartedAt ||
     prevProps.msg.processingFinishedAt !== nextProps.msg.processingFinishedAt ||
+    prevProps.msg.suppressPendingIndicator !== nextProps.msg.suppressPendingIndicator ||
     prevProps.msg.thinking !== nextProps.msg.thinking ||
     prevProps.msg.tools !== nextProps.msg.tools ||
     prevProps.msg.plan !== nextProps.msg.plan || // Check plan changes
