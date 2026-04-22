@@ -2,7 +2,7 @@
 doc_type: plan
 execution_status: in_progress
 last_updated: 2026-04-22
-execution_stage: stage2_completed
+execution_stage: stage3_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -266,6 +266,13 @@ Status: Current
 - 结果可引用
 - 引文可回放
 - grounding contract 初步成立
+
+### Progress Notes
+
+- 已新增 `knowledge_citation_anchors` 注册表
+- `knowledge.search` 已返回 `anchorIds` 和 `evidencePack`
+- `knowledge.read` 已支持按 `anchorId` 精确读取引用片段
+- grounding contract 已通过 `claim -> supportingAnchorIds` 约束落地
 
 ## Stage 4: 多语言与法律元数据排序
 

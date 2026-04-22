@@ -7,6 +7,7 @@
 - `schema.rs`: 索引 schema 初始化
 - `catalog.rs`: 索引目录查询
 - `canonical_store.rs`: canonical document 缓存与复用
+- `citation_anchors.rs`: citation anchor 构建、读取和查询
 - `document_blocks.rs`: block 级索引构建与查询
 - `indexer.rs`: 索引构建
 - `jobs.rs`: 异步任务和重建调度

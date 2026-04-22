@@ -107,6 +107,33 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             ON knowledge_document_blocks(source_id, relative_path, block_index);
         CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_document
             ON knowledge_document_blocks(document_id, block_index);
+        CREATE TABLE IF NOT EXISTS knowledge_citation_anchors (
+            anchor_id TEXT PRIMARY KEY,
+            block_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_name TEXT NOT NULL DEFAULT '',
+            root_path TEXT NOT NULL,
+            absolute_path TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            file_extension TEXT,
+            title TEXT,
+            language TEXT,
+            page INTEGER,
+            block_type TEXT NOT NULL DEFAULT '',
+            section_path_json TEXT NOT NULL DEFAULT '[]',
+            char_start INTEGER NOT NULL,
+            char_end INTEGER NOT NULL,
+            line_start INTEGER NOT NULL,
+            line_end INTEGER NOT NULL,
+            quote_text TEXT NOT NULL,
+            normalized_quote_text TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_citation_anchors_block
+            ON knowledge_citation_anchors(block_id, char_start);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_citation_anchors_source
+            ON knowledge_citation_anchors(source_id, relative_path, page, char_start);
         CREATE TABLE IF NOT EXISTS knowledge_canonical_documents (
             document_id TEXT PRIMARY KEY,
             source_id TEXT NOT NULL,

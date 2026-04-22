@@ -328,6 +328,7 @@ fn knowledge_fs_call(action: &'static str, arguments: &Value) -> NormalizedToolC
     copy_if_present(&mut payload, arguments, "pattern");
     copy_if_present(&mut payload, arguments, "query");
     copy_if_present(&mut payload, arguments, "blockId");
+    copy_if_present(&mut payload, arguments, "anchorId");
     copy_if_present(&mut payload, arguments, "offset");
     copy_if_present(&mut payload, arguments, "limit");
     copy_if_present(&mut payload, arguments, "maxChars");
