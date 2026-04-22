@@ -1310,29 +1310,15 @@ fn build_action_tool_schema(
     description: &str,
     descriptors: &[ActionDescriptor],
 ) -> Value {
-    let variants = descriptors
+    let actions = descriptors
         .iter()
-        .map(|descriptor| {
-            let payload_schema = (descriptor.input_schema)();
-            let payload_required = payload_schema
-                .get("required")
-                .and_then(Value::as_array)
-                .map(|items| !items.is_empty())
-                .unwrap_or(false);
-            json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "const": descriptor.action,
-                        "description": descriptor.description,
-                    },
-                    "payload": payload_schema,
-                },
-                "required": if payload_required { json!(["action", "payload"]) } else { json!(["action"]) },
-                "additionalProperties": false,
-            })
-        })
+        .map(|descriptor| descriptor.action)
         .collect::<Vec<_>>();
+    let action_help = descriptors
+        .iter()
+        .map(|descriptor| format!("{}: {}", descriptor.action, descriptor.description))
+        .collect::<Vec<_>>()
+        .join("; ");
     json!({
         "type": "function",
         "function": {
@@ -1340,7 +1326,20 @@ fn build_action_tool_schema(
             "description": description,
             "parameters": {
                 "type": "object",
-                "oneOf": variants
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": actions,
+                        "description": format!("Structured action name. Available actions: {action_help}"),
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Structured arguments for the selected action. Field requirements are validated by the host for the specific action.",
+                        "additionalProperties": true,
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
             }
         }
     })
@@ -1822,24 +1821,22 @@ mod tests {
         let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
             .expect("app_cli schema should exist");
         let parameters = &schema["function"]["parameters"];
-        let variants = parameters["oneOf"].as_array().expect("oneOf variants");
-        assert!(variants.iter().all(|item| item.get("properties").is_some()));
-        assert!(variants
-            .iter()
-            .all(|item| item["properties"]["action"].get("const").is_some()));
+        assert_eq!(parameters["type"].as_str(), Some("object"));
+        assert_eq!(
+            parameters["properties"]["action"]["type"].as_str(),
+            Some("string")
+        );
+        assert!(parameters["properties"]["action"]["enum"].is_array());
     }
 
     #[test]
     fn app_cli_schema_filters_actions_by_runtime_mode() {
         let schema = schema_for_tool_for_runtime_mode("app_cli", Some("diagnostics"))
             .expect("diagnostics schema should exist");
-        let variants = schema["function"]["parameters"]["oneOf"]
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
-            .expect("oneOf variants");
-        let actions = variants
-            .iter()
-            .filter_map(|item| item["properties"]["action"]["const"].as_str())
-            .collect::<Vec<_>>();
+            .expect("action enum");
+        let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
@@ -1849,11 +1846,11 @@ mod tests {
     fn redbox_editor_schema_hides_compat_only_actions() {
         let schema = schema_for_tool_for_runtime_mode("redbox_editor", Some("video-editor"))
             .expect("editor schema should exist");
-        let actions = schema["function"]["parameters"]["oneOf"]
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
-            .expect("oneOf variants")
+            .expect("action enum")
             .iter()
-            .filter_map(|item| item["properties"]["action"]["const"].as_str())
+            .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         assert!(actions.contains(&"script_read"));
         assert!(actions.contains(&"ffmpeg_edit"));
@@ -1865,11 +1862,11 @@ mod tests {
     fn redbox_fs_schema_uses_explicit_action_variants() {
         let schema = schema_for_tool_for_runtime_mode("redbox_fs", Some("chatroom"))
             .expect("redbox_fs schema should exist");
-        let actions = schema["function"]["parameters"]["oneOf"]
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
-            .expect("oneOf variants")
+            .expect("action enum")
             .iter()
-            .filter_map(|item| item["properties"]["action"]["const"].as_str())
+            .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         assert!(actions.contains(&"workspace.list"));
         assert!(actions.contains(&"workspace.read"));

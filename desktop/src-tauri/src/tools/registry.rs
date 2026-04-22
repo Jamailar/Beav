@@ -350,15 +350,12 @@ mod tests {
                     .find(|item| item.pointer("/function/name") == Some(&json!("app_cli")))
             })
             .expect("app_cli schema");
-        let actions = app_cli["function"]["parameters"]["oneOf"]
+        let actions = app_cli["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
-            .expect("oneOf variants")
+            .expect("action enum")
             .iter()
-            .filter_map(|item| {
-                item.pointer("/properties/action/const")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-            })
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
         assert_eq!(
             actions,
