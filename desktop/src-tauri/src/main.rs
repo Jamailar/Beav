@@ -6238,10 +6238,17 @@ fn run_openai_interactive_chat_runtime(
         if !forcing_toolless_turn && !tool_turn_limit_reached {
             tool_turn += 1;
         }
-        let requires_forced_tool_choice =
-            ((is_wander && tool_turn == 1) || must_force_first_tool_turn) && !forcing_toolless_turn;
-        let disable_thinking_for_turn =
-            provider_profile.should_disable_thinking(runtime_mode, requires_forced_tool_choice);
+        let tool_choice = if forcing_toolless_turn {
+            crate::provider_compat::InteractiveToolChoice::None
+        } else if (is_wander && tool_turn == 1) || must_force_first_tool_turn {
+            crate::provider_compat::InteractiveToolChoice::Required
+        } else if tool_turn_limit_reached {
+            crate::provider_compat::InteractiveToolChoice::None
+        } else {
+            crate::provider_compat::InteractiveToolChoice::Auto
+        };
+        let turn_policy =
+            provider_profile.turn_policy(runtime_mode, tool_choice, wander_saw_tool_call);
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
         if let Some(current_session_id) = session_id {
             emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
@@ -6260,16 +6267,8 @@ fn run_openai_interactive_chat_runtime(
                 "[timing][wander-runtime][{}] turn-{}-request elapsed=0ms | toolChoice={} thinkingDisabled={}",
                 trace_id,
                 turn_index,
-                if forcing_toolless_turn {
-                    "none"
-                } else if (is_wander && tool_turn == 1) || must_force_first_tool_turn {
-                    "required"
-                } else if tool_turn_limit_reached {
-                    "none"
-                } else {
-                    "auto"
-                },
-                disable_thinking_for_turn
+                tool_choice.as_api_value(),
+                turn_policy.disable_thinking
             ),
         );
         if let Some(instruction) = forced_toolless_instruction {
@@ -6294,26 +6293,17 @@ fn run_openai_interactive_chat_runtime(
                 "content": system_prompt
             }),
         );
-        let tool_choice = if forcing_toolless_turn {
-            json!("none")
-        } else if (is_wander && tool_turn == 1) || must_force_first_tool_turn {
-            json!("required")
-        } else if tool_turn_limit_reached {
-            json!("none")
-        } else {
-            json!("auto")
-        };
         let include_tools = !forcing_toolless_turn && !tool_turn_limit_reached;
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tool_choice": tool_choice,
+            "tool_choice": tool_choice.as_api_value(),
             "stream": !is_wander
         });
         if include_tools {
             body["tools"] = interactive_runtime_tools_for_mode(state, runtime_mode, session_id);
         }
-        if disable_thinking_for_turn {
+        if turn_policy.disable_thinking {
             body["enable_thinking"] = json!(false);
         }
         if is_wander {
@@ -6321,9 +6311,6 @@ fn run_openai_interactive_chat_runtime(
             body["max_tokens"] = json!(900);
         }
         let streaming_enabled = !is_wander;
-        let allow_text_fallback = !wander_saw_tool_call
-            && runtime_mode != "wander"
-            && provider_profile.capabilities.supports_text_fallback;
         let turn_result = match run_openai_provider_turn(
             app,
             state,
@@ -6333,7 +6320,7 @@ fn run_openai_interactive_chat_runtime(
             &body,
             None,
             true,
-            allow_text_fallback,
+            turn_policy.allow_text_fallback,
         ) {
             Ok(value) => value,
             Err(error) => {

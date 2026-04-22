@@ -103,7 +103,7 @@ pub(crate) fn provider_profile_from_config(config: &ResolvedChatConfig) -> Provi
 #[cfg(test)]
 mod tests {
     use super::provider_profile_from_parts;
-    use crate::provider_compat::ProviderFamily;
+    use crate::provider_compat::{InteractiveToolChoice, ProviderFamily};
 
     #[test]
     fn qwen_profiles_disable_thinking_for_required_tool_choice() {
@@ -123,5 +123,33 @@ mod tests {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
         assert!(!profile.should_disable_thinking("chat", true));
         assert!(profile.capabilities.supports_tool_choice_required);
+    }
+
+    #[test]
+    fn text_fallback_stays_disabled_after_tool_calls_or_in_wander() {
+        let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
+        assert!(
+            profile
+                .turn_policy("chatroom", InteractiveToolChoice::Auto, false)
+                .allow_text_fallback
+        );
+        assert!(
+            !profile
+                .turn_policy("chatroom", InteractiveToolChoice::Auto, true)
+                .allow_text_fallback
+        );
+        assert!(
+            !profile
+                .turn_policy("wander", InteractiveToolChoice::Auto, false)
+                .allow_text_fallback
+        );
+    }
+
+    #[test]
+    fn qwen_required_tool_choice_turn_policy_disables_thinking() {
+        let profile =
+            provider_profile_from_parts("openai", "https://api.ziz.hk/redbox/v1", "qwen3.5-plus");
+        let policy = profile.turn_policy("redclaw", InteractiveToolChoice::Required, false);
+        assert!(policy.disable_thinking);
     }
 }

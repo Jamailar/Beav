@@ -6,6 +6,7 @@ use crate::llm_transport::{
     run_openai_json_chat_completion_transport, run_openai_streaming_chat_completion_transport,
     LlmTransportError, TransportErrorKind,
 };
+use crate::provider_compat::InteractiveToolChoice;
 use crate::{
     append_debug_log_state, provider_profile_from_config, AppState, InteractiveToolCall,
     ResolvedChatConfig,
@@ -175,7 +176,12 @@ pub(crate) fn run_openai_provider_turn(
             );
             let mut fallback_body = body.clone();
             fallback_body["stream"] = json!(false);
-            if provider_profile_from_config(config).should_disable_thinking(runtime_mode, false) {
+            let turn_policy = provider_profile_from_config(config).turn_policy(
+                runtime_mode,
+                InteractiveToolChoice::Auto,
+                false,
+            );
+            if turn_policy.disable_thinking {
                 fallback_body["enable_thinking"] = json!(false);
             }
             let response = run_openai_json_chat_completion_transport(
