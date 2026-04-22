@@ -231,6 +231,29 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       bundledPath: '',
     };
   }
+  if (channel === 'cli-runtime:detect') {
+    return {
+      success: true,
+      tools: [],
+    };
+  }
+  if (channel === 'cli-runtime:list-tools' || channel === 'cli-runtime:list-environments') {
+    return [];
+  }
+  if (channel === 'cli-runtime:inspect' || channel === 'cli-runtime:poll-execution') {
+    return null;
+  }
+  if (
+    channel === 'cli-runtime:create-environment'
+    || channel === 'cli-runtime:install'
+    || channel === 'cli-runtime:execute'
+    || channel === 'cli-runtime:cancel-execution'
+    || channel === 'cli-runtime:verify'
+    || channel === 'cli-runtime:approve-escalation'
+    || channel === 'cli-runtime:deny-escalation'
+  ) {
+    return { success: false, error: `RedBox CLI runtime action failed for "${channel}": ${message}` };
+  }
   if (channel === 'indexing:get-stats') {
     return { totalStats: { vectors: 0, documents: 0 }, queue: [] };
   }
@@ -597,6 +620,38 @@ function createIpcRenderer() {
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
       getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
       listApprovals: () => invokeChannel('runtime:list-approvals')
+    },
+    cliRuntime: {
+      detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),
+      listTools: () => invokeChannel('cli-runtime:list-tools'),
+      inspect: (payload: { toolId: string }) => invokeChannel('cli-runtime:inspect', payload),
+      listEnvironments: () => invokeChannel('cli-runtime:list-environments'),
+      createEnvironment: (payload: {
+        scope: 'app-global' | 'workspace-local' | 'task-ephemeral';
+        workspaceRoot?: string;
+        taskId?: string;
+      }) => invokeChannel('cli-runtime:create-environment', payload),
+      install: (payload: {
+        environmentId: string;
+        installMethod: string;
+        spec: string;
+        toolName?: string;
+      }) => invokeChannel('cli-runtime:install', payload),
+      execute: (payload: {
+        environmentId: string;
+        toolId?: string;
+        argv: string[];
+        cwd: string;
+        usePty?: boolean;
+        verificationRules?: unknown[];
+      }) => invokeChannel('cli-runtime:execute', payload),
+      cancelExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:cancel-execution', payload),
+      pollExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:poll-execution', payload),
+      verify: (payload: { executionId: string; rules: unknown[] }) => invokeChannel('cli-runtime:verify', payload),
+      approveEscalation: (payload: { escalationId: string; scope: 'once' | 'session' | 'always' }) =>
+        invokeChannel('cli-runtime:approve-escalation', payload),
+      denyEscalation: (payload: { escalationId: string; reason?: string }) =>
+        invokeChannel('cli-runtime:deny-escalation', payload),
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),

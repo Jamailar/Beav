@@ -86,6 +86,71 @@ export interface RuntimeEventStreamHandlers {
   onChatSessionTitleUpdated?: (payload: RuntimeScopedPayload & { title: string }) => void;
   onChatSkillActivated?: (payload: RuntimeScopedPayload & { name: string; description: string }) => void;
   onChatToolConfirmRequest?: (payload: RuntimeScopedPayload & { request: ToolConfirmRequestPayload }) => void;
+  onCliInstallStarted?: (payload: RuntimeScopedPayload & {
+    installId?: string;
+    toolId?: string;
+    toolName: string;
+    environmentId?: string;
+    installMethod?: string;
+    spec?: string;
+    raw: UnknownRecord;
+  }) => void;
+  onCliInstallFinished?: (payload: RuntimeScopedPayload & {
+    installId?: string;
+    toolId?: string;
+    toolName: string;
+    environmentId?: string;
+    status: string;
+    summary: string;
+    raw: UnknownRecord;
+  }) => void;
+  onCliExecutionStarted?: (payload: RuntimeScopedPayload & {
+    executionId: string;
+    environmentId?: string;
+    toolId?: string;
+    toolName: string;
+    argv: string[];
+    cwd?: string;
+    raw: UnknownRecord;
+  }) => void;
+  onCliExecutionLog?: (payload: RuntimeScopedPayload & {
+    executionId: string;
+    stream?: string;
+    chunk: string;
+    raw: UnknownRecord;
+  }) => void;
+  onCliExecutionStatus?: (payload: RuntimeScopedPayload & {
+    executionId: string;
+    status: string;
+    summary: string;
+    exitCode?: number;
+    raw: UnknownRecord;
+  }) => void;
+  onCliEscalationRequested?: (payload: RuntimeScopedPayload & {
+    escalationId: string;
+    executionId?: string;
+    title: string;
+    description: string;
+    reason?: string;
+    commandPreview?: string;
+    permissionSummary: string[];
+    scopeOptions: Array<'once' | 'session' | 'always'>;
+    raw: UnknownRecord;
+  }) => void;
+  onCliEscalationResolved?: (payload: RuntimeScopedPayload & {
+    escalationId: string;
+    executionId?: string;
+    status: string;
+    scope?: string;
+    summary: string;
+    raw: UnknownRecord;
+  }) => void;
+  onCliVerificationFinished?: (payload: RuntimeScopedPayload & {
+    executionId: string;
+    status: string;
+    summary: string;
+    raw: UnknownRecord;
+  }) => void;
   onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
   onCreativeChatAdvisorStart?: (payload: {
     roomId: string;
@@ -142,6 +207,15 @@ function toOptionalText(value: unknown): string | undefined {
 function toTextArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => toText(item)).filter((item) => Boolean(item));
+}
+
+function toOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function normalizeToolConfirmRequest(value: unknown): ToolConfirmRequestPayload | null {
@@ -206,6 +280,15 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
     case 'runtime:subagent-started':
     case 'runtime:subagent-finished':
     case 'runtime:checkpoint':
+    case 'runtime:cli-tool-detected':
+    case 'runtime:cli-install-started':
+    case 'runtime:cli-install-finished':
+    case 'runtime:cli-execution-started':
+    case 'runtime:cli-execution-log':
+    case 'runtime:cli-execution-status':
+    case 'runtime:cli-escalation-requested':
+    case 'runtime:cli-escalation-resolved':
+    case 'runtime:cli-verification-finished':
       return eventType;
     default:
       return null;
@@ -295,6 +378,122 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       callId: toText(payload.callId),
       name: toText(payload.name),
       output: toRecord(payload.output),
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-install-started') {
+    handlers.onCliInstallStarted?.({
+      sessionId,
+      ...runtimeMeta,
+      installId: toOptionalText(payload.installId) || toOptionalText(payload.executionId),
+      toolId: toOptionalText(payload.toolId),
+      toolName: toText(payload.toolName || payload.name || payload.executable) || 'cli',
+      environmentId: toOptionalText(payload.environmentId),
+      installMethod: toOptionalText(payload.installMethod),
+      spec: toOptionalText(payload.spec),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-install-finished') {
+    handlers.onCliInstallFinished?.({
+      sessionId,
+      ...runtimeMeta,
+      installId: toOptionalText(payload.installId) || toOptionalText(payload.executionId),
+      toolId: toOptionalText(payload.toolId),
+      toolName: toText(payload.toolName || payload.name || payload.executable) || 'cli',
+      environmentId: toOptionalText(payload.environmentId),
+      status: toText(payload.status) || (payload.success === false ? 'failed' : 'completed'),
+      summary: toText(payload.summary || payload.message || payload.error),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-execution-started') {
+    handlers.onCliExecutionStarted?.({
+      sessionId,
+      ...runtimeMeta,
+      executionId: toText(payload.executionId || payload.id),
+      environmentId: toOptionalText(payload.environmentId),
+      toolId: toOptionalText(payload.toolId),
+      toolName: toText(payload.toolName || payload.name || payload.executable) || 'cli',
+      argv: Array.isArray(payload.argv) ? payload.argv.map((item) => toText(item)).filter(Boolean) : [],
+      cwd: toOptionalText(payload.cwd),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-execution-log') {
+    handlers.onCliExecutionLog?.({
+      sessionId,
+      ...runtimeMeta,
+      executionId: toText(payload.executionId || payload.id),
+      stream: toOptionalText(payload.stream),
+      chunk: String(payload.chunk || payload.content || payload.text || payload.preview || ''),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-execution-status') {
+    handlers.onCliExecutionStatus?.({
+      sessionId,
+      ...runtimeMeta,
+      executionId: toText(payload.executionId || payload.id),
+      status: toText(payload.status) || 'running',
+      summary: toText(payload.summary || payload.message || payload.error),
+      exitCode: toOptionalNumber(payload.exitCode),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-escalation-requested') {
+    const scopeOptions = toTextArray(payload.scopeOptions).filter(
+      (item): item is 'once' | 'session' | 'always' => item === 'once' || item === 'session' || item === 'always',
+    );
+    handlers.onCliEscalationRequested?.({
+      sessionId,
+      ...runtimeMeta,
+      escalationId: toText(payload.escalationId || payload.id),
+      executionId: toOptionalText(payload.executionId),
+      title: toText(payload.title) || 'CLI 需要额外权限',
+      description: toText(payload.description || payload.message),
+      reason: toOptionalText(payload.reason),
+      commandPreview: toOptionalText(payload.commandPreview || payload.command),
+      permissionSummary: toTextArray(payload.permissionSummary || payload.permissions),
+      scopeOptions,
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-escalation-resolved') {
+    handlers.onCliEscalationResolved?.({
+      sessionId,
+      ...runtimeMeta,
+      escalationId: toText(payload.escalationId || payload.id),
+      executionId: toOptionalText(payload.executionId),
+      status: toText(payload.status || payload.resolution) || 'resolved',
+      scope: toOptionalText(payload.scope),
+      summary: toText(payload.summary || payload.message || payload.reason),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:cli-verification-finished') {
+    handlers.onCliVerificationFinished?.({
+      sessionId,
+      ...runtimeMeta,
+      executionId: toText(payload.executionId || payload.id),
+      status: toText(payload.status) || (payload.success === false ? 'failed' : 'completed'),
+      summary: toText(payload.summary || payload.message || payload.error),
+      raw: payload,
     });
     return;
   }

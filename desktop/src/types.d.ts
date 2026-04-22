@@ -119,6 +119,15 @@ export type RuntimeUnifiedEventType =
   | 'runtime:subagent-started'
   | 'runtime:subagent-finished'
   | 'runtime:checkpoint'
+  | 'runtime:cli-tool-detected'
+  | 'runtime:cli-install-started'
+  | 'runtime:cli-install-finished'
+  | 'runtime:cli-execution-started'
+  | 'runtime:cli-execution-log'
+  | 'runtime:cli-execution-status'
+  | 'runtime:cli-escalation-requested'
+  | 'runtime:cli-escalation-resolved'
+  | 'runtime:cli-verification-finished'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -136,6 +145,110 @@ export interface RuntimeUnifiedEvent {
   parentRuntimeId?: string | null;
   payload?: unknown;
   timestamp: number;
+}
+
+export type CliRuntimeToolSource =
+  | 'system'
+  | 'app-managed'
+  | 'workspace-managed'
+  | 'user-declared'
+  | 'unknown';
+
+export type CliRuntimeToolHealth =
+  | 'unknown'
+  | 'ready'
+  | 'missing'
+  | 'broken';
+
+export type CliRuntimeEnvironmentScope =
+  | 'app-global'
+  | 'workspace-local'
+  | 'task-ephemeral';
+
+export type CliRuntimeExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting-approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type CliRuntimeEscalationScope = 'once' | 'session' | 'always';
+
+export interface CliRuntimeToolRecord {
+  id: string;
+  name: string;
+  executable: string;
+  resolvedPath?: string | null;
+  source: CliRuntimeToolSource;
+  installMethod?: string | null;
+  installSpec?: string | null;
+  version?: string | null;
+  health: CliRuntimeToolHealth;
+  manifestId?: string | null;
+  environmentId?: string | null;
+  lastCheckedAt?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeEnvironmentRecord {
+  id: string;
+  scope: CliRuntimeEnvironmentScope;
+  rootPath: string;
+  workspaceRoot?: string | null;
+  pathEntries: string[];
+  installedToolIds: string[];
+  runtimes?: Record<string, unknown> | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeVerificationRecord {
+  ruleType?: string;
+  status?: 'passed' | 'failed' | 'skipped' | 'unknown';
+  summary?: string;
+  detail?: string;
+  payload?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeExecutionRecord {
+  id: string;
+  sessionId?: string | null;
+  taskId?: string | null;
+  runtimeId?: string | null;
+  environmentId?: string | null;
+  toolId?: string | null;
+  toolName?: string | null;
+  argv: string[];
+  cwd?: string | null;
+  commandPreview?: string | null;
+  status: CliRuntimeExecutionStatus;
+  usePty?: boolean;
+  exitCode?: number | null;
+  summary?: string | null;
+  lastLogChunk?: string | null;
+  startedAt?: number | null;
+  updatedAt?: number | null;
+  completedAt?: number | null;
+  verificationResults?: CliRuntimeVerificationRecord[];
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeEscalationRequest {
+  escalationId: string;
+  sessionId?: string | null;
+  taskId?: string | null;
+  runtimeId?: string | null;
+  executionId?: string | null;
+  title: string;
+  description: string;
+  reason?: string;
+  commandPreview?: string;
+  permissionSummary?: string[];
+  scopeOptions?: CliRuntimeEscalationScope[];
+  requestedAt?: number | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface SessionRuntimeRecord {
