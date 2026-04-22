@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::persistence::with_store;
-use crate::runtime::{RuntimeWarmEntry, SessionToolResultRecord};
+use crate::runtime::{runtime_approval_snapshot, RuntimeWarmEntry, SessionToolResultRecord};
 use crate::{now_i64, payload_string, AppState};
 
 const DIAGNOSTIC_HISTORY_LIMIT: usize = 100;
@@ -526,10 +526,12 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
             runtime_warm.last_warmed_at,
         )
     };
+    let approvals = runtime_approval_snapshot(state)?;
 
     Ok(json!({
         "generatedAt": now_i64(),
         "runtimeWarm": build_runtime_warm_summary(runtime_warm_entries, runtime_warm_last_warmed_at),
+        "approvals": approvals,
         "phase0": {
             "personaGeneration": build_persona_summary(&diagnostics.advisor_persona_runs, &advisor_names),
             "knowledgeIngest": build_knowledge_ingest_summary(&diagnostics.advisor_knowledge_ingests, &advisor_names),

@@ -94,7 +94,7 @@ impl RuntimeToolCallPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeApprovalDetails {
     pub r#type: String,

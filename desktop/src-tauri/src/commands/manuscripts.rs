@@ -7,7 +7,10 @@ use crate::manuscript_package::{
     video_script_state_from_manifest,
 };
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::ManuscriptScriptConfirmPayload;
+use crate::runtime::{
+    request_runtime_approval, resolve_runtime_approval_by_source_key,
+    ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
+};
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
@@ -9354,6 +9357,28 @@ pub fn handle_manuscripts_channel(
                 let (next_state, script_state) = persist_package_script_body(
                     state, &full_path, file_name, &content, None, &source,
                 )?;
+                let _ = request_runtime_approval(
+                    state,
+                    RuntimeApprovalRecord::pending(
+                        format!("manuscript-script:{file_path}"),
+                        "manuscript_script",
+                        file_path.clone(),
+                        "manuscripts.package_script",
+                        RuntimeApprovalDetails {
+                            r#type: "edit".to_string(),
+                            title: "稿件脚本待确认".to_string(),
+                            description: format!(
+                                "稿件包 {} 的脚本已更新，需确认后再视为可执行脚本。",
+                                file_path
+                            ),
+                            impact: Some("会影响后续剪辑、渲染或执行步骤。".to_string()),
+                        },
+                    )
+                    .with_metadata(Some(json!({
+                        "filePath": file_path,
+                        "source": source,
+                    }))),
+                )?;
                 Ok(json!({
                     "success": true,
                     "state": next_state,
@@ -9383,6 +9408,7 @@ pub fn handle_manuscripts_channel(
                         read_json_value_or(&package_manifest_path(&full_path), json!({}));
                     let approval = confirm_manifest_video_script(&mut manifest)?;
                     write_json_value(&package_manifest_path(&full_path), &manifest)?;
+                    let _ = resolve_runtime_approval_by_source_key(state, &file_path, true)?;
                     return Ok(json!({
                         "success": true,
                         "script": package_video_script_state_value(&full_path, file_name, &manifest),
@@ -9393,6 +9419,7 @@ pub fn handle_manuscripts_channel(
                 let mut project = ensure_editor_project(&full_path)?;
                 let approval = confirm_editor_project_script(&mut project)?;
                 write_json_value(&package_editor_project_path(&full_path), &project)?;
+                let _ = resolve_runtime_approval_by_source_key(state, &file_path, true)?;
                 Ok(json!({
                     "success": true,
                     "script": package_script_state_value(&project),
