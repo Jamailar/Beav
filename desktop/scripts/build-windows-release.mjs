@@ -61,6 +61,7 @@ async function buildLocally({ target, runner, signCommand, requireSigning }) {
   await ensureCommandExists('pnpm');
   const tauriConfig = await readTauriConfig();
   assertBundledGuideResources(tauriConfig);
+  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
 
   const hostIsWindows = process.platform === 'win32';
   if (hostIsWindows) {
@@ -201,6 +202,7 @@ async function buildOnRemote({ target, runner, signCommand, requireSigning, remo
       [
         `cd ${shellQuote(remoteWorkdir)}`,
         'source "$HOME/.cargo/env" >/dev/null 2>&1 || true',
+        'node ./scripts/tauri-preflight.mjs',
         'pnpm install --frozen-lockfile',
         `env ${remoteEnv.join(' ')} node ${shellQuote(remoteScriptPath)}`,
       ].join(' && '),
