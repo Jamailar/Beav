@@ -8,6 +8,7 @@ mod auth;
 mod chat_binding;
 mod chat_helpers;
 mod chat_title;
+mod cli_runtime;
 mod commands;
 mod desktop_io;
 mod diagnostics;
