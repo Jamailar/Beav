@@ -54,6 +54,28 @@ export function parseArgs(argv) {
   return args;
 }
 
+export function dedupeList(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+export function parseTargetList(value, fallback = []) {
+  if (Array.isArray(value)) {
+    return dedupeList(value.map((item) => String(item || '').trim()).filter(Boolean));
+  }
+
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return dedupeList(fallback.map((item) => String(item || '').trim()).filter(Boolean));
+  }
+
+  return dedupeList(
+    raw
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
 export function envFlag(name, fallback = false) {
   const value = process.env[name];
   if (value == null || value === '') {
@@ -155,6 +177,35 @@ export function bundleRootForTarget(target) {
 
 export function installerArtifactsDir(platform) {
   return path.join(artifactsRoot, 'installers', platform);
+}
+
+export async function ensureRustTargets(targets, options = {}) {
+  const { cwd = repoRoot } = options;
+  const requestedTargets = dedupeList(
+    targets
+      .map((target) => String(target || '').trim())
+      .filter(Boolean),
+  );
+
+  if (requestedTargets.length === 0) {
+    return;
+  }
+
+  const installedResult = await captureCommand('rustup', ['target', 'list', '--installed'], { cwd });
+  const installedTargets = new Set(
+    installedResult.stdout
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+
+  const missingTargets = requestedTargets.filter((target) => !installedTargets.has(target));
+  if (missingTargets.length === 0) {
+    return;
+  }
+
+  logStep(`Installing missing Rust targets: ${missingTargets.join(', ')}`);
+  await runCommand('rustup', ['target', 'add', ...missingTargets], { cwd });
 }
 
 export async function copyArtifactToDir(sourcePath, targetDir) {

@@ -466,16 +466,52 @@ pub(crate) fn redbox_builtin_skills_root() -> PathBuf {
         .unwrap_or_else(|| redbox_project_root().join("builtin-skills"))
 }
 
-pub(crate) fn redbox_prompt_library_root() -> PathBuf {
-    redbox_project_root().join("prompts").join("library")
+pub(crate) fn redbox_prompt_library_roots() -> Vec<PathBuf> {
+    let source_root = redbox_project_root().join("prompts").join("library");
+    let source_root_exists = source_root.exists() && source_root.is_dir();
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    let push = |roots: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            roots.push(path);
+        }
+    };
+
+    for root in redbox_bundled_resource_roots() {
+        let bundled_library_root = root.join("library");
+        if bundled_library_root.exists() && bundled_library_root.is_dir() {
+            push(&mut roots, &mut seen, bundled_library_root);
+        }
+        let bundled_nested_library_root = root.join("prompts").join("library");
+        if bundled_nested_library_root.exists() && bundled_nested_library_root.is_dir() {
+            push(&mut roots, &mut seen, bundled_nested_library_root);
+        }
+    }
+
+    if source_root_exists {
+        push(&mut roots, &mut seen, source_root.clone());
+    }
+
+    if roots.is_empty() {
+        push(&mut roots, &mut seen, source_root);
+    }
+
+    roots
 }
 
 pub(crate) fn load_redbox_prompt(relative_path: &str) -> Option<String> {
-    let full_path = redbox_prompt_library_root().join(relative_path);
-    fs::read_to_string(full_path)
-        .ok()
-        .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
+    for root in redbox_prompt_library_roots() {
+        let full_path = root.join(relative_path);
+        let content = fs::read_to_string(full_path)
+            .ok()
+            .map(|content| content.trim().to_string())
+            .filter(|content| !content.is_empty());
+        if content.is_some() {
+            return content;
+        }
+    }
+    None
 }
 
 pub(crate) fn load_redbox_prompt_or_embedded(relative_path: &str, embedded: &str) -> String {
@@ -974,6 +1010,16 @@ mod tests {
     fn redbox_builtin_skills_root_points_to_a_skill_directory_in_dev() {
         let root = redbox_builtin_skills_root();
         assert!(root.join("writing-style").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn redbox_prompt_library_root_points_to_a_prompt_directory_in_dev() {
+        assert!(redbox_prompt_library_roots().into_iter().any(|root| {
+            root.join("runtime")
+                .join("advisors")
+                .join("templates")
+                .exists()
+        }));
     }
 
     #[test]

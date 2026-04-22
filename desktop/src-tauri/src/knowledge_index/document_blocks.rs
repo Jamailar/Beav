@@ -147,7 +147,11 @@ pub(crate) fn search_blocks(
         .map_err(|error| error.to_string())?;
     let candidates = stmt
         .query_map(
-            params![source_id, format!("%{normalized_query}%"), (limit * 6).max(limit)],
+            params![
+                source_id,
+                format!("%{normalized_query}%"),
+                (limit * 6).max(limit)
+            ],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -373,17 +377,9 @@ fn extract_text(path: &Path) -> Result<Option<String>, String> {
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
     match extension.as_deref() {
-        Some("txt")
-        | Some("md")
-        | Some("markdown")
-        | Some("csv")
-        | Some("tsv")
-        | Some("json")
-        | Some("yaml")
-        | Some("yml")
-        | Some("xml")
-        | Some("html")
-        | Some("htm") => read_utf8(path).map(|value| value.map(|text| html_to_text_if_needed(text, extension.as_deref()))),
+        Some("txt") | Some("md") | Some("markdown") | Some("csv") | Some("tsv") | Some("json")
+        | Some("yaml") | Some("yml") | Some("xml") | Some("html") | Some("htm") => read_utf8(path)
+            .map(|value| value.map(|text| html_to_text_if_needed(text, extension.as_deref()))),
         Some("docx") => extract_docx_text(path),
         _ => read_utf8(path),
     }
@@ -405,7 +401,9 @@ fn extract_docx_text(path: &Path) -> Result<Option<String>, String> {
         Ok(entry) => entry,
         Err(_) => return Ok(None),
     };
-    entry.read_to_string(&mut xml).map_err(|error| error.to_string())?;
+    entry
+        .read_to_string(&mut xml)
+        .map_err(|error| error.to_string())?;
     Ok(Some(strip_xml_tags(&xml)))
 }
 
@@ -462,7 +460,11 @@ fn build_snippet(text: &str, query: &str, max_chars: usize) -> String {
     let lowered = text.to_lowercase();
     let start = lowered.find(&normalized_query).unwrap_or(0);
     let safe_start = start.saturating_sub(max_chars / 4);
-    let snippet = text.chars().skip(safe_start).take(max_chars).collect::<String>();
+    let snippet = text
+        .chars()
+        .skip(safe_start)
+        .take(max_chars)
+        .collect::<String>();
     if snippet.chars().count() >= text.chars().count() {
         return snippet.trim().to_string();
     }
@@ -497,7 +499,9 @@ fn split_into_blocks(input: &str) -> Vec<TextBlock> {
         let is_separator = line.trim().is_empty();
         let next_chars = current_chars + line.chars().count() + 1;
         let should_flush = !current_lines.is_empty()
-            && (is_separator || current_lines.len() >= MAX_BLOCK_LINES || next_chars >= MAX_BLOCK_CHARS);
+            && (is_separator
+                || current_lines.len() >= MAX_BLOCK_LINES
+                || next_chars >= MAX_BLOCK_CHARS);
         if should_flush {
             blocks.push(TextBlock {
                 line_start: block_start,

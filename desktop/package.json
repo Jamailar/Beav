@@ -17,6 +17,7 @@
     "release:mac": "node ./scripts/build-mac-release.mjs",
     "release:mac:setup-notary": "node ./scripts/setup-mac-notary-profile.mjs",
     "release:win": "node ./scripts/build-windows-release.mjs",
+    "release:linux": "node ./scripts/build-linux-release.mjs",
     "release:all": "node ./scripts/build-all-release.mjs",
     "release:oss": "node ./scripts/publish-open-source-release.mjs"
   },

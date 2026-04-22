@@ -4,18 +4,21 @@
 
 - macOS 本地签名 + notarization + staple + 验证
 - 非 Windows 主机通过 `ssh jamdebian` 远程打包 Windows 并拉回产物
+- 非 Linux 主机通过 `ssh jamdebian` 远程打包 Linux 并拉回产物
 - Windows 原生打包
 - 远端或本机的 `cargo-xwin` Windows NSIS 交叉打包
+- Linux 原生打包
 
 ## 命令入口
 
 - `pnpm release:mac`
 - `pnpm release:mac:setup-notary`
 - `pnpm release:win`
+- `pnpm release:linux`
 - `pnpm release:all`
 - `pnpm release:oss`
 
-## 一键执行两个平台
+## 一键执行三个平台
 
 直接运行：
 
@@ -27,12 +30,14 @@ pnpm release:all
 
 1. 固定执行 `node ./scripts/build-windows-release.mjs --mode remote --host jamdebian`
 2. 再执行 `node ./scripts/build-mac-release.mjs`
-3. 即使其中一个平台失败，也会继续跑另一个平台
-4. 最后统一输出两个平台的构建结果和安装包路径
+3. 再执行 `node ./scripts/build-linux-release.mjs --mode remote --host jamdebian`
+4. 即使其中一个平台失败，也会继续跑其他平台
+5. 最后统一输出三个平台的构建结果和安装包路径
 
 这条总控脚本的目的不是简单串联命令，而是保证：
 
 - Windows 永远走 `ssh jamdebian` 远程构建再拉回
+- Linux 在非 Linux 主机上默认也走 `ssh jamdebian` 远程构建再拉回
 - macOS notarization 上传遇到瞬时网络错误时会自动重试
 - 单个平台失败时，另一个平台的构建结果仍然会被明确输出
 
@@ -46,8 +51,8 @@ pnpm release:oss -- --repo <owner/name>
 
 执行行为：
 
-1. 先复用 `node ./scripts/build-all-release.mjs` 完成 Windows + macOS 安装包构建
-2. 读取 `artifacts/release/mac-build-summary.json` 和 `artifacts/release/windows-build-summary.json`
+1. 先复用 `node ./scripts/build-all-release.mjs` 完成 Windows + macOS + Linux 安装包构建
+2. 读取 `artifacts/release/mac-build-summary.json`、`artifacts/release/windows-build-summary.json` 和 `artifacts/release/linux-build-summary.json`
 3. 默认按 `package.json.version` 生成 `vX.Y.Z` tag
 4. 将该 tag 推送到开源 remote，默认 remote 名为 `export-sanitized`
 5. 自动生成 `artifacts/release/vX.Y.Z-release-notes.md`
@@ -73,7 +78,7 @@ pnpm release:oss -- --repo <owner/name>
 
 ### 目标
 
-`pnpm release:mac` 会执行下面这条完整链路：
+`pnpm release:mac` 默认会连续产出 `aarch64-apple-darwin + x86_64-apple-darwin` 两个安装包，并执行下面这条完整链路：
 
 1. 从本机 keychain 自动查找 `Developer ID Application` 证书。
 2. 用该证书执行 Tauri `build`，生成签名后的 `.app` 与 `.dmg`。
@@ -154,13 +159,14 @@ pnpm release:all -- --mac-notary-retries 5 --mac-notary-retry-delay-ms 8000
 
 ### 产物
 
-- `src-tauri/target/release/bundle/macos/RedBox.app`
-- `src-tauri/target/release/bundle/dmg/RedBox_<version>_<arch>.dmg`
+- `src-tauri/target/<target>/release/bundle/macos/RedBox.app`
+- `src-tauri/target/<target>/release/bundle/dmg/RedBox_<version>_<arch>.dmg`
 - `artifacts/installers/macos/RedBox_<version>_<arch>.dmg`
 - `artifacts/release/mac-build-summary.json`
 
 ### 可选参数
 
+- `REDBOX_MAC_TARGETS=aarch64-apple-darwin,x86_64-apple-darwin pnpm release:mac`
 - `REDBOX_MAC_TARGET=universal-apple-darwin pnpm release:mac`
 
 如果要打 universal 包，必须先安装额外 Rust target：
@@ -173,7 +179,11 @@ rustup target add x86_64-apple-darwin
 
 ### 目标
 
-`pnpm release:win` 默认生成 NSIS 安装包。
+`pnpm release:win` 默认连续生成三种 Windows NSIS 安装包：
+
+- `x86_64-pc-windows-msvc`
+- `aarch64-pc-windows-msvc`
+- `i686-pc-windows-msvc`
 
 优先推荐：
 
@@ -218,15 +228,17 @@ pnpm release:win
 pnpm release:win -- --mode native
 ```
 
-默认 target：
+默认 targets：
 
 - `x86_64-pc-windows-msvc`
+- `aarch64-pc-windows-msvc`
+- `i686-pc-windows-msvc`
 
 ### 远端或本机交叉打包前提
 
 根据 Tauri 官方文档，远端 Linux 或本机交叉打包 Windows NSIS 需要：
 
-1. `rustup target add x86_64-pc-windows-msvc`
+1. `rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc i686-pc-windows-msvc`
 2. `cargo install --locked cargo-xwin`
 3. `nsis`
 4. `llvm-rc`
@@ -236,7 +248,7 @@ pnpm release:win -- --mode native
 ```bash
 brew install nsis llvm
 cargo install --locked cargo-xwin
-rustup target add x86_64-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc i686-pc-windows-msvc
 ```
 
 同时需要把 LLVM bin 目录放进 PATH，例如 Apple Silicon Homebrew：
@@ -259,6 +271,11 @@ Windows 安装包签名不在仓库里硬编码。脚本支持通过环境变量
 REDBOX_WINDOWS_SIGN_COMMAND='trusted-signing-cli -e https://... -a ... -c ... -d RedBox %1' pnpm release:win
 ```
 
+### 可选参数
+
+- `REDBOX_WINDOWS_TARGETS=x86_64-pc-windows-msvc,aarch64-pc-windows-msvc,i686-pc-windows-msvc pnpm release:win`
+- `pnpm release:win -- --targets x86_64-pc-windows-msvc`
+
 如果你要强制没有签名命令时直接失败：
 
 ```bash
@@ -269,6 +286,53 @@ REDBOX_REQUIRE_WINDOWS_SIGN=1 pnpm release:win
 
 - `artifacts/installers/windows/*-setup.exe`
 - `artifacts/release/windows-build-summary.json`
+
+## Linux
+
+### 目标
+
+`pnpm release:linux` 默认生成 Linux x64 桌面端安装包：
+
+- `AppImage`
+- `.deb`
+
+在 Linux 主机上默认原生打包；在 macOS / 非 Linux 主机上默认通过 `ssh jamdebian` 远程构建并拉回产物。
+
+### 默认远程打包
+
+在 macOS 开发机上直接运行：
+
+```bash
+pnpm release:linux
+```
+
+默认行为：
+
+1. `rsync` 当前仓库到 `ssh jamdebian:/home/jam/build/redbox-tauri-linux-release`
+2. 在远端执行 `pnpm install --frozen-lockfile`
+3. 在远端以 `REDBOX_LINUX_MODE=local` 触发 Linux 原生打包
+4. 从远端拉回 `.AppImage` 和 `.deb` 到 `artifacts/installers/linux/`
+5. 本地写入 `artifacts/release/linux-build-summary.json`
+
+### Linux 主机原生打包
+
+在 Linux 主机上直接运行：
+
+```bash
+pnpm release:linux -- --mode local
+```
+
+默认 target：
+
+- `x86_64-unknown-linux-gnu`
+
+### 产物
+
+- `src-tauri/target/<target>/release/bundle/appimage/*.AppImage`
+- `src-tauri/target/<target>/release/bundle/deb/*.deb`
+- `artifacts/installers/linux/*.AppImage`
+- `artifacts/installers/linux/*.deb`
+- `artifacts/release/linux-build-summary.json`
 
 ## 用户需要手动准备的密钥
 

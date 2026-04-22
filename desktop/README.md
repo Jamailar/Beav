@@ -19,6 +19,7 @@
 - `pnpm release:mac`
 - `pnpm release:mac:setup-notary`
 - `pnpm release:win`
+- `pnpm release:linux`
 - `pnpm release:all`
 - `pnpm release:oss`
 - 修改应用版本号时，只改根 `package.json` 的 `version`；Tauri 配置与 Rust 元数据会自动同步
@@ -29,6 +30,7 @@
 - 前端 IPC channel 已全量有 Rust host 路由。
 - Tauri debug build 已通过。
 - macOS `.app` bundle 已启用。
+- 发布脚本默认覆盖 macOS `arm64 + x64`、Windows `x64 + arm64 + x86`，以及 Linux `x64`。
 - `desktop/src-tauri/src/main.rs` 目前承载 Rust host 内核：
   - app / settings / spaces / subjects
   - manuscripts / media / cover / knowledge

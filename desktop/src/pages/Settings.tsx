@@ -530,6 +530,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
+  const aiSourceAutosaveTimerRef = useRef<number | null>(null);
   const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
@@ -1134,10 +1135,92 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     aiSourceDraftDirtyRef.current = false;
   }, []);
 
+  const buildAiSourcePersistenceSnapshot = useCallback((
+    sources: AiSourceConfig[] = aiSources,
+    resolvedDefaultSourceId: string = defaultAiSourceId,
+  ) => {
+    const sanitizedSources: AiSourceConfig[] = sources
+      .map((source) => ({
+        ...source,
+        name: source.name.trim(),
+        presetId: source.presetId.trim() || 'custom',
+        baseURL: source.baseURL.trim(),
+        apiKey: source.apiKey.trim(),
+        models: normalizeSourceModels([...(source.models || []), source.model]),
+        modelsMeta: normalizeAiModelDescriptors([
+          ...(source.modelsMeta || []),
+          ...(source.models || []).map((id) => ({ id })),
+          source.model ? { id: source.model } : null,
+        ]),
+        model: String(source.model || '').trim(),
+        protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
+      }))
+      .map((source) => ({
+        ...source,
+        model: source.model || source.models?.[0] || '',
+        models: normalizeSourceModels([...(source.models || []), source.model]),
+        modelsMeta: normalizeAiModelDescriptors([
+          ...(source.modelsMeta || []),
+          ...(source.models || []).map((id) => ({ id })),
+          source.model ? { id: source.model } : null,
+        ]),
+      }))
+      .filter((source) => !isDeprecatedEmptyOpenAiSource(source));
+
+    const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+    return {
+      sanitizedSources,
+      resolvedDefaultSourceId,
+      defaultSource,
+      resolvedApiEndpoint: String(defaultSource?.baseURL || '').trim(),
+      resolvedApiKey: String(defaultSource?.apiKey || '').trim(),
+      resolvedModelName: String(defaultSource?.model || '').trim(),
+    };
+  }, [aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource]);
+
+  const persistAiSourcesSnapshot = useCallback(async (
+    sources: AiSourceConfig[] = aiSources,
+    resolvedDefaultSourceId: string = defaultAiSourceId,
+  ) => {
+    const snapshot = buildAiSourcePersistenceSnapshot(sources, resolvedDefaultSourceId);
+    await window.ipcRenderer.saveSettings({
+      ai_sources_json: JSON.stringify(snapshot.sanitizedSources),
+      default_ai_source_id: snapshot.resolvedDefaultSourceId || snapshot.defaultSource?.id || '',
+      api_endpoint: snapshot.resolvedApiEndpoint,
+      api_key: snapshot.resolvedApiKey,
+      model_name: snapshot.resolvedModelName,
+    });
+    clearAiSourceDraftDirty();
+  }, [aiSources, buildAiSourcePersistenceSnapshot, clearAiSourceDraftDirty, defaultAiSourceId]);
+
   const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
     markAiSourceDraftDirty();
     setAiSources((prev) => prev.map((source) => (source.id === sourceId ? updater(source) : source)));
   }, [markAiSourceDraftDirty]);
+
+  useEffect(() => {
+    if (!baseSettingsLoadedRef.current) return;
+    if (!aiSourceDraftDirtyRef.current) return;
+    if (aiSourceAutosaveTimerRef.current != null) {
+      window.clearTimeout(aiSourceAutosaveTimerRef.current);
+    }
+    aiSourceAutosaveTimerRef.current = window.setTimeout(() => {
+      aiSourceAutosaveTimerRef.current = null;
+      void persistAiSourcesSnapshot().catch((error) => {
+        console.error('Failed to persist AI source snapshot:', error);
+        setStatus('error');
+        setTestStatus('error');
+        setTestMsg(error instanceof Error ? error.message : 'AI 源配置自动保存失败');
+      });
+    }, 350);
+
+    return () => {
+      if (aiSourceAutosaveTimerRef.current != null) {
+        window.clearTimeout(aiSourceAutosaveTimerRef.current);
+        aiSourceAutosaveTimerRef.current = null;
+      }
+    };
+  }, [aiSources, defaultAiSourceId, persistAiSourcesSnapshot]);
 
   const openCreateAiSourceModal = () => {
     setCreateAiSourceDraft(createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
@@ -3228,44 +3311,26 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (aiSourceAutosaveTimerRef.current != null) {
+      window.clearTimeout(aiSourceAutosaveTimerRef.current);
+      aiSourceAutosaveTimerRef.current = null;
+    }
     setStatus('saving');
     try {
-      let sanitizedSources: AiSourceConfig[] = aiSources.map((source) => ({
-        ...source,
-        name: source.name.trim(),
-        presetId: source.presetId.trim() || 'custom',
-        baseURL: source.baseURL.trim(),
-        apiKey: source.apiKey.trim(),
-        models: normalizeSourceModels([...(source.models || []), source.model]),
-        modelsMeta: normalizeAiModelDescriptors([
-          ...(source.modelsMeta || []),
-          ...(source.models || []).map((id) => ({ id })),
-          source.model ? { id: source.model } : null,
-        ]),
-        model: String(source.model || '').trim(),
-        protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
-      })).map((source) => ({
-        ...source,
-        model: source.model || source.models?.[0] || '',
-        models: normalizeSourceModels([...(source.models || []), source.model]),
-        modelsMeta: normalizeAiModelDescriptors([
-          ...(source.modelsMeta || []),
-          ...(source.models || []).map((id) => ({ id })),
-          source.model ? { id: source.model } : null,
-        ]),
-      })).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
-
-      const resolvedDefaultSourceId = defaultAiSourceId;
-      const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+      const {
+        sanitizedSources,
+        resolvedDefaultSourceId,
+        defaultSource,
+        resolvedApiEndpoint,
+        resolvedApiKey,
+        resolvedModelName,
+      } = buildAiSourcePersistenceSnapshot();
       if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
         const normalizedModel = (defaultSource.model || '').trim();
         if (!normalizedModel) {
           throw new Error('请为默认 AI 源填写模型名称（可手动填写，或从模型列表选择）');
         }
       }
-      const resolvedApiEndpoint = defaultSource?.baseURL || '';
-      const resolvedApiKey = String(defaultSource?.apiKey || '').trim();
-      const resolvedModelName = String(defaultSource?.model || '').trim();
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
       const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
@@ -3603,7 +3668,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         const isOfficialSourcePending = isOfficialSource && officialAuthPending;
                         const isOfficialSourceLoggedIn = isOfficialSource && officialAuthLoggedIn;
                         const isOfficialSourceUnavailable = isOfficialSource && !officialAuthLoggedIn;
-                        const sourceModelsForDisplay = isOfficialSourceLoggedIn ? sourceModels : [];
+                        const sourceModelsForDisplay = isOfficialSource
+                          ? (isOfficialSourceLoggedIn ? sourceModels : [])
+                          : sourceModels;
+                        const sourceRemoteModels = getSourceAvailableModels(source.id);
+                        const sourceModelDraft = String(sourceModelDrafts[source.id] || '');
+                        const sourceModelDraftTrimmed = sourceModelDraft.trim();
+                        const sourceModelCapability = sourceModelCapabilityDrafts[source.id] || 'chat';
                         const localGuide = getLocalGuideForSource(source);
                         const allowEmptyKey = isLocalAiSource(source);
 
@@ -3819,7 +3890,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                           onClick={() => openAddModelModal(source)}
                                           className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
                                         >
-                                          添加模型
+                                          {isOfficialSource ? '添加模型' : '浏览候选'}
                                         </button>
                                         <button
                                           type="button"
@@ -3835,6 +3906,60 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                         </button>
                                       </div>
                                     </div>
+
+                                    {!isOfficialSource && (
+                                      <div className="rounded-lg border border-dashed border-border bg-surface-primary/70 px-3 py-3 space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="text-[11px] font-medium text-text-primary">手动添加模型</div>
+                                          <div className="text-[11px] text-text-tertiary">
+                                            不依赖模型列表 API
+                                          </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
+                                          <div className="space-y-1">
+                                            <input
+                                              type="text"
+                                              list={`ai-source-inline-model-options-${source.id}`}
+                                              value={sourceModelDraft}
+                                              onChange={(e) => setSourceModelDrafts((prev) => ({ ...prev, [source.id]: e.target.value }))}
+                                              placeholder="直接输入模型 ID，例如 gpt-4.1 / claude-sonnet-4 / qwen-plus"
+                                              className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                            />
+                                            <datalist id={`ai-source-inline-model-options-${source.id}`}>
+                                              {sourceRemoteModels.map((item) => (
+                                                <option key={item.id} value={item.id} />
+                                              ))}
+                                            </datalist>
+                                            <div className="text-[11px] text-text-tertiary">
+                                              厂商不返回候选模型时，直接填官方模型 ID 后加入当前源即可。
+                                            </div>
+                                          </div>
+                                          <select
+                                            value={sourceModelCapability}
+                                            onChange={(e) => setSourceModelCapabilityDrafts((prev) => ({
+                                              ...prev,
+                                              [source.id]: e.target.value as ModelCapability,
+                                            }))}
+                                            className="bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                          >
+                                            <option value="chat">语言模型</option>
+                                            <option value="transcription">转录模型</option>
+                                            <option value="audio">音频生成</option>
+                                            <option value="image">图片生成</option>
+                                            <option value="video">视频生成</option>
+                                            <option value="embedding">向量模型</option>
+                                          </select>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAddSourceModel(source.id)}
+                                            disabled={!sourceModelDraftTrimmed}
+                                            className="px-3 py-2 text-xs bg-text-primary text-background rounded hover:opacity-90 transition-opacity disabled:opacity-50"
+                                          >
+                                            加入当前源
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {isModelListExpanded && (
                                       sourceModelsForDisplay.length ? (
@@ -4434,7 +4559,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                   <div className="min-w-0">
                     <h3 className="text-base font-semibold text-text-primary truncate">添加模型</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      {addModelModalSource.name || '未命名模型源'} · 候选模型 {addModelModalRemoteModels.length} 个
+                      {addModelModalSource.name || '未命名模型源'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
                     </p>
                   </div>
                   <button
@@ -4448,7 +4573,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
                 <div className="px-5 py-4 space-y-3">
                   <div className="text-[12px] text-text-tertiary">
-                    仅展示候选，不会自动加入常用列表；点击确认后才会加入当前模型源。
+                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前模型源。
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
                     <input
