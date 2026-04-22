@@ -868,14 +868,17 @@ fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Re
     let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
     let mut warmed_entries = Vec::new();
     for mode in modes {
+        let bundle =
+            interactive_runtime_shared::interactive_runtime_context_bundle(state, mode, None);
         let entry = RuntimeWarmEntry {
             mode: (*mode).to_string(),
-            system_prompt: interactive_runtime_system_prompt(state, mode, None),
+            system_prompt: bundle.system_prompt,
             model_config: if *mode == "wander" {
                 Some(resolve_wander_model_config(&settings_snapshot))
             } else {
                 None
             },
+            context_bundle: bundle.summary,
             long_term_context: if *mode == "wander" {
                 Some(build_wander_long_term_context(state))
             } else {

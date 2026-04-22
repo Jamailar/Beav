@@ -164,6 +164,7 @@ fn build_runtime_warm_summary(entries: Vec<RuntimeWarmEntry>, last_warmed_at: i6
                 "systemPromptChars": entry.system_prompt.chars().count() as i64,
                 "longTermContextChars": entry.long_term_context.as_ref().map(|value| value.chars().count() as i64).unwrap_or(0),
                 "hasModelConfig": entry.model_config.is_some(),
+                "contextBundle": entry.context_bundle,
             })
         })
         .collect::<Vec<_>>();
