@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -409,6 +410,60 @@ pub(crate) fn redbox_project_root() -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn bundled_resource_roots_for_install_root(install_root: &Path) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            roots.push(path);
+        }
+    };
+
+    push(install_root.to_path_buf());
+    push(install_root.join("resources"));
+    push(install_root.join("_up_"));
+    push(install_root.join("_up_").join("resources"));
+
+    roots
+}
+
+pub(crate) fn redbox_bundled_resource_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(install_root) = current_exe.parent() {
+            roots.extend(bundled_resource_roots_for_install_root(install_root));
+        }
+    }
+    roots
+}
+
+pub(crate) fn redbox_builtin_skill_roots() -> Vec<PathBuf> {
+    let mut roots = redbox_bundled_resource_roots()
+        .into_iter()
+        .map(|root| root.join("builtin-skills"))
+        .filter(|root| root.exists() && root.is_dir())
+        .collect::<Vec<_>>();
+    let source_root = redbox_project_root().join("builtin-skills");
+    if source_root.exists()
+        && source_root.is_dir()
+        && !roots.iter().any(|root| root == &source_root)
+    {
+        roots.push(source_root);
+    }
+    if roots.is_empty() {
+        roots.push(redbox_project_root().join("builtin-skills"));
+    }
+    roots
+}
+
+pub(crate) fn redbox_builtin_skills_root() -> PathBuf {
+    redbox_builtin_skill_roots()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| redbox_project_root().join("builtin-skills"))
 }
 
 pub(crate) fn redbox_prompt_library_root() -> PathBuf {
@@ -900,6 +955,26 @@ pub(crate) fn file_url_for_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_resource_roots_for_install_root_covers_tauri_nsis_layout() {
+        let roots = bundled_resource_roots_for_install_root(Path::new("/tmp/RedBox"));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/tmp/RedBox"),
+                PathBuf::from("/tmp/RedBox/resources"),
+                PathBuf::from("/tmp/RedBox/_up_"),
+                PathBuf::from("/tmp/RedBox/_up_/resources"),
+            ]
+        );
+    }
+
+    #[test]
+    fn redbox_builtin_skills_root_points_to_a_skill_directory_in_dev() {
+        let root = redbox_builtin_skills_root();
+        assert!(root.join("writing-style").join("SKILL.md").exists());
+    }
 
     #[test]
     fn current_host_runtime_context_fields_are_consistent() {

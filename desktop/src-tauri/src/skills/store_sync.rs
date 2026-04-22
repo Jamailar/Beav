@@ -10,7 +10,7 @@ use crate::skills::{
     build_market_skill_record, build_user_skill_record, discover_builtin_skill_records,
     discover_skill_records_from_root,
 };
-use crate::{redbox_project_root, slug_from_relative_path, workspace_root, AppState};
+use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root, AppState};
 
 pub fn preferred_user_skill_root() -> PathBuf {
     dirs::home_dir()
@@ -121,7 +121,7 @@ pub fn resolve_skill_file_path(
 ) -> Option<PathBuf> {
     match record.source_scope.as_deref() {
         Some("builtin") => Some(skill_file_path_for_root(
-            &redbox_project_root().join("builtin-skills"),
+            &redbox_builtin_skills_root(),
             &record.name,
         )),
         Some("workspace") => {

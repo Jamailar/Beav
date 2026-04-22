@@ -8,7 +8,7 @@ use normalized_line_endings::Normalized;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::SkillRecord;
-use crate::{redbox_project_root, slug_from_relative_path};
+use crate::{redbox_builtin_skill_roots, slug_from_relative_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -345,11 +345,18 @@ pub fn discover_skill_records_from_root(
 }
 
 pub fn discover_builtin_skill_records() -> Vec<SkillRecord> {
-    discover_skill_records_from_root(
-        &redbox_project_root().join("builtin-skills"),
-        "builtin",
-        true,
-    )
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut records = Vec::<SkillRecord>::new();
+    for root in redbox_builtin_skill_roots() {
+        for record in discover_skill_records_from_root(&root, "builtin", true) {
+            let key = record.name.to_ascii_lowercase();
+            if seen.insert(key) {
+                records.push(record);
+            }
+        }
+    }
+    records.sort_by_key(|item| item.name.to_ascii_lowercase());
+    records
 }
 
 pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {
@@ -417,10 +424,11 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
     parts
 }
 
-fn builtin_skill_root(skill_name: &str) -> PathBuf {
-    redbox_project_root()
-        .join("builtin-skills")
-        .join(skill_name)
+fn builtin_skill_roots(skill_name: &str) -> Vec<PathBuf> {
+    redbox_builtin_skill_roots()
+        .into_iter()
+        .map(|root| root.join(skill_name))
+        .collect()
 }
 
 pub fn load_skill_bundle_sections_from_root(
@@ -456,10 +464,11 @@ pub fn load_skill_bundle_sections_from_sources(
     skill_name: &str,
     workspace_root: Option<&Path>,
 ) -> SkillBundleSections {
-    let builtin_root = builtin_skill_root(skill_name);
-    let builtin_bundle = load_skill_bundle_sections_from_root(skill_name, &builtin_root);
-    if !builtin_bundle.body.trim().is_empty() {
-        return builtin_bundle;
+    for builtin_root in builtin_skill_roots(skill_name) {
+        let builtin_bundle = load_skill_bundle_sections_from_root(skill_name, &builtin_root);
+        if !builtin_bundle.body.trim().is_empty() {
+            return builtin_bundle;
+        }
     }
     for root in skill_source_roots(workspace_root) {
         let skill_root = root.join(skill_name);
