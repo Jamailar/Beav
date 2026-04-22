@@ -2,18 +2,21 @@ use glob::Pattern;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use tauri::State;
 
 use crate::{
-    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
+    document_parse::CanonicalDocument,
+    knowledge_index::{
+        canonical_store::{self, CanonicalDocumentRow},
+        catalog_db_path,
+        fingerprint::fingerprint_file,
+        schema::ensure_catalog_ready,
+    },
     AppState,
 };
 
 const MAX_INDEXED_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_BLOCK_CHARS: usize = 1600;
-const MAX_BLOCK_LINES: usize = 24;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentBlockRecord {
@@ -28,6 +31,8 @@ pub(crate) struct DocumentBlockRecord {
     pub title: Option<String>,
     pub language: Option<String>,
     pub page: Option<i64>,
+    pub block_type: String,
+    pub section_path_json: String,
     pub block_index: i64,
     pub line_start: i64,
     pub line_end: i64,
@@ -50,10 +55,18 @@ pub(crate) struct DocumentBlockHit {
     pub title: Option<String>,
     pub language: Option<String>,
     pub page: Option<i64>,
+    pub block_type: String,
+    pub section_path: Vec<String>,
     pub block_index: i64,
     pub line_start: i64,
     pub line_end: i64,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BuildSourceBlocksResult {
+    pub blocks: Vec<DocumentBlockRecord>,
+    pub canonical_rows: Vec<CanonicalDocumentRow>,
 }
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -75,12 +88,14 @@ pub(crate) fn replace_blocks(
                 r#"
                 INSERT INTO knowledge_document_blocks (
                     block_id, document_id, source_id, source_name, root_path, absolute_path,
-                    relative_path, file_extension, title, language, page, block_index, line_start,
-                    line_end, text, normalized_text, updated_at
+                    relative_path, file_extension, title, language, page, block_type,
+                    section_path_json, block_index, line_start, line_end, text,
+                    normalized_text, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17
+                    ?13, ?14, ?15, ?16, ?17,
+                    ?18, ?19
                 )
                 "#,
             )
@@ -98,6 +113,8 @@ pub(crate) fn replace_blocks(
                 block.title,
                 block.language,
                 block.page,
+                block.block_type,
+                block.section_path_json,
                 block.block_index,
                 block.line_start,
                 block.line_end,
@@ -138,8 +155,8 @@ pub(crate) fn search_blocks(
         .prepare(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-                   relative_path, file_extension, title, language, page, block_index, line_start,
-                   line_end, text
+                   relative_path, file_extension, title, language, page, block_type,
+                   section_path_json, block_index, line_start, line_end, text
             FROM knowledge_document_blocks
             WHERE source_id = ?1
               AND normalized_text LIKE ?2
@@ -150,11 +167,7 @@ pub(crate) fn search_blocks(
         .map_err(|error| error.to_string())?;
     let candidates = stmt
         .query_map(
-            params![
-                source_id,
-                format!("%{normalized_query}%"),
-                (limit * 6).max(limit)
-            ],
+            params![source_id, format!("%{normalized_query}%"), (limit * 8).max(limit)],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -168,10 +181,12 @@ pub(crate) fn search_blocks(
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, Option<i64>>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, i64>(12)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
                     row.get::<_, i64>(13)?,
-                    row.get::<_, String>(14)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, i64>(15)?,
+                    row.get::<_, String>(16)?,
                 ))
             },
         )
@@ -191,6 +206,8 @@ pub(crate) fn search_blocks(
             title,
             language,
             page,
+            block_type,
+            section_path_json,
             block_index,
             line_start,
             line_end,
@@ -211,6 +228,8 @@ pub(crate) fn search_blocks(
             title,
             language,
             page,
+            block_type,
+            section_path: decode_section_path(&section_path_json),
             block_index,
             line_start,
             line_end,
@@ -231,8 +250,9 @@ pub(crate) fn read_block(
     conn.query_row(
         r#"
         SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-               relative_path, file_extension, title, language, page, block_index, line_start,
-               line_end, text, normalized_text, updated_at
+               relative_path, file_extension, title, language, page, block_type,
+               section_path_json, block_index, line_start, line_end, text,
+               normalized_text, updated_at
         FROM knowledge_document_blocks
         WHERE block_id = ?1
         "#,
@@ -250,12 +270,14 @@ pub(crate) fn read_block(
                 title: row.get(8)?,
                 language: row.get(9)?,
                 page: row.get(10)?,
-                block_index: row.get(11)?,
-                line_start: row.get(12)?,
-                line_end: row.get(13)?,
-                text: row.get(14)?,
-                normalized_text: row.get(15)?,
-                updated_at: row.get(16)?,
+                block_type: row.get(11)?,
+                section_path_json: row.get(12)?,
+                block_index: row.get(13)?,
+                line_start: row.get(14)?,
+                line_end: row.get(15)?,
+                text: row.get(16)?,
+                normalized_text: row.get(17)?,
+                updated_at: row.get(18)?,
             })
         },
     )
@@ -264,41 +286,55 @@ pub(crate) fn read_block(
 }
 
 pub(crate) fn build_blocks_for_source(
+    state: &State<'_, AppState>,
     source_id: &str,
     source_name: &str,
     root_path: &Path,
     updated_at: &str,
-) -> Result<Vec<DocumentBlockRecord>, String> {
+) -> Result<BuildSourceBlocksResult, String> {
     let mut blocks = Vec::new();
+    let mut canonical_rows = Vec::new();
     if root_path.is_file() {
         build_blocks_for_file(
+            state,
             source_id,
             source_name,
             root_path.parent().unwrap_or(root_path),
             root_path,
             updated_at,
             &mut blocks,
+            &mut canonical_rows,
         )?;
-        return Ok(blocks);
+        return Ok(BuildSourceBlocksResult {
+            blocks,
+            canonical_rows,
+        });
     }
     collect_blocks_recursive(
+        state,
         source_id,
         source_name,
         root_path,
         root_path,
         updated_at,
         &mut blocks,
+        &mut canonical_rows,
     )?;
-    Ok(blocks)
+    Ok(BuildSourceBlocksResult {
+        blocks,
+        canonical_rows,
+    })
 }
 
 fn collect_blocks_recursive(
+    state: &State<'_, AppState>,
     source_id: &str,
     source_name: &str,
     root_path: &Path,
     current: &Path,
     updated_at: &str,
     blocks: &mut Vec<DocumentBlockRecord>,
+    canonical_rows: &mut Vec<CanonicalDocumentRow>,
 ) -> Result<(), String> {
     let entries = match fs::read_dir(current) {
         Ok(entries) => entries,
@@ -308,143 +344,129 @@ fn collect_blocks_recursive(
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         if path.is_dir() {
-            collect_blocks_recursive(source_id, source_name, root_path, &path, updated_at, blocks)?;
+            collect_blocks_recursive(
+                state,
+                source_id,
+                source_name,
+                root_path,
+                &path,
+                updated_at,
+                blocks,
+                canonical_rows,
+            )?;
             continue;
         }
         if !path.is_file() {
             continue;
         }
-        build_blocks_for_file(source_id, source_name, root_path, &path, updated_at, blocks)?;
+        build_blocks_for_file(
+            state,
+            source_id,
+            source_name,
+            root_path,
+            &path,
+            updated_at,
+            blocks,
+            canonical_rows,
+        )?;
     }
     Ok(())
 }
 
 fn build_blocks_for_file(
+    state: &State<'_, AppState>,
     source_id: &str,
     source_name: &str,
     root_path: &Path,
     file_path: &Path,
     updated_at: &str,
     blocks: &mut Vec<DocumentBlockRecord>,
+    canonical_rows: &mut Vec<CanonicalDocumentRow>,
 ) -> Result<(), String> {
-    let metadata = match fs::metadata(file_path) {
-        Ok(metadata) => metadata,
-        Err(error) => return Err(error.to_string()),
-    };
+    let metadata = fs::metadata(file_path).map_err(|error| error.to_string())?;
     if metadata.len() > MAX_INDEXED_FILE_BYTES {
         return Ok(());
     }
-    let Some(raw_text) = extract_text(file_path)? else {
-        return Ok(());
+    let absolute_path = file_path.display().to_string();
+    let fingerprint = fingerprint_file(file_path)?;
+    let canonical = if let Some(cached) =
+        canonical_store::load_cached_document(state, &absolute_path, &fingerprint.content_hash)?
+    {
+        cached
+    } else {
+        let Some(parsed) = crate::document_parse::parse_path(source_id, root_path, file_path)? else {
+            return Ok(());
+        };
+        parsed
     };
-    let relative_path = file_path
-        .strip_prefix(root_path)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let document_id = format!("{source_id}:{relative_path}");
-    let title = file_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_string());
-    let language = detect_language(&raw_text);
-    for (block_index, block) in split_into_blocks(&raw_text).into_iter().enumerate() {
+
+    canonical_rows.push(CanonicalDocumentRow {
+        document_id: canonical.document_id.clone(),
+        source_id: canonical.source_id.clone(),
+        absolute_path: canonical.absolute_path.clone(),
+        relative_path: canonical.relative_path.clone(),
+        file_extension: file_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase()),
+        source_type: canonical.source_type.clone(),
+        content_hash: fingerprint.content_hash,
+        parser_name: canonical.parser_info.parser_name.clone(),
+        parser_version: canonical.parser_info.parser_version.clone(),
+        language: canonical.language.clone(),
+        title: canonical.title.clone(),
+        canonical_json: serde_json::to_string(&canonical).map_err(|error| error.to_string())?,
+        updated_at: updated_at.to_string(),
+    });
+    blocks.extend(block_records_from_document(
+        &canonical,
+        source_name,
+        root_path,
+        updated_at,
+    )?);
+    Ok(())
+}
+
+fn block_records_from_document(
+    document: &CanonicalDocument,
+    source_name: &str,
+    root_path: &Path,
+    updated_at: &str,
+) -> Result<Vec<DocumentBlockRecord>, String> {
+    let mut records = Vec::new();
+    for (block_index, block) in document.blocks.iter().enumerate() {
         let normalized_text = normalize_text(&block.text);
         if normalized_text.is_empty() {
             continue;
         }
-        blocks.push(DocumentBlockRecord {
-            block_id: format!("{document_id}#{block_index}"),
-            document_id: document_id.clone(),
-            source_id: source_id.to_string(),
+        records.push(DocumentBlockRecord {
+            block_id: format!("{}#{block_index}", document.document_id),
+            document_id: document.document_id.clone(),
+            source_id: document.source_id.clone(),
             source_name: source_name.to_string(),
             root_path: root_path.display().to_string(),
-            absolute_path: file_path.display().to_string(),
-            relative_path: relative_path.clone(),
-            file_extension: file_path
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_ascii_lowercase()),
-            title: title.clone(),
-            language: language.clone(),
-            page: Some(1),
+            absolute_path: document.absolute_path.clone(),
+            relative_path: document.relative_path.clone(),
+            file_extension: Some(document.source_type.clone()),
+            title: document.title.clone(),
+            language: block.language.clone().or_else(|| document.language.clone()),
+            page: block.page,
+            block_type: block.block_type.clone(),
+            section_path_json: serde_json::to_string(&block.section_path)
+                .map_err(|error| error.to_string())?,
             block_index: block_index as i64,
-            line_start: block.line_start as i64,
-            line_end: block.line_end as i64,
-            text: block.text,
+            line_start: block.line_start,
+            line_end: block.line_end,
+            text: block.text.clone(),
             normalized_text,
             updated_at: updated_at.to_string(),
         });
     }
-    Ok(())
+    Ok(records)
 }
 
-fn extract_text(path: &Path) -> Result<Option<String>, String> {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
-    match extension.as_deref() {
-        Some("txt") | Some("md") | Some("markdown") | Some("csv") | Some("tsv") | Some("json")
-        | Some("yaml") | Some("yml") | Some("xml") | Some("html") | Some("htm") => read_utf8(path)
-            .map(|value| value.map(|text| html_to_text_if_needed(text, extension.as_deref()))),
-        Some("docx") => extract_docx_text(path),
-        Some("pdf") => extract_pdf_text(path),
-        _ => read_utf8(path),
-    }
-}
-
-fn read_utf8(path: &Path) -> Result<Option<String>, String> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-fn extract_docx_text(path: &Path) -> Result<Option<String>, String> {
-    let file = fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    let mut xml = String::new();
-    let mut entry = match archive.by_name("word/document.xml") {
-        Ok(entry) => entry,
-        Err(_) => return Ok(None),
-    };
-    entry
-        .read_to_string(&mut xml)
-        .map_err(|error| error.to_string())?;
-    Ok(Some(strip_xml_tags(&xml)))
-}
-
-fn extract_pdf_text(path: &Path) -> Result<Option<String>, String> {
-    match pdf_extract::extract_text(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(_) => Ok(None),
-    }
-}
-
-fn html_to_text_if_needed(text: String, extension: Option<&str>) -> String {
-    match extension {
-        Some("html") | Some("htm") => strip_xml_tags(&text),
-        _ => text,
-    }
-}
-
-fn strip_xml_tags(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut inside_tag = false;
-    for ch in input.chars() {
-        match ch {
-            '<' => inside_tag = true,
-            '>' => {
-                inside_tag = false;
-                output.push(' ');
-            }
-            _ if !inside_tag => output.push(ch),
-            _ => {}
-        }
-    }
-    output
+fn decode_section_path(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
 }
 
 fn normalize_text(input: &str) -> String {
@@ -453,22 +475,6 @@ fn normalize_text(input: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-fn detect_language(input: &str) -> Option<String> {
-    let chinese = input
-        .chars()
-        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
-        .count();
-    let ascii = input.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
-    if chinese == 0 && ascii == 0 {
-        return None;
-    }
-    if chinese >= ascii {
-        Some("zh".to_string())
-    } else {
-        Some("en".to_string())
-    }
 }
 
 fn build_snippet(text: &str, query: &str, max_chars: usize) -> String {
@@ -495,144 +501,19 @@ fn glob_match_options() -> glob::MatchOptions {
     }
 }
 
-#[derive(Debug, Clone)]
-struct TextBlock {
-    line_start: usize,
-    line_end: usize,
-    text: String,
-}
-
-fn split_into_blocks(input: &str) -> Vec<TextBlock> {
-    let mut blocks = Vec::new();
-    let mut current_lines = Vec::new();
-    let mut current_chars = 0usize;
-    let mut block_start = 1usize;
-    let mut line_no = 0usize;
-
-    for raw_line in input.lines() {
-        line_no += 1;
-        let line = raw_line.trim_end();
-        let is_separator = line.trim().is_empty();
-        let next_chars = current_chars + line.chars().count() + 1;
-        let should_flush = !current_lines.is_empty()
-            && (is_separator
-                || current_lines.len() >= MAX_BLOCK_LINES
-                || next_chars >= MAX_BLOCK_CHARS);
-        if should_flush {
-            blocks.push(TextBlock {
-                line_start: block_start,
-                line_end: line_no.saturating_sub(1),
-                text: current_lines.join("\n"),
-            });
-            current_lines.clear();
-            current_chars = 0;
-            block_start = if is_separator { line_no + 1 } else { line_no };
-        }
-        if is_separator {
-            continue;
-        }
-        if current_lines.is_empty() {
-            block_start = line_no;
-        }
-        current_chars += line.chars().count() + 1;
-        current_lines.push(line.to_string());
-    }
-
-    if !current_lines.is_empty() {
-        blocks.push(TextBlock {
-            line_start: block_start,
-            line_end: line_no,
-            text: current_lines.join("\n"),
-        });
-    }
-    blocks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
-    fn write_minimal_docx(path: &Path, text: &str) {
-        let file = fs::File::create(path).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::FileOptions::default();
-        zip.start_file("[Content_Types].xml", options).unwrap();
-        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>"#).unwrap();
-        zip.start_file("word/document.xml", options).unwrap();
-        zip.write_all(
-            format!(
-                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#
-            )
-            .as_bytes(),
-        )
-        .unwrap();
-        zip.finish().unwrap();
+    #[test]
+    fn decodes_section_path_json() {
+        let value = decode_section_path(r#"["sheet","Sheet1"]"#);
+        assert_eq!(value, vec!["sheet".to_string(), "Sheet1".to_string()]);
     }
 
     #[test]
-    fn strips_html_tags_to_plain_text() {
-        let text = strip_xml_tags("<p>Hello <strong>World</strong></p>");
-        assert!(text.contains("Hello"));
-        assert!(text.contains("World"));
-    }
-
-    #[test]
-    fn splits_text_into_multiple_blocks() {
-        let input = (1..=40)
-            .map(|index| format!("line {index}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let blocks = split_into_blocks(&input);
-        assert!(blocks.len() >= 2);
-        assert_eq!(blocks[0].line_start, 1);
-        assert!(blocks[0].line_end >= 1);
-    }
-
-    #[test]
-    fn extracts_text_from_minimal_docx_file() {
-        let unique = format!(
-            "redbox-docx-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let root = std::env::temp_dir().join(unique);
-        fs::create_dir_all(&root).unwrap();
-        let docx_path = root.join("sample.docx");
-        write_minimal_docx(&docx_path, "Hello DOCX");
-
-        let extracted = extract_docx_text(&docx_path).unwrap().unwrap();
-        assert!(extracted.contains("Hello DOCX"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rebuilding_source_blocks_reflects_deleted_files() {
-        let unique = format!(
-            "redbox-source-block-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let root = std::env::temp_dir().join(unique);
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("a.txt"), "alpha block").unwrap();
-        fs::write(root.join("b.html"), "<p>beta block</p>").unwrap();
-        write_minimal_docx(&root.join("c.docx"), "gamma block");
-
-        let before = build_blocks_for_source("source-1", "Source 1", &root, "2026-04-22").unwrap();
-        assert!(before.iter().any(|block| block.relative_path == "a.txt"));
-        assert!(before.iter().any(|block| block.relative_path == "b.html"));
-        assert!(before.iter().any(|block| block.relative_path == "c.docx"));
-
-        fs::remove_file(root.join("b.html")).unwrap();
-        let after = build_blocks_for_source("source-1", "Source 1", &root, "2026-04-22").unwrap();
-        assert!(after.len() < before.len());
-        assert!(!after.iter().any(|block| block.relative_path == "b.html"));
-
-        let _ = fs::remove_dir_all(root);
+    fn normalizes_text_to_lowercase_compact_form() {
+        let value = normalize_text("Hello   World\nSecond");
+        assert_eq!(value, "hello world second");
     }
 }

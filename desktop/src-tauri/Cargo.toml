@@ -11,6 +11,7 @@ tauri-build = { version = "2.0.0", features = [] }
 [dependencies]
 arboard = "3.4.1"
 base64 = "0.22.1"
+calamine = "0.24.0"
 dirs = "5.0.1"
 futures-util = "0.3.31"
 glob = "0.3.1"

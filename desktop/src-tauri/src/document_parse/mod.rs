@@ -1,0 +1,827 @@
+use calamine::{open_workbook_auto, Data, Reader};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::{Cursor, Read};
+use std::path::Path;
+
+const PARSER_NAME: &str = "redbox-canonical";
+const PARSER_VERSION: &str = "stage2-v1";
+const MAX_CANONICAL_BLOCK_CHARS: usize = 1600;
+const MAX_CANONICAL_BLOCK_LINES: usize = 24;
+const MAX_ZIP_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_ZIP_ENTRIES: usize = 32;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ParserInfo {
+    pub parser_name: String,
+    pub parser_version: String,
+    pub strategy: String,
+    pub fallback_used: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CanonicalBlock {
+    pub block_type: String,
+    pub section_path: Vec<String>,
+    pub page: Option<i64>,
+    pub line_start: i64,
+    pub line_end: i64,
+    pub text: String,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CanonicalAttachment {
+    pub attachment_path: String,
+    pub source_type: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CanonicalDocument {
+    pub document_id: String,
+    pub source_id: String,
+    pub absolute_path: String,
+    pub relative_path: String,
+    pub source_type: String,
+    pub title: Option<String>,
+    pub language: Option<String>,
+    pub parser_info: ParserInfo,
+    pub blocks: Vec<CanonicalBlock>,
+    pub attachments: Vec<CanonicalAttachment>,
+}
+
+pub(crate) fn parse_path(
+    source_id: &str,
+    root_path: &Path,
+    path: &Path,
+) -> Result<Option<CanonicalDocument>, String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    let relative_path = path
+        .strip_prefix(root_path)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let absolute_path = path.display().to_string();
+    let title = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string());
+
+    let parsed = match extension.as_str() {
+        "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
+            read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
+        }
+        "html" | "htm" => {
+            read_utf8_sections(path, "html", vec!["body".to_string()])?
+                .map(|value| value.into_iter().map(|section| ParsedSection {
+                    text: strip_xml_tags(&section.text),
+                    ..section
+                }).collect())
+        }
+        "csv" | "tsv" => parse_delimited_file(path)?,
+        "pdf" => parse_pdf(path)?,
+        "docx" => parse_docx(path)?,
+        "pptx" => parse_pptx(path)?,
+        "xlsx" => parse_xlsx(path)?,
+        "eml" => parse_eml(path)?,
+        "zip" => parse_zip(path)?,
+        _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
+    };
+
+    let Some(parsed) = parsed else {
+        return Ok(None);
+    };
+
+    let mut blocks = Vec::new();
+    let mut attachments = Vec::new();
+    let mut fallback_used = false;
+    let mut strategy = String::new();
+    for section in parsed {
+        strategy = section.strategy.clone();
+        fallback_used = fallback_used || section.fallback_used;
+        if let Some(attachment_path) = section.attachment_path.as_ref() {
+            attachments.push(CanonicalAttachment {
+                attachment_path: attachment_path.clone(),
+                source_type: section.block_type.clone(),
+                title: section.section_path.last().cloned(),
+            });
+        }
+        blocks.extend(split_into_canonical_blocks(
+            &section.text,
+            &section.block_type,
+            &section.section_path,
+            section.page,
+            section.language.clone(),
+        ));
+    }
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    let language = dominant_language(&blocks);
+    Ok(Some(CanonicalDocument {
+        document_id: format!("{source_id}:{relative_path}"),
+        source_id: source_id.to_string(),
+        absolute_path,
+        relative_path,
+        source_type: extension,
+        title,
+        language,
+        parser_info: ParserInfo {
+            parser_name: PARSER_NAME.to_string(),
+            parser_version: PARSER_VERSION.to_string(),
+            strategy,
+            fallback_used,
+        },
+        blocks,
+        attachments,
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct ParsedSection {
+    strategy: String,
+    block_type: String,
+    section_path: Vec<String>,
+    page: Option<i64>,
+    text: String,
+    language: Option<String>,
+    fallback_used: bool,
+    attachment_path: Option<String>,
+}
+
+fn read_utf8_sections(
+    path: &Path,
+    block_type: &str,
+    section_path: Vec<String>,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(vec![ParsedSection {
+            strategy: block_type.to_string(),
+            block_type: block_type.to_string(),
+            section_path,
+            page: Some(1),
+            language: detect_language(&content),
+            text: content,
+            fallback_used: false,
+            attachment_path: None,
+        }])),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn parse_delimited_file(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("csv");
+    read_utf8_sections(path, extension, vec!["sheet".to_string(), "Sheet1".to_string()])
+}
+
+fn parse_pdf(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    match pdf_extract::extract_text(path) {
+        Ok(text) if !text.trim().is_empty() => Ok(Some(vec![ParsedSection {
+            strategy: "pdf-extract".to_string(),
+            block_type: "pdf-page".to_string(),
+            section_path: vec!["page".to_string(), "1".to_string()],
+            page: Some(1),
+            language: detect_language(&text),
+            text,
+            fallback_used: false,
+            attachment_path: None,
+        }])),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
+fn parse_docx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let mut xml = String::new();
+    let mut entry = match archive.by_name("word/document.xml") {
+        Ok(entry) => entry,
+        Err(_) => return Ok(None),
+    };
+    entry
+        .read_to_string(&mut xml)
+        .map_err(|error| error.to_string())?;
+    let text = strip_xml_tags(&xml);
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(vec![ParsedSection {
+        strategy: "docx-zip-xml".to_string(),
+        block_type: "docx-body".to_string(),
+        section_path: vec!["body".to_string()],
+        page: Some(1),
+        language: detect_language(&text),
+        text,
+        fallback_used: false,
+        attachment_path: None,
+    }]))
+}
+
+fn parse_pptx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let mut sections = Vec::new();
+    let mut slide_names = archive
+        .file_names()
+        .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    slide_names.sort();
+    for (index, name) in slide_names.into_iter().enumerate() {
+        let mut xml = String::new();
+        let mut entry = archive.by_name(&name).map_err(|error| error.to_string())?;
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        let text = strip_xml_tags(&xml);
+        if text.trim().is_empty() {
+            continue;
+        }
+        sections.push(ParsedSection {
+            strategy: "pptx-zip-xml".to_string(),
+            block_type: "ppt-slide".to_string(),
+            section_path: vec!["slide".to_string(), format!("{}", index + 1)],
+            page: Some((index + 1) as i64),
+            language: detect_language(&text),
+            text,
+            fallback_used: false,
+            attachment_path: None,
+        });
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(sections))
+}
+
+fn parse_xlsx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let mut workbook = open_workbook_auto(path).map_err(|error| error.to_string())?;
+    let sheet_names = workbook.sheet_names().to_vec();
+    let mut sections = Vec::new();
+    for sheet_name in sheet_names {
+        let range = match workbook.worksheet_range(&sheet_name) {
+            Ok(range) => range,
+            Err(_) => continue,
+        };
+        if range.is_empty() {
+            continue;
+        }
+        let mut rows = Vec::new();
+        for row in range.rows() {
+            let cells = row
+                .iter()
+                .map(data_to_string)
+                .collect::<Vec<_>>()
+                .join("\t");
+            if !cells.trim().is_empty() {
+                rows.push(cells);
+            }
+        }
+        let text = rows.join("\n");
+        if text.trim().is_empty() {
+            continue;
+        }
+        sections.push(ParsedSection {
+            strategy: "xlsx-calamine".to_string(),
+            block_type: "xlsx-sheet".to_string(),
+            section_path: vec!["sheet".to_string(), sheet_name.clone()],
+            page: None,
+            language: detect_language(&text),
+            text,
+            fallback_used: false,
+            attachment_path: None,
+        });
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(sections))
+}
+
+fn parse_eml(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let normalized = content.replace("\r\n", "\n");
+    let mut headers = Vec::new();
+    let mut body = String::new();
+    let mut in_body = false;
+    let mut attachments = Vec::new();
+    for line in normalized.lines() {
+        if !in_body {
+            if line.trim().is_empty() {
+                in_body = true;
+                continue;
+            }
+            headers.push(line.to_string());
+            if let Some(filename) = extract_header_value(line, "filename=") {
+                attachments.push(filename);
+            }
+        } else {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    let subject = headers
+        .iter()
+        .find_map(|line| extract_header_value(line, "Subject:"))
+        .unwrap_or_else(|| "Email".to_string());
+    let text = if body.contains('<') && body.contains('>') {
+        strip_xml_tags(&body)
+    } else {
+        body
+    };
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut sections = vec![ParsedSection {
+        strategy: "eml-basic".to_string(),
+        block_type: "email-body".to_string(),
+        section_path: vec!["body".to_string()],
+        page: None,
+        language: detect_language(&text),
+        text,
+        fallback_used: false,
+        attachment_path: None,
+    }];
+    for attachment in attachments {
+        sections.push(ParsedSection {
+            strategy: "eml-basic".to_string(),
+            block_type: "email-attachment".to_string(),
+            section_path: vec!["attachment".to_string(), attachment.clone()],
+            page: None,
+            language: None,
+            text: format!("Attachment: {attachment}"),
+            fallback_used: false,
+            attachment_path: Some(attachment),
+        });
+    }
+    sections[0]
+        .section_path
+        .insert(0, subject);
+    Ok(Some(sections))
+}
+
+fn parse_zip(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let mut sections = Vec::new();
+    let mut processed = 0usize;
+    for index in 0..archive.len() {
+        if processed >= MAX_ZIP_ENTRIES {
+            break;
+        }
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        if entry.is_dir() || entry.size() > MAX_ZIP_ENTRY_BYTES {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        let extension = name
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "txt" | "md" | "markdown" | "html" | "htm" | "csv" | "tsv" | "json" | "yaml"
+                | "yml" | "xml" | "eml" | "docx" | "pptx"
+        ) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+        if let Some(inner_sections) = parse_zip_entry_bytes(&name, &bytes)? {
+            for mut section in inner_sections {
+                section.section_path.insert(0, "attachment".to_string());
+                section.section_path.insert(1, name.clone());
+                section.attachment_path = Some(name.clone());
+                sections.push(section);
+            }
+            processed += 1;
+        }
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(sections))
+}
+
+fn parse_zip_entry_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection>>, String> {
+    let extension = name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "txt" | "md" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "yml" | "xml" => {
+            let text = String::from_utf8(bytes.to_vec()).ok();
+            Ok(text.filter(|value| !value.trim().is_empty()).map(|text| {
+                vec![ParsedSection {
+                    strategy: "zip-text".to_string(),
+                    block_type: extension.to_string(),
+                    section_path: vec!["body".to_string()],
+                    page: Some(1),
+                    language: detect_language(&text),
+                    text,
+                    fallback_used: false,
+                    attachment_path: Some(name.to_string()),
+                }]
+            }))
+        }
+        "html" | "htm" => {
+            let text = String::from_utf8(bytes.to_vec())
+                .ok()
+                .map(|value| strip_xml_tags(&value));
+            Ok(text.filter(|value| !value.trim().is_empty()).map(|text| {
+                vec![ParsedSection {
+                    strategy: "zip-html".to_string(),
+                    block_type: "html".to_string(),
+                    section_path: vec!["body".to_string()],
+                    page: Some(1),
+                    language: detect_language(&text),
+                    text,
+                    fallback_used: false,
+                    attachment_path: Some(name.to_string()),
+                }]
+            }))
+        }
+        "eml" => parse_eml_bytes(name, bytes),
+        "docx" => parse_docx_bytes(name, bytes),
+        "pptx" => parse_pptx_bytes(name, bytes),
+        _ => Ok(None),
+    }
+}
+
+fn parse_eml_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection>>, String> {
+    let content = String::from_utf8(bytes.to_vec()).ok();
+    let Some(content) = content else {
+        return Ok(None);
+    };
+    let temp = std::env::temp_dir().join(format!("redbox-eml-{}", sanitize_temp_name(name)));
+    fs::write(&temp, content).map_err(|error| error.to_string())?;
+    let parsed = parse_eml(&temp);
+    let _ = fs::remove_file(&temp);
+    parsed
+}
+
+fn parse_docx_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection>>, String> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|error| error.to_string())?;
+    let mut xml = String::new();
+    let mut entry = match archive.by_name("word/document.xml") {
+        Ok(entry) => entry,
+        Err(_) => return Ok(None),
+    };
+    entry
+        .read_to_string(&mut xml)
+        .map_err(|error| error.to_string())?;
+    let text = strip_xml_tags(&xml);
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(vec![ParsedSection {
+        strategy: "zip-docx".to_string(),
+        block_type: "docx-body".to_string(),
+        section_path: vec!["body".to_string(), name.to_string()],
+        page: Some(1),
+        language: detect_language(&text),
+        text,
+        fallback_used: false,
+        attachment_path: Some(name.to_string()),
+    }]))
+}
+
+fn parse_pptx_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection>>, String> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|error| error.to_string())?;
+    let mut sections = Vec::new();
+    let mut slide_names = archive
+        .file_names()
+        .filter(|entry| entry.starts_with("ppt/slides/slide") && entry.ends_with(".xml"))
+        .map(|entry| entry.to_string())
+        .collect::<Vec<_>>();
+    slide_names.sort();
+    for (index, slide_name) in slide_names.into_iter().enumerate() {
+        let mut xml = String::new();
+        let mut entry = archive.by_name(&slide_name).map_err(|error| error.to_string())?;
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        let text = strip_xml_tags(&xml);
+        if text.trim().is_empty() {
+            continue;
+        }
+        sections.push(ParsedSection {
+            strategy: "zip-pptx".to_string(),
+            block_type: "ppt-slide".to_string(),
+            section_path: vec![
+                "slide".to_string(),
+                format!("{}", index + 1),
+                name.to_string(),
+            ],
+            page: Some((index + 1) as i64),
+            language: detect_language(&text),
+            text,
+            fallback_used: false,
+            attachment_path: Some(name.to_string()),
+        });
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(sections))
+}
+
+fn extract_header_value(line: &str, prefix: &str) -> Option<String> {
+    if let Some(value) = line.strip_prefix(prefix) {
+        return Some(value.trim().trim_matches('"').to_string());
+    }
+    line.find(prefix).map(|index| {
+        line[index + prefix.len()..]
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"')
+            .to_string()
+    })
+}
+
+fn sanitize_temp_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+fn data_to_string(value: &Data) -> String {
+    match value {
+        Data::Empty => String::new(),
+        Data::String(text) => text.clone(),
+        Data::Float(number) => number.to_string(),
+        Data::Int(number) => number.to_string(),
+        Data::Bool(flag) => flag.to_string(),
+        Data::DateTime(value) => value.to_string(),
+        Data::DateTimeIso(text) => text.clone(),
+        Data::DurationIso(text) => text.clone(),
+        Data::Error(error) => format!("{error:?}"),
+    }
+}
+
+fn split_into_canonical_blocks(
+    input: &str,
+    block_type: &str,
+    section_path: &[String],
+    page: Option<i64>,
+    language: Option<String>,
+) -> Vec<CanonicalBlock> {
+    let mut blocks = Vec::new();
+    let mut current_lines = Vec::new();
+    let mut current_chars = 0usize;
+    let mut block_start = 1usize;
+    let mut line_no = 0usize;
+
+    for raw_line in input.lines() {
+        line_no += 1;
+        let line = raw_line.trim_end();
+        let is_separator = line.trim().is_empty();
+        let next_chars = current_chars + line.chars().count() + 1;
+        let should_flush = !current_lines.is_empty()
+            && (is_separator
+                || current_lines.len() >= MAX_CANONICAL_BLOCK_LINES
+                || next_chars >= MAX_CANONICAL_BLOCK_CHARS);
+        if should_flush {
+            blocks.push(CanonicalBlock {
+                block_type: block_type.to_string(),
+                section_path: section_path.to_vec(),
+                page,
+                line_start: block_start as i64,
+                line_end: line_no.saturating_sub(1) as i64,
+                text: current_lines.join("\n"),
+                language: language.clone(),
+            });
+            current_lines.clear();
+            current_chars = 0;
+            block_start = if is_separator { line_no + 1 } else { line_no };
+        }
+        if is_separator {
+            continue;
+        }
+        if current_lines.is_empty() {
+            block_start = line_no;
+        }
+        current_chars += line.chars().count() + 1;
+        current_lines.push(line.to_string());
+    }
+
+    if !current_lines.is_empty() {
+        blocks.push(CanonicalBlock {
+            block_type: block_type.to_string(),
+            section_path: section_path.to_vec(),
+            page,
+            line_start: block_start as i64,
+            line_end: line_no as i64,
+            text: current_lines.join("\n"),
+            language,
+        });
+    }
+    blocks
+}
+
+fn strip_xml_tags(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut inside_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => inside_tag = true,
+            '>' => {
+                inside_tag = false;
+                output.push(' ');
+            }
+            _ if !inside_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn detect_language(input: &str) -> Option<String> {
+    let chinese = input
+        .chars()
+        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .count();
+    let ascii = input.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+    if chinese == 0 && ascii == 0 {
+        return None;
+    }
+    if chinese >= ascii {
+        Some("zh".to_string())
+    } else {
+        Some("en".to_string())
+    }
+}
+
+fn dominant_language(blocks: &[CanonicalBlock]) -> Option<String> {
+    let mut zh = 0usize;
+    let mut en = 0usize;
+    for block in blocks {
+        match block.language.as_deref() {
+            Some("zh") => zh += 1,
+            Some("en") => en += 1,
+            _ => {}
+        }
+    }
+    if zh == 0 && en == 0 {
+        None
+    } else if zh >= en {
+        Some("zh".to_string())
+    } else {
+        Some("en".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_minimal_pptx(path: &Path, text: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>"#).unwrap();
+        zip.start_file("ppt/slides/slide1.xml", options).unwrap();
+        zip.write_all(
+            format!(
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><a:t xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{text}</a:t></p:spTree></p:cSld></p:sld>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+
+    fn write_minimal_xlsx(path: &Path, text: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#).unwrap();
+        zip.start_file("_rels/.rels", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+        zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+        zip.write_all(
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{text}</t></is></c></row></sheetData></worksheet>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn parses_pptx_slides() {
+        let unique = format!(
+            "redbox-pptx-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("sample.pptx");
+        write_minimal_pptx(&path, "Hello Slide");
+
+        let parsed = parse_pptx(&path).unwrap().unwrap();
+        assert!(parsed[0].text.contains("Hello Slide"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_basic_eml_body() {
+        let unique = format!(
+            "redbox-eml-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("sample.eml");
+        fs::write(
+            &path,
+            "Subject: Contract Update\nContent-Type: text/plain\n\nThis is the email body.",
+        )
+        .unwrap();
+
+        let parsed = parse_eml(&path).unwrap().unwrap();
+        assert!(parsed[0].text.contains("email body"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_xlsx_sheet_text() {
+        let unique = format!(
+            "redbox-xlsx-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("sample.xlsx");
+        write_minimal_xlsx(&path, "Hello Sheet");
+
+        let parsed = parse_xlsx(&path).unwrap().unwrap();
+        assert!(parsed[0].text.contains("Hello Sheet"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_zip_text_attachments() {
+        let unique = format!(
+            "redbox-zip-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("bundle.zip");
+        let file = fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("notes.txt", options).unwrap();
+        zip.write_all(b"zip attachment body").unwrap();
+        zip.finish().unwrap();
+
+        let parsed = parse_zip(&path).unwrap().unwrap();
+        assert!(parsed.iter().any(|section| section.text.contains("zip attachment body")));
+        let _ = fs::remove_dir_all(root);
+    }
+}

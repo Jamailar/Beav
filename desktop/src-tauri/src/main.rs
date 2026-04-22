@@ -11,6 +11,7 @@ mod chat_title;
 mod commands;
 mod desktop_io;
 mod diagnostics;
+mod document_parse;
 mod events;
 mod helpers;
 mod http_utils;
