@@ -22,6 +22,7 @@ mod llm_transport;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
+mod memory;
 mod memory_maintenance;
 mod official_support;
 mod persistence;

@@ -100,6 +100,8 @@ pub(crate) fn interactive_runtime_system_prompt(
         .map(|value| value.display().to_string())
         .unwrap_or_default();
     let subjects_section = build_subjects_section(state, &workspace_root_value);
+    let memory_section =
+        crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8);
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
     if runtime_mode == "wander" {
         let mut sections = Vec::<String>::new();
@@ -136,6 +138,9 @@ pub(crate) fn interactive_runtime_system_prompt(
         }
         if !skills_section.trim().is_empty() {
             sections.push(format!("Skill guidance:\n{}", skills_section.trim()));
+        }
+        if let Some(memory_section) = memory_section.as_ref() {
+            sections.push(memory_section.summary.trim().to_string());
         }
         if !advisor_context_section.trim().is_empty() {
             sections.push(advisor_context_section.trim().to_string());
@@ -181,6 +186,13 @@ pub(crate) fn interactive_runtime_system_prompt(
                 ("project_context", project_context),
                 ("host_runtime_context", host_runtime_context_section.clone()),
                 ("skills_section", skills_section.clone()),
+                (
+                    "memory_section",
+                    memory_section
+                        .as_ref()
+                        .map(|item| item.summary.clone())
+                        .unwrap_or_default(),
+                ),
                 ("subjects_section", subjects_section),
                 ("current_date", now_iso()),
                 ("current_working_directory", workspace_root_value),
@@ -197,6 +209,10 @@ pub(crate) fn interactive_runtime_system_prompt(
         if !advisor_context_section.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(advisor_context_section.trim());
+        }
+        if let Some(memory_section) = memory_section.as_ref() {
+            rendered.push_str("\n\n");
+            rendered.push_str(memory_section.summary.trim());
         }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {

@@ -10,6 +10,10 @@ pub fn handle_workspace_data_channel(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
+    if let Some(result) = crate::memory::handle_memory_channel(state, channel, payload) {
+        return Some(result);
+    }
+
     if !matches!(
         channel,
         "youtube:save-note"
@@ -25,14 +29,6 @@ pub fn handle_workspace_data_channel(
             | "archives:samples:create"
             | "archives:samples:update"
             | "archives:samples:delete"
-            | "memory:list"
-            | "memory:archived"
-            | "memory:history"
-            | "memory:maintenance-status"
-            | "memory:maintenance-run"
-            | "memory:search"
-            | "memory:add"
-            | "memory:delete"
     ) {
         return None;
     }
@@ -293,206 +289,6 @@ pub fn handle_workspace_data_channel(
                     store.archive_samples.retain(|item| item.id != id);
                     Ok(json!({ "success": true }))
                 })
-            }
-            "memory:list" => with_store(state, |store| {
-                let started_at = now_ms();
-                let request_id = format!("memory:list:{}", started_at);
-                let mut items: Vec<UserMemoryRecord> = store
-                    .memories
-                    .iter()
-                    .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
-                    .cloned()
-                    .collect();
-                items.sort_by(|a, b| {
-                    b.updated_at
-                        .unwrap_or(b.created_at)
-                        .cmp(&a.updated_at.unwrap_or(a.created_at))
-                });
-                log_timing_event(
-                    state,
-                    "settings",
-                    &request_id,
-                    "memory:list",
-                    started_at,
-                    Some(format!("items={}", items.len())),
-                );
-                Ok(json!(items))
-            }),
-            "memory:archived" => with_store(state, |store| {
-                let started_at = now_ms();
-                let request_id = format!("memory:archived:{}", started_at);
-                let mut items: Vec<UserMemoryRecord> = store
-                    .memories
-                    .iter()
-                    .filter(|item| item.status.as_deref() == Some("archived"))
-                    .cloned()
-                    .collect();
-                items.sort_by(|a, b| b.archived_at.unwrap_or(0).cmp(&a.archived_at.unwrap_or(0)));
-                log_timing_event(
-                    state,
-                    "settings",
-                    &request_id,
-                    "memory:archived",
-                    started_at,
-                    Some(format!("items={}", items.len())),
-                );
-                Ok(json!(items))
-            }),
-            "memory:history" => with_store(state, |store| {
-                let started_at = now_ms();
-                let request_id = format!("memory:history:{}", started_at);
-                let mut items = store.memory_history.clone();
-                items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                log_timing_event(
-                    state,
-                    "settings",
-                    &request_id,
-                    "memory:history",
-                    started_at,
-                    Some(format!("items={}", items.len())),
-                );
-                Ok(json!(items))
-            }),
-            "memory:maintenance-status" => {
-                let started_at = now_ms();
-                let request_id = format!("memory:maintenance-status:{}", started_at);
-                let workspace_status = memory_maintenance_status_from_workspace(state)?;
-                let fallback_status = with_store(state, |store| {
-                    Ok(memory_maintenance_status_from_settings(&store.settings))
-                })?;
-                let response = json!(workspace_status
-                    .or(fallback_status)
-                    .unwrap_or_else(default_memory_maintenance_status));
-                log_timing_event(
-                    state,
-                    "settings",
-                    &request_id,
-                    "memory:maintenance-status",
-                    started_at,
-                    None,
-                );
-                Ok(response)
-            }
-            "memory:maintenance-run" => run_memory_maintenance_with_reason(state, "manual"),
-            "memory:search" => {
-                let query = payload_string(payload, "query")
-                    .unwrap_or_default()
-                    .to_lowercase();
-                with_store(state, |store| {
-                    let results: Vec<Value> = store
-                        .memories
-                        .iter()
-                        .filter(|item| item.content.to_lowercase().contains(&query))
-                        .map(|item| {
-                            let mut value = json!(item);
-                            if let Some(object) = value.as_object_mut() {
-                                object.insert("score".to_string(), json!(0.88));
-                                object.insert("matchReasons".to_string(), json!(["content"]));
-                            }
-                            value
-                        })
-                        .collect();
-                    Ok(json!(results))
-                })
-            }
-            "memory:add" => {
-                let content = payload_string(payload, "content").unwrap_or_default();
-                let memory_type =
-                    payload_string(payload, "type").unwrap_or_else(|| "general".to_string());
-                let tags = payload_field(payload, "tags")
-                    .and_then(|value| value.as_array())
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(|entry| entry.as_str().map(ToString::to_string))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let memory = with_store_mut(state, |store| {
-                    let item = UserMemoryRecord {
-                        id: make_id("memory"),
-                        content: content.clone(),
-                        r#type: memory_type.clone(),
-                        tags,
-                        created_at: now_i64(),
-                        updated_at: Some(now_i64()),
-                        last_accessed: None,
-                        status: Some("active".to_string()),
-                        archived_at: None,
-                        archive_reason: None,
-                        origin_id: None,
-                        canonical_key: None,
-                        revision: Some(1),
-                        last_conflict_at: None,
-                    };
-                    store.memories.push(item.clone());
-                    store.memory_history.push(MemoryHistoryRecord {
-                        id: make_id("memory-history"),
-                        memory_id: item.id.clone(),
-                        origin_id: item.id.clone(),
-                        action: "create".to_string(),
-                        reason: None,
-                        timestamp: now_i64(),
-                        before: None,
-                        after: Some(json!(item.clone())),
-                        archived_memory_id: None,
-                    });
-                    bump_memory_maintenance_mutation(state, store, "mutation");
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(item)
-                })?;
-                let _ = with_store(state, |store| {
-                    let pending = memory_maintenance_status_from_workspace(state)?
-                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
-                        .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
-                        .unwrap_or(0);
-                    Ok(pending)
-                })
-                .and_then(|pending| {
-                    if pending >= 5 {
-                        let _ = run_memory_maintenance_with_reason(state, "mutation");
-                    }
-                    Ok(())
-                });
-                Ok(json!(memory))
-            }
-            "memory:delete" => {
-                let id = payload_value_as_string(payload).unwrap_or_default();
-                with_store_mut(state, |store| {
-                    if let Some(item) = store.memories.iter_mut().find(|entry| entry.id == id) {
-                        item.status = Some("archived".to_string());
-                        item.archived_at = Some(now_i64());
-                        item.archive_reason = Some("manual-delete".to_string());
-                        store.memory_history.push(MemoryHistoryRecord {
-                            id: make_id("memory-history"),
-                            memory_id: item.id.clone(),
-                            origin_id: item.id.clone(),
-                            action: "archive".to_string(),
-                            reason: Some("manual-delete".to_string()),
-                            timestamp: now_i64(),
-                            before: None,
-                            after: Some(json!(item.clone())),
-                            archived_memory_id: Some(item.id.clone()),
-                        });
-                        bump_memory_maintenance_mutation(state, store, "mutation");
-                    }
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(json!({ "success": true }))
-                })?;
-                let _ = with_store(state, |store| {
-                    let pending = memory_maintenance_status_from_workspace(state)?
-                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
-                        .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
-                        .unwrap_or(0);
-                    Ok(pending)
-                })
-                .and_then(|pending| {
-                    if pending >= 5 {
-                        let _ = run_memory_maintenance_with_reason(state, "mutation");
-                    }
-                    Ok(())
-                });
-                Ok(json!({ "success": true }))
             }
             _ => unreachable!(),
         }

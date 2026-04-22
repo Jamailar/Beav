@@ -3,16 +3,19 @@ use tauri::State;
 
 use crate::agent::{ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind};
 use crate::commands::chat_state::{ensure_chat_session, infer_context_type_from_session_id};
+use crate::memory::{
+    default_memory_maintenance_status, memory_maintenance_status_from_settings,
+    memory_maintenance_status_from_workspace, write_memory_maintenance_status_for_workspace,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_session_checkpoint, chat_messages_for_session, load_session_bundle_messages,
     save_session_bundle_messages, update_session_context_record,
 };
 use crate::{
-    append_session_transcript, default_memory_maintenance_status, make_id,
-    memory_maintenance_status_from_workspace, next_memory_maintenance_at_ms, now_i64, now_iso,
+    append_session_transcript, make_id, next_memory_maintenance_at_ms, now_i64, now_iso,
     resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
-    write_memory_maintenance_status_for_workspace, AppState, ChatMessageRecord, ChatSessionRecord,
+    AppState, ChatMessageRecord, ChatSessionRecord,
 };
 
 pub fn persist_chat_exchange(
@@ -156,7 +159,7 @@ pub fn update_post_exchange_maintenance(
     let next_scheduled_at = next_memory_maintenance_at_ms(response, now_i64());
     let current = with_store(state, |store| {
         Ok(memory_maintenance_status_from_workspace(state)?
-            .or_else(|| crate::memory_maintenance_status_from_settings(&store.settings))
+            .or_else(|| memory_maintenance_status_from_settings(&store.settings))
             .unwrap_or_else(default_memory_maintenance_status))
     })?;
     let status = build_post_exchange_maintenance_status(&current, next_scheduled_at);
