@@ -61,6 +61,12 @@ type RuntimeDiagnosticsSummary = {
             hasModelConfig: boolean;
         }>;
     };
+    approvals?: {
+        pendingCount?: number;
+        resolvedCount?: number;
+        pending?: Array<Record<string, unknown>>;
+        recent?: Array<Record<string, unknown>>;
+    };
     phase0?: {
         personaGeneration?: {
             count?: number;
@@ -2645,6 +2651,66 @@ export function ToolsSettingsSection({
                             ) : (
                                 <div className="text-[11px] text-text-tertiary">暂无 runtime warm 数据。</div>
                             )}
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs font-medium text-text-primary">Approval Runtime</div>
+                                <div className="text-[10px] text-text-tertiary">
+                                    pending {runtimeDiagnosticsSummary?.approvals?.pendingCount ?? 0} / resolved {runtimeDiagnosticsSummary?.approvals?.resolvedCount ?? 0}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-2">
+                                    <div className="text-[11px] text-text-tertiary">待确认</div>
+                                    {(runtimeDiagnosticsSummary?.approvals?.pending ?? []).length ? (
+                                        <div className="space-y-2">
+                                            {(runtimeDiagnosticsSummary?.approvals?.pending ?? []).slice(0, 6).map((row, index) => (
+                                                <div key={`${String(row.approvalId ?? 'pending')}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-[11px] font-medium text-text-primary">
+                                                            {String((row.details as Record<string, unknown> | undefined)?.title ?? row.name ?? '待确认')}
+                                                        </div>
+                                                        <div className="text-[10px] text-amber-600 bg-amber-500/10 rounded px-1.5 py-0.5">pending</div>
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary mt-1">
+                                                        {String(row.sourceKey ?? row.approvalId ?? '')}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] text-text-tertiary">当前没有待确认事项。</div>
+                                    )}
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="text-[11px] text-text-tertiary">最近已处理</div>
+                                    {(runtimeDiagnosticsSummary?.approvals?.recent ?? []).length ? (
+                                        <div className="space-y-2">
+                                            {(runtimeDiagnosticsSummary?.approvals?.recent ?? []).slice(0, 6).map((row, index) => (
+                                                <div key={`${String(row.approvalId ?? 'recent')}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-[11px] font-medium text-text-primary">
+                                                            {String((row.details as Record<string, unknown> | undefined)?.title ?? row.name ?? '已处理')}
+                                                        </div>
+                                                        <div className={clsx(
+                                                            'text-[10px] rounded px-1.5 py-0.5',
+                                                            row.confirmed === false ? 'bg-red-500/10 text-red-600' : 'bg-green-500/10 text-green-600'
+                                                        )}>
+                                                            {row.confirmed === false ? 'rejected' : 'confirmed'}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary mt-1">
+                                                        {String(row.sourceKey ?? row.approvalId ?? '')}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] text-text-tertiary">暂无已处理审批记录。</div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
 

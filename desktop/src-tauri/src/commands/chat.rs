@@ -8,7 +8,10 @@ use crate::commands::chat_state::{
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{RuntimeApprovalResolutionPayload, SessionToolResultRecord};
+use crate::runtime::{
+    resolve_runtime_approval_by_approval_id, resolve_runtime_approval_by_call_id,
+    RuntimeApprovalResolutionPayload, SessionToolResultRecord,
+};
 use crate::session_lineage_fields;
 use crate::skills::{
     active_skill_activation_items, merge_requested_skills_into_session,
@@ -274,6 +277,8 @@ pub fn handle_send_channel(
                     });
             let call_id = resolution.call_id.clone();
             let confirmed = resolution.confirmed;
+            let _ = resolve_runtime_approval_by_call_id(state, &call_id, confirmed)?;
+            let _ = resolve_runtime_approval_by_approval_id(state, &call_id, confirmed)?;
             let session_id = with_store_mut(state, |store| {
                 let session_id = latest_session_id(store);
                 let (runtime_id, parent_runtime_id, source_task_id) =

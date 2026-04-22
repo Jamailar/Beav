@@ -247,6 +247,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
     return {
       generatedAt: Date.now(),
       runtimeWarm: { lastWarmedAt: 0, entries: [] },
+      approvals: { pendingCount: 0, resolvedCount: 0, pending: [], recent: [] },
       phase0: {
         personaGeneration: { count: 0, byAdvisor: [], recent: [] },
         knowledgeIngest: { count: 0, byAdvisor: [], recent: [] },
@@ -594,7 +595,8 @@ function createIpcRenderer() {
       forkSession: (payload: { sessionId: string }) => invokeChannel('runtime:fork-session', payload),
       getTrace: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-trace', payload),
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
-      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload)
+      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
+      listApprovals: () => invokeChannel('runtime:list-approvals')
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),

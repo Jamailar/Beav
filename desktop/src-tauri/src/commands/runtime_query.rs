@@ -10,11 +10,14 @@ use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::interactive_runtime_shared::interactive_runtime_system_prompt;
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
+use crate::runtime::{
+    persist_runtime_query_checkpoints, request_runtime_approval, runtime_query_checkpoint_events,
+    RuntimeApprovalDetails, RuntimeApprovalRecord, RuntimeApprovalRequestPayload,
+};
 use crate::skills::active_skill_activation_items;
 use crate::{
-    log_timing_event, now_i64, now_ms, payload_field, payload_string, record_runtime_query_metric,
-    resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
+    log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string,
+    record_runtime_query_metric, resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
 };
 
 pub fn handle_runtime_query(
@@ -69,12 +72,77 @@ pub fn handle_runtime_query(
         None
     };
     let prepared = build_runtime_query_turn(
-        session_id,
+        session_id.clone(),
         route,
         orchestration,
         &message,
         payload_field(payload, "modelConfig"),
     );
+    if prepared.route.requires_human_approval {
+        let approval_id = make_id("runtime-approval");
+        let request = RuntimeApprovalRequestPayload::new(
+            approval_id.clone(),
+            "runtime.query",
+            RuntimeApprovalDetails {
+                r#type: "info".to_string(),
+                title: "运行前需要人工确认".to_string(),
+                description: format!(
+                    "当前 runtime query 被标记为 requiresHumanApproval，需要先确认再继续执行。intent={} role={}",
+                    prepared.route.intent, prepared.route.recommended_role
+                ),
+                impact: Some("确认后才会继续执行后续 runtime 链路。".to_string()),
+            },
+        );
+        let approval = request_runtime_approval(
+            state,
+            RuntimeApprovalRecord::pending(
+                approval_id.clone(),
+                "runtime_query",
+                format!(
+                    "{}:{}",
+                    session_id
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or("new-session"),
+                    prepared.route.intent
+                ),
+                request.name.clone(),
+                request.details.clone(),
+            )
+            .with_scope(session_id.as_deref(), None, None, Some(&approval_id))
+            .with_metadata(Some(json!({
+                "message": message,
+                "route": prepared.route.clone().into_value(),
+            }))),
+        )?;
+        if let Some(session_id) = session_id.as_deref() {
+            emit_runtime_task_checkpoint_saved(
+                app,
+                None,
+                Some(session_id),
+                "chat.tool_confirm_request",
+                "runtime approval requested",
+                serde_json::to_value(&request).ok(),
+            );
+        }
+        log_timing_event(
+            state,
+            "ai",
+            &request_id,
+            "runtime:query:approval-required",
+            started_at,
+            Some(format!("approvalId={}", approval.approval_id)),
+        );
+        return Ok(json!({
+            "success": true,
+            "sessionId": session_id,
+            "response": "",
+            "route": prepared.route.clone().into_value(),
+            "orchestration": prepared.orchestration,
+            "pendingApproval": true,
+            "approval": approval,
+        }));
+    }
     let turn = PreparedSessionAgentTurn::runtime_query(prepared);
     let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;

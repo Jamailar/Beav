@@ -57,12 +57,12 @@ use runtime::{
     append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
     resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_error_payload,
     runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
-    InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord,
-    RedclawJobDefinitionRecord, RedclawJobExecutionRecord, RedclawLongCycleTaskRecord,
-    RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig,
-    RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry,
-    RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
-    SkillRecord,
+    ApprovalRuntimeState, InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest,
+    McpServerRecord, RedclawJobDefinitionRecord, RedclawJobExecutionRecord,
+    RedclawLongCycleTaskRecord, RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord,
+    ResolvedChatConfig, RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord,
+    SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
@@ -703,6 +703,7 @@ struct AppState {
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
     runtime_warm: Mutex<RuntimeWarmState>,
+    approval_runtime: Mutex<ApprovalRuntimeState>,
     skill_watch: Mutex<skills::SkillWatcherSnapshot>,
     diagnostics: Mutex<DiagnosticsState>,
     knowledge_index_state: Mutex<knowledge_index::KnowledgeIndexRuntimeState>,
@@ -7373,6 +7374,7 @@ fn main() {
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
+            approval_runtime: Mutex::new(ApprovalRuntimeState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
             diagnostics: Mutex::new(DiagnosticsState::default()),
             knowledge_index_state: Mutex::new(

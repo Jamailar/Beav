@@ -1,5 +1,7 @@
 #[path = "runtime/agent_engine.rs"]
 mod agent_engine;
+#[path = "runtime/approval_runtime.rs"]
+mod approval_runtime;
 #[path = "runtime/config_runtime.rs"]
 mod config_runtime;
 #[path = "runtime/contracts.rs"]
@@ -20,6 +22,7 @@ mod task_runtime;
 mod types;
 
 pub use agent_engine::*;
+pub use approval_runtime::*;
 pub use config_runtime::*;
 pub use contracts::*;
 pub use events::*;

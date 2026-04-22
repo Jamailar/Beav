@@ -24,6 +24,7 @@ pub fn handle_runtime_session_channel(
         "runtime:get-tool-results" => {
             runtime_session_ops::runtime_tool_results_value(state, payload)
         }
+        "runtime:list-approvals" => runtime_session_ops::runtime_approvals_value(state),
         _ => return None,
     })
 }
