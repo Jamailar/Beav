@@ -41,6 +41,7 @@
 
 ### Feature References
 
+- [cli-runtime-acceptance-regression-baseline.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/cli-runtime-acceptance-regression-baseline.md)
 - [video-editor-transformation-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/video-editor-transformation-plan.md)
 - [video-editor-parity-checklist.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/video-editor-parity-checklist.md)
 - [manuscript-package-html-architecture.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/manuscript-package-html-architecture.md)
