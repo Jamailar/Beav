@@ -1437,11 +1437,10 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        guess_mime_and_kind, interactive_tool_panic_message, manuscript_save_result_path,
-        interactive_execution_progress_observe_success, InteractiveExecutionContract,
-        InteractiveExecutionProgress,
+        guess_mime_and_kind, interactive_execution_progress_observe_success,
+        interactive_tool_panic_message, manuscript_save_result_path,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        structured_tool_error_code,
+        structured_tool_error_code, InteractiveExecutionContract, InteractiveExecutionProgress,
     };
     use serde_json::json;
     use std::path::Path;
@@ -4462,7 +4461,10 @@ fn interactive_execution_progress_observe_success(
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             if contract.require_source_read
-                && matches!(action.as_str(), "workspace.read" | "knowledge.read" | "read")
+                && matches!(
+                    action.as_str(),
+                    "workspace.read" | "knowledge.read" | "read"
+                )
             {
                 progress.source_read_completed = true;
             }
