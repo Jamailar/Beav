@@ -534,6 +534,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
+  const aiSourceDraftDirtyRef = useRef(false);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
@@ -1125,9 +1126,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return undefined;
   }, []);
 
-  const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
-    setAiSources((prev) => prev.map((source) => (source.id === sourceId ? updater(source) : source)));
+  const markAiSourceDraftDirty = useCallback(() => {
+    aiSourceDraftDirtyRef.current = true;
   }, []);
+
+  const clearAiSourceDraftDirty = useCallback(() => {
+    aiSourceDraftDirtyRef.current = false;
+  }, []);
+
+  const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
+    markAiSourceDraftDirty();
+    setAiSources((prev) => prev.map((source) => (source.id === sourceId ? updater(source) : source)));
+  }, [markAiSourceDraftDirty]);
 
   const openCreateAiSourceModal = () => {
     setCreateAiSourceDraft(createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
@@ -1152,6 +1162,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       protocol: createAiSourceDraft.protocol || preset?.protocol || 'openai',
     };
 
+    markAiSourceDraftDirty();
     setAiSources((prev) => [...prev, nextSource]);
     setActiveAiSourceId(nextSource.id);
     setAiSourceExpandState((prev) => ({ ...prev, [nextSource.id]: true }));
@@ -1163,6 +1174,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   };
 
   const handleDeleteAiSource = (sourceId: string) => {
+    markAiSourceDraftDirty();
     setAiSources((prev) => {
       const next = prev.filter((source) => source.id !== sourceId);
       if (!next.length) {
@@ -2452,6 +2464,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     try {
       const settings = await window.ipcRenderer.getSettings();
       if (requestId !== settingsLoadRequestRef.current) return;
+      if (preserveViewState && aiSourceDraftDirtyRef.current) {
+        return;
+      }
       if (settings) {
         const resolveLinkedSourceIdFromList = (params: {
           endpoint?: string;
@@ -2565,6 +2580,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
         setImageSourceId(resolvedImageSourceId);
+        clearAiSourceDraftDirty();
         console.log('[settings][ai] loadSettings-applied', {
           sourceCount: sourceList.length,
           defaultAiSourceId: normalizedDefaultId,
@@ -2643,12 +2659,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
+        clearAiSourceDraftDirty();
       }
     } catch (e) {
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
+  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -3316,6 +3333,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
       });
+      clearAiSourceDraftDirty();
       if (formData.debug_log_enabled) {
         await loadRecentDebugLogs();
       }
@@ -3461,6 +3479,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                             value={defaultAiSourceId}
                             sources={aiSources}
                             onChange={(nextSourceId) => {
+                              markAiSourceDraftDirty();
                               setDefaultAiSourceId(nextSourceId);
                               setActiveAiSourceId(nextSourceId);
                               setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
@@ -3634,6 +3653,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      markAiSourceDraftDirty();
                                       setDefaultAiSourceId(source.id);
                                       setActiveAiSourceId(source.id);
                                     }}
