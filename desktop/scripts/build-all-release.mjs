@@ -25,6 +25,7 @@ async function readSummary(summaryPath) {
 async function runStep({ name, command, args, summaryPath }) {
   logStep(`Starting ${name} release`);
   try {
+    await fs.rm(summaryPath, { force: true });
     await runCommand(command, args, { cwd: repoRoot });
     return {
       name,

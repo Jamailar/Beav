@@ -252,6 +252,7 @@ async function main() {
   }
 
   const buildEnv = buildSigningOnlyEnv(signingIdentity);
+  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
 
   const buildArgs = ['tauri', 'build', '--ci'];
   if (target) {

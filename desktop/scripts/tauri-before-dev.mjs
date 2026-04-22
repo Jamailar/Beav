@@ -1,6 +1,7 @@
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import process from 'node:process';
 import { promisify } from 'node:util';
+import { runCommand } from './release-utils.mjs';
 import { syncVersion } from './sync-version.mjs';
 
 const execFile = promisify(execFileCallback);
@@ -134,6 +135,7 @@ async function startDevServer() {
 }
 
 async function main() {
+  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd });
   await syncVersion({ cwd });
 
   const state = await getPortState();
