@@ -78,6 +78,8 @@ jobs:
                       -type f \( -iname 'readme*.md' \) -print0
                   )
 
+                  rm -rf public-repo/UserBase public-repo/private
+
                   sync_dir private-repo/Plugin public-repo/Plugin
                   sync_dir private-repo/images public-repo/images
                   sync_dir private-repo/desktop public-repo/desktop \
