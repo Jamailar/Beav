@@ -934,6 +934,29 @@ fn normalize_string(value: Option<&Value>) -> Option<String> {
         .filter(|item| !item.is_empty())
 }
 
+pub(crate) fn normalized_structured_payload_arguments(arguments: &Value) -> Value {
+    let Some(object) = arguments.as_object() else {
+        return arguments.clone();
+    };
+    let Some(payload_text) = object
+        .get("payload")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return arguments.clone();
+    };
+    let Ok(parsed_payload) = serde_json::from_str::<Value>(payload_text) else {
+        return arguments.clone();
+    };
+    if !parsed_payload.is_object() {
+        return arguments.clone();
+    }
+    let mut normalized = object.clone();
+    normalized.insert("payload".to_string(), parsed_payload);
+    Value::Object(normalized)
+}
+
 pub(crate) fn payload_field<'a>(payload: &'a Value, key: &str) -> Option<&'a Value> {
     payload.as_object().and_then(|object| object.get(key))
 }
@@ -1415,7 +1438,10 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         guess_mime_and_kind, interactive_tool_panic_message, manuscript_save_result_path,
-        redbox_fs_profile_read_completed, structured_tool_error_code,
+        interactive_execution_progress_observe_success, InteractiveExecutionContract,
+        InteractiveExecutionProgress,
+        normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
+        structured_tool_error_code,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1488,6 +1514,41 @@ mod tests {
             }"#,
         );
         assert_eq!(code.as_deref(), Some("ACTION_FAILED"));
+    }
+
+    #[test]
+    fn normalized_structured_payload_arguments_parses_stringified_payload_object() {
+        let normalized = normalized_structured_payload_arguments(&json!({
+            "action": "workspace.list",
+            "payload": "{\"path\":\"knowledge/demo\",\"limit\":12}"
+        }));
+        assert_eq!(
+            normalized.pointer("/payload/path"),
+            Some(&json!("knowledge/demo"))
+        );
+        assert_eq!(normalized.pointer("/payload/limit"), Some(&json!(12)));
+    }
+
+    #[test]
+    fn interactive_execution_progress_counts_knowledge_read_as_source_read() {
+        let mut progress = InteractiveExecutionProgress::default();
+        let contract = InteractiveExecutionContract {
+            require_source_read: true,
+            ..Default::default()
+        };
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "redbox_fs",
+            &json!({
+                "action": "knowledge.read",
+                "path": "knowledge/demo/content.md"
+            }),
+            &json!({
+                "ok": true
+            }),
+        );
+        assert!(progress.source_read_completed);
     }
 }
 
@@ -3360,35 +3421,52 @@ fn execute_interactive_tool_call(
                 }
             }
             "redbox_fs" => {
-                let action = payload_string(arguments, "action").unwrap_or_default();
-                let raw_path = payload_string(arguments, "path").unwrap_or_default();
+                let normalized_arguments = normalized_structured_payload_arguments(arguments);
+                let action = payload_string(&normalized_arguments, "action").unwrap_or_default();
+                let raw_path = payload_string(&normalized_arguments, "path").unwrap_or_default();
                 match action.as_str() {
                     "knowledge.search" | "search"
-                        if payload_string(arguments, "scope")
+                        if payload_string(&normalized_arguments, "scope")
                             .unwrap_or_default()
                             .eq_ignore_ascii_case("knowledge")
                             || action == "knowledge.search" =>
                     {
-                        crate::tools::knowledge_search::execute_grep(state, session_id, arguments)
+                        crate::tools::knowledge_search::execute_grep(
+                            state,
+                            session_id,
+                            &normalized_arguments,
+                        )
                     }
                     "knowledge.list" | "list"
-                        if payload_string(arguments, "scope")
+                        if payload_string(&normalized_arguments, "scope")
                             .unwrap_or_default()
                             .eq_ignore_ascii_case("knowledge")
                             || action == "knowledge.list" =>
                     {
-                        crate::tools::knowledge_search::execute_glob(state, session_id, arguments)
+                        crate::tools::knowledge_search::execute_glob(
+                            state,
+                            session_id,
+                            &normalized_arguments,
+                        )
                     }
                     "knowledge.read" | "read"
-                        if payload_string(arguments, "scope")
+                        if payload_string(&normalized_arguments, "scope")
                             .unwrap_or_default()
                             .eq_ignore_ascii_case("knowledge")
                             || action == "knowledge.read" =>
                     {
-                        crate::tools::knowledge_search::execute_read(state, session_id, arguments)
+                        crate::tools::knowledge_search::execute_read(
+                            state,
+                            session_id,
+                            &normalized_arguments,
+                        )
                     }
                     "workspace.search" | "search" => {
-                        crate::tools::workspace_search::execute_search(state, session_id, arguments)
+                        crate::tools::workspace_search::execute_search(
+                            state,
+                            session_id,
+                            &normalized_arguments,
+                        )
                     }
                     "workspace.list" | "list" => {
                         if raw_path.trim().is_empty() {
@@ -3396,7 +3474,7 @@ fn execute_interactive_tool_call(
                                 "path is required for redbox_fs(action=workspace.list)".to_string()
                             );
                         }
-                        let limit = parse_usize_arg(arguments, "limit", 20, 50);
+                        let limit = parse_usize_arg(&normalized_arguments, "limit", 20, 50);
                         let resolved =
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
                                 state, session_id, &raw_path,
@@ -3415,7 +3493,8 @@ fn execute_interactive_tool_call(
                                 "path is required for redbox_fs(action=workspace.read)".to_string()
                             );
                         }
-                        let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
+                        let max_chars =
+                            parse_usize_arg(&normalized_arguments, "maxChars", 4000, 20000);
                         let resolved =
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
                                 state, session_id, &raw_path,
@@ -4382,7 +4461,8 @@ fn interactive_execution_progress_observe_success(
             let action = tool_action_name(arguments)
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            if contract.require_source_read && matches!(action.as_str(), "workspace.read" | "read")
+            if contract.require_source_read
+                && matches!(action.as_str(), "workspace.read" | "knowledge.read" | "read")
             {
                 progress.source_read_completed = true;
             }

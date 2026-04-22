@@ -39,7 +39,13 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
         ToolPack::Wander => &["redbox_fs"],
         ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
-        ToolPack::Redclaw => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::Redclaw => {
+            if cfg!(target_os = "windows") {
+                &["redbox_fs", "app_cli"]
+            } else {
+                &["bash", "redbox_fs", "app_cli"]
+            }
+        }
         ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
         ToolPack::Editor => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
         ToolPack::Diagnostics => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
@@ -77,5 +83,11 @@ mod tests {
     fn redclaw_runtime_includes_structured_file_tool() {
         let tools = tool_names_for_runtime_mode("redclaw");
         assert!(tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"app_cli"));
+        if cfg!(target_os = "windows") {
+            assert!(!tools.contains(&"bash"));
+        } else {
+            assert!(tools.contains(&"bash"));
+        }
     }
 }

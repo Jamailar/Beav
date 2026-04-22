@@ -142,14 +142,15 @@ fn compat_metadata(arguments: &Value) -> Option<Value> {
 }
 
 fn normalized_structured_arguments(arguments: &Value) -> Value {
-    let Some(action) = payload_string(arguments, "action")
+    let arguments = crate::normalized_structured_payload_arguments(arguments);
+    let Some(action) = payload_string(&arguments, "action")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     else {
-        return arguments.clone();
+        return arguments;
     };
     let mut normalized = arguments.as_object().cloned().unwrap_or_default();
-    let mut payload = payload_field(arguments, "payload")
+    let mut payload = payload_field(&arguments, "payload")
         .cloned()
         .filter(|value| value.is_object())
         .unwrap_or_else(|| json!({}));
@@ -4469,6 +4470,23 @@ mod tests {
             "kind": "redpost",
             "parent": "wander",
             "title": "测试标题"
+        }));
+        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("redpost")));
+        assert_eq!(
+            normalized.pointer("/payload/parent"),
+            Some(&json!("wander"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/title"),
+            Some(&json!("测试标题"))
+        );
+    }
+
+    #[test]
+    fn normalized_structured_arguments_parses_stringified_payload() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "manuscripts.createProject",
+            "payload": "{\"kind\":\"redpost\",\"parent\":\"wander\",\"title\":\"测试标题\"}"
         }));
         assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("redpost")));
         assert_eq!(
