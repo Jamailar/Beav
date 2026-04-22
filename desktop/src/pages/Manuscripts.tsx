@@ -2484,7 +2484,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             return;
         }
         try {
-            const result = await window.ipcRenderer.invoke('manuscripts:confirm-package-script', {
+            const result = await window.ipcRenderer.manuscripts.confirmPackageScript({
                 filePath: editorFile,
             }) as { success?: boolean; state?: PackageState; error?: string };
             if (!result?.success || !result.state) {

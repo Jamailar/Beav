@@ -682,6 +682,10 @@ function createIpcRenderer() {
       getContextUsage: (sessionId: string) => invokeChannel('chat:get-context-usage', sessionId),
       getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId)
     },
+    manuscripts: {
+      confirmPackageScript: (payload: { filePath: string }) =>
+        invokeChannel('manuscripts:confirm-package-script', payload),
+    },
     redclawRunner: {
       getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
         timeoutMs: 2800,

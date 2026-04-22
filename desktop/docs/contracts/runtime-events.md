@@ -9,6 +9,7 @@ Status: Current
 ## Source Of Truth
 
 - [src-tauri/src/events/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/events/README.md)
+- [src-tauri/src/runtime/contracts.rs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/runtime/contracts.rs)
 - [src/runtime/runtimeEventStream.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/runtime/runtimeEventStream.ts)
 
 ## Envelope Shape

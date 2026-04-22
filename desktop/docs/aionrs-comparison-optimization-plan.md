@@ -1,6 +1,7 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
+execution_stage: runtime_contract_foundation
 last_updated: 2026-04-22
 owner: ai-runtime
 scope: desktop

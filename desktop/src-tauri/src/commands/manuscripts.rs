@@ -7,6 +7,7 @@ use crate::manuscript_package::{
     video_script_state_from_manifest,
 };
 use crate::persistence::{with_store, with_store_mut};
+use crate::runtime::ManuscriptScriptConfirmPayload;
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
@@ -9360,7 +9361,12 @@ pub fn handle_manuscripts_channel(
                 }))
             }
             "manuscripts:confirm-package-script" => {
-                let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+                let file_path =
+                    serde_json::from_value::<ManuscriptScriptConfirmPayload>(payload.clone())
+                        .map(|value| value.file_path)
+                        .unwrap_or_else(|_| {
+                            payload_string(&payload, "filePath").unwrap_or_default()
+                        });
                 if file_path.is_empty() {
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }

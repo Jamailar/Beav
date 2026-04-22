@@ -1,6 +1,11 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::runtime::{
+    RuntimeCheckpointPayload, RuntimeEventEnvelope, RuntimeSubagentEventPayload,
+    RuntimeTaskNodeChangedPayload, RuntimeToolCallPayload, RuntimeToolOutputPayload,
+    RuntimeToolResultPayload,
+};
 use crate::{append_debug_trace_state, now_i64, payload_field, payload_string, AppState};
 
 fn should_emit_legacy_chat_compat(session_id: Option<&str>) -> bool {
@@ -229,17 +234,17 @@ pub fn emit_runtime_event_with_lineage(
     parent_runtime_id: Option<&str>,
     payload: Value,
 ) {
+    let event_payload = payload.clone();
     let _ = app.emit(
         "runtime:event",
-        json!({
-            "eventType": event_type,
-            "sessionId": session_id,
-            "taskId": task_id,
-            "runtimeId": runtime_id,
-            "parentRuntimeId": parent_runtime_id,
-            "payload": payload,
-            "timestamp": now_i64(),
-        }),
+        RuntimeEventEnvelope::new(
+            event_type,
+            session_id,
+            task_id,
+            runtime_id,
+            parent_runtime_id,
+            event_payload,
+        ),
     );
     log_runtime_event_emit(app, event_type, session_id, task_id, &payload);
     emit_legacy_chat_compat_event(app, event_type, session_id, &payload);
@@ -367,16 +372,25 @@ pub fn emit_runtime_tool_request(
     input: Value,
     description: Option<&str>,
 ) {
+    let legacy_input = input.clone();
     emit_runtime_event(
         app,
         "runtime:tool-start",
         session_id,
         None,
-        json!({
-            "callId": call_id,
-            "name": name,
-            "input": input,
-            "description": description.unwrap_or(""),
+        serde_json::to_value(RuntimeToolCallPayload::new(
+            call_id,
+            name,
+            input,
+            description.unwrap_or(""),
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "callId": call_id,
+                "name": name,
+                "input": legacy_input,
+                "description": description.unwrap_or(""),
+            })
         }),
     );
 }
@@ -416,13 +430,20 @@ pub fn emit_runtime_tool_result(
         "runtime:tool-end",
         session_id,
         None,
-        json!({
-            "callId": call_id,
-            "name": name,
-            "output": {
-                "success": success,
-                "content": content,
-            },
+        serde_json::to_value(RuntimeToolResultPayload::new(
+            call_id,
+            name,
+            RuntimeToolOutputPayload::final_result(success, content),
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "callId": call_id,
+                "name": name,
+                "output": {
+                    "success": success,
+                    "content": content,
+                },
+            })
         }),
     );
 }
@@ -439,14 +460,21 @@ pub fn emit_runtime_tool_partial(
         "runtime:tool-update",
         session_id,
         None,
-        json!({
-            "callId": call_id,
-            "name": name,
-            "output": {
-                "success": true,
-                "content": partial,
-                "partial": true,
-            },
+        serde_json::to_value(RuntimeToolResultPayload::new(
+            call_id,
+            name,
+            RuntimeToolOutputPayload::partial(partial),
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "callId": call_id,
+                "name": name,
+                "output": {
+                    "success": true,
+                    "content": partial,
+                    "partial": true,
+                },
+            })
         }),
     );
 }
@@ -465,11 +493,16 @@ pub fn emit_runtime_task_node_changed(
         "runtime:task-node-changed",
         session_id,
         Some(task_id),
-        json!({
-            "nodeId": node_id,
-            "status": status,
-            "summary": summary,
-            "error": error,
+        serde_json::to_value(RuntimeTaskNodeChangedPayload::new(
+            node_id, status, summary, error,
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "nodeId": node_id,
+                "status": status,
+                "summary": summary,
+                "error": error,
+            })
         }),
     );
 }
@@ -492,13 +525,23 @@ pub fn emit_runtime_subagent_spawned(
         task_id,
         child_runtime_id,
         parent_runtime_id,
-        json!({
-            "roleId": role_id,
-            "runtimeMode": runtime_mode,
-            "childRuntimeId": child_runtime_id,
-            "childTaskId": child_task_id,
-            "childSessionId": child_session_id,
-            "parentTaskId": task_id,
+        serde_json::to_value(RuntimeSubagentEventPayload::new(
+            role_id,
+            runtime_mode,
+            child_runtime_id,
+            child_task_id,
+            child_session_id,
+            task_id,
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "roleId": role_id,
+                "runtimeMode": runtime_mode,
+                "childRuntimeId": child_runtime_id,
+                "childTaskId": child_task_id,
+                "childSessionId": child_session_id,
+                "parentTaskId": task_id,
+            })
         }),
     );
 }
@@ -524,16 +567,29 @@ pub fn emit_runtime_subagent_finished(
         task_id,
         child_runtime_id,
         parent_runtime_id,
-        json!({
-            "roleId": role_id,
-            "runtimeMode": runtime_mode,
-            "childRuntimeId": child_runtime_id,
-            "childTaskId": child_task_id,
-            "childSessionId": child_session_id,
-            "parentTaskId": task_id,
-            "status": status,
-            "summary": summary,
-            "error": error,
+        serde_json::to_value(
+            RuntimeSubagentEventPayload::new(
+                role_id,
+                runtime_mode,
+                child_runtime_id,
+                child_task_id,
+                child_session_id,
+                task_id,
+            )
+            .with_result(status, summary, error),
+        )
+        .unwrap_or_else(|_| {
+            json!({
+                "roleId": role_id,
+                "runtimeMode": runtime_mode,
+                "childRuntimeId": child_runtime_id,
+                "childTaskId": child_task_id,
+                "childSessionId": child_session_id,
+                "parentTaskId": task_id,
+                "status": status,
+                "summary": summary,
+                "error": error,
+            })
         }),
     );
 }
@@ -546,15 +602,23 @@ pub fn emit_runtime_task_checkpoint_saved(
     summary: &str,
     payload: Option<Value>,
 ) {
+    let legacy_payload = payload.clone();
     emit_runtime_event(
         app,
         "runtime:checkpoint",
         session_id,
         task_id,
-        json!({
-            "checkpointType": checkpoint_type,
-            "summary": summary,
-            "payload": payload,
+        serde_json::to_value(RuntimeCheckpointPayload::new(
+            checkpoint_type,
+            summary,
+            payload,
+        ))
+        .unwrap_or_else(|_| {
+            json!({
+                "checkpointType": checkpoint_type,
+                "summary": summary,
+                "payload": legacy_payload,
+            })
         }),
     );
 }
