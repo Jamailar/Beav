@@ -156,7 +156,7 @@ function writeFixedSessionWarmSnapshot(
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
-const STREAM_UPDATE_INTERVAL_MS = 48;
+const STREAM_UPDATE_INTERVAL_MS = 72;
 const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,

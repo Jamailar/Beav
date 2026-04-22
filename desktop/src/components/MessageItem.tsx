@@ -1,13 +1,13 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import ReactMarkdown, { Components, UrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Components, UrlTransform } from 'react-markdown';
 import { Copy, Check } from 'lucide-react';
 import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
 import { SkillActivatedBadge, ThinkingIndicator } from './ThinkingBubble';
 import { TodoList, PlanStep } from './TodoList';
 import { resolveAssetUrl, isLocalAssetUrl } from '../utils/pathManager';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
+import { StreamingMarkdown } from './chat/StreamingMarkdown';
 import './chat-message.css';
 
 const copyTextWithClipboard = async (text: string): Promise<boolean> => {
@@ -371,7 +371,7 @@ export const MessageItem = memo(({
     };
   }, [imageMenu.visible]);
 
-  const handleImageContextMenu = (event: React.MouseEvent<HTMLImageElement>, source: string) => {
+  const handleImageContextMenu = useCallback((event: React.MouseEvent<HTMLImageElement>, source: string) => {
     event.preventDefault();
     const normalized = resolveAssetUrl(String(source || '').trim());
     if (!normalized) return;
@@ -381,9 +381,9 @@ export const MessageItem = memo(({
       y: event.clientY,
       src: normalized,
     });
-  };
+  }, []);
 
-  const handleMediaContextMenu = (event: React.MouseEvent<HTMLElement>, source: string) => {
+  const handleMediaContextMenu = useCallback((event: React.MouseEvent<HTMLElement>, source: string) => {
     event.preventDefault();
     const normalized = resolveAssetUrl(String(source || '').trim());
     if (!normalized) return;
@@ -393,7 +393,7 @@ export const MessageItem = memo(({
       y: event.clientY,
       src: normalized,
     });
-  };
+  }, []);
 
   const handleCopyImage = async () => {
     if (!imageMenu.src) return;
@@ -454,7 +454,7 @@ export const MessageItem = memo(({
         />
       );
     },
-  }), []);
+  }), [handleImageContextMenu, handleMediaContextMenu]);
 
   const renderYoutubeCard = (card: { title: string; thumbnailUrl?: string }) => (
     <div className="bg-white/10 rounded-lg overflow-hidden">
@@ -553,15 +553,13 @@ export const MessageItem = memo(({
   const renderThoughtText = (content: string) => (
     <div className="chat-ai-shell">
       <div className="chat-ai-content">
-        <div className="chat-markdown-body text-text-secondary">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-            urlTransform={transformMarkdownUrl}
-          >
-            {content}
-          </ReactMarkdown>
-        </div>
+        <StreamingMarkdown
+          content={content}
+          isStreaming={msg.isStreaming}
+          components={markdownComponents}
+          urlTransform={transformMarkdownUrl}
+          className="chat-markdown-body text-text-secondary"
+        />
       </div>
     </div>
   );
@@ -665,19 +663,16 @@ export const MessageItem = memo(({
               )}>
                 {showPendingThinkingIndicator ? (
                   <ThinkingIndicator />
-                ) : msg.isStreaming ? (
-                  <div className="whitespace-pre-wrap break-words">{sanitizedAssistantContent}</div>
                 ) : (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                  <StreamingMarkdown
+                    content={sanitizedAssistantContent}
+                    isStreaming={msg.isStreaming}
                     components={markdownComponents}
                     urlTransform={transformMarkdownUrl}
-                  >
-                    {sanitizedAssistantContent}
-                  </ReactMarkdown>
+                  />
                 )}
                 {msg.isStreaming && !showPendingThinkingIndicator && (
-                  <span className="ml-1 inline-block h-4 w-2 animate-pulse align-middle bg-accent-primary" />
+                  <span className="chat-streaming-caret" />
                 )}
               </div>
             </div>
