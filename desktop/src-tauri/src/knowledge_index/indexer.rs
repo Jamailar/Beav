@@ -8,6 +8,7 @@ use crate::{
     knowledge_index::{
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         canonical_store::replace_documents,
+        citation_anchors::{build_anchors_for_blocks, replace_anchors},
         document_blocks::{build_blocks_for_source, replace_blocks},
         fingerprint::fingerprint_file,
         mark_indexed_now,
@@ -297,6 +298,7 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
     let mut items = Vec::new();
     let mut files = Vec::new();
     let mut blocks = Vec::new();
+    let mut anchors = Vec::new();
     let mut canonical_rows = Vec::new();
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
@@ -319,6 +321,7 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
                 &root_path,
                 &source.updated_at,
             )?;
+            anchors.extend(build_anchors_for_blocks(&indexed.blocks));
             blocks.extend(indexed.blocks);
             canonical_rows.extend(indexed.canonical_rows);
         }
@@ -331,6 +334,7 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
     replace_catalog(state, &items, &files)?;
     replace_documents(state, &canonical_rows)?;
     replace_blocks(state, &blocks)?;
+    replace_anchors(state, &anchors)?;
     mark_indexed_now(state)?;
     let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
     let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));

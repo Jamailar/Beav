@@ -5,7 +5,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 
-use crate::knowledge_index::document_blocks;
+use crate::knowledge_index::{
+    citation_anchors,
+    document_blocks,
+};
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
 
@@ -172,16 +175,47 @@ pub fn execute_read(
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
     if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+        if let Some(anchor_id) =
+            payload_string(arguments, "anchorId").filter(|value| !value.trim().is_empty())
+        {
+            if let Some(anchor) = citation_anchors::read_anchor(state, &anchor_id)? {
+                return Ok(json!({
+                    "scopeKind": scope_kind_label(&scope),
+                    "sourceId": anchor.source_id,
+                    "sourceName": anchor.source_name,
+                    "documentId": anchor.document_id,
+                    "blockId": anchor.block_id,
+                    "anchorId": anchor.anchor_id,
+                    "rootPath": anchor.root_path,
+                    "path": anchor.path,
+                    "absolutePath": anchor.absolute_path,
+                    "title": anchor.title,
+                    "language": anchor.language,
+                    "page": anchor.page,
+                    "blockType": anchor.block_type,
+                    "sectionPath": anchor.section_path,
+                    "charStart": anchor.char_start,
+                    "charEnd": anchor.char_end,
+                    "lineStart": anchor.line_start,
+                    "lineEnd": anchor.line_end,
+                    "content": truncate_chars(&anchor.quote_text, parse_usize(arguments, "maxChars", DEFAULT_READ_MAX_CHARS, 20_000))
+                }));
+            }
+            return Err(format!("knowledge anchor does not exist: {anchor_id}"));
+        }
         if let Some(block_id) =
             payload_string(arguments, "blockId").filter(|value| !value.trim().is_empty())
         {
             if let Some(block) = document_blocks::read_block(state, &block_id)? {
+                let anchors = citation_anchors::anchors_for_block(state, &block.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
                     "sourceId": block.source_id,
                     "sourceName": block.source_name,
                     "documentId": block.document_id,
                     "blockId": block.block_id,
+                    "anchorIds": anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>(),
+                    "anchors": anchors,
                     "rootPath": block.root_path,
                     "path": block.relative_path,
                     "absolutePath": block.absolute_path,
@@ -457,6 +491,7 @@ fn execute_source_search(
             limit,
             snippet_chars,
         )?;
+        let (hit_payloads, evidence_pack) = build_hit_payloads_and_evidence_pack(state, &hits, query)?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -466,7 +501,8 @@ fn execute_source_search(
             "query": query,
             "searchMode": "indexed-blocks",
             "totalMatches": hits.len(),
-            "hits": hits
+            "hits": hit_payloads,
+            "evidencePack": evidence_pack
         }));
     }
 
@@ -521,6 +557,62 @@ fn execute_source_search(
         "totalMatches": hits.len(),
         "hits": hits
     }))
+}
+
+fn build_hit_payloads_and_evidence_pack(
+    state: &State<'_, AppState>,
+    hits: &[document_blocks::DocumentBlockHit],
+    query: &str,
+) -> Result<(Vec<Value>, Value), String> {
+    let mut hit_payloads = Vec::<Value>::new();
+    let mut evidences = Vec::<Value>::new();
+    for hit in hits {
+        let anchors = citation_anchors::anchors_for_block_query(state, &hit.block_id, query, 3)?;
+        let anchor_ids = anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>();
+        hit_payloads.push(json!({
+            "blockId": hit.block_id,
+            "documentId": hit.document_id,
+            "sourceId": hit.source_id,
+            "sourceName": hit.source_name,
+            "rootPath": hit.root_path,
+            "path": hit.path,
+            "absolutePath": hit.absolute_path,
+            "fileExtension": hit.file_extension,
+            "title": hit.title,
+            "language": hit.language,
+            "page": hit.page,
+            "blockType": hit.block_type,
+            "sectionPath": hit.section_path,
+            "blockIndex": hit.block_index,
+            "lineStart": hit.line_start,
+            "lineEnd": hit.line_end,
+            "snippet": hit.snippet,
+            "anchorIds": anchor_ids,
+        }));
+        evidences.push(json!({
+            "documentId": hit.document_id,
+            "blockId": hit.block_id,
+            "path": hit.path,
+            "page": hit.page,
+            "blockType": hit.block_type,
+            "sectionPath": hit.section_path,
+            "anchorIds": anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>(),
+            "anchors": anchors,
+            "quotePreview": anchors.first().map(|item| item.quote_text.clone())
+        }));
+    }
+    Ok((
+        hit_payloads,
+        json!({
+            "query": query,
+            "evidences": evidences,
+            "groundingContract": {
+                "claimField": "claim",
+                "anchorIdsField": "supportingAnchorIds",
+                "rule": "Every grounded claim must cite at least one anchorId."
+            }
+        }),
+    ))
 }
 
 fn resolve_session_advisor_id(

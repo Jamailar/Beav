@@ -645,6 +645,10 @@ fn fs_knowledge_read_input_schema() -> Value {
                 "blockId",
                 string_schema("Optional indexed block id returned by knowledge.search."),
             ),
+            (
+                "anchorId",
+                string_schema("Optional citation anchor id returned by knowledge.search."),
+            ),
             ("path", string_schema("Source-relative file path to read.")),
             ("offset", integer_schema("0-based line offset.", 0, 100_000)),
             ("limit", integer_schema("Maximum lines to read.", 1, 400)),
