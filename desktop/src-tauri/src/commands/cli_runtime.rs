@@ -6,17 +6,18 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    add_installed_tool_to_environment, approve_cli_escalation, create_task_ephemeral_environment,
-    default_detect_commands, deny_cli_escalation, detect_many, detect_tool,
-    emit_cli_escalation_resolved, emit_cli_execution_status, emit_cli_install_finished,
-    emit_cli_install_started, emit_cli_verification_finished, ensure_app_global_environment,
-    ensure_workspace_environment, ensure_workspace_environment_for_active_space,
-    execute_cli_command, find_cli_environment_by_id, find_cli_execution_by_id,
-    list_cli_environments, load_cli_execution_snapshot, load_host_shell_env, merge_execution_env,
-    run_cli_verification, CliApproveEscalationRequest, CliCreateEnvironmentRequest,
-    CliDenyEscalationRequest, CliEnvironmentRecord, CliEnvironmentScope, CliExecuteRequest,
-    CliExecutionStatus, CliInstallMethod, CliInstallRequest, CliInstallResult, CliToolHealth,
-    CliToolSource, CliVerifyExecutionRequest, CliVerifyResult,
+    add_installed_tool_to_environment, approve_cli_escalation, cancel_cli_execution,
+    create_task_ephemeral_environment, default_detect_commands, deny_cli_escalation, detect_many,
+    detect_tool, emit_cli_escalation_resolved, emit_cli_execution_status,
+    emit_cli_install_finished, emit_cli_install_started, emit_cli_verification_finished,
+    ensure_app_global_environment, ensure_workspace_environment,
+    ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
+    find_cli_execution_by_id, list_cli_environments, load_cli_execution_snapshot,
+    load_host_shell_env, merge_execution_env, refresh_cli_execution, run_cli_verification,
+    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
+    CliEnvironmentRecord, CliEnvironmentScope, CliExecuteRequest, CliExecutionStatus,
+    CliInstallMethod, CliInstallRequest, CliInstallResult, CliToolHealth, CliToolSource,
+    CliVerifyExecutionRequest, CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
 
@@ -492,13 +493,18 @@ fn install_value(
     })
 }
 
-fn poll_execution_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+fn poll_execution_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let execution_id = payload_string(payload, "executionId")
         .ok_or_else(|| "executionId is required".to_string())?;
     let max_chars = payload
         .get("maxChars")
         .and_then(Value::as_u64)
         .unwrap_or(4_000) as usize;
+    let _ = refresh_cli_execution(app, &execution_id)?;
     let snapshot = load_cli_execution_snapshot(state, &execution_id, max_chars)?;
     match snapshot {
         Some(snapshot) => to_cli_runtime_ipc_value(snapshot),
@@ -527,20 +533,20 @@ fn verify_execution_value(
     })
 }
 
-fn unsupported_execution_action(
+fn cancel_execution_value(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
     let execution_id = payload_string(payload, "executionId")
         .ok_or_else(|| "executionId is required".to_string())?;
-    let record = find_cli_execution_by_id(state, &execution_id)?;
+    let execution = cancel_cli_execution(app, state, &execution_id)?;
     Ok(json!({
-        "success": false,
-        "supported": false,
+        "success": true,
+        "supported": true,
         "executionId": execution_id,
-        "status": record
-            .map(|item| cli_runtime_execution_status_label(&item.status)),
-        "error": "cli runtime cancellation is not available until background execution lands",
+        "status": cli_runtime_execution_status_label(&execution.status),
+        "execution": execution,
     }))
 }
 
@@ -626,8 +632,8 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:create-environment" => create_environment_value(state, payload),
         "cli-runtime:install" => install_value(app, state, payload),
         "cli-runtime:execute" => execute_value(app, state, payload),
-        "cli-runtime:poll-execution" => poll_execution_value(state, payload),
-        "cli-runtime:cancel-execution" => unsupported_execution_action(state, payload),
+        "cli-runtime:poll-execution" => poll_execution_value(app, state, payload),
+        "cli-runtime:cancel-execution" => cancel_execution_value(app, state, payload),
         "cli-runtime:verify" => verify_execution_value(app, state, payload),
         "cli-runtime:approve-escalation" => approve_escalation_value(app, state, payload),
         "cli-runtime:deny-escalation" => deny_escalation_value(app, state, payload),

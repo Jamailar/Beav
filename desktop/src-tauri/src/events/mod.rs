@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::runtime::{
     RuntimeCheckpointPayload, RuntimeEventEnvelope, RuntimeSubagentEventPayload,
@@ -19,8 +19,8 @@ fn should_emit_legacy_chat_compat(session_id: Option<&str>) -> bool {
     !normalized.starts_with("session_wander_")
 }
 
-fn emit_legacy_chat_compat_event(
-    app: &AppHandle,
+fn emit_legacy_chat_compat_event<R: Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     session_id: Option<&str>,
     payload: &Value,
@@ -156,8 +156,8 @@ fn emit_legacy_chat_compat_event(
     }
 }
 
-fn log_runtime_event_emit(
-    app: &AppHandle,
+fn log_runtime_event_emit<R: Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     session_id: Option<&str>,
     task_id: Option<&str>,
@@ -215,8 +215,8 @@ fn log_runtime_event_emit(
     append_debug_trace_state(&state, line);
 }
 
-pub fn emit_runtime_event(
-    app: &AppHandle,
+pub fn emit_runtime_event<R: Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     session_id: Option<&str>,
     task_id: Option<&str>,
@@ -225,8 +225,8 @@ pub fn emit_runtime_event(
     emit_runtime_event_with_lineage(app, event_type, session_id, task_id, None, None, payload);
 }
 
-pub fn emit_runtime_event_with_lineage(
-    app: &AppHandle,
+pub fn emit_runtime_event_with_lineage<R: Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     session_id: Option<&str>,
     task_id: Option<&str>,

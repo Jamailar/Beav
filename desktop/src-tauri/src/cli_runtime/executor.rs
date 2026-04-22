@@ -1,17 +1,24 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::cli_runtime::{
-    authorize_cli_execution, emit_cli_escalation_requested, emit_cli_execution_log,
-    emit_cli_execution_started, emit_cli_execution_status, emit_cli_verification_finished,
-    execution_log_metadata, execution_log_paths, load_host_shell_env, merge_execution_env,
+    append_execution_log_chunk, authorize_cli_execution, emit_cli_escalation_requested,
+    emit_cli_execution_log, emit_cli_execution_started, emit_cli_execution_status,
+    emit_cli_verification_finished, execution_log_metadata, execution_log_paths,
+    find_cli_execution_by_id, initialize_execution_logs, load_host_shell_env, merge_execution_env,
     resolve_cli_environment, run_cli_verification, upsert_cli_execution_record,
-    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest,
-    CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
+    write_execution_logs, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
+    CliExecuteRequest, CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
+    CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, AppState};
@@ -83,6 +90,21 @@ struct LocalCliCommandOutput {
     stderr: Vec<u8>,
 }
 
+struct BackgroundCliExecution {
+    child: Mutex<Child>,
+    cancellation_requested: AtomicBool,
+    verification_rules: Vec<CliVerifyRule>,
+    stdout_reader: Mutex<Option<JoinHandle<()>>>,
+    stderr_reader: Mutex<Option<JoinHandle<()>>>,
+}
+
+static ACTIVE_BACKGROUND_EXECUTIONS: OnceLock<Mutex<HashMap<String, Arc<BackgroundCliExecution>>>> =
+    OnceLock::new();
+
+fn active_background_executions() -> &'static Mutex<HashMap<String, Arc<BackgroundCliExecution>>> {
+    ACTIVE_BACKGROUND_EXECUTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn run_local_command_capture(
     argv: &[String],
     cwd: &Path,
@@ -105,8 +127,321 @@ fn run_local_command_capture(
     })
 }
 
-pub fn execute_cli_command(
-    app: &AppHandle,
+fn spawn_local_command(
+    argv: &[String],
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Child, String> {
+    let program = argv
+        .first()
+        .cloned()
+        .ok_or_else(|| "cli execute requires argv[0]".to_string())?;
+    let mut command = Command::new(program);
+    command.args(&argv[1..]);
+    command.current_dir(cwd);
+    command.envs(env);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    configure_background_command(&mut command);
+    command.spawn().map_err(|error| error.to_string())
+}
+
+fn register_background_execution(
+    execution_id: String,
+    runtime: Arc<BackgroundCliExecution>,
+) -> Result<(), String> {
+    let mut guard = active_background_executions()
+        .lock()
+        .map_err(|_| "cli background execution registry lock is poisoned".to_string())?;
+    guard.insert(execution_id, runtime);
+    Ok(())
+}
+
+fn get_background_execution(
+    execution_id: &str,
+) -> Result<Option<Arc<BackgroundCliExecution>>, String> {
+    let guard = active_background_executions()
+        .lock()
+        .map_err(|_| "cli background execution registry lock is poisoned".to_string())?;
+    Ok(guard.get(execution_id).cloned())
+}
+
+fn take_background_execution(
+    execution_id: &str,
+) -> Result<Option<Arc<BackgroundCliExecution>>, String> {
+    let mut guard = active_background_executions()
+        .lock()
+        .map_err(|_| "cli background execution registry lock is poisoned".to_string())?;
+    Ok(guard.remove(execution_id))
+}
+
+fn take_reader_handle(reader: &Mutex<Option<JoinHandle<()>>>) -> Option<JoinHandle<()>> {
+    reader.lock().ok().and_then(|mut guard| guard.take())
+}
+
+fn join_background_readers(runtime: &BackgroundCliExecution) {
+    if let Some(handle) = take_reader_handle(&runtime.stdout_reader) {
+        let _ = handle.join();
+    }
+    if let Some(handle) = take_reader_handle(&runtime.stderr_reader) {
+        let _ = handle.join();
+    }
+}
+
+fn spawn_execution_log_reader<RT: Runtime, R: Read + Send + 'static>(
+    app: AppHandle<RT>,
+    record: CliExecutionRecord,
+    stream: &'static str,
+    path: PathBuf,
+    mut reader: R,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0u8; 4_096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    let chunk = &buffer[..count];
+                    if let Err(error) = append_execution_log_chunk(&path, chunk) {
+                        eprintln!(
+                            "[cli runtime] failed to append {stream} log for {}: {error}",
+                            record.id
+                        );
+                    }
+                    let text = String::from_utf8_lossy(chunk).to_string();
+                    emit_cli_execution_log(&app, &record, stream, &text);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[cli runtime] failed to read {stream} output for {}: {error}",
+                        record.id
+                    );
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn finalize_background_execution<RT: Runtime>(
+    app: &AppHandle<RT>,
+    execution_id: &str,
+    runtime: Arc<BackgroundCliExecution>,
+    exit_status: ExitStatus,
+) -> Result<Option<CliExecutionRecord>, String> {
+    join_background_readers(&runtime);
+    let state = app.state::<AppState>();
+    let Some(mut record) = find_cli_execution_by_id(&state, execution_id)? else {
+        return Ok(None);
+    };
+    let cancelled = runtime.cancellation_requested.load(Ordering::SeqCst)
+        || record.status == CliExecutionStatus::Cancelled;
+    record.exit_code = exit_status.code();
+    if record.finished_at.is_none() {
+        record.finished_at = Some(now_i64());
+    }
+    record.status = if cancelled {
+        CliExecutionStatus::Cancelled
+    } else if exit_status.success() {
+        CliExecutionStatus::Completed
+    } else {
+        CliExecutionStatus::Failed
+    };
+    if cancelled && !runtime.verification_rules.is_empty() {
+        record.verification_status = CliVerificationStatus::Skipped;
+    }
+
+    let mut reason = match record.status {
+        CliExecutionStatus::Cancelled => Some("process cancelled".to_string()),
+        CliExecutionStatus::Completed => Some("process exited successfully".to_string()),
+        CliExecutionStatus::Failed => Some("process exited with non-zero status".to_string()),
+        _ => None,
+    };
+
+    if !runtime.verification_rules.is_empty() && !cancelled {
+        let stored_execution = upsert_cli_execution_record(&state, record)?;
+        let outcome = run_cli_verification(&state, stored_execution, &runtime.verification_rules)?;
+        reason = Some(outcome.summary.clone());
+        emit_cli_verification_finished(app, &outcome.execution, &outcome.summary);
+        record = outcome.execution;
+    } else {
+        record = upsert_cli_execution_record(&state, record)?;
+    }
+
+    emit_cli_execution_status(app, &record, reason.as_deref());
+    Ok(Some(record))
+}
+
+fn spawn_background_reaper<RT: Runtime>(app: AppHandle<RT>, execution_id: String) {
+    thread::spawn(move || loop {
+        match refresh_cli_execution(&app, &execution_id) {
+            Ok(Some(_)) => break,
+            Ok(None) => match get_background_execution(&execution_id) {
+                Ok(Some(_)) => thread::sleep(Duration::from_millis(100)),
+                Ok(None) => break,
+                Err(error) => {
+                    eprintln!(
+                        "[cli runtime] failed to inspect background execution {execution_id}: {error}"
+                    );
+                    break;
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "[cli runtime] failed to refresh background execution {execution_id}: {error}"
+                );
+                break;
+            }
+        }
+    });
+}
+
+fn fail_execution_launch<RT: Runtime>(
+    app: &AppHandle<RT>,
+    state: &State<'_, AppState>,
+    mut record: CliExecutionRecord,
+    error: String,
+) -> Result<CliExecutionRecord, String> {
+    record.status = CliExecutionStatus::Failed;
+    record.finished_at = Some(now_i64());
+    record = upsert_cli_execution_record(state, record)?;
+    emit_cli_execution_status(app, &record, Some(&error));
+    Err(error)
+}
+
+fn launch_background_execution<RT: Runtime>(
+    app: &AppHandle<RT>,
+    request: &CliExecuteRequest,
+    record: &CliExecutionRecord,
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> Result<(), String> {
+    initialize_execution_logs(stdout_path, stderr_path)?;
+    let mut child = spawn_local_command(&request.argv, Path::new(cwd), env)?;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .ok_or_else(|| "cli background execution missing stdout pipe".to_string())?;
+    let stderr_reader = child
+        .stderr
+        .take()
+        .ok_or_else(|| "cli background execution missing stderr pipe".to_string())?;
+    let runtime = Arc::new(BackgroundCliExecution {
+        child: Mutex::new(child),
+        cancellation_requested: AtomicBool::new(false),
+        verification_rules: request.verification_rules.clone(),
+        stdout_reader: Mutex::new(Some(spawn_execution_log_reader(
+            app.clone(),
+            record.clone(),
+            "stdout",
+            stdout_path.to_path_buf(),
+            stdout_reader,
+        ))),
+        stderr_reader: Mutex::new(Some(spawn_execution_log_reader(
+            app.clone(),
+            record.clone(),
+            "stderr",
+            stderr_path.to_path_buf(),
+            stderr_reader,
+        ))),
+    });
+    if let Err(error) = register_background_execution(record.id.clone(), Arc::clone(&runtime)) {
+        if let Ok(mut child) = runtime.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        join_background_readers(&runtime);
+        return Err(error);
+    }
+    emit_cli_execution_status(app, record, Some("process running in background"));
+    spawn_background_reaper(app.clone(), record.id.clone());
+    Ok(())
+}
+
+pub fn refresh_cli_execution<RT: Runtime>(
+    app: &AppHandle<RT>,
+    execution_id: &str,
+) -> Result<Option<CliExecutionRecord>, String> {
+    let Some(runtime) = get_background_execution(execution_id)? else {
+        return Ok(None);
+    };
+    let exit_status = {
+        let mut child = runtime
+            .child
+            .lock()
+            .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+        child.try_wait().map_err(|error| error.to_string())?
+    };
+    let Some(exit_status) = exit_status else {
+        return Ok(None);
+    };
+    let Some(runtime) = take_background_execution(execution_id)? else {
+        return Ok(None);
+    };
+    finalize_background_execution(app, execution_id, runtime, exit_status)
+}
+
+pub fn cancel_cli_execution<RT: Runtime>(
+    app: &AppHandle<RT>,
+    state: &State<'_, AppState>,
+    execution_id: &str,
+) -> Result<CliExecutionRecord, String> {
+    let Some(mut record) = find_cli_execution_by_id(state, execution_id)? else {
+        return Err(format!("cli execution not found: {execution_id}"));
+    };
+
+    match record.status {
+        CliExecutionStatus::Completed
+        | CliExecutionStatus::Failed
+        | CliExecutionStatus::Cancelled => Ok(record),
+        CliExecutionStatus::Pending | CliExecutionStatus::AwaitingEscalation => {
+            record.status = CliExecutionStatus::Cancelled;
+            record.finished_at = Some(now_i64());
+            record = upsert_cli_execution_record(state, record)?;
+            emit_cli_execution_status(app, &record, Some("process cancelled before start"));
+            Ok(record)
+        }
+        CliExecutionStatus::Running => {
+            let Some(runtime) = get_background_execution(execution_id)? else {
+                return Err(
+                    "cli execution is not registered as a cancellable background task".to_string(),
+                );
+            };
+            runtime.cancellation_requested.store(true, Ordering::SeqCst);
+            {
+                let mut child = runtime
+                    .child
+                    .lock()
+                    .map_err(|_| "cli execution process lock is poisoned".to_string())?;
+                if let Err(error) = child.kill() {
+                    let still_running = child
+                        .try_wait()
+                        .map_err(|wait_error| wait_error.to_string())?
+                        .is_none();
+                    if still_running {
+                        return Err(error.to_string());
+                    }
+                }
+            }
+            record.status = CliExecutionStatus::Cancelled;
+            record.finished_at = Some(now_i64());
+            if !runtime.verification_rules.is_empty() {
+                record.verification_status = CliVerificationStatus::Skipped;
+            }
+            record = upsert_cli_execution_record(state, record)?;
+            emit_cli_execution_status(app, &record, Some("process cancellation requested"));
+            let _ = refresh_cli_execution(app, execution_id);
+            find_cli_execution_by_id(state, execution_id)?
+                .ok_or_else(|| format!("cli execution not found: {execution_id}"))
+        }
+    }
+}
+
+pub fn execute_cli_command<RT: Runtime>(
+    app: &AppHandle<RT>,
     state: &State<'_, AppState>,
     request: CliExecuteRequest,
 ) -> Result<CliExecutionRecord, String> {
@@ -196,8 +531,27 @@ pub fn execute_cli_command(
         return Ok(record);
     }
 
-    let local_output = run_local_command_capture(&request.argv, Path::new(&cwd), &merged_env)?;
-    crate::cli_runtime::write_execution_logs(
+    if request.use_pty {
+        return match launch_background_execution(
+            app,
+            &request,
+            &record,
+            &cwd,
+            &merged_env,
+            &stdout_path,
+            &stderr_path,
+        ) {
+            Ok(()) => Ok(record),
+            Err(error) => fail_execution_launch(app, state, record, error),
+        };
+    }
+
+    let local_output = match run_local_command_capture(&request.argv, Path::new(&cwd), &merged_env)
+    {
+        Ok(output) => output,
+        Err(error) => return fail_execution_launch(app, state, record, error),
+    };
+    write_execution_logs(
         &stdout_path,
         &stderr_path,
         &local_output.stdout,
@@ -239,7 +593,10 @@ pub fn execute_cli_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::fs;
+    use std::sync::Arc;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
 
     #[test]
     fn split_log_chunks_keeps_full_content() {
@@ -296,5 +653,224 @@ mod tests {
         let stdout = fs::read_to_string(&stdout_path).expect("stdout log should read");
         assert!(stdout.contains("rustc"));
         let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    static EXECUTOR_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static EXECUTOR_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn executor_test_lock() -> &'static Mutex<()> {
+        EXECUTOR_TEST_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn test_store_root() -> PathBuf {
+        let nonce = EXECUTOR_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "redbox-cli-runtime-test-{}-{nonce}",
+            crate::now_i64()
+        ))
+    }
+
+    fn build_test_app() -> tauri::App<tauri::test::MockRuntime> {
+        let temp_root = test_store_root();
+        let workspace_root = temp_root.join("workspace");
+        fs::create_dir_all(&workspace_root).expect("workspace root should exist");
+        let store_path = temp_root.join("store.json");
+        let store = crate::persistence::load_store(&store_path);
+        let shared_store = Arc::new(Mutex::new(store));
+        mock_builder()
+            .manage(crate::AppState {
+                store_path,
+                store: shared_store,
+                workspace_root_cache: Mutex::new(workspace_root),
+                startup_migration: Mutex::new(
+                    crate::startup_migration::StartupMigrationStatus::default(),
+                ),
+                store_persist_version: Arc::new(AtomicU64::new(0)),
+                auth_runtime: Mutex::new(crate::AuthRuntimeState::default()),
+                official_auth_refresh_lock: Mutex::new(()),
+                official_wechat_status_lock: Mutex::new(()),
+                official_cache_refresh_inflight: AtomicBool::new(false),
+                mcp_manager: crate::mcp::McpManager::default(),
+                chat_runtime_states: Mutex::new(HashMap::new()),
+                editor_runtime_states: Mutex::new(HashMap::new()),
+                active_chat_requests: Mutex::new(HashMap::new()),
+                creative_chat_cancellations: Mutex::new(HashSet::new()),
+                assistant_runtime: Mutex::new(None),
+                assistant_sidecar: Mutex::new(None),
+                redclaw_runtime: Mutex::new(None),
+                runtime_warm: Mutex::new(crate::RuntimeWarmState::default()),
+                approval_runtime: Mutex::new(crate::ApprovalRuntimeState::default()),
+                skill_watch: Mutex::new(crate::skills::SkillWatcherSnapshot::default()),
+                diagnostics: Mutex::new(crate::DiagnosticsState::default()),
+                knowledge_index_state: Mutex::new(
+                    crate::knowledge_index::KnowledgeIndexRuntimeState::default(),
+                ),
+            })
+            .build(mock_context(noop_assets()))
+            .expect("mock app should build")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn completed_background_command() -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 1; printf 'done\\n'".to_string(),
+        ]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn completed_background_command() -> Vec<String> {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 1; Write-Output 'done'".to_string(),
+        ]
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn cancellable_background_command() -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'started\\n'; sleep 10".to_string(),
+        ]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn cancellable_background_command() -> Vec<String> {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output 'started'; Start-Sleep -Seconds 10".to_string(),
+        ]
+    }
+
+    fn wait_for_status<RT: Runtime>(
+        app: &AppHandle<RT>,
+        execution_id: &str,
+        expected: CliExecutionStatus,
+    ) -> CliExecutionRecord {
+        for _ in 0..60 {
+            if let Err(error) = refresh_cli_execution(app, execution_id) {
+                panic!("failed to refresh execution {execution_id}: {error}");
+            }
+            let state = app.state::<crate::AppState>();
+            let record = find_cli_execution_by_id(&state, execution_id)
+                .expect("execution lookup should succeed")
+                .expect("execution should exist");
+            if record.status == expected {
+                return record;
+            }
+            if matches!(
+                record.status,
+                CliExecutionStatus::Completed
+                    | CliExecutionStatus::Failed
+                    | CliExecutionStatus::Cancelled
+            ) && record.status != expected
+            {
+                panic!(
+                    "execution {execution_id} reached unexpected terminal status {:?}",
+                    record.status
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let state = app.state::<crate::AppState>();
+        let record = find_cli_execution_by_id(&state, execution_id)
+            .expect("execution lookup should succeed")
+            .expect("execution should exist");
+        panic!(
+            "execution {execution_id} did not reach expected status; last status {:?}",
+            record.status
+        );
+    }
+
+    #[test]
+    fn background_execution_poll_transitions_from_running_to_completed() {
+        let _guard = executor_test_lock()
+            .lock()
+            .expect("executor test lock should not be poisoned");
+        let app = build_test_app();
+        let app_handle = app.handle().clone();
+        let state = app.state::<crate::AppState>();
+        let environment = crate::cli_runtime::ensure_app_global_environment(&state)
+            .expect("app environment should exist");
+        let cwd = std::env::temp_dir().join(format!("redbox-cli-runtime-cwd-{}", crate::now_i64()));
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let execution = execute_cli_command(
+            &app_handle,
+            &state,
+            CliExecuteRequest {
+                environment_id: Some(environment.id),
+                argv: completed_background_command(),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                use_pty: true,
+                ..CliExecuteRequest::default()
+            },
+        )
+        .expect("background execution should start");
+        assert_eq!(execution.status, CliExecutionStatus::Running);
+
+        let snapshot = crate::cli_runtime::load_cli_execution_snapshot(&state, &execution.id, 200)
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+        assert_eq!(snapshot.execution.status, CliExecutionStatus::Running);
+
+        let record = wait_for_status(&app_handle, &execution.id, CliExecutionStatus::Completed);
+        assert_eq!(record.exit_code, Some(0));
+
+        let state = app.state::<crate::AppState>();
+        let snapshot = crate::cli_runtime::load_cli_execution_snapshot(&state, &execution.id, 200)
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+        assert_eq!(snapshot.execution.status, CliExecutionStatus::Completed);
+        assert!(snapshot.stdout_tail.contains("done"));
+    }
+
+    #[test]
+    fn cancel_cli_execution_stops_background_process_and_marks_cancelled() {
+        let _guard = executor_test_lock()
+            .lock()
+            .expect("executor test lock should not be poisoned");
+        let app = build_test_app();
+        let app_handle = app.handle().clone();
+        let state = app.state::<crate::AppState>();
+        let environment = crate::cli_runtime::ensure_app_global_environment(&state)
+            .expect("app environment should exist");
+        let cwd =
+            std::env::temp_dir().join(format!("redbox-cli-runtime-cancel-{}", crate::now_i64()));
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let execution = execute_cli_command(
+            &app_handle,
+            &state,
+            CliExecuteRequest {
+                environment_id: Some(environment.id),
+                argv: cancellable_background_command(),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                use_pty: true,
+                ..CliExecuteRequest::default()
+            },
+        )
+        .expect("background execution should start");
+        assert_eq!(execution.status, CliExecutionStatus::Running);
+
+        let cancelled =
+            cancel_cli_execution(&app_handle, &state, &execution.id).expect("cancel should work");
+        assert_eq!(cancelled.status, CliExecutionStatus::Cancelled);
+
+        let record = wait_for_status(&app_handle, &execution.id, CliExecutionStatus::Cancelled);
+        assert_eq!(record.status, CliExecutionStatus::Cancelled);
+
+        let state = app.state::<crate::AppState>();
+        let snapshot = crate::cli_runtime::load_cli_execution_snapshot(&state, &execution.id, 200)
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+        assert_eq!(snapshot.execution.status, CliExecutionStatus::Cancelled);
+        assert!(snapshot.execution.finished_at.is_some());
     }
 }
