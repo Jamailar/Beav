@@ -9,8 +9,11 @@ CLI runtime host control plane 的基础模块目录。
 - `detector.rs`：CLI 可执行探测与版本探针
 - `environment_store.rs`：app-global / workspace-local / task-ephemeral 生命周期
 - `runtime_resolver.rs`：环境选择与复用规则
+- `process_store.rs`：execution record 与 stdout/stderr 日志落盘
+- `events.rs`：CLI runtime 到统一 `runtime:event` 的最小事件映射
+- `executor.rs`：最小同步执行器
 
 ## 当前边界
 
-- 本次已覆盖基础域模型、探测、环境存储与 resolver
+- 本次已覆盖基础域模型、探测、环境存储、resolver、基础执行链路
 - command surface、执行器、策略、校验、事件接线在后续原子提交继续补齐
