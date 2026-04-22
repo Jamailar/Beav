@@ -42,8 +42,10 @@ echo "[publish] Step 3/3: upload artifacts to GitHub Release"
 "$SCRIPT_DIR/upload-release.sh" "$TAG"
 
 if [[ "$SYNC_PUBLIC" == "1" ]]; then
-  echo "[publish] Step 4/4: sync code and README to public mirror"
-  "$ROOT_DIR/scripts/sync-public-mirror.sh"
+  echo "[publish] Step 4/5: public mirror sync is handled by .github/workflows/sync-public-assets.yml after git push"
+  if [[ "$GIT_PUSH" != "1" ]]; then
+    echo "[publish] WARNING: REDBOX_SYNC_PUBLIC=1 but REDBOX_GIT_PUSH!=1, so the cloud sync workflow will not be triggered."
+  fi
 fi
 
 if [[ "$GIT_PUSH" == "1" ]]; then

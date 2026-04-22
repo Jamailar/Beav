@@ -6,7 +6,8 @@
 
 - 本文件作用于仓库根目录默认范围。
 - 如果进入某个子目录存在更近的 `AGENTS.md`，以更近的文件为准。
-- `LexBox/` 已有自己的 `AGENTS.md`。除非任务明确涉及它，否则不要把 LexBox 的实现假设套到 RedBox 主产品上。
+- `desktop/` 是当前主桌面端并有自己的 `AGENTS.md`。
+- `archive/desktop-electron/` 是归档的旧 Electron 实现；除非任务明确涉及迁移对照或历史问题，否则不要默认改它。
 
 ## Environment Baseline
 
@@ -25,41 +26,38 @@
 
 ### Generated or packaged outputs
 
-- `desktop/dist/`、`desktop/dist-electron/`、`desktop/release/`：构建产物，禁止手改。
-- `desktop/.private-runtime/`、`desktop/.plugin-runtime/`：准备脚本生成/复制的运行时资源，视为构建期产物。
-- `desktop/dist-electron/library` 由 `sync:prompt-library` 从 `desktop/electron/prompts/library` 同步生成，不要直接改产物目录。
+- `desktop/dist/`、`desktop/src-tauri/target/`、`desktop/src-tauri/gen/`、`desktop/release/`：构建产物，禁止手改。
+- `archive/desktop-electron/dist/`、`archive/desktop-electron/dist-electron/`、`archive/desktop-electron/release/`：旧桌面端构建产物，同样禁止手改。
 
 ### Other important files
 
 - `README.md`：对外说明、更新日志入口，发布脚本也会从这里提取 release notes。
-- `private/Docs/` 与 `desktop/Docs/`：局部设计说明/接口资料，改动相应领域时应同步。
+- `private/Docs/` 与 `desktop/docs/`：局部设计说明/接口资料，改动相应领域时应同步。
 
 ## Architecture Map
 
 ### Renderer -> Host path
 
 - 页面入口：`desktop/src/main.tsx` -> `desktop/src/App.tsx` -> `desktop/src/pages/*`
-- 宿主桥：renderer 通过 `window.ipcRenderer` 调用 `desktop/electron/preload.ts`
-- 主进程路由：`desktop/electron/main.ts`
-- 业务实现：`desktop/electron/core/*`、`desktop/electron/db.ts`、相关 store/service
+- 宿主桥：renderer 通过 `window.ipcRenderer` 调用 `desktop/src/bridge/ipcRenderer.ts`
+- Tauri 宿主入口：`desktop/src-tauri/src/main.rs`
+- 业务实现：`desktop/src-tauri/src/commands/*`、`desktop/src-tauri/src/runtime/*`、`desktop/src-tauri/src/persistence/*`、相关 store/service
 
 默认原则：
 
-- renderer 不直接碰 Node / Electron 原语，优先走 preload 暴露的 API。
-- 新增能力时，先扩 `preload.ts` 的命名 API，再在页面里消费；不要在页面中散落裸 `invoke/send` 字符串。
-- `main.ts` 保持“路由/装配层”角色；真正逻辑尽量下沉到 `core/*` 或独立 service/store。
+- renderer 不直接在页面里散落调用 Tauri 原语，优先走 `window.ipcRenderer` 兼容桥。
+- 新增能力时，先扩 `src/bridge/ipcRenderer.ts` 的命名 API，再在页面里消费；不要在页面中散落裸 `invoke/send` 字符串。
+- `main.rs` 保持“路由/装配层”角色；真正逻辑尽量下沉到 `commands/*`、`runtime/*`、`persistence/*` 或独立 service/store。
 
 ### AI runtime path
 
-- 旧式入口仍存在：`AgentExecutor`、`ChatService`、`ai:start-chat` 一类链路仍在仓库里。
 - 新运行时能力已经扩展到 session/runtime/task/work abstractions：
-  - `desktop/electron/core/agentExecutor.ts`
-  - `desktop/electron/core/queryRuntime.ts`
-  - `desktop/electron/core/sessionRuntimeStore.ts`
-  - `desktop/electron/core/ai/*`
-  - `desktop/electron/core/toolRegistry.ts`
-  - `desktop/electron/core/tools/*`
-  - `desktop/electron/core/mcpRuntime.ts`
+  - `desktop/src-tauri/src/agent/*`
+  - `desktop/src-tauri/src/runtime/*`
+  - `desktop/src-tauri/src/skills/*`
+  - `desktop/src-tauri/src/tools/*`
+  - `desktop/src-tauri/src/mcp/*`
+  - `desktop/src-tauri/src/subagents/*`
 - 技能、提示词、工具是 AI 编排主边界。做能力分流时优先改这些边界，而不是在用户消息文本上硬写关键词判断。
 
 ### Data and content flow
@@ -82,12 +80,12 @@
 
 - `Plugin/` 是直接加载的扩展目录，不是独立打包工程。
 - 改动后应在 Chrome / Edge 扩展管理页重新加载验证。
-- 扩展依赖桌面端本地接口 `http://127.0.0.1:23456`；如果采集链路失效，优先先查桌面端是否已启动、桥接端口是否还在。
+- 扩展依赖桌面端本地接口；如果采集链路失效，优先先查桌面端是否已启动、桥接端口是否还在。
 
 ### Suggested verification matrix
 
 - 改 renderer 页面：至少打开对应页面并验证切换、已有数据保留、刷新态。
-- 改 preload / IPC / main-process：至少验证一次真实 renderer 调用，不要只看类型通过。
+- 改 bridge / IPC / Tauri command：至少验证一次真实 renderer 调用，不要只看类型通过。
 - 改 AI runtime / tool / prompt：至少跑一轮真实对话或任务，检查事件流、工具调用、权限确认和最终摘要。
 - 改 `Plugin/`：验证 popup、background、页面注入或右键入口的真实浏览器行为。
 - 改 `RedBoxweb/`：运行 `pnpm test` 和一次 `pnpm build`。
@@ -148,10 +146,10 @@
 
 ## Known Pitfalls
 
-- `desktop/electron/main.ts` 已经很大。除纯路由接线外，新增逻辑优先抽到 `core/*`。
-- prompt library 是打包时复制的；只改源目录不做同步，运行时可能读到旧内容。
+- `desktop/src-tauri/src/main.rs` 仍然很大。除纯路由接线外，新增逻辑优先抽到 `commands/*`、`runtime/*` 等子模块。
+- `archive/desktop-electron/` 仍保留旧实现与旧文档；除非你明确在处理历史逻辑，不要把它当成当前产品代码入口。
 - 插件依赖桌面端本地接入层；插件“坏了”不一定是插件本身，也可能是桌面端服务未起。
-- 旧聊天链路和新 runtime/session/task 链路并存。改 AI 功能前先确认你动的是哪条链，不要只修一半。
+- 桌面端仍兼容 `window.ipcRenderer` 与一批旧 channel 名称；改桥接或命令层时先确认兼容面是否仍被页面消费。
 - 调度逻辑使用本地时间；涉及 daily/weekly/cron 语义时，不要无视时区与 DST 行为。
 - 不要把用户可见页面在刷新时清空成 loading 态。
 - 不要在持锁范围内做慢 I/O。
@@ -161,7 +159,7 @@
 - 新增或重构重要 IPC/bridge 能力时，更新相应 README / Docs，避免知识只留在 `main.ts` 里。
 - 新增重要提示词、技能、运行时模式、工具包时，应在附近补足最小文档，让后续维护者知道入口和职责。
 - 如果某次 bug 修复沉淀出新的工程约束，优先把规则加到这里，写得窄、明确、可执行。
-- 计划类文档默认放在与功能最接近的 `Docs/` 目录；桌面端计划优先放在 `desktop/Docs/`。
+- 计划类文档默认放在与功能最接近的 `docs/` 目录；桌面端计划优先放在 `desktop/docs/`。
 - 所有“计划 / 方案 / 路线图 / 改造计划”类 Markdown 文档必须使用 frontmatter，且必须包含执行状态字段，至少包括：
   - `doc_type: plan`
   - `execution_status`: `not_started` | `in_progress` | `blocked` | `completed` | `cancelled`

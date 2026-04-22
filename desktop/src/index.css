@@ -120,6 +120,7 @@ select {
 .editor-ui-shell [contenteditable='true'],
 .editor-ui-shell .cm-content,
 .editor-ui-shell .cm-editor,
+.editor-ui-shell .cm-scroller,
 .editor-ui-shell .chat-ai-content,
 .editor-ui-shell .chat-markdown-body,
 .editor-ui-shell .chat-user-bubble {
@@ -134,6 +135,19 @@ select {
 .manuscript-editor-shell .cm-gutters {
   background-color: rgb(var(--color-surface-primary) / 1) !important;
   color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+.manuscript-editor-shell,
+.manuscript-editor-shell * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.manuscript-editor-shell .cm-editor,
+.manuscript-editor-shell .cm-scroller,
+.manuscript-editor-shell .cm-content,
+.manuscript-editor-shell .cm-line {
+  cursor: text !important;
 }
 
 .manuscript-editor-shell .cm-activeLine {

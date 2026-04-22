@@ -1,0 +1,11 @@
+dist/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+artifacts/
+.codex/
+.opencode/
+.redbox-dev/
+.DS_Store
+.env.local
+.env.*.local

@@ -91,7 +91,7 @@ Optional env vars:
 - `REDBOX_SKIP_WIN=1` (skip remote win build)
 - `REDBOX_SKIP_MAC=1` (skip local mac build)
 - `REDBOX_MAC_MODE=signed|full|nosign` (local mac build mode; release pipeline defaults to `full`)
-- `REDBOX_SYNC_PUBLIC=1` (after release upload, also sync code/README to public repo)
+- `REDBOX_SYNC_PUBLIC=1` (after release upload, rely on the GitHub Actions sync workflow to update the public mirror after push)
 - `REDBOX_GIT_PUSH=0` (disable final git tag/push step)
 
 ## Individual commands
@@ -100,7 +100,7 @@ Optional env vars:
 bash scripts/hybrid-release/build-win-on-remote.sh
 bash scripts/hybrid-release/build-mac-local.sh
 bash scripts/hybrid-release/upload-release.sh v1.7.6
-bash scripts/sync-public-mirror.sh
+push 当前分支和 tag 后，由 `.github/workflows/sync-public-assets.yml` 自动同步公开镜像
 ```
 
 Examples:

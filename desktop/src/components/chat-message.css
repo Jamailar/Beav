@@ -192,6 +192,16 @@
   white-space: pre-wrap;
 }
 
+.chat-streaming-caret {
+  display: inline-block;
+  width: 0.5rem;
+  height: 1rem;
+  margin-left: 0.25rem;
+  vertical-align: -0.125rem;
+  background: var(--accent-primary, #2563eb);
+  animation: chat-streaming-caret-pulse 1s ease-in-out infinite;
+}
+
 @keyframes chat-ai-shell-enter {
   from {
     opacity: 0;
@@ -234,6 +244,16 @@
   40% {
     opacity: 0.92;
     transform: translateY(-2px) scale(1);
+  }
+}
+
+@keyframes chat-streaming-caret-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+  }
+  50% {
+    opacity: 1;
   }
 }
 

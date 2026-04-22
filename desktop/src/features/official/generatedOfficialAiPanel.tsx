@@ -3,6 +3,7 @@ import { CreditCard, Gem, QrCode, RefreshCw, Smartphone, UserRound } from 'lucid
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
+import { useOfficialAuthState } from '../../hooks/useOfficialAuthState';
 import { extractAlipayPayQrContent } from '../../pages/settings/shared';
 
 type LoginTab = 'wechat' | 'sms';
@@ -18,17 +19,6 @@ interface RedboxAuthSession {
   user: Record<string, unknown> | null;
   createdAt: number;
   updatedAt: number;
-}
-
-interface AuthStateSnapshot {
-  status?: string;
-  loggedIn?: boolean;
-  session?: RedboxAuthSession | null;
-  points?: Record<string, unknown> | null;
-  models?: ModelsResponseItem[];
-  callRecords?: RedboxCallRecordItem[];
-  degradedReason?: string | null;
-  lastError?: string | null;
 }
 
 interface RedboxWechatInfo {
@@ -53,13 +43,6 @@ interface ModelsResponseItem {
   id: string;
 }
 
-interface RedboxSessionDisplaySnapshot {
-  user: Record<string, unknown> | null;
-  expiresAt: number | null;
-  updatedAt: number;
-}
-
-const SESSION_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:display-session';
 const PANEL_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:panel-display';
 
 interface RedboxPanelDisplaySnapshot {
@@ -134,43 +117,6 @@ const timedInvoke = async <T,>(
       });
     }
     throw error;
-  }
-};
-
-const readDisplaySessionSnapshot = (): RedboxAuthSession | null => {
-  try {
-    const raw = window.localStorage.getItem(SESSION_DISPLAY_SNAPSHOT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as RedboxSessionDisplaySnapshot;
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      accessToken: '',
-      refreshToken: '',
-      tokenType: 'Bearer',
-      expiresAt: Number.isFinite(Number(parsed.expiresAt)) ? Number(parsed.expiresAt) : null,
-      apiKey: '',
-      user: parsed.user && typeof parsed.user === 'object' ? parsed.user : null,
-      createdAt: Number(parsed.updatedAt || Date.now()),
-      updatedAt: Number(parsed.updatedAt || Date.now()),
-    };
-  } catch {
-    return null;
-  }
-};
-
-const writeDisplaySessionSnapshot = (sessionData: RedboxAuthSession | null): void => {
-  try {
-    if (!sessionData) {
-      window.localStorage.removeItem(SESSION_DISPLAY_SNAPSHOT_KEY);
-      return;
-    }
-    window.localStorage.setItem(SESSION_DISPLAY_SNAPSHOT_KEY, JSON.stringify({
-      user: sessionData.user || null,
-      expiresAt: Number.isFinite(Number(sessionData.expiresAt)) ? Number(sessionData.expiresAt) : null,
-      updatedAt: Number(sessionData.updatedAt || Date.now()),
-    } satisfies RedboxSessionDisplaySnapshot));
-  } catch {
-    // ignore snapshot failures
   }
 };
 
@@ -264,9 +210,8 @@ const buildWechatQrDataUrl = async (value: string): Promise<string> => {
 
 const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const initialPanelSnapshot = readPanelDisplaySnapshot();
+  const { snapshot: authState, bootstrapped } = useOfficialAuthState();
   const [loginTab, setLoginTab] = useState<LoginTab>('wechat');
-  const [session, setSession] = useState<RedboxAuthSession | null>(() => readDisplaySessionSnapshot());
-  const [bootstrapped, setBootstrapped] = useState(false);
   const [user, setUser] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.user || null);
   const [points, setPoints] = useState<Record<string, unknown> | null>(() => initialPanelSnapshot?.points || null);
   const [models, setModels] = useState<ModelsResponseItem[]>(() => initialPanelSnapshot?.models || []);
@@ -291,12 +236,14 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const pollSessionIdRef = useRef('');
   const confirmedWechatSessionRef = useRef('');
   const backgroundRefreshQueuedRef = useRef(false);
-  const lastSessionTraceRef = useRef<string>('init');
   const lastRenderModeRef = useRef<string>('init');
+  const lastSessionSignatureRef = useRef('');
+  const lastBootstrapSyncSignatureRef = useRef('');
   const refreshControlsDisabled = refreshing || authBusy || logoutBusy || paymentBusy;
   const authControlsDisabled = authBusy || refreshing || logoutBusy || paymentBusy;
   const logoutDisabled = refreshControlsDisabled;
   const paymentControlsDisabled = paymentBusy || logoutBusy;
+  const session = (authState?.session || null) as RedboxAuthSession | null;
 
   const setPanelNotice = useCallback((type: NoticeType, message: string) => {
     setNoticeType(type);
@@ -313,13 +260,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     pollSessionIdRef.current = '';
   }, []);
 
-  const applySession = useCallback((sessionData: RedboxAuthSession | null) => {
-    traceAuthUi('applySession:start', summarizeSessionForTrace(sessionData));
-    setSession(sessionData);
-    writeDisplaySessionSnapshot(sessionData);
-    traceAuthUi('applySession:end', summarizeSessionForTrace(sessionData));
-  }, []);
-
   const requestSettingsRefresh = useCallback((options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     void onReloadSettings({
       preserveViewState: true,
@@ -329,12 +269,34 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, [onReloadSettings]);
 
   useEffect(() => {
-    const nextSessionTrace = JSON.stringify(summarizeSessionForTrace(session));
-    if (lastSessionTraceRef.current !== nextSessionTrace) {
-      lastSessionTraceRef.current = nextSessionTrace;
-      traceAuthUi('session:committed', summarizeSessionForTrace(session));
+    const nextSessionSignature = JSON.stringify(summarizeSessionForTrace(session));
+    if (lastSessionSignatureRef.current === nextSessionSignature) {
+      return;
     }
-  }, [session]);
+    lastSessionSignatureRef.current = nextSessionSignature;
+    traceAuthUi('session:committed', summarizeSessionForTrace(session));
+
+    if (!session) {
+      confirmedWechatSessionRef.current = '';
+      stopWechatPolling();
+      setUser(null);
+      setPoints(null);
+      setModels([]);
+      setCallRecords([]);
+      writePanelDisplaySnapshot(null);
+      return;
+    }
+
+    const sessionUser = session.user && typeof session.user === 'object'
+      ? session.user as Record<string, unknown>
+      : null;
+    setUser(sessionUser);
+    if (pollSessionIdRef.current) {
+      confirmedWechatSessionRef.current = pollSessionIdRef.current;
+      stopWechatPolling();
+      setWechatStatusText('CONFIRMED');
+    }
+  }, [session, stopWechatPolling]);
 
   useEffect(() => {
     const nextRenderMode = !bootstrapped
@@ -361,27 +323,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       updatedAt: Date.now(),
     });
   }, [callRecords, models, points, user]);
-
-  const hydrateCachedSession = useCallback(async () => {
-    const snapshot = await timedInvoke<AuthStateSnapshot | null>('auth:get-state');
-    const sessionData = snapshot?.session || null;
-    if (sessionData) {
-      applySession(sessionData);
-      if (snapshot?.points) setPoints(snapshot.points);
-      if (snapshot?.models) setModels((snapshot.models || []).filter((item) => String(item?.id || '').trim()));
-      if (snapshot?.callRecords) {
-        setCallRecords((snapshot.callRecords || []).filter((item) => String(item?.id || '').trim()));
-      }
-      return sessionData;
-    }
-    const status = String(snapshot?.status || '').trim();
-    const loggedIn = Boolean(snapshot?.loggedIn);
-    if (status === 'anonymous' || status === 'reauthRequired' || !loggedIn) {
-      writePanelDisplaySnapshot(null);
-    }
-    applySession(null);
-    return sessionData;
-  }, [applySession]);
 
   const fetchUser = useCallback(async () => {
     const result = await timedInvoke<{ success: boolean; user?: Record<string, unknown>; error?: string }>('redbox-auth:me');
@@ -525,9 +466,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         if (status === 'CONFIRMED') {
           confirmedWechatSessionRef.current = normalizedSessionId;
           stopWechatPolling();
-          if (result.data.session) {
-            applySession(result.data.session);
-          }
           requestSettingsRefresh();
           queueBackgroundRefresh('wechat-poll');
           setPanelNotice('success', '微信登录成功');
@@ -546,7 +484,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       }
     };
     scheduleNext(WECHAT_POLL_INITIAL_DELAY_MS);
-  }, [applySession, queueBackgroundRefresh, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
+  }, [queueBackgroundRefresh, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
   const fetchWechatQr = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -626,7 +564,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       if (!result?.success || !result.session) {
         throw new Error(result?.error || (mode === 'login' ? '登录失败' : '注册失败'));
       }
-      applySession(result.session);
       requestSettingsRefresh();
       queueBackgroundRefresh(mode);
       setPanelNotice('success', mode === 'login' ? '登录成功' : '注册并登录成功');
@@ -635,7 +572,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } finally {
       setAuthBusy(false);
     }
-  }, [applySession, queueBackgroundRefresh, requestSettingsRefresh, setPanelNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
+  }, [queueBackgroundRefresh, requestSettingsRefresh, setPanelNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
 
   const logout = useCallback(async () => {
     setLogoutBusy(true);
@@ -650,7 +587,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       }
       confirmedWechatSessionRef.current = '';
       stopWechatPolling();
-      applySession(null);
       setUser(null);
       setPoints(null);
       setModels([]);
@@ -665,7 +601,7 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
     } finally {
       setLogoutBusy(false);
     }
-  }, [applySession, requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
+  }, [requestSettingsRefresh, setPanelNotice, stopWechatPolling]);
 
   const handleCreateOrderAndPay = useCallback(async () => {
     const amount = normalizeRechargeAmountInput(rechargeAmount);
@@ -753,64 +689,28 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   }, [pointsPerYuan, rechargeAmount]);
 
   useEffect(() => {
-    let canceled = false;
-    const bootstrap = async () => {
-      try {
-        const cachedSession = await hydrateCachedSession();
-        if (canceled) return;
-        if (cachedSession) {
-          requestSettingsRefresh();
-          queueBackgroundRefresh('bootstrap');
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (!canceled) {
-          setBootstrapped(true);
-        }
-      }
-    };
-    void bootstrap();
-    return () => {
-      canceled = true;
-      stopWechatPolling();
-    };
-  }, [hydrateCachedSession, queueBackgroundRefresh, requestSettingsRefresh, stopWechatPolling]);
+    if (!bootstrapped || !session) {
+      lastBootstrapSyncSignatureRef.current = '';
+      return;
+    }
+    const nextBootstrapSyncSignature = JSON.stringify({
+      updatedAt: session.updatedAt ?? null,
+      expiresAt: session.expiresAt ?? null,
+      userId: summarizeSessionForTrace(session).userId ?? null,
+    });
+    if (lastBootstrapSyncSignatureRef.current === nextBootstrapSyncSignature) {
+      return;
+    }
+    lastBootstrapSyncSignatureRef.current = nextBootstrapSyncSignature;
+    requestSettingsRefresh();
+    queueBackgroundRefresh('bootstrap');
+  }, [bootstrapped, queueBackgroundRefresh, requestSettingsRefresh, session]);
 
   useEffect(() => {
-    const handleSessionUpdated = (_event: unknown, payload?: { session?: RedboxAuthSession | null; loggedIn?: boolean; degradedReason?: string | null; lastError?: string | null }) => {
-      traceAuthUi('auth:onStateChanged', {
-        loggedIn: payload?.loggedIn ?? null,
-        degradedReason: payload?.degradedReason ?? null,
-        lastError: payload?.lastError ?? null,
-        session: summarizeSessionForTrace(payload?.session || null),
-      });
-      const nextSession = payload?.session || null;
-      applySession(nextSession);
-      if (nextSession || payload?.loggedIn) {
-        const activeWechatSessionId = pollSessionIdRef.current;
-        stopWechatPolling();
-        if (activeWechatSessionId) {
-          confirmedWechatSessionRef.current = activeWechatSessionId;
-        }
-        setWechatStatusText('CONFIRMED');
-      }
-      if (!nextSession && !payload?.loggedIn) {
-        confirmedWechatSessionRef.current = '';
-        setUser(null);
-        setPoints(null);
-        setModels([]);
-        setCallRecords([]);
-        writePanelDisplaySnapshot(null);
-        return;
-      }
-      requestSettingsRefresh();
-    };
-    window.ipcRenderer.auth.onStateChanged(handleSessionUpdated);
     return () => {
-      window.ipcRenderer.auth.offStateChanged(handleSessionUpdated);
+      stopWechatPolling();
     };
-  }, [applySession, requestSettingsRefresh, stopWechatPolling]);
+  }, [stopWechatPolling]);
 
   useEffect(() => {
     const handleDataUpdated = (_event: unknown, payload?: { points?: Record<string, unknown> | null; models?: ModelsResponseItem[]; callRecords?: RedboxCallRecordItem[] }) => {

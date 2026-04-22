@@ -46,7 +46,7 @@ jobs:
                     git checkout -B "$TARGET_BRANCH"
                   fi
 
-            - name: Sync README, Plugin, images and desktop source
+            - name: Sync README, Plugin, images and open-source desktop source
               run: |
                   set -euo pipefail
 
@@ -74,15 +74,16 @@ jobs:
                   done < <(
                     find private-repo \
                       -path 'private-repo/.git' -prune -o \
-                      -path 'private-repo/LexBox' -prune -o \
+                      -path 'private-repo/desktop' -prune -o \
+                      -path 'private-repo/archive' -prune -o \
                       -type f \( -iname 'readme*.md' \) -print0
                   )
 
-                  rm -rf public-repo/UserBase public-repo/private
+                  rm -rf public-repo/UserBase public-repo/private public-repo/archive
 
                   sync_dir private-repo/Plugin public-repo/Plugin
                   sync_dir private-repo/images public-repo/images
-                  sync_dir private-repo/desktop public-repo/desktop \
+                  sync_dir private-repo/archive/desktop-electron public-repo/desktop \
                     --exclude dist/ \
                     --exclude dist-electron/ \
                     --exclude release/ \

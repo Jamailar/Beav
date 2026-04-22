@@ -97,11 +97,25 @@ interface ChatRuntimeState {
 
 interface ChatErrorEventPayload {
   message?: string;
+  title?: string;
   raw?: string;
+  detail?: string;
   hint?: string;
   statusCode?: number;
+  httpStatus?: number;
   errorCode?: string;
   category?: string;
+  layer?: string;
+  retryable?: boolean;
+  transportMode?: string;
+  modelName?: string;
+}
+
+interface StructuredChatErrorNotice {
+  title: string;
+  hint?: string;
+  detail?: string;
+  metaParts?: string[];
 }
 
 type FixedSessionWarmSnapshot = {
@@ -142,7 +156,7 @@ function writeFixedSessionWarmSnapshot(
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
-const STREAM_UPDATE_INTERVAL_MS = 48;
+const STREAM_UPDATE_INTERVAL_MS = 72;
 const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -180,6 +194,33 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   if (current.endsWith(incoming)) return current;
   if (incoming.startsWith(current)) return incoming;
   return `${current}${incoming}`;
+}
+
+function isThinkingMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType === 'thinking');
+}
+
+function isAssistantReplyMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType !== 'thinking');
+}
+
+function findLastAssistantReplyIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isAssistantReplyMessage(messages[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findLastRunningThinkingIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isThinkingMessage(message) && message.isStreaming) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function parseMessageTimestampMs(value: unknown): number | undefined {
@@ -223,101 +264,27 @@ function parseEmbeddedHttpError(rawValue: string): Partial<ChatErrorEventPayload
   };
 }
 
-function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
+function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null | undefined): StructuredChatErrorNotice {
   const embedded = parseEmbeddedHttpError(typeof payload === 'string'
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.message || 'AI 请求失败').trim();
-  const detail = String(data.raw || '').trim();
-  const lower = `${title}\n${detail}`.toLowerCase();
-  const detectedInsufficientBalance =
-    lower.includes('insufficient balance') ||
-    lower.includes('insufficient_balance') ||
-    lower.includes('insufficient_quota') ||
-    /\b1008\b/.test(lower);
-  const detectedInvalidKey =
-    lower.includes('invalid api key') ||
-    lower.includes('incorrect api key') ||
-    lower.includes('invalid_api_key') ||
-    lower.includes('authentication_error') ||
-    lower.includes('unauthorized');
-  const detectedRateLimit =
-    Number(data.statusCode) === 429 ||
-    lower.includes('rate limit') ||
-    lower.includes('too many requests');
-
-  const category = detectedInsufficientBalance
-    ? 'quota'
-    : detectedInvalidKey
-      ? 'auth'
-      : detectedRateLimit
-        ? 'rate_limit'
-        : String(data.category || '').trim();
-
-  const isValidationError = category === 'validation';
-  const isExecutionError = category === 'execution';
-
-  const hint = detectedInsufficientBalance
-    ? '账号余额/额度不足。请充值、升级套餐或切换到有余额的 AI 源。'
-    : detectedInvalidKey
-      ? '请检查 API Key 是否正确、是否过期，以及该模型是否有调用权限。'
-      : detectedRateLimit
-        ? '请求频率过高。请稍后重试，或降低并发与调用频率。'
-        : isValidationError
-          ? String(data.hint || '').trim() || '当前结果未通过执行校验，请先修复素材读取、证据链或保存回执问题。'
-          : isExecutionError
-            ? String(data.hint || '').trim() || '执行阶段发生错误，请检查素材读取、工具调用、文件路径或权限。'
-        : String(data.hint || '').trim() || '请检查 AI 源配置后重试。';
+  const title = String(data.title || data.message || '').trim() || '请求失败';
+  const detail = String(data.detail || data.raw || '').trim();
+  const hint = String(data.hint || '').trim();
+  const layer = String(data.layer || data.category || '').trim();
   const metaParts = [
-    data.statusCode ? `HTTP ${data.statusCode}` : '',
+    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
     data.errorCode ? String(data.errorCode) : '',
-    category || '',
+    layer || '',
+    data.transportMode ? `transport:${String(data.transportMode)}` : '',
+    data.retryable ? '可重试' : '',
   ].filter(Boolean);
-
-  const userFacingTitle = detectedInsufficientBalance
-    ? 'AI 账号余额不足（供应商返回）'
-    : detectedInvalidKey
-      ? 'AI API Key 无效或无权限（供应商返回）'
-      : detectedRateLimit
-        ? 'AI 请求被限流（供应商返回）'
-        : isValidationError
-          ? '执行校验未通过'
-          : isExecutionError
-            ? '任务执行失败'
-        : title;
-
-  const lines: string[] = [`❌ ${userFacingTitle}`];
-  lines.push(
-    isValidationError || isExecutionError
-      ? '说明：这是任务执行阶段返回的错误，不是 AI 源鉴权或 App 崩溃。'
-      : '说明：这是 AI 源接口返回的错误，不是 App 崩溃。'
-  );
-  if (hint) lines.push(`处理建议：${hint}`);
-  if (metaParts.length > 0) lines.push(`标识：${metaParts.join(' · ')}`);
-  if (detail) {
-    lines.push('');
-    lines.push('错误详情（用于反馈）：');
-    lines.push('```text');
-    lines.push(detail.slice(0, 3000));
-    lines.push('```');
-  }
-
-  const notice = detectedInsufficientBalance
-    ? `AI 源余额不足${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请充值或切换有余额的 AI 源。`
-    : detectedInvalidKey
-      ? `AI 源鉴权失败${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请检查 API Key。`
-      : detectedRateLimit
-        ? `AI 请求被限流${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请稍后重试。`
-        : isValidationError
-          ? '执行校验未通过，请先修复 reviewer 指出的问题。'
-          : isExecutionError
-            ? '任务执行失败，请检查素材读取、工具调用和文件权限。'
-        : `AI 请求失败：${userFacingTitle}${metaParts.length > 0 ? `（${metaParts.join(' / ')}）` : ''}`;
-
   return {
-    formatted: lines.join('\n'),
-    notice,
+    title,
+    hint: hint || undefined,
+    detail: detail || undefined,
+    metaParts: metaParts.length > 0 ? metaParts : undefined,
   };
 }
 
@@ -377,7 +344,7 @@ export function Chat({
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
@@ -883,6 +850,7 @@ export function Chat({
       const aiPlaceholder: Message = {
         id: (processingStartedAt + 1).toString(),
         role: 'ai',
+        messageType: 'reply',
         content: '',
         tools: [],
         timeline: (
@@ -1021,6 +989,7 @@ export function Chat({
         return {
           id: msg.id,
           role, // Simplified mapping
+          messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
@@ -1049,6 +1018,7 @@ export function Chat({
           uiMessages.push({
             id: `streaming_${Date.now()}`,
             role: 'ai',
+            messageType: 'reply',
             content: restoredContent,
             tools: [],
             timeline: [],
@@ -1058,6 +1028,7 @@ export function Chat({
         } else {
           uiMessages[uiMessages.length - 1] = {
             ...lastMsg,
+            messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
             processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
@@ -1159,17 +1130,21 @@ export function Chat({
         return prev;
       }
 
-      const lastMsg = prev[prev.length - 1];
-      if (!lastMsg || lastMsg.role !== 'ai') {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) {
         return prev;
       }
+      const lastMsg = prev[lastReplyIndex];
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
-      return [...prev.slice(0, -1), {
+      const next = [...prev];
+      next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
-      }];
+        messageType: 'reply',
+      };
+      return next;
     });
   }, []);
 
@@ -1199,6 +1174,19 @@ export function Chat({
     };
   }, [fixedSessionId, isActive, loadChatRooms]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshChatModels = () => {
+      void loadChatModelOptions();
+    };
+    window.ipcRenderer.on('settings:updated', refreshChatModels);
+    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    return () => {
+      window.ipcRenderer.off('settings:updated', refreshChatModels);
+      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+    };
+  }, [isActive, loadChatModelOptions]);
+
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
       window.ipcRenderer.chat.cancel({ sessionId: currentSessionId });
@@ -1220,8 +1208,9 @@ export function Chat({
         responseCompletedRef.current = false;
       }
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         const now = Date.now();
         const newTimeline = [...lastMsg.timeline];
@@ -1246,7 +1235,9 @@ export function Chat({
           timestamp: now
         });
 
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, timeline: newTimeline, messageType: 'reply' };
+        return next;
       });
     };
 
@@ -1254,26 +1245,30 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex !== -1) return prev;
 
-        const newTimeline = [...lastMsg.timeline];
-        
-        // Check if we already have a running thought (shouldn't happen with correct agent logic, but safe to check)
-        const lastItem = newTimeline[newTimeline.length - 1];
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            return prev; // Already thinking
-        }
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
 
-        newTimeline.push({
-          id: Math.random().toString(36),
-          type: 'thought',
+        const now = Date.now();
+        const next = [...prev];
+        next[lastReplyIndex] = {
+          ...next[lastReplyIndex],
+          messageType: 'reply',
+          suppressPendingIndicator: true,
+        };
+        next.splice(lastReplyIndex, 0, {
+          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          role: 'ai',
+          messageType: 'thinking',
           content: '',
-          status: 'running',
-          timestamp: Date.now()
+          tools: [],
+          timeline: [],
+          isStreaming: true,
+          processingStartedAt: now,
         });
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        return next;
       });
     };
 
@@ -1283,35 +1278,39 @@ export function Chat({
       const content = data?.content;
       if (!content) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        let next = [...prev];
 
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            // Update existing thought
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                content: mergeThoughtDelta(String(lastItem.content || ''), content)
-            };
-        } else {
-            // No running thought? Create one (fallback)
-            newTimeline.push({
-                id: Math.random().toString(36),
-                type: 'thought',
-                content: content,
-                status: 'running',
-                timestamp: Date.now()
-            });
+        if (runningThinkingIndex === -1) {
+          const lastReplyIndex = findLastAssistantReplyIndex(next);
+          if (lastReplyIndex === -1) return prev;
+          const now = Date.now();
+          next[lastReplyIndex] = {
+            ...next[lastReplyIndex],
+            messageType: 'reply',
+            suppressPendingIndicator: true,
+          };
+          next.splice(lastReplyIndex, 0, {
+            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'ai',
+            messageType: 'thinking',
+            content,
+            tools: [],
+            timeline: [],
+            isStreaming: true,
+            processingStartedAt: now,
+          });
+          return next;
         }
 
-        return [...prev.slice(0, -1), {
-          ...lastMsg,
-          timeline: newTimeline,
-          thinking: mergeThoughtDelta(lastMsg.thinking || '', content),
-        }];
+        const thinkingMessage = next[runningThinkingIndex];
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          content: mergeThoughtDelta(thinkingMessage.content || '', content),
+          isStreaming: true,
+        };
+        return next;
       });
     };
 
@@ -1319,22 +1318,18 @@ export function Chat({
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                status: 'done',
-                duration: Date.now() - lastItem.timestamp
-            };
-        }
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline, thinking: lastMsg.thinking || '' }];
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        const thinkingMessage = next[runningThinkingIndex];
+        const finishedAt = Date.now();
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: finishedAt,
+        };
+        return next;
       });
     };
 
@@ -1346,6 +1341,18 @@ export function Chat({
         return;
       }
       if (!content) return;
+      setMessages(prev => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        next[runningThinkingIndex] = {
+          ...next[runningThinkingIndex],
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: Date.now(),
+        };
+        return next;
+      });
 
       const now = performance.now();
       const lastChunk = lastStreamChunkRef.current;
@@ -1394,8 +1401,19 @@ export function Chat({
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
 
@@ -1423,19 +1441,22 @@ export function Chat({
           status: 'running'
         };
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: [...lastMsg.tools, newTool] 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolEnd = (_: unknown, toolData: { callId: string; name: string; output: { success: boolean; content: string } }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         // Update Timeline
         const newTimeline = [...lastMsg.timeline];
@@ -1478,22 +1499,32 @@ export function Chat({
 
         // Update Legacy Tools
         const updatedTools = lastMsg.tools.map(t =>
-          t.callId === toolData.callId ? { ...t, status: 'done', output: toolData.output } as ToolEvent : t
+          t.callId === toolData.callId
+            ? {
+                ...t,
+                status: toolData.output?.success ? 'done' : 'failed',
+                output: toolData.output,
+              } as ToolEvent
+            : t
         );
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: updatedTools 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolUpdate = (_: unknown, toolData: { callId: string; name: string; partial: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         if (!toolData?.partial) return prev;
 
         const newTimeline = [...lastMsg.timeline];
@@ -1541,18 +1572,22 @@ export function Chat({
           },
         };
 
-        return [...prev.slice(0, -1), {
+        const next = [...prev];
+        next[lastReplyIndex] = {
           ...lastMsg,
+          messageType: 'reply',
           timeline: newTimeline,
-        }];
+        };
+        return next;
       });
     };
 
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         
         // Add to Timeline
         const newTimeline = [...lastMsg.timeline, {
@@ -1564,11 +1599,14 @@ export function Chat({
             skillData: skillData
         }];
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             activatedSkill: skillData 
-        }];
+        };
+        return next;
       });
     };
 
@@ -1631,7 +1669,8 @@ export function Chat({
           source,
         });
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           debugUi('response_end:set_messages', {
             chatInstanceId: chatInstanceIdRef.current,
             sessionId: currentSessionIdRef.current,
@@ -1656,13 +1695,17 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
+              messageType: 'reply',
               content: mergedContent,
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
+            };
+            return next;
           }
           if (finalContent) {
             const now = Date.now();
@@ -1671,6 +1714,7 @@ export function Chat({
               {
                 id: now.toString(),
                 role: 'ai',
+                messageType: 'reply',
                 content: finalContent,
                 tools: [],
                 timeline: [],
@@ -1720,7 +1764,8 @@ export function Chat({
         setConfirmRequest(null);
         setErrorNotice(null);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
           const now = Date.now();
           const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1731,7 +1776,25 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false, processingFinishedAt: now }];
+          const next = [...prev];
+          next[lastReplyIndex] = {
+            ...lastMsg,
+            messageType: 'reply',
+            timeline,
+            isStreaming: false,
+            suppressPendingIndicator: false,
+            processingFinishedAt: now,
+          };
+          const runningThinkingIndex = findLastRunningThinkingIndex(next);
+          if (runningThinkingIndex !== -1) {
+            next[runningThinkingIndex] = {
+              ...next[runningThinkingIndex],
+              messageType: 'thinking',
+              isStreaming: false,
+              processingFinishedAt: now,
+            };
+          }
+          return next;
         });
       });
     };
@@ -1746,10 +1809,12 @@ export function Chat({
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        return [...prev.slice(0, -1), { ...lastMsg, plan: steps }];
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', plan: steps };
+        return next;
       });
     };
 
@@ -1757,7 +1822,7 @@ export function Chat({
       if (!isActiveRef.current) return;
       suppressComposerFocus('error', 3000);
       blurComposer('error');
-      const { formatted, notice } = deriveChatErrorPresentation(error);
+      const notice = normalizeChatErrorNotice(error);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
@@ -1768,7 +1833,8 @@ export function Chat({
         setConfirmRequest(null);
         setErrorNotice(notice);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
             const now = Date.now();
             const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1779,28 +1845,27 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
-              content: formatted,
+              messageType: 'reply',
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
-          }
-          const now = Date.now();
-          return [
-            ...prev,
-            {
-              id: now.toString(),
-              role: 'ai',
-              content: formatted,
-              tools: [],
-              timeline: [],
-              isStreaming: false,
-              processingStartedAt: now,
-              processingFinishedAt: now,
+            };
+            const runningThinkingIndex = findLastRunningThinkingIndex(next);
+            if (runningThinkingIndex !== -1) {
+              next[runningThinkingIndex] = {
+                ...next[runningThinkingIndex],
+                messageType: 'thinking',
+                isStreaming: false,
+                processingFinishedAt: now,
+              };
             }
-          ];
+            return next;
+          }
+          return prev;
         });
       });
     };
@@ -2083,6 +2148,7 @@ export function Chat({
     const aiPlaceholder: Message = {
       id: (processingStartedAt + 1).toString(),
       role: 'ai',
+      messageType: 'reply',
       content: '',
       tools: [],
       timeline: [],
@@ -2570,8 +2636,29 @@ export function Chat({
                   <>
                 {errorNotice && (
                   <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                    <div className="font-medium">本次 AI 请求失败</div>
-                    <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                    {typeof errorNotice === 'string' ? (
+                      <>
+                        <div className="font-medium">请求失败</div>
+                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium">{errorNotice.title}</div>
+                        {errorNotice.hint && (
+                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
+                        )}
+                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
+                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
+                            {errorNotice.metaParts.join(' · ')}
+                          </div>
+                        )}
+                        {errorNotice.detail && (
+                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                            {errorNotice.detail}
+                          </pre>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (

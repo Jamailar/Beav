@@ -238,6 +238,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   const options: ChatModelOption[] = [];
   const defaultSourceId = String(settings.default_ai_source_id || '').trim();
   const prefersOfficialDefault = defaultSourceId.toLowerCase() === 'redbox_official_auto';
+  let hasExplicitDefaultSource = false;
 
   try {
     const parsed = JSON.parse(String(settings.ai_sources_json || '[]')) as Array<Record<string, unknown>>;
@@ -245,6 +246,9 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
       for (const item of parsed) {
         if (!item || typeof item !== 'object') continue;
         const sourceId = String(item.id || '').trim();
+        if (sourceId && sourceId === defaultSourceId) {
+          hasExplicitDefaultSource = true;
+        }
         const sourceName = String(item.name || sourceId || 'AI 源').trim();
         const baseURL = String(item.baseURL || item.baseUrl || '').trim();
         const apiKey = String(item.apiKey || item.key || '').trim();
@@ -282,7 +286,12 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   }
 
   const fallbackModel = String(settings.model_name || '').trim();
-  if (!prefersOfficialDefault && fallbackModel && modelSupportsChat(fallbackModel)) {
+  if (
+    !prefersOfficialDefault
+    && !hasExplicitDefaultSource
+    && fallbackModel
+    && modelSupportsChat(fallbackModel)
+  ) {
     options.push({
       key: `fallback::${fallbackModel}`,
       modelName: fallbackModel,
@@ -295,11 +304,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
 
   const deduped = new Map<string, ChatModelOption>();
   for (const option of options) {
-    const uniqueKey = `${option.baseURL}::${option.modelName}`;
-    const existing = deduped.get(uniqueKey);
-    if (!existing || option.isDefault) {
-      deduped.set(uniqueKey, option);
-    }
+    deduped.set(option.key, option);
   }
 
   return Array.from(deduped.values());

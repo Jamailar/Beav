@@ -101,7 +101,14 @@ const getToolSummary = (toolName: string, input: unknown): string => {
     return '';
   };
 
-  if (toolName === 'app_cli') return pickText('command');
+  if (toolName === 'app_cli') return pickText('action', 'command');
+  if (toolName === 'redbox_fs') {
+    const action = pickText('action');
+    const target = pickText('path', 'pattern', 'query');
+    if (action && target) return `${action} · ${target}`;
+    return action || target;
+  }
+  if (toolName === 'redbox_editor') return pickText('action', 'filePath');
   if (toolName === 'bash' || toolName === 'run_command') return pickText('cmd', 'command');
   if (toolName === 'workspace') return pickText('action', 'path', 'query');
   if (toolName === 'read_file') return pickText('filePath', 'path');

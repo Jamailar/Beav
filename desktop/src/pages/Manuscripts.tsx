@@ -44,7 +44,6 @@ import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
 import type { EditorProjectFile } from '../components/manuscripts/editorProject';
-import { WritingDraftWorkbench } from '../components/manuscripts/WritingDraftWorkbench';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../features/chat/editorSessionBinding';
 import {
@@ -61,6 +60,9 @@ const VideoDraftWorkbench = lazy(async () => ({
 }));
 const AudioDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/AudioDraftWorkbench')).AudioDraftWorkbench,
+}));
+const WritingDraftWorkbench = lazy(async () => ({
+    default: (await import('../components/manuscripts/WritingDraftWorkbench')).WritingDraftWorkbench,
 }));
 
 type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
@@ -685,7 +687,7 @@ function normalizeDraftFileName(input: string): string {
 }
 
 function buildDraftStorageName(): string {
-    return `${Date.now()}`;
+    return `manuscript-${Date.now()}`;
 }
 
 function pathBasenameSafe(rawPath: string): string {
@@ -694,16 +696,28 @@ function pathBasenameSafe(rawPath: string): string {
     return parts[parts.length - 1] || '';
 }
 
+function normalizeAssetKindReference(value: string | null | undefined): string {
+    const trimmed = String(value || '').trim().toLowerCase();
+    if (!trimmed) return '';
+    return trimmed.split(/[?#]/, 1)[0] || '';
+}
+
 function isSameDraftRelativePath(left: string | null | undefined, right: string | null | undefined): boolean {
     return String(left || '').replace(/\\/g, '/').trim() === String(right || '').replace(/\\/g, '/').trim();
 }
 
 function inferAssetKind(asset: MediaAsset): 'image' | 'video' | 'audio' | 'unknown' {
     const mime = String(asset.mimeType || '').toLowerCase();
-    const ref = `${asset.relativePath || ''} ${asset.previewUrl || ''} ${asset.absolutePath || ''}`.toLowerCase();
-    if (mime.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(ref)) return 'image';
-    if (mime.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(ref)) return 'video';
-    if (mime.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i.test(ref)) return 'audio';
+    const refs = [
+        normalizeAssetKindReference(asset.relativePath),
+        normalizeAssetKindReference(asset.previewUrl),
+        normalizeAssetKindReference(asset.absolutePath),
+        normalizeAssetKindReference(asset.title),
+    ].filter(Boolean);
+    const ref = refs.join(' ');
+    if (mime.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|bmp|svg|heic|heif|avif|jfif)$/i.test(ref)) return 'image';
+    if (mime.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv|mpg|mpeg|m2ts|mts|ts|3gp|wmv|flv)$/i.test(ref)) return 'video';
+    if (mime.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|aiff|aif|caf)$/i.test(ref)) return 'audio';
     return 'unknown';
 }
 
@@ -1350,12 +1364,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         if (filter === 'all' && activeFolder) return [] as MediaAsset[];
         return assets.filter((asset) => {
             const assetKind = inferAssetKind(asset);
-            if (filter === 'media' && !['image', 'video', 'audio'].includes(assetKind)) return false;
+            if (filter === 'media' && !['image', 'video', 'audio', 'unknown'].includes(assetKind)) return false;
             if (filter === 'image' && assetKind !== 'image') return false;
             if (filter === 'video' && assetKind !== 'video') return false;
             if (filter === 'audio' && assetKind !== 'audio') return false;
             if (filter === 'drafts' || filter === 'folders') return false;
-            if (isMediaScope && getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
+            if (isMediaScope && mediaFolder && getRelativeFolderPath(asset.relativePath || '') !== mediaFolder) return false;
             const haystack = `${asset.title || ''} ${asset.prompt || ''} ${asset.relativePath || ''}`.toLowerCase();
             return !normalizedQuery || haystack.includes(normalizedQuery);
         });
@@ -3205,57 +3219,59 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         />
                     </Suspense>
                 ) : (
-                    <WritingDraftWorkbench
-                        isActive={isActive}
-                        draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
-                        title={currentDescriptor.title}
-                        filePath={editorFile}
-                        editorBody={editorBody}
-                        writeProposal={editorWriteProposalView}
-                        editorBodyDirty={editorBodyDirty}
-                        isSavingEditorBody={isSavingEditorBody}
-                        isApplyingWriteProposal={isApplyingWriteProposal}
-                        isRejectingWriteProposal={isRejectingWriteProposal}
-                        editorChatSessionId={editorChatSessionId}
-                        editorChatReady={editorChatSessionReady}
-                        layoutPreview={articleLayoutPreview}
-                        wechatPreview={articleWechatPreview}
-                        hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
-                        richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
-                        richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
-                        richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
-                        richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
-                        richpostThemesDir={typeof packageState?.richpostThemesDir === 'string' ? packageState.richpostThemesDir : null}
-                        richpostThemeTemplateFile={typeof packageState?.richpostThemeTemplateFile === 'string' ? packageState.richpostThemeTemplateFile : null}
-                        isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
-                        longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
-                        longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
-                        isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
-                        richpostPages={richpostPagePreviews}
-                        coverAsset={packageCoverAsset}
-                        imageAssets={packageImageAssets}
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
+                        <WritingDraftWorkbench
+                            isActive={isActive}
+                            draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
+                            title={currentDescriptor.title}
+                            filePath={editorFile}
+                            editorBody={editorBody}
+                            writeProposal={editorWriteProposalView}
+                            editorBodyDirty={editorBodyDirty}
+                            isSavingEditorBody={isSavingEditorBody}
+                            isApplyingWriteProposal={isApplyingWriteProposal}
+                            isRejectingWriteProposal={isRejectingWriteProposal}
+                            editorChatSessionId={editorChatSessionId}
+                            editorChatReady={editorChatSessionReady}
+                            layoutPreview={articleLayoutPreview}
+                            wechatPreview={articleWechatPreview}
+                            hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
+                            richpostThemeId={typeof packageState?.richpostThemeId === 'string' ? packageState.richpostThemeId : null}
+                            richpostFontScale={Number(packageState?.richpostFontScale || 1) || 1}
+                            richpostLineHeightScale={Number(packageState?.richpostLineHeightScale || 1) || 1}
+                            richpostThemePresets={Array.isArray(packageState?.richpostThemeCatalog) ? packageState.richpostThemeCatalog : []}
+                            richpostThemesDir={typeof packageState?.richpostThemesDir === 'string' ? packageState.richpostThemesDir : null}
+                            richpostThemeTemplateFile={typeof packageState?.richpostThemeTemplateFile === 'string' ? packageState.richpostThemeTemplateFile : null}
+                            isApplyingRichpostTheme={String(workingId || '').startsWith('richpost-theme:')}
+                            longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
+                            longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
+                            isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
+                            richpostPages={richpostPagePreviews}
+                            coverAsset={packageCoverAsset}
+                            imageAssets={packageImageAssets}
                             onEditorBodyChange={(value) => {
                                 setEditorBody(value);
                                 setEditorBodyDirty(true);
                             }}
-                        onAcceptWriteProposal={() => {
-                            void handleAcceptEditorWriteProposal();
-                        }}
-                        onSelectRichpostTheme={(themeId) => {
-                            void handleSelectRichpostTheme(themeId);
-                        }}
-                        onUpdateRichpostTypography={(settings) => {
-                            void handleUpdateRichpostTypography(settings);
-                        }}
-                        onSelectLongformLayoutPreset={(presetId, target) => {
-                            void handleSelectLongformLayoutPreset(presetId, target);
-                        }}
+                            onAcceptWriteProposal={() => {
+                                void handleAcceptEditorWriteProposal();
+                            }}
+                            onSelectRichpostTheme={(themeId) => {
+                                void handleSelectRichpostTheme(themeId);
+                            }}
+                            onUpdateRichpostTypography={(settings) => {
+                                void handleUpdateRichpostTypography(settings);
+                            }}
+                            onSelectLongformLayoutPreset={(presetId, target) => {
+                                void handleSelectLongformLayoutPreset(presetId, target);
+                            }}
                             onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
                             onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                             onRejectWriteProposal={() => {
                                 void handleRejectEditorWriteProposal();
                             }}
-                    />
+                        />
+                    </Suspense>
                 )}
             </div>
         );

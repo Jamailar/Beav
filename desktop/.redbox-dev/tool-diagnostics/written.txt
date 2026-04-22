@@ -1,1 +1,0 @@
-tool diagnostic write

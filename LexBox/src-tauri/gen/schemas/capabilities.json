@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default capability for the RedBox desktop window","local":true,"windows":["main"],"permissions":["core:default","core:event:default"]}}
