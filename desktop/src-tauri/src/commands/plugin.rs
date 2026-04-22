@@ -28,6 +28,15 @@ fn browser_plugin_prepared_dir(export_root: &Path) -> std::path::PathBuf {
     export_root.join(EXPORTED_BROWSER_PLUGIN_DIR_NAME)
 }
 
+fn sync_browser_plugin_dir(bundled_path: &Path, prepared_dir: &Path) -> Result<bool, String> {
+    let replaced_existing = prepared_dir.exists();
+    if replaced_existing {
+        fs::remove_dir_all(prepared_dir).map_err(|error| error.to_string())?;
+    }
+    copy_dir_recursive(bundled_path, prepared_dir)?;
+    Ok(replaced_existing)
+}
+
 fn migrate_flat_browser_plugin_layout(
     export_root: &Path,
     prepared_dir: &Path,
@@ -116,26 +125,21 @@ pub fn handle_plugin_channel(
                 let export_path = browser_plugin_export_root(state)?;
                 let prepared_path = browser_plugin_prepared_dir(&export_path);
                 migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
-                let already_prepared = prepared_path.join("manifest.json").exists();
-                if !already_prepared {
-                    copy_dir_recursive(&bundled_path, &prepared_path)?;
-                }
+                let replaced_existing = sync_browser_plugin_dir(&bundled_path, &prepared_path)?;
                 Ok(json!({
                     "success": true,
                     "path": export_path.display().to_string(),
                     "pluginPath": prepared_path.display().to_string(),
                     "bundledPath": bundled_path.display().to_string(),
-                    "alreadyPrepared": already_prepared
+                    "alreadyPrepared": replaced_existing
                 }))
             }
             "plugin:open-browser-extension-dir" => {
                 let export_path = browser_plugin_export_root(state)?;
                 let prepared_path = browser_plugin_prepared_dir(&export_path);
                 migrate_flat_browser_plugin_layout(&export_path, &prepared_path)?;
-                if !prepared_path.join("manifest.json").exists() {
-                    if let Some(bundled_path) = browser_plugin_bundled_root(app) {
-                        copy_dir_recursive(&bundled_path, &prepared_path)?;
-                    }
+                if let Some(bundled_path) = browser_plugin_bundled_root(app) {
+                    sync_browser_plugin_dir(&bundled_path, &prepared_path)?;
                 }
                 open::that(&export_path).map_err(|error| error.to_string())?;
                 Ok(json!({

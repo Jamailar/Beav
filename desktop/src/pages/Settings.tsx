@@ -3148,7 +3148,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       await loadBrowserPluginStatus();
-      void appAlert(`插件已准备完成。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
+      void appAlert(`插件已同步到最新内置版本。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
     } catch (error) {
       console.error('Failed to prepare browser plugin', error);
       void appAlert(`插件准备失败：${String(error)}`);
