@@ -479,6 +479,7 @@ impl<'a> AppCliExecutor<'a> {
             "memory" => self.handle_memory(&tokens[1..], &payload),
             "redclaw" => self.handle_redclaw(&tokens[1..], &payload),
             "runtime" => self.handle_runtime(&tokens[1..], &payload),
+            "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(&tokens[1..], &payload),
             "settings" => self.handle_settings(&tokens[1..], &payload),
             "skills" => self.handle_skills(&tokens[1..], &payload),
             "mcp" => self.handle_mcp(&tokens[1..], &payload),
@@ -576,6 +577,42 @@ impl<'a> AppCliExecutor<'a> {
             "runtimetaskscancel" => {
                 let tokens = vec!["tasks".to_string(), "cancel".to_string()];
                 self.handle_runtime(&tokens, payload)
+            }
+            "cliruntimedetect" => {
+                let tokens = vec!["detect".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeinspect" => {
+                let tokens = vec!["inspect".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeenvironmentlist" => {
+                let tokens = vec!["environment".to_string(), "list".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeenvironmentcreate" => {
+                let tokens = vec!["environment".to_string(), "create".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeinstall" => {
+                let tokens = vec!["install".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeexecute" => {
+                let tokens = vec!["execute".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeverify" => {
+                let tokens = vec!["verify".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeescalationapprove" => {
+                let tokens = vec!["escalation".to_string(), "approve".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
+            "cliruntimeescalationdeny" => {
+                let tokens = vec!["escalation".to_string(), "deny".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
             }
             "mcplist" => {
                 let tokens = vec!["list".to_string()];
@@ -1646,6 +1683,160 @@ impl<'a> AppCliExecutor<'a> {
                 }
             }
             _ => Err(format!("unsupported runtime action: {action}")),
+        }
+    }
+
+    fn handle_cli_runtime(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("cli_runtime")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "detect" => self.call_channel(
+                "cli-runtime:detect",
+                json!({
+                    "commands": payload_field(payload, "commands")
+                        .cloned()
+                        .unwrap_or_else(|| json!(args.positionals)),
+                    "sessionId": payload_string(payload, "sessionId"),
+                    "taskId": payload_string(payload, "taskId"),
+                }),
+            ),
+            "inspect" => self.call_channel(
+                "cli-runtime:inspect",
+                json!({
+                    "toolId": args
+                        .string(&["tool-id", "toolId"])
+                        .or_else(|| payload_string(payload, "toolId")),
+                    "command": args
+                        .string(&["command"])
+                        .or_else(|| payload_string(payload, "command")),
+                }),
+            ),
+            "environment" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "list" => self.call_channel("cli-runtime:list-environments", json!({})),
+                    "create" => self.call_channel(
+                        "cli-runtime:create-environment",
+                        json!({
+                            "scope": nested_args
+                                .string(&["scope"])
+                                .or_else(|| payload_string(payload, "scope"))
+                                .ok_or_else(|| "cli_runtime environment.create requires --scope".to_string())?,
+                            "workspaceRoot": nested_args
+                                .string(&["workspace-root", "workspaceRoot"])
+                                .or_else(|| payload_string(payload, "workspaceRoot")),
+                            "taskId": nested_args
+                                .string(&["task-id", "taskId"])
+                                .or_else(|| payload_string(payload, "taskId")),
+                        }),
+                    ),
+                    _ => Err(format!("unsupported cli_runtime environment action: {sub}")),
+                }
+            }
+            "install" => self.call_channel(
+                "cli-runtime:install",
+                json!({
+                    "environmentId": args
+                        .string(&["environment-id", "environmentId"])
+                        .or_else(|| payload_string(payload, "environmentId"))
+                        .ok_or_else(|| "cli_runtime install requires --environment-id".to_string())?,
+                    "installMethod": args
+                        .string(&["install-method", "installMethod"])
+                        .or_else(|| payload_string(payload, "installMethod"))
+                        .ok_or_else(|| "cli_runtime install requires --install-method".to_string())?,
+                    "spec": args
+                        .string(&["spec"])
+                        .or_else(|| payload_string(payload, "spec"))
+                        .ok_or_else(|| "cli_runtime install requires --spec".to_string())?,
+                    "toolName": args
+                        .string(&["tool-name", "toolName"])
+                        .or_else(|| payload_string(payload, "toolName")),
+                    "sessionId": payload_string(payload, "sessionId"),
+                    "taskId": payload_string(payload, "taskId"),
+                    "runtimeId": payload_string(payload, "runtimeId"),
+                    "env": payload_field(payload, "env").cloned().unwrap_or_else(|| json!({})),
+                }),
+            ),
+            "execute" => self.call_channel(
+                "cli-runtime:execute",
+                json!({
+                    "environmentId": args
+                        .string(&["environment-id", "environmentId"])
+                        .or_else(|| payload_string(payload, "environmentId")),
+                    "toolId": args
+                        .string(&["tool-id", "toolId"])
+                        .or_else(|| payload_string(payload, "toolId")),
+                    "argv": payload_field(payload, "argv")
+                        .cloned()
+                        .or_else(|| {
+                            if args.positionals.is_empty() {
+                                None
+                            } else {
+                                Some(json!(args.positionals))
+                            }
+                        })
+                        .ok_or_else(|| "cli_runtime execute requires argv".to_string())?,
+                    "cwd": args
+                        .string(&["cwd"])
+                        .or_else(|| payload_string(payload, "cwd")),
+                    "sessionId": payload_string(payload, "sessionId"),
+                    "taskId": payload_string(payload, "taskId"),
+                    "runtimeId": payload_string(payload, "runtimeId"),
+                    "usePty": payload_field(payload, "usePty").cloned().unwrap_or_else(|| json!(false)),
+                    "verificationRules": payload_field(payload, "verificationRules")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                    "env": payload_field(payload, "env").cloned().unwrap_or_else(|| json!({})),
+                }),
+            ),
+            "verify" => self.call_channel(
+                "cli-runtime:verify",
+                json!({
+                    "executionId": args
+                        .string(&["execution-id", "executionId"])
+                        .or_else(|| payload_string(payload, "executionId"))
+                        .ok_or_else(|| "cli_runtime verify requires --execution-id".to_string())?,
+                    "rules": payload_field(payload, "rules")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                }),
+            ),
+            "escalation" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "approve" => self.call_channel(
+                        "cli-runtime:approve-escalation",
+                        json!({
+                            "escalationId": nested_args
+                                .string(&["escalation-id", "escalationId"])
+                                .or_else(|| payload_string(payload, "escalationId"))
+                                .ok_or_else(|| "cli_runtime escalation.approve requires --escalation-id".to_string())?,
+                            "scope": nested_args
+                                .string(&["scope"])
+                                .or_else(|| payload_string(payload, "scope"))
+                                .ok_or_else(|| "cli_runtime escalation.approve requires --scope".to_string())?,
+                        }),
+                    ),
+                    "deny" => self.call_channel(
+                        "cli-runtime:deny-escalation",
+                        json!({
+                            "escalationId": nested_args
+                                .string(&["escalation-id", "escalationId"])
+                                .or_else(|| payload_string(payload, "escalationId"))
+                                .ok_or_else(|| "cli_runtime escalation.deny requires --escalation-id".to_string())?,
+                            "reason": nested_args
+                                .string(&["reason"])
+                                .or_else(|| payload_string(payload, "reason")),
+                        }),
+                    ),
+                    _ => Err(format!("unsupported cli_runtime escalation action: {sub}")),
+                }
+            }
+            _ => Err(format!("unsupported cli_runtime action: {action}")),
         }
     }
 

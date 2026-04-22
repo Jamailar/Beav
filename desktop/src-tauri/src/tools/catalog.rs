@@ -396,6 +396,187 @@ fn runtime_output_schema() -> Value {
     }))
 }
 
+fn cli_runtime_detect_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "commands",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                }),
+            ),
+            (
+                "sessionId",
+                string_schema("Optional session id for lineage."),
+            ),
+            ("taskId", string_schema("Optional task id for lineage.")),
+        ],
+        &[],
+        None,
+    )
+}
+
+fn cli_runtime_inspect_input_schema() -> Value {
+    object_schema(
+        &[
+            ("toolId", string_schema("CLI tool id or executable name.")),
+            (
+                "command",
+                string_schema("Direct command/executable to inspect."),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
+fn cli_runtime_environment_create_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "scope",
+                json!({
+                    "type": "string",
+                    "enum": ["app-global", "workspace-local", "task-ephemeral"],
+                }),
+            ),
+            (
+                "workspaceRoot",
+                string_schema("Workspace root for workspace-local scope."),
+            ),
+            ("taskId", string_schema("Task id for task-ephemeral scope.")),
+        ],
+        &["scope"],
+        None,
+    )
+}
+
+fn cli_runtime_install_input_schema() -> Value {
+    object_schema(
+        &[
+            ("environmentId", string_schema("Target CLI environment id.")),
+            (
+                "installMethod",
+                json!({
+                    "type": "string",
+                    "enum": ["manual", "npm", "pnpm", "python", "uv", "cargo", "go", "binary"],
+                }),
+            ),
+            (
+                "spec",
+                string_schema("Install spec passed to the package manager."),
+            ),
+            (
+                "toolName",
+                string_schema("Expected executable name after installation."),
+            ),
+            (
+                "sessionId",
+                string_schema("Optional session id for lineage."),
+            ),
+            ("taskId", string_schema("Optional task id for lineage.")),
+            (
+                "runtimeId",
+                string_schema("Optional runtime id for lineage."),
+            ),
+        ],
+        &["environmentId", "installMethod", "spec"],
+        None,
+    )
+}
+
+fn cli_runtime_execute_input_schema() -> Value {
+    object_schema(
+        &[
+            ("environmentId", string_schema("Target CLI environment id.")),
+            (
+                "toolId",
+                string_schema("Optional tool id or executable name."),
+            ),
+            (
+                "argv",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                }),
+            ),
+            ("cwd", string_schema("Working directory for the command.")),
+            (
+                "sessionId",
+                string_schema("Optional session id for lineage."),
+            ),
+            ("taskId", string_schema("Optional task id for lineage.")),
+            (
+                "runtimeId",
+                string_schema("Optional runtime id for lineage."),
+            ),
+            ("usePty", bool_schema("Whether to request PTY execution.")),
+            (
+                "verificationRules",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                }),
+            ),
+            (
+                "env",
+                json!({
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                }),
+            ),
+        ],
+        &["argv"],
+        None,
+    )
+}
+
+fn cli_runtime_verify_input_schema() -> Value {
+    object_schema(
+        &[
+            ("executionId", string_schema("CLI execution id.")),
+            (
+                "rules",
+                json!({
+                    "type": "array",
+                    "items": { "type": "object", "additionalProperties": true },
+                }),
+            ),
+        ],
+        &["executionId", "rules"],
+        None,
+    )
+}
+
+fn cli_runtime_escalation_approve_input_schema() -> Value {
+    object_schema(
+        &[
+            ("escalationId", string_schema("Escalation request id.")),
+            (
+                "scope",
+                json!({
+                    "type": "string",
+                    "enum": ["once", "session", "always"],
+                }),
+            ),
+        ],
+        &["escalationId", "scope"],
+        None,
+    )
+}
+
+fn cli_runtime_escalation_deny_input_schema() -> Value {
+    object_schema(
+        &[
+            ("escalationId", string_schema("Escalation request id.")),
+            ("reason", string_schema("Optional denial reason.")),
+        ],
+        &["escalationId"],
+        None,
+    )
+}
+
 fn mcp_list_input_schema() -> Value {
     no_payload_schema()
 }
@@ -1000,6 +1181,105 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         description: "Cancel a runtime task.",
         input_schema: runtime_simple_input_schema,
         output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.detect",
+        namespace: "cli_runtime",
+        description: "Detect available CLI tools from the host PATH and managed environments.",
+        input_schema: cli_runtime_detect_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.inspect",
+        namespace: "cli_runtime",
+        description: "Inspect one CLI executable and refresh its detection record.",
+        input_schema: cli_runtime_inspect_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.environment.list",
+        namespace: "cli_runtime.environment",
+        description: "List managed CLI runtime environments.",
+        input_schema: no_payload_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.environment.create",
+        namespace: "cli_runtime.environment",
+        description: "Create or hydrate a managed CLI runtime environment.",
+        input_schema: cli_runtime_environment_create_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.install",
+        namespace: "cli_runtime",
+        description: "Install one CLI tool into a managed environment.",
+        input_schema: cli_runtime_install_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.execute",
+        namespace: "cli_runtime",
+        description: "Execute one CLI command through the managed runtime control plane.",
+        input_schema: cli_runtime_execute_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.verify",
+        namespace: "cli_runtime",
+        description: "Run structured verification rules against one finished CLI execution.",
+        input_schema: cli_runtime_verify_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.escalation.approve",
+        namespace: "cli_runtime.escalation",
+        description: "Approve one pending CLI escalation request.",
+        input_schema: cli_runtime_escalation_approve_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.escalation.deny",
+        namespace: "cli_runtime.escalation",
+        description: "Deny one pending CLI escalation request.",
+        input_schema: cli_runtime_escalation_deny_input_schema,
+        output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
         runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
@@ -1870,6 +2150,7 @@ mod tests {
             .expect("action enum");
         let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
+        assert!(actions.contains(&"cli_runtime.detect"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
     }

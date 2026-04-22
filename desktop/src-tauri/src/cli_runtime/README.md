@@ -17,4 +17,5 @@ CLI runtime host control plane 的基础模块目录。
 ## 当前边界
 
 - 当前已覆盖基础域模型、探测、环境存储、resolver、执行、install/verify 路由与最小事件接线
+- `app_cli(action="cli_runtime.*")` 已作为 canonical runtime surface 暴露给 diagnostics / redclaw runtime
 - 仍未覆盖后台取消、真正 PTY 托管和更细粒度 installer backend

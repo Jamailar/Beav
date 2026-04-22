@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::cli_runtime::{
-    append_cli_verification_records, upsert_cli_execution_record, CliExecuteRequest,
+    replace_cli_verification_records, upsert_cli_execution_record, CliExecuteRequest,
     CliExecutionRecord, CliExecutionStatus, CliVerificationRecord, CliVerificationStatus,
     CliVerifierKind, CliVerifyRule,
 };
@@ -320,7 +320,7 @@ pub fn run_cli_verification(
     let mut updated_execution = execution.clone();
     updated_execution.verification_status = verification_status;
     let updated_execution = upsert_cli_execution_record(state, updated_execution)?;
-    let stored_records = append_cli_verification_records(state, verification_records)?;
+    let stored_records = replace_cli_verification_records(state, verification_records)?;
     Ok(CliVerificationOutcome {
         execution: updated_execution,
         verifications: stored_records,

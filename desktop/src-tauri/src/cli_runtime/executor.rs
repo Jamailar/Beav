@@ -219,18 +219,20 @@ pub fn execute_cli_command(
     } else {
         CliExecutionStatus::Failed
     };
-    let reason = if record.status == CliExecutionStatus::Completed {
-        Some("process exited successfully")
+    let mut reason = if record.status == CliExecutionStatus::Completed {
+        Some("process exited successfully".to_string())
     } else {
-        Some("process exited with non-zero status")
+        Some("process exited with non-zero status".to_string())
     };
-    record = upsert_cli_execution_record(state, record)?;
-    emit_cli_execution_status(app, &record, reason);
     if !request.verification_rules.is_empty() {
         let outcome = run_cli_verification(state, record.clone(), &request.verification_rules)?;
+        reason = Some(outcome.summary.clone());
         emit_cli_verification_finished(app, &outcome.execution, &outcome.summary);
         record = outcome.execution;
+    } else {
+        record = upsert_cli_execution_record(state, record)?;
     }
+    emit_cli_execution_status(app, &record, reason.as_deref());
     Ok(record)
 }
 
