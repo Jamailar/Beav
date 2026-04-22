@@ -61,6 +61,11 @@ import {
   toAiModelDescriptor,
 } from './settings/shared';
 import { type ModelCapability } from '../../shared/modelCapabilities';
+import type {
+  CliRuntimeEnvironmentRecord,
+  CliRuntimeEnvironmentScope,
+  CliRuntimeToolRecord,
+} from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
   REDBOX_OFFICIAL_VIDEO_MODEL_LIST,
@@ -328,6 +333,54 @@ function toRuntimePerfNumber(value: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function normalizeCliRuntimeToolRecord(value: unknown): CliRuntimeToolRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = String(record.id || record.toolId || '').trim();
+  const executable = String(record.executable || record.command || '').trim();
+  const name = String(record.name || executable || id).trim();
+  if (!id && !name && !executable) return null;
+  return {
+    id: id || name || executable,
+    name: name || executable || id,
+    executable: executable || name || id,
+    resolvedPath: String(record.resolvedPath || record.resolved_path || '').trim() || null,
+    source: String(record.source || 'unknown').trim().toLowerCase() as CliRuntimeToolRecord['source'],
+    installMethod: String(record.installMethod || record.install_method || '').trim() || null,
+    installSpec: String(record.installSpec || record.install_spec || '').trim() || null,
+    version: String(record.version || '').trim() || null,
+    health: String(record.health || 'unknown').trim().toLowerCase() as CliRuntimeToolRecord['health'],
+    manifestId: String(record.manifestId || record.manifest_id || '').trim() || null,
+    environmentId: String(record.environmentId || record.environment_id || '').trim() || null,
+    lastCheckedAt: toRuntimePerfNumber(record.lastCheckedAt) ?? null,
+    metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata as Record<string, unknown> : null,
+  };
+}
+
+function normalizeCliRuntimeEnvironmentRecord(value: unknown): CliRuntimeEnvironmentRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = String(record.id || '').trim();
+  const rootPath = String(record.rootPath || record.root_path || '').trim();
+  if (!id && !rootPath) return null;
+  return {
+    id: id || rootPath,
+    scope: String(record.scope || 'workspace-local').trim().toLowerCase() as CliRuntimeEnvironmentRecord['scope'],
+    rootPath,
+    workspaceRoot: String(record.workspaceRoot || record.workspace_root || '').trim() || null,
+    pathEntries: Array.isArray(record.pathEntries)
+      ? record.pathEntries.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    installedToolIds: Array.isArray(record.installedToolIds)
+      ? record.installedToolIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    runtimes: record.runtimes && typeof record.runtimes === 'object' ? record.runtimes as Record<string, unknown> : null,
+    createdAt: toRuntimePerfNumber(record.createdAt) ?? null,
+    updatedAt: toRuntimePerfNumber(record.updatedAt) ?? null,
+    metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata as Record<string, unknown> : null,
+  };
 }
 
 function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
@@ -813,6 +866,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     error?: string;
   } | null>(null);
   const [isPreparingBrowserPlugin, setIsPreparingBrowserPlugin] = useState(false);
+  const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
+  const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
+  const [cliRuntimeStatusMessage, setCliRuntimeStatusMessage] = useState('');
+  const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
+  const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
+  const [cliRuntimeCreatingEnvironment, setCliRuntimeCreatingEnvironment] = useState<CliRuntimeEnvironmentScope | ''>('');
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [mcpStatusMessage, setMcpStatusMessage] = useState('');
   const [isSyncingMcp, setIsSyncingMcp] = useState(false);
@@ -1098,6 +1157,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     const timer = window.setTimeout(() => setMcpStatusMessage(''), 2800);
     return () => window.clearTimeout(timer);
   }, [mcpStatusMessage]);
+
+  useEffect(() => {
+    if (!cliRuntimeStatusMessage) return;
+    const timer = window.setTimeout(() => setCliRuntimeStatusMessage(''), 3200);
+    return () => window.clearTimeout(timer);
+  }, [cliRuntimeStatusMessage]);
 
   useEffect(() => {
     if (activeTab !== 'tools') return;
@@ -2788,6 +2853,115 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const loadCliRuntimeDashboard = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsCliRuntimeRefreshing(true);
+    }
+    try {
+      const [detectResult, environmentsResult] = await Promise.all([
+        window.ipcRenderer.cliRuntime.detect(),
+        window.ipcRenderer.cliRuntime.listEnvironments(),
+      ]);
+      const detectedToolsRaw = Array.isArray(detectResult)
+        ? detectResult
+        : Array.isArray((detectResult as { tools?: unknown[] } | null)?.tools)
+          ? (detectResult as { tools?: unknown[] }).tools || []
+          : [];
+      const nextTools = detectedToolsRaw
+        .map(normalizeCliRuntimeToolRecord)
+        .filter((item): item is CliRuntimeToolRecord => Boolean(item))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const nextEnvironments = (Array.isArray(environmentsResult) ? environmentsResult : [])
+        .map(normalizeCliRuntimeEnvironmentRecord)
+        .filter((item): item is CliRuntimeEnvironmentRecord => Boolean(item))
+        .sort((left, right) => left.scope.localeCompare(right.scope) || left.id.localeCompare(right.id));
+      setCliRuntimeTools(nextTools);
+      setCliRuntimeEnvironments(nextEnvironments);
+      if (!options?.silent) {
+        setCliRuntimeStatusMessage(`已刷新 CLI runtime：${nextTools.length} 个工具，${nextEnvironments.length} 个环境`);
+      }
+    } catch (error) {
+      console.error('Failed to load CLI runtime dashboard', error);
+      if (!options?.silent) {
+        setCliRuntimeStatusMessage(`刷新 CLI runtime 失败：${String(error)}`);
+      }
+    } finally {
+      if (!options?.silent) {
+        setIsCliRuntimeRefreshing(false);
+      }
+    }
+  }, []);
+
+  const handleInspectCliRuntimeTool = useCallback(async (toolId: string) => {
+    const normalizedToolId = String(toolId || '').trim();
+    if (!normalizedToolId) return;
+    setCliRuntimeInspectingToolId(normalizedToolId);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.inspect({ toolId: normalizedToolId });
+      const normalized = normalizeCliRuntimeToolRecord(result);
+      if (normalized) {
+        setCliRuntimeTools((prev) => {
+          const next = prev.map((item) => (item.id === normalizedToolId ? { ...item, ...normalized } : item));
+          if (!next.some((item) => item.id === normalizedToolId)) {
+            next.unshift(normalized);
+          }
+          return next.sort((left, right) => left.name.localeCompare(right.name));
+        });
+        setCliRuntimeStatusMessage(`已检查 ${normalized.name || normalized.executable}`);
+      } else {
+        setCliRuntimeStatusMessage(`未返回 ${normalizedToolId} 的 inspect 数据`);
+      }
+    } catch (error) {
+      console.error('Failed to inspect CLI runtime tool', error);
+      setCliRuntimeStatusMessage(`Inspect 失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInspectingToolId('');
+    }
+  }, []);
+
+  const handleCreateCliRuntimeEnvironment = useCallback(async (scope: CliRuntimeEnvironmentScope) => {
+    setCliRuntimeCreatingEnvironment(scope);
+    try {
+      const workspaceRoot = scope === 'workspace-local'
+        ? String(formData.workspace_dir || '').trim() || undefined
+        : undefined;
+      const result = await window.ipcRenderer.cliRuntime.createEnvironment({ scope, workspaceRoot });
+      const normalized = normalizeCliRuntimeEnvironmentRecord(result);
+      if (normalized) {
+        setCliRuntimeEnvironments((prev) => {
+          const next = prev.filter((item) => item.id !== normalized.id);
+          next.unshift(normalized);
+          return next.sort((left, right) => left.scope.localeCompare(right.scope) || left.id.localeCompare(right.id));
+        });
+        setCliRuntimeStatusMessage(`已创建环境 ${normalized.id}`);
+      } else if ((result as { success?: boolean; error?: string } | null)?.success === false) {
+        setCliRuntimeStatusMessage((result as { error?: string }).error || '创建 CLI environment 失败');
+      } else {
+        await loadCliRuntimeDashboard({ silent: true });
+        setCliRuntimeStatusMessage(`已触发环境创建：${scope}`);
+      }
+    } catch (error) {
+      console.error('Failed to create CLI runtime environment', error);
+      setCliRuntimeStatusMessage(`创建环境失败：${String(error)}`);
+    } finally {
+      setCliRuntimeCreatingEnvironment('');
+    }
+  }, [formData.workspace_dir, loadCliRuntimeDashboard]);
+
+  const handleOpenCliRuntimeEnvironmentRoot = useCallback(async (rootPath: string) => {
+    const normalizedPath = String(rootPath || '').trim();
+    if (!normalizedPath) return;
+    try {
+      const result = await window.ipcRenderer.openPath(normalizedPath);
+      if (!result?.success) {
+        throw new Error(result?.error || '打开目录失败');
+      }
+    } catch (error) {
+      console.error('Failed to open CLI runtime environment root', error);
+      setCliRuntimeStatusMessage(`打开目录失败：${String(error)}`);
+    }
+  }, []);
+
   const loadBrowserPluginStatus = useCallback(async () => {
     try {
       const status = await window.ipcRenderer.browserPlugin.getStatus();
@@ -2805,6 +2979,34 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!isActive || activeTab !== 'tools') return;
+    let refreshTimer: number | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer != null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void loadCliRuntimeDashboard({ silent: true });
+      }, 450);
+    };
+    const handleRuntimeEvent = (_event: unknown, envelope?: unknown) => {
+      const record = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
+      const eventType = String(record.eventType || '').trim();
+      if (eventType.startsWith('runtime:cli-')) {
+        scheduleRefresh();
+      }
+    };
+    window.ipcRenderer.on('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+      if (refreshTimer != null) {
+        window.clearTimeout(refreshTimer);
+      }
+    };
+  }, [activeTab, isActive, loadCliRuntimeDashboard]);
 
   const withTimeout = useCallback(<T,>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
     return new Promise<T>((resolve, reject) => {
@@ -3044,6 +3246,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       } else if (tab === 'tools') {
         await Promise.all([
           checkTools(),
+          loadCliRuntimeDashboard({ silent: true }),
           loadBrowserPluginStatus(),
           loadMcpRuntimeData(),
         ]);
@@ -3071,6 +3274,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     checkTools,
     formData.developer_mode_enabled,
     isActive,
+    loadCliRuntimeDashboard,
     loadAppVersion,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
@@ -4264,6 +4468,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             {/* Tools Tab */}
             {activeTab === 'tools' && (
               <ToolsSettingsSection
+                cliRuntimeTools={cliRuntimeTools}
+                cliRuntimeEnvironments={cliRuntimeEnvironments}
+                cliRuntimeStatusMessage={cliRuntimeStatusMessage}
+                isCliRuntimeRefreshing={isCliRuntimeRefreshing}
+                cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
+                cliRuntimeCreatingEnvironment={cliRuntimeCreatingEnvironment}
+                handleRefreshCliRuntime={loadCliRuntimeDashboard}
+                handleInspectCliRuntimeTool={handleInspectCliRuntimeTool}
+                handleCreateCliRuntimeEnvironment={handleCreateCliRuntimeEnvironment}
+                handleOpenCliRuntimeEnvironmentRoot={handleOpenCliRuntimeEnvironmentRoot}
                 isSyncingMcp={isSyncingMcp}
                 handleDiscoverAndImportMcp={handleDiscoverAndImportMcp}
                 handleAddMcpServer={handleAddMcpServer}

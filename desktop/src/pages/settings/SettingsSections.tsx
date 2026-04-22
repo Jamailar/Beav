@@ -3,6 +3,11 @@ import { Activity, Check, ChevronDown, Copy, Database, Download, FolderOpen, Inf
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
+  CliRuntimeEnvironmentRecord,
+  CliRuntimeEnvironmentScope,
+  CliRuntimeToolRecord,
+} from '../../types';
+import type {
   AgentTaskSnapshot,
   AgentTaskTrace,
   BackgroundTaskItem,
@@ -1683,6 +1688,16 @@ export function MemorySettingsSection({
 }
 
 interface ToolsSettingsSectionProps {
+    cliRuntimeTools: CliRuntimeToolRecord[];
+    cliRuntimeEnvironments: CliRuntimeEnvironmentRecord[];
+    cliRuntimeStatusMessage: string;
+    isCliRuntimeRefreshing: boolean;
+    cliRuntimeInspectingToolId: string;
+    cliRuntimeCreatingEnvironment: CliRuntimeEnvironmentScope | '';
+    handleRefreshCliRuntime: () => Promise<void>;
+    handleInspectCliRuntimeTool: (toolId: string) => Promise<void>;
+    handleCreateCliRuntimeEnvironment: (scope: CliRuntimeEnvironmentScope) => Promise<void>;
+    handleOpenCliRuntimeEnvironmentRoot: (rootPath: string) => Promise<void>;
     isSyncingMcp: boolean;
     handleDiscoverAndImportMcp: () => Promise<void>;
     handleAddMcpServer: () => void;
@@ -1804,6 +1819,16 @@ interface ToolsSettingsSectionProps {
 }
 
 export function ToolsSettingsSection({
+    cliRuntimeTools,
+    cliRuntimeEnvironments,
+    cliRuntimeStatusMessage,
+    isCliRuntimeRefreshing,
+    cliRuntimeInspectingToolId,
+    cliRuntimeCreatingEnvironment,
+    handleRefreshCliRuntime,
+    handleInspectCliRuntimeTool,
+    handleCreateCliRuntimeEnvironment,
+    handleOpenCliRuntimeEnvironmentRoot,
     isSyncingMcp,
     handleDiscoverAndImportMcp,
     handleAddMcpServer,
@@ -1947,6 +1972,53 @@ export function ToolsSettingsSection({
         if (!value) return '未使用';
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? '未使用' : date.toLocaleString();
+    };
+
+    const formatCliTime = (value?: number | null) => {
+        if (!value) return '未检测';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '未检测' : date.toLocaleString();
+    };
+
+    const cliToolHealthTone = (health: CliRuntimeToolRecord['health']) => {
+        switch (health) {
+            case 'ready':
+                return 'bg-green-500/10 text-green-600';
+            case 'missing':
+                return 'bg-amber-500/10 text-amber-600';
+            case 'broken':
+                return 'bg-red-500/10 text-red-600';
+            default:
+                return 'bg-surface-secondary border border-border text-text-tertiary';
+        }
+    };
+
+    const cliToolSourceLabel = (source: CliRuntimeToolRecord['source']) => {
+        switch (source) {
+            case 'app-managed':
+                return 'App 托管';
+            case 'workspace-managed':
+                return 'Workspace 托管';
+            case 'user-declared':
+                return '用户声明';
+            case 'system':
+                return '系统环境';
+            default:
+                return '未知';
+        }
+    };
+
+    const cliEnvironmentScopeLabel = (scope: CliRuntimeEnvironmentRecord['scope']) => {
+        switch (scope) {
+            case 'app-global':
+                return 'app-global';
+            case 'workspace-local':
+                return 'workspace-local';
+            case 'task-ephemeral':
+                return 'task-ephemeral';
+            default:
+                return scope;
+        }
     };
 
     const availabilityTone = (tool: ToolDiagnosticDescriptor) => {
@@ -2149,6 +2221,178 @@ export function ToolsSettingsSection({
     return (
         <section className="space-y-6">
             <h2 className="text-lg font-medium text-text-primary mb-6">外部工具管理</h2>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-medium text-text-primary">CLI Runtime 控制面</h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            展示本机 CLI 探测结果和运行环境，作为 AI 外部命令执行的统一管理入口。
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void handleCreateCliRuntimeEnvironment('app-global')}
+                            disabled={cliRuntimeCreatingEnvironment === 'app-global'}
+                            className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            {cliRuntimeCreatingEnvironment === 'app-global' ? '创建中...' : '新增 app-global'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleCreateCliRuntimeEnvironment('workspace-local')}
+                            disabled={cliRuntimeCreatingEnvironment === 'workspace-local'}
+                            className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            {cliRuntimeCreatingEnvironment === 'workspace-local' ? '创建中...' : '新增 workspace-local'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshCliRuntime()}
+                            disabled={isCliRuntimeRefreshing}
+                            className="px-3 py-1.5 bg-accent-primary text-white rounded text-xs hover:opacity-90 disabled:opacity-50"
+                        >
+                            {isCliRuntimeRefreshing ? '检测中...' : '刷新检测'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">已发现工具</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">{cliRuntimeTools.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">环境数量</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">{cliRuntimeEnvironments.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">task-ephemeral</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">
+                            {cliRuntimeEnvironments.filter((item) => item.scope === 'task-ephemeral').length}
+                        </div>
+                    </div>
+                </div>
+
+                {cliRuntimeStatusMessage ? (
+                    <div className="text-xs text-text-secondary border border-border rounded px-3 py-2 bg-surface-primary/60">
+                        {cliRuntimeStatusMessage}
+                    </div>
+                ) : null}
+
+                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-4">
+                    <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">工具发现结果</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">
+                                点击 inspect 可重新拉取某个 CLI 的路径、版本和健康状态。
+                            </div>
+                        </div>
+
+                        {cliRuntimeTools.length === 0 ? (
+                            <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                暂未检测到 CLI 工具。可先点击“刷新检测”，或等待 host 侧完成接线。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {cliRuntimeTools.map((tool) => (
+                                    <div key={tool.id} className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="text-sm font-medium text-text-primary">{tool.name || tool.executable}</div>
+                                                    <span className={clsx('px-1.5 py-0.5 rounded text-[10px]', cliToolHealthTone(tool.health))}>
+                                                        {tool.health}
+                                                    </span>
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-surface-secondary border border-border text-text-tertiary">
+                                                        {cliToolSourceLabel(tool.source)}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                    {tool.resolvedPath || tool.executable}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleInspectCliRuntimeTool(tool.id)}
+                                                disabled={cliRuntimeInspectingToolId === tool.id}
+                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                            >
+                                                {cliRuntimeInspectingToolId === tool.id ? 'Inspecting...' : 'Inspect'}
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+                                            <div>version: {tool.version || 'unknown'}</div>
+                                            <div>executable: {tool.executable || 'unknown'}</div>
+                                            <div>install: {tool.installMethod || 'n/a'}</div>
+                                            <div>manifest: {tool.manifestId || 'n/a'}</div>
+                                            <div>environment: {tool.environmentId || '未绑定'}</div>
+                                            <div>checked: {formatCliTime(tool.lastCheckedAt)}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">运行环境</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">
+                                `task-ephemeral` 通常由运行时按任务自动创建；这里主要负责观察与打开 root。
+                            </div>
+                        </div>
+
+                        {cliRuntimeEnvironments.length === 0 ? (
+                            <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                暂无 CLI environment。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {cliRuntimeEnvironments.map((environment) => (
+                                    <div key={environment.id} className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="text-sm font-medium text-text-primary">{cliEnvironmentScopeLabel(environment.scope)}</div>
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-surface-secondary border border-border text-text-tertiary">
+                                                        {environment.id}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                    {environment.rootPath}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleOpenCliRuntimeEnvironmentRoot(environment.rootPath)}
+                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                            >
+                                                打开目录
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-1 text-[11px] text-text-secondary">
+                                            <div>workspace: {environment.workspaceRoot || 'n/a'}</div>
+                                            <div>tools: {environment.installedToolIds.length}</div>
+                                            <div>path entries: {environment.pathEntries.length}</div>
+                                            <div>updated: {formatCliTime(environment.updatedAt)}</div>
+                                        </div>
+
+                                        {environment.pathEntries.length > 0 ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono max-h-28 overflow-auto whitespace-pre-wrap break-all">
+                                                {environment.pathEntries.join('\n')}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
