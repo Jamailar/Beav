@@ -27,6 +27,7 @@ pub(crate) struct DocumentBlockRecord {
     pub file_extension: Option<String>,
     pub title: Option<String>,
     pub language: Option<String>,
+    pub page: Option<i64>,
     pub block_index: i64,
     pub line_start: i64,
     pub line_end: i64,
@@ -48,6 +49,7 @@ pub(crate) struct DocumentBlockHit {
     pub file_extension: Option<String>,
     pub title: Option<String>,
     pub language: Option<String>,
+    pub page: Option<i64>,
     pub block_index: i64,
     pub line_start: i64,
     pub line_end: i64,
@@ -73,12 +75,12 @@ pub(crate) fn replace_blocks(
                 r#"
                 INSERT INTO knowledge_document_blocks (
                     block_id, document_id, source_id, source_name, root_path, absolute_path,
-                    relative_path, file_extension, title, language, block_index, line_start,
+                    relative_path, file_extension, title, language, page, block_index, line_start,
                     line_end, text, normalized_text, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16
+                    ?13, ?14, ?15, ?16, ?17
                 )
                 "#,
             )
@@ -95,6 +97,7 @@ pub(crate) fn replace_blocks(
                 block.file_extension,
                 block.title,
                 block.language,
+                block.page,
                 block.block_index,
                 block.line_start,
                 block.line_end,
@@ -135,7 +138,7 @@ pub(crate) fn search_blocks(
         .prepare(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-                   relative_path, file_extension, title, language, block_index, line_start,
+                   relative_path, file_extension, title, language, page, block_index, line_start,
                    line_end, text
             FROM knowledge_document_blocks
             WHERE source_id = ?1
@@ -164,10 +167,11 @@ pub(crate) fn search_blocks(
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(10)?,
                     row.get::<_, i64>(11)?,
                     row.get::<_, i64>(12)?,
-                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             },
         )
@@ -186,6 +190,7 @@ pub(crate) fn search_blocks(
             file_extension,
             title,
             language,
+            page,
             block_index,
             line_start,
             line_end,
@@ -205,6 +210,7 @@ pub(crate) fn search_blocks(
             file_extension,
             title,
             language,
+            page,
             block_index,
             line_start,
             line_end,
@@ -225,7 +231,7 @@ pub(crate) fn read_block(
     conn.query_row(
         r#"
         SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-               relative_path, file_extension, title, language, block_index, line_start,
+               relative_path, file_extension, title, language, page, block_index, line_start,
                line_end, text, normalized_text, updated_at
         FROM knowledge_document_blocks
         WHERE block_id = ?1
@@ -243,12 +249,13 @@ pub(crate) fn read_block(
                 file_extension: row.get(7)?,
                 title: row.get(8)?,
                 language: row.get(9)?,
-                block_index: row.get(10)?,
-                line_start: row.get(11)?,
-                line_end: row.get(12)?,
-                text: row.get(13)?,
-                normalized_text: row.get(14)?,
-                updated_at: row.get(15)?,
+                page: row.get(10)?,
+                block_index: row.get(11)?,
+                line_start: row.get(12)?,
+                line_end: row.get(13)?,
+                text: row.get(14)?,
+                normalized_text: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         },
     )
@@ -360,6 +367,7 @@ fn build_blocks_for_file(
                 .map(|value| value.to_ascii_lowercase()),
             title: title.clone(),
             language: language.clone(),
+            page: Some(1),
             block_index: block_index as i64,
             line_start: block.line_start as i64,
             line_end: block.line_end as i64,
@@ -381,6 +389,7 @@ fn extract_text(path: &Path) -> Result<Option<String>, String> {
         | Some("yaml") | Some("yml") | Some("xml") | Some("html") | Some("htm") => read_utf8(path)
             .map(|value| value.map(|text| html_to_text_if_needed(text, extension.as_deref()))),
         Some("docx") => extract_docx_text(path),
+        Some("pdf") => extract_pdf_text(path),
         _ => read_utf8(path),
     }
 }
@@ -405,6 +414,13 @@ fn extract_docx_text(path: &Path) -> Result<Option<String>, String> {
         .read_to_string(&mut xml)
         .map_err(|error| error.to_string())?;
     Ok(Some(strip_xml_tags(&xml)))
+}
+
+fn extract_pdf_text(path: &Path) -> Result<Option<String>, String> {
+    match pdf_extract::extract_text(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(_) => Ok(None),
+    }
 }
 
 fn html_to_text_if_needed(text: String, extension: Option<&str>) -> String {
@@ -535,6 +551,24 @@ fn split_into_blocks(input: &str) -> Vec<TextBlock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn write_minimal_docx(path: &Path, text: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>"#).unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(
+            format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
 
     #[test]
     fn strips_html_tags_to_plain_text() {
@@ -553,5 +587,52 @@ mod tests {
         assert!(blocks.len() >= 2);
         assert_eq!(blocks[0].line_start, 1);
         assert!(blocks[0].line_end >= 1);
+    }
+
+    #[test]
+    fn extracts_text_from_minimal_docx_file() {
+        let unique = format!(
+            "redbox-docx-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        let docx_path = root.join("sample.docx");
+        write_minimal_docx(&docx_path, "Hello DOCX");
+
+        let extracted = extract_docx_text(&docx_path).unwrap().unwrap();
+        assert!(extracted.contains("Hello DOCX"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rebuilding_source_blocks_reflects_deleted_files() {
+        let unique = format!(
+            "redbox-source-block-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), "alpha block").unwrap();
+        fs::write(root.join("b.html"), "<p>beta block</p>").unwrap();
+        write_minimal_docx(&root.join("c.docx"), "gamma block");
+
+        let before = build_blocks_for_source("source-1", "Source 1", &root, "2026-04-22").unwrap();
+        assert!(before.iter().any(|block| block.relative_path == "a.txt"));
+        assert!(before.iter().any(|block| block.relative_path == "b.html"));
+        assert!(before.iter().any(|block| block.relative_path == "c.docx"));
+
+        fs::remove_file(root.join("b.html")).unwrap();
+        let after = build_blocks_for_source("source-1", "Source 1", &root, "2026-04-22").unwrap();
+        assert!(after.len() < before.len());
+        assert!(!after.iter().any(|block| block.relative_path == "b.html"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

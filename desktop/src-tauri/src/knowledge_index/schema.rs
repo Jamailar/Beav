@@ -67,6 +67,7 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             file_extension TEXT,
             title TEXT,
             language TEXT,
+            page INTEGER,
             block_index INTEGER NOT NULL,
             line_start INTEGER NOT NULL,
             line_end INTEGER NOT NULL,

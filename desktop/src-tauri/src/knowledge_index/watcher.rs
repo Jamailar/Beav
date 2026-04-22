@@ -6,9 +6,34 @@ use std::time::{Duration, Instant};
 use notify::{recommended_watcher, Event, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 
-use crate::{knowledge_index::jobs, workspace_root, AppState};
+use crate::{knowledge_index::jobs, with_store, workspace_root, AppState};
 
 const WATCH_DEBOUNCE_MS: u64 = 1200;
+
+fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let state = app.state::<AppState>();
+    let mut roots = Vec::<PathBuf>::new();
+    if let Ok(root) = workspace_root(&state).map(|root| root.join("knowledge")) {
+        if root.exists() {
+            roots.push(root);
+        }
+    }
+    let source_roots = with_store(&state, |store| {
+        Ok(store
+            .document_sources
+            .iter()
+            .map(|item| PathBuf::from(&item.root_path))
+            .collect::<Vec<_>>())
+    })
+    .unwrap_or_default();
+    for root in source_roots {
+        if root.exists() && !roots.iter().any(|item| item == &root) {
+            roots.push(root);
+        }
+    }
+    roots.sort();
+    roots
+}
 
 pub(crate) fn start(app: AppHandle) {
     thread::spawn(move || {
@@ -20,31 +45,27 @@ pub(crate) fn start(app: AppHandle) {
                 return;
             }
         };
-        let mut watched_root: Option<PathBuf> = None;
+        let mut watched_roots: Vec<PathBuf> = Vec::new();
         let mut dirty_at: Option<Instant> = Some(Instant::now());
 
         loop {
             let state = app.state::<AppState>();
-            let current_root = workspace_root(&state)
-                .ok()
-                .map(|root| root.join("knowledge"))
-                .filter(|root| root.exists());
+            let current_roots = desired_watch_roots(&app);
 
-            if current_root != watched_root {
-                if let Some(previous) = watched_root.as_ref() {
+            if current_roots != watched_roots {
+                for previous in &watched_roots {
                     let _ = watcher.unwatch(previous);
                 }
-                if let Some(next_root) = current_root.as_ref() {
+                for next_root in &current_roots {
                     if let Err(error) = watcher.watch(next_root, RecursiveMode::Recursive) {
                         eprintln!("[RedBox knowledge index] watch failed: {error}");
-                    } else {
-                        if let Ok(mut runtime) = state.knowledge_index_state.lock() {
-                            runtime.watched_root = Some(next_root.clone());
-                        }
-                        dirty_at = Some(Instant::now());
                     }
                 }
-                watched_root = current_root;
+                if let Ok(mut runtime) = state.knowledge_index_state.lock() {
+                    runtime.watched_roots = current_roots.clone();
+                }
+                watched_roots = current_roots;
+                dirty_at = Some(Instant::now());
             }
 
             match rx.recv_timeout(Duration::from_millis(300)) {

@@ -21,7 +21,7 @@ pub(crate) struct KnowledgeIndexRuntimeState {
     pub failed_count: usize,
     pub last_indexed_at: Option<String>,
     pub last_error: Option<String>,
-    pub watched_root: Option<PathBuf>,
+    pub watched_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]

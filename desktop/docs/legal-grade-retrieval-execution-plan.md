@@ -2,7 +2,7 @@
 doc_type: plan
 execution_status: in_progress
 last_updated: 2026-04-22
-execution_stage: stage1_in_progress
+execution_stage: stage1_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -147,6 +147,11 @@ Status: Current
 - `txt/md/html/pdf/docx` 最小支持成立
 - `knowledge.search/read` 已切换到 canonical/index 路径
 - 基础回归样例稳定
+
+### Progress Notes
+
+- 已完成已注册文档源的 block 索引与 `knowledge.search/read` 的 `sourceId/rootPath/blockId` 支持
+- 已补原生文本 `pdf` 抽取与多文档源监听
 
 ## Stage 2: 通用解析标准层
 
