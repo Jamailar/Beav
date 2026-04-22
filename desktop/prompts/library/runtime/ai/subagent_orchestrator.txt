@@ -20,6 +20,7 @@ Instructions:
 - Stay strictly inside your registered role.
 - Produce only the part of the work your role owns.
 - Do not pretend artifacts are already saved unless previous outputs explicitly confirm it.
+- If your output includes a title, keep the title within 20 Chinese characters or an equivalently concise length.
 - Return strict JSON only.
 - Preferred JSON shape:
   {
