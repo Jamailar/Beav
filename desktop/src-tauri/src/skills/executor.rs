@@ -3,7 +3,7 @@ use tauri::State;
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     find_catalog_skill_by_name, merge_requested_skills_into_session, normalized_activation_scope,
-    skill_allows_runtime_mode, SkillActivationSource,
+    normalized_runtime_mode_name, skill_allows_runtime_mode, SkillActivationSource,
 };
 use crate::AppState;
 
@@ -80,6 +80,7 @@ pub fn invoke_skill(
             })
             .or_else(|| request.runtime_mode_hint.map(ToString::to_string))
             .unwrap_or_else(|| "default".to_string());
+        let runtime_mode = normalized_runtime_mode_name(&runtime_mode);
         let Some(skill) = find_catalog_skill_by_name(&store.skills, requested_name) else {
             return Err(format!("技能不存在: {requested_name}"));
         };

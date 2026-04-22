@@ -2,6 +2,15 @@ use crate::skills::LoadedSkillRecord;
 use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::{pack_by_name, tool_names_for_pack};
 
+pub fn normalized_runtime_mode_name(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "default" | "chat" => "chatroom".to_string(),
+        "image" | "image-gen" | "image_generate" => "image-generation".to_string(),
+        "background" => "background-maintenance".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn normalized_set(values: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for item in values
@@ -24,9 +33,10 @@ pub fn skill_allows_runtime_mode(skill: &LoadedSkillRecord, runtime_mode: &str) 
     if skill.metadata.allowed_runtime_modes.is_empty() {
         return true;
     }
-    let normalized_mode = runtime_mode.trim().to_ascii_lowercase();
+    let normalized_mode = normalized_runtime_mode_name(runtime_mode);
     normalized_set(&skill.metadata.allowed_runtime_modes)
         .into_iter()
+        .map(|item| normalized_runtime_mode_name(&item))
         .any(|item| item == normalized_mode || item == "all" || item == "*")
 }
 
@@ -106,5 +116,21 @@ mod tests {
     fn skill_allows_runtime_mode_respects_explicit_modes() {
         assert!(skill_allows_runtime_mode(&test_skill(), "redclaw"));
         assert!(!skill_allows_runtime_mode(&test_skill(), "wander"));
+    }
+
+    #[test]
+    fn skill_allows_runtime_mode_treats_default_as_chatroom_alias() {
+        let mut skill = test_skill();
+        skill.metadata.allowed_runtime_modes = vec!["chatroom".to_string()];
+        assert!(skill_allows_runtime_mode(&skill, "default"));
+        assert!(skill_allows_runtime_mode(&skill, "chat"));
+    }
+
+    #[test]
+    fn skill_allows_runtime_mode_treats_image_alias_as_image_generation() {
+        let mut skill = test_skill();
+        skill.metadata.allowed_runtime_modes = vec!["image-generation".to_string()];
+        assert!(skill_allows_runtime_mode(&skill, "image"));
+        assert!(skill_allows_runtime_mode(&skill, "image-gen"));
     }
 }
