@@ -14,6 +14,7 @@
 
 - [architecture/system-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/system-overview.md)
 - [architecture/product-module-breakdown.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/product-module-breakdown.md)
+- [aionrs-comparison-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/aionrs-comparison-optimization-plan.md)
 - [migration-architecture.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/migration-architecture.md)
 - [ai-runtime-maintenance-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ai-runtime-maintenance-overview.md)
 - [agent-collaboration-upgrade-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/agent-collaboration-upgrade-plan.md)

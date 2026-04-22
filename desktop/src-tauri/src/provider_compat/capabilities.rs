@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::{InteractiveToolChoice, ProviderTurnPolicy};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ProviderFamily {
@@ -50,5 +52,20 @@ impl ProviderProfile {
             && self
                 .capabilities
                 .requires_disable_thinking_for_forced_tool_choice
+    }
+
+    pub(crate) fn turn_policy(
+        &self,
+        runtime_mode: &str,
+        tool_choice: InteractiveToolChoice,
+        saw_tool_call: bool,
+    ) -> ProviderTurnPolicy {
+        ProviderTurnPolicy {
+            disable_thinking: self
+                .should_disable_thinking(runtime_mode, tool_choice.requires_tool_choice()),
+            allow_text_fallback: !saw_tool_call
+                && runtime_mode != "wander"
+                && self.capabilities.supports_text_fallback,
+        }
     }
 }
