@@ -224,8 +224,31 @@ fn detects_network_access(argv: &[String]) -> bool {
     }
 }
 
-fn detects_global_install(argv: &[String]) -> bool {
-    let (argv, _) = strip_privilege_wrapper(argv);
+fn has_flag_with_value(argv: &[String], flags: &[&str]) -> bool {
+    argv.windows(2).any(|window| {
+        flags.iter().any(|flag| window[0].trim() == *flag) && !window[1].trim().is_empty()
+    })
+}
+
+fn has_local_install_target(request: &CliExecuteRequest) -> bool {
+    has_flag_with_value(&request.argv, &["--root", "--prefix", "--dir"])
+        || request
+            .env
+            .get("GOBIN")
+            .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .env
+            .get("UV_TOOL_DIR")
+            .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .env
+            .get("UV_TOOL_BIN_DIR")
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn detects_global_install(request: &CliExecuteRequest) -> bool {
+    let (argv, _) = strip_privilege_wrapper(&request.argv);
+    let local_install_target = has_local_install_target(request);
     let command = command_name(argv);
     match command.as_str() {
         "npm" | "pnpm" => {
@@ -237,16 +260,25 @@ fn detects_global_install(argv: &[String]) -> bool {
                 .is_some_and(|item| item.trim().eq_ignore_ascii_case("global"))
                 && has_subcommand(argv, &["add", "remove", "upgrade"])
         }
-        "cargo" => argv
-            .get(1)
-            .is_some_and(|item| item.trim().eq_ignore_ascii_case("install")),
-        "go" => argv
-            .get(1)
-            .is_some_and(|item| item.trim().eq_ignore_ascii_case("install")),
-        "uv" => argv.windows(2).any(|window| {
-            window[0].trim().eq_ignore_ascii_case("tool")
-                && window[1].trim().eq_ignore_ascii_case("install")
-        }),
+        "cargo" => {
+            !local_install_target
+                && argv
+                    .get(1)
+                    .is_some_and(|item| item.trim().eq_ignore_ascii_case("install"))
+        }
+        "go" => {
+            !local_install_target
+                && argv
+                    .get(1)
+                    .is_some_and(|item| item.trim().eq_ignore_ascii_case("install"))
+        }
+        "uv" => {
+            !local_install_target
+                && argv.windows(2).any(|window| {
+                    window[0].trim().eq_ignore_ascii_case("tool")
+                        && window[1].trim().eq_ignore_ascii_case("install")
+                })
+        }
         _ => false,
     }
 }
@@ -463,7 +495,7 @@ fn build_policy_finding(
         network: detects_network_access(&request.argv),
         write_outside_workspace: !outside_paths.is_empty(),
         sensitive_paths: false,
-        global_install: detects_global_install(&request.argv),
+        global_install: detects_global_install(request),
         elevated_privilege: elevated,
         paths: outside_paths,
     };
@@ -765,6 +797,36 @@ mod tests {
             &["touch".to_string(), "../../outside.txt".to_string()],
         );
         assert_eq!(paths, vec!["/tmp/outside.txt".to_string()]);
+    }
+
+    #[test]
+    fn detects_global_install_skips_localized_tool_installs() {
+        let request = CliExecuteRequest {
+            argv: vec![
+                "cargo".to_string(),
+                "install".to_string(),
+                "--root".to_string(),
+                "/tmp/redbox-cli".to_string(),
+                "wrangler".to_string(),
+            ],
+            ..Default::default()
+        };
+        assert!(!detects_global_install(&request));
+
+        let request = CliExecuteRequest {
+            argv: vec![
+                "uv".to_string(),
+                "tool".to_string(),
+                "install".to_string(),
+                "ruff".to_string(),
+            ],
+            env: std::collections::BTreeMap::from([(
+                "UV_TOOL_DIR".to_string(),
+                "/tmp/redbox-cli/uv-tools".to_string(),
+            )]),
+            ..Default::default()
+        };
+        assert!(!detects_global_install(&request));
     }
 
     #[test]
