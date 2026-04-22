@@ -36,7 +36,7 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
-        ToolPack::Wander => &["redbox_fs", "bash"],
+        ToolPack::Wander => &["redbox_fs"],
         ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Redclaw => &["bash", "redbox_fs", "app_cli"],
@@ -70,6 +70,7 @@ mod tests {
     fn wander_runtime_includes_structured_file_tool() {
         let tools = tool_names_for_runtime_mode("wander");
         assert!(tools.contains(&"redbox_fs"));
+        assert!(!tools.contains(&"bash"));
     }
 
     #[test]

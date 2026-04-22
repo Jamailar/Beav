@@ -7132,8 +7132,11 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
                             "wander:result",
                             json!({
                                 "requestId": request_id,
+                                "error": result.get("error").cloned().unwrap_or(Value::Null),
                                 "result": result.get("result").cloned().unwrap_or(Value::Null),
                                 "historyId": result.get("historyId").cloned().unwrap_or(Value::Null),
+                                "items": result.get("items").cloned().unwrap_or(Value::Null),
+                                "validationIssues": result.get("validationIssues").cloned().unwrap_or(Value::Null),
                             }),
                         );
                     }

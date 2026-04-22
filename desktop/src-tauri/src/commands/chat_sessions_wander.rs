@@ -189,6 +189,30 @@ fn normalize_wander_connections(raw: Option<&Value>) -> Vec<Value> {
     normalized.into_iter().map(Value::from).collect()
 }
 
+fn normalize_wander_direction_frame(raw: &Value) -> Value {
+    let payload = raw
+        .get("direction_frame")
+        .or_else(|| raw.get("directionFrame"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let read_field = |snake: &str, camel: &str| {
+        payload
+            .get(snake)
+            .or_else(|| payload.get(camel))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    json!({
+        "target_reader": read_field("target_reader", "targetReader"),
+        "core_tension": read_field("core_tension", "coreTension"),
+        "angle": read_field("angle", "angle"),
+        "material_entry": read_field("material_entry", "materialEntry"),
+    })
+}
+
 fn normalize_wander_option(raw: &Value) -> Value {
     let topic = raw.get("topic").and_then(Value::as_object);
     let title = topic
@@ -200,7 +224,7 @@ fn normalize_wander_option(raw: &Value) -> Value {
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
-        .unwrap_or("未命名选题")
+        .unwrap_or("")
         .trim()
         .to_string();
     let content_direction = raw
@@ -209,11 +233,12 @@ fn normalize_wander_option(raw: &Value) -> Value {
         .or_else(|| raw.get("direction").and_then(Value::as_str))
         .or_else(|| raw.get("contentDirection").and_then(Value::as_str))
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("围绕素材提炼一个可执行的内容方向。")
+        .unwrap_or("")
         .trim()
         .to_string();
     json!({
         "content_direction": content_direction,
+        "direction_frame": normalize_wander_direction_frame(raw),
         "topic": {
             "title": title,
             "connections": normalize_wander_connections(
@@ -247,8 +272,15 @@ fn repair_embedded_wander_result(raw: Value) -> Value {
     json!({
         "content_direction": embedded.get("content_direction").cloned().or_else(|| raw.get("content_direction").cloned()).unwrap_or_else(|| json!("")),
         "thinking_process": merged_thinking,
+        "direction_frame": embedded
+            .get("direction_frame")
+            .cloned()
+            .or_else(|| embedded.get("directionFrame").cloned())
+            .or_else(|| raw.get("direction_frame").cloned())
+            .or_else(|| raw.get("directionFrame").cloned())
+            .unwrap_or_else(|| json!({})),
         "topic": embedded.get("topic").cloned().or_else(|| raw.get("topic").cloned()).unwrap_or_else(|| json!({
-            "title": "未命名选题",
+            "title": "",
             "connections": [1]
         })),
         "options": raw.get("options").cloned().or_else(|| embedded.get("options").cloned()),
@@ -287,13 +319,6 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
         if normalized_options.is_empty() {
             normalized_options.push(normalize_wander_option(&repaired));
         }
-        while normalized_options.len() < 3 {
-            let fallback = normalized_options
-                .last()
-                .cloned()
-                .unwrap_or_else(|| normalize_wander_option(&repaired));
-            normalized_options.push(fallback);
-        }
         normalized_options.truncate(3);
         let first = normalized_options
             .first()
@@ -303,8 +328,9 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
             "thinking_process": thinking_process,
             "options": normalized_options,
             "content_direction": first.get("content_direction").cloned().unwrap_or_else(|| json!("")),
+            "direction_frame": first.get("direction_frame").cloned().unwrap_or_else(|| json!({})),
             "topic": first.get("topic").cloned().unwrap_or_else(|| json!({
-                "title": "未命名选题",
+                "title": "",
                 "connections": [1]
             })),
             "selected_index": 0
@@ -315,8 +341,9 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
     json!({
         "content_direction": single.get("content_direction").cloned().unwrap_or_else(|| json!("")),
         "thinking_process": thinking_process,
+        "direction_frame": single.get("direction_frame").cloned().unwrap_or_else(|| json!({})),
         "topic": single.get("topic").cloned().unwrap_or_else(|| json!({
-            "title": "未命名选题",
+            "title": "",
             "connections": [1]
         }))
     })
@@ -334,27 +361,32 @@ fn build_legacy_wander_prompt(
             "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
             "2) JSON 顶层必须包含：thinking_process, options；",
             "3) options 必须是长度为 3 的数组；",
-            "4) 每个 option 必须包含：content_direction, topic；",
+            "4) 每个 option 必须包含：content_direction, topic, direction_frame；",
             "5) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "6) thinking_process 为 3-6 条简洁思考要点。",
-            "7) title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
-            "8) content_direction 必须具体说明面向谁、核心冲突是什么、切入角度是什么，不得使用空泛套话。",
-            "9) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
-            "10) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+            "6) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
+            "7) thinking_process 为 3-6 条简洁思考要点。",
+            "8) title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
+            "9) content_direction 必须具体说明面向谁、核心冲突是什么、切入角度是什么，不得使用空泛套话。",
+            "10) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
+            "11) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
+            "12) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+            "13) 如果当前只想到 1-2 个合格方向，继续思考补齐，不要复制弱结果凑满 3 条。",
         ]
         .join("\n")
     } else {
         [
             "硬性输出要求（单选题模式）：",
             "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
-            "2) JSON 顶层必须包含：content_direction, thinking_process, topic；",
+            "2) JSON 顶层必须包含：content_direction, thinking_process, topic, direction_frame；",
             "3) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "4) thinking_process 为 3-6 条简洁思考要点；",
-            "5) content_direction 必须是可直接创作的内容方向说明。",
-            "6) topic.title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
-            "7) content_direction 必须明确：目标读者、核心矛盾、叙事角度、可用素材切入点；不得使用“围绕这组素材提炼一个方向”之类空话。",
-            "8) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
-            "9) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+            "4) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
+            "5) thinking_process 为 3-6 条简洁思考要点；",
+            "6) content_direction 必须是可直接创作的内容方向说明。",
+            "7) topic.title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
+            "8) content_direction 必须明确：目标读者、核心矛盾、叙事角度、可用素材切入点；不得使用“围绕这组素材提炼一个方向”之类空话。",
+            "9) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
+            "10) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
+            "11) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
         ]
         .join("\n")
     };
@@ -440,7 +472,7 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                     })
                     .unwrap_or_else(|| "先从目录中最像正文的文件开始探索。".to_string());
                 return format!(
-                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"list\"|\"read\", scope=\"workspace\") 读取，只有在 redbox_fs 不足时才回退 bash。\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
+                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"workspace.list\"|\"workspace.read\"|\"workspace.search\") 读取。\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
                     index + 1,
                     title,
                     item_type,
@@ -490,7 +522,7 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "优先 meta.json，再按命名线索继续探索。".to_string());
             format!(
-                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 原始记录路径: {}\n- 探索顺序: {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"list\"|\"read\", scope=\"workspace\") 读取这些路径；只有在 redbox_fs 不足时才回退 bash。",
+                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 原始记录路径: {}\n- 探索顺序: {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"workspace.list\"|\"workspace.read\"|\"workspace.search\") 读取这些路径。",
                 index + 1,
                 title,
                 item_type,
@@ -505,54 +537,153 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
         .join("\n\n")
 }
 
-fn wander_result_has_placeholder_text(result: &Value) -> bool {
+fn is_generic_wander_title(title: &str) -> bool {
     let generic_title_markers = ["延展出的内容选题", "未命名选题"];
+    let normalized = title.trim();
+    normalized.is_empty()
+        || generic_title_markers
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
+
+fn is_generic_wander_direction(direction: &str) -> bool {
     let generic_direction_markers = [
         "围绕这组素材提炼",
         "围绕素材提炼一个可执行的内容方向",
         "围绕素材提炼一个更聚焦",
     ];
+    let normalized = direction.trim();
+    normalized.is_empty()
+        || generic_direction_markers
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
 
-    let has_generic_title = |title: &str| {
-        let normalized = title.trim();
-        normalized.is_empty()
-            || generic_title_markers
-                .iter()
-                .any(|marker| normalized.contains(marker))
-    };
-    let has_generic_direction = |direction: &str| {
-        let normalized = direction.trim();
-        normalized.is_empty()
-            || generic_direction_markers
-                .iter()
-                .any(|marker| normalized.contains(marker))
-    };
+fn wander_validation_issue(path: &str, code: &str, message: impl Into<String>) -> Value {
+    json!({
+        "path": path,
+        "code": code,
+        "message": message.into(),
+    })
+}
 
-    if let Some(options) = result.get("options").and_then(Value::as_array) {
-        return options.iter().any(|option| {
-            let title = option
-                .get("topic")
-                .and_then(|value| value.get("title"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let direction = option
-                .get("content_direction")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            has_generic_title(title) || has_generic_direction(direction)
-        });
+fn collect_wander_direction_frame_issues(frame: Option<&Value>, path_prefix: &str) -> Vec<Value> {
+    let read_field = |snake: &str, camel: &str| {
+        frame
+            .and_then(|value| value.get(snake).or_else(|| value.get(camel)))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let checks = [
+        (
+            "target_reader",
+            "targetReader",
+            "missing_target_reader",
+            "目标读者",
+        ),
+        (
+            "core_tension",
+            "coreTension",
+            "missing_core_tension",
+            "核心矛盾",
+        ),
+        ("angle", "angle", "missing_angle", "叙事角度"),
+        (
+            "material_entry",
+            "materialEntry",
+            "missing_material_entry",
+            "素材切入点",
+        ),
+    ];
+    let mut issues = Vec::new();
+    for (snake, camel, code, label) in checks {
+        let value = read_field(snake, camel);
+        if value.is_empty() {
+            issues.push(wander_validation_issue(
+                &format!("{path_prefix}.{snake}"),
+                code,
+                format!("内容方向缺少{label}。"),
+            ));
+        }
     }
+    issues
+}
 
-    let title = result
+fn collect_wander_option_validation_issues(option: &Value, path_prefix: &str) -> Vec<Value> {
+    let title = option
         .get("topic")
         .and_then(|value| value.get("title"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let direction = result
+    let direction = option
         .get("content_direction")
         .and_then(Value::as_str)
         .unwrap_or("");
-    has_generic_title(title) || has_generic_direction(direction)
+    let mut issues = Vec::new();
+    if is_generic_wander_title(title) {
+        issues.push(wander_validation_issue(
+            &format!("{path_prefix}.topic.title"),
+            "generic_title",
+            "标题缺失，或仍是模板化占位表达。",
+        ));
+    }
+    if is_generic_wander_direction(direction) {
+        issues.push(wander_validation_issue(
+            &format!("{path_prefix}.content_direction"),
+            "generic_direction",
+            "内容方向缺失，或仍是模板化占位表达。",
+        ));
+    }
+    issues.extend(collect_wander_direction_frame_issues(
+        option.get("direction_frame"),
+        &format!("{path_prefix}.direction_frame"),
+    ));
+    issues
+}
+
+fn collect_wander_validation_issues(result: &Value, multi_choice: bool) -> Vec<Value> {
+    if multi_choice {
+        let options = result
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut issues = Vec::new();
+        if options.len() != 3 {
+            issues.push(wander_validation_issue(
+                "options",
+                "invalid_option_count",
+                "多选模式必须返回 3 条真正不同的候选，不要复制弱结果凑数。",
+            ));
+        }
+        for (index, option) in options.iter().enumerate() {
+            issues.extend(collect_wander_option_validation_issues(
+                option,
+                &format!("options[{index}]"),
+            ));
+        }
+        return issues;
+    }
+
+    collect_wander_option_validation_issues(result, "result")
+}
+
+fn summarize_wander_validation_issues(issues: &[Value]) -> String {
+    let summary = issues
+        .iter()
+        .filter_map(|issue| issue.get("message").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("；");
+    if summary.is_empty() {
+        "漫步结果过于空泛，请补齐更具体的标题与内容方向。".to_string()
+    } else {
+        format!("漫步结果需要继续收紧：{summary}")
+    }
 }
 
 fn parse_wander_brainstorm_payload(payload: &Value) -> (Vec<Value>, Value) {
@@ -1619,6 +1750,7 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("contextType".to_string(), json!("wander"));
                     metadata.insert("contextContent".to_string(), json!(items_text));
                     metadata.insert("isContextBound".to_string(), json!(true));
+                    metadata.insert("allowedTools".to_string(), json!(["redbox_fs"]));
                     metadata.insert(
                         "loadWritingStyleSkill".to_string(),
                         json!(load_writing_style_skill),
@@ -1699,9 +1831,6 @@ pub fn handle_chat_sessions_wander_channel(
                 let parsed_payload = parse_wander_json_payload(&model_result)
                     .unwrap_or_else(|| json!({ "content_direction": model_result.clone() }));
                 let result_value = normalize_wander_result(parsed_payload, multi_choice);
-                if wander_result_has_placeholder_text(&result_value) {
-                    return Err("漫步结果过于空泛：标题或内容方向仍是模板化占位表达".to_string());
-                }
                 log_timing_event(
                     state,
                     "wander",
@@ -1712,6 +1841,65 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 let result_text =
                     serde_json::to_string(&result_value).map_err(|error| error.to_string())?;
+                let validation_issues =
+                    collect_wander_validation_issues(&result_value, multi_choice);
+                if !validation_issues.is_empty() {
+                    let error_message = summarize_wander_validation_issues(&validation_issues);
+                    with_store_mut(state, |store| {
+                        if let Some(session) = store
+                            .chat_sessions
+                            .iter_mut()
+                            .find(|item| item.id == wander_session_id)
+                        {
+                            let mut metadata = session
+                                .metadata
+                                .clone()
+                                .and_then(|value| value.as_object().cloned())
+                                .unwrap_or_default();
+                            metadata.insert(
+                                "wanderLastValidationFailure".to_string(),
+                                json!({
+                                    "error": error_message,
+                                    "validationIssues": validation_issues.clone(),
+                                    "result": result_value.clone(),
+                                }),
+                            );
+                            session.metadata = Some(Value::Object(metadata));
+                            session.updated_at = now_iso();
+                        }
+                        append_session_checkpoint(
+                            store,
+                            &wander_session_id,
+                            "wander-validation-failed",
+                            "Wander validation failed".to_string(),
+                            Some(json!({
+                                "validationIssues": validation_issues.clone(),
+                                "responsePreview": text_snippet(&result_text, 220),
+                            })),
+                        );
+                        Ok(())
+                    })?;
+                    let _ = app.emit(
+                        "wander:progress",
+                        json!({
+                            "requestId": request_id.clone(),
+                            "sessionId": wander_session_id.clone(),
+                            "phase": "complete",
+                            "stepIndex": 3,
+                            "totalSteps": 3,
+                            "title": "校验候选",
+                            "status": "error",
+                            "detail": error_message.clone(),
+                        }),
+                    );
+                    return Ok(json!({
+                        "error": error_message,
+                        "result": result_text,
+                        "items": items,
+                        "validationIssues": validation_issues,
+                        "historyId": Value::Null,
+                    }));
+                }
                 let history_id = make_id("wander");
                 let history_started_at = now_ms();
                 with_store_mut(state, |store| {
@@ -1800,4 +1988,92 @@ pub fn handle_chat_sessions_wander_channel(
             )),
         }
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_wander_result_keeps_partial_multi_choice_without_duplication() {
+        let result = normalize_wander_result(
+            json!({
+                "options": [
+                    {
+                        "content_direction": "给正在做内容的人一个更锋利的选题切口。",
+                        "direction_frame": {
+                            "target_reader": "刚开始做内容的人",
+                            "core_tension": "总想等自己更厉害再开始",
+                            "angle": "用15度角法则拆掉启动门槛",
+                            "material_entry": "借素材里的延迟开工困境做切口"
+                        },
+                        "topic": {
+                            "title": "别等变厉害再开始",
+                            "connections": [1]
+                        }
+                    }
+                ]
+            }),
+            true,
+        );
+
+        let options = result["options"].as_array().expect("options");
+        assert_eq!(options.len(), 1);
+    }
+
+    #[test]
+    fn collect_wander_validation_issues_reports_missing_direction_frame_fields() {
+        let issues = collect_wander_validation_issues(
+            &json!({
+                "content_direction": "这是一个方向。",
+                "direction_frame": {
+                    "target_reader": "",
+                    "core_tension": "",
+                    "angle": "",
+                    "material_entry": ""
+                },
+                "topic": {
+                    "title": "一个标题",
+                    "connections": [1]
+                }
+            }),
+            false,
+        );
+
+        let codes = issues
+            .iter()
+            .filter_map(|item| item.get("code").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"missing_target_reader"));
+        assert!(codes.contains(&"missing_core_tension"));
+        assert!(codes.contains(&"missing_angle"));
+        assert!(codes.contains(&"missing_material_entry"));
+    }
+
+    #[test]
+    fn collect_wander_validation_issues_rejects_template_title_and_direction() {
+        let issues = collect_wander_validation_issues(
+            &json!({
+                "content_direction": "围绕素材提炼一个可执行的内容方向。",
+                "direction_frame": {
+                    "target_reader": "AI 创作者",
+                    "core_tension": "想做内容但没有抓手",
+                    "angle": "从等待变厉害转向先行动",
+                    "material_entry": "借一条素材的开头张力"
+                },
+                "topic": {
+                    "title": "从某素材延展出的内容选题",
+                    "connections": [1]
+                }
+            }),
+            false,
+        );
+
+        let codes = issues
+            .iter()
+            .filter_map(|item| item.get("code").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"generic_title"));
+        assert!(codes.contains(&"generic_direction"));
+    }
 }

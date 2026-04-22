@@ -36,12 +36,30 @@ interface WanderMaterialRef {
 interface WanderResult {
   content_direction: string;
   thinking_process: string[];
+  direction_frame: {
+    target_reader: string;
+    core_tension: string;
+    angle: string;
+    material_entry: string;
+  };
   topic: { title: string; connections: number[] };
   options?: Array<{
     content_direction: string;
+    direction_frame: {
+      target_reader: string;
+      core_tension: string;
+      angle: string;
+      material_entry: string;
+    };
     topic: { title: string; connections: number[] };
   }>;
   selected_index?: number;
+}
+
+interface WanderValidationIssue {
+  path: string;
+  code: string;
+  message: string;
 }
 
 interface WanderHistoryRecord {
@@ -94,6 +112,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [validationIssues, setValidationIssues] = useState<WanderValidationIssue[]>([]);
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [showFinal, setShowFinal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -104,6 +123,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const activeRequestIdRef = useRef('');
   const historyListRef = useRef<WanderHistoryRecord[]>([]);
   const activeItemsRef = useRef<WanderItem[]>([]);
+  const activeOption = parsedResult?.options?.[selectedOptionIndex];
+  const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -216,13 +237,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     if (!embedded || typeof embedded !== 'object' || !embedded.topic) {
       return result;
     }
+    const embeddedFrame = embedded.direction_frame && typeof embedded.direction_frame === 'object'
+      ? embedded.direction_frame
+      : undefined;
     return {
       content_direction: String(embedded.content_direction || result.content_direction || '').trim(),
       thinking_process: Array.isArray(result.thinking_process) && result.thinking_process.length > 0
         ? result.thinking_process
         : (Array.isArray(embedded.thinking_process) ? embedded.thinking_process.map((item) => String(item || '').trim()).filter(Boolean) : []),
+      direction_frame: {
+        target_reader: String(embeddedFrame?.target_reader || result.direction_frame?.target_reader || '').trim(),
+        core_tension: String(embeddedFrame?.core_tension || result.direction_frame?.core_tension || '').trim(),
+        angle: String(embeddedFrame?.angle || result.direction_frame?.angle || '').trim(),
+        material_entry: String(embeddedFrame?.material_entry || result.direction_frame?.material_entry || '').trim(),
+      },
       topic: {
-        title: String(embedded.topic?.title || result.topic?.title || '未命名选题').trim() || '未命名选题',
+        title: String(embedded.topic?.title || result.topic?.title || '').trim(),
         connections: Array.isArray(embedded.topic?.connections)
           ? embedded.topic.connections.map((item) => Number(item)).filter((item) => Number.isFinite(item))
           : (result.topic?.connections || []),
@@ -232,8 +262,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         : (Array.isArray(embedded.options)
           ? embedded.options.map((option) => ({
               content_direction: String(option?.content_direction || '').trim(),
+              direction_frame: {
+                target_reader: String(option?.direction_frame?.target_reader || '').trim(),
+                core_tension: String(option?.direction_frame?.core_tension || '').trim(),
+                angle: String(option?.direction_frame?.angle || '').trim(),
+                material_entry: String(option?.direction_frame?.material_entry || '').trim(),
+              },
               topic: {
-                title: String(option?.topic?.title || '未命名选题').trim() || '未命名选题',
+                title: String(option?.topic?.title || '').trim(),
                 connections: Array.isArray(option?.topic?.connections)
                   ? option.topic.connections.map((item) => Number(item)).filter((item) => Number.isFinite(item))
                   : [],
@@ -265,11 +301,16 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const topicPayload = payload.topic && typeof payload.topic === 'object'
       ? payload.topic as Record<string, unknown>
       : {};
+    const directionFramePayload = payload.direction_frame && typeof payload.direction_frame === 'object'
+      ? payload.direction_frame as Record<string, unknown>
+      : (payload.directionFrame && typeof payload.directionFrame === 'object'
+        ? payload.directionFrame as Record<string, unknown>
+        : {});
     const title = String(
       topicPayload.title
       || payload.title
-      || '未命名选题'
-    ).trim() || '未命名选题';
+      || ''
+    ).trim();
     const contentDirection = String(
       payload.content_direction
       || payload.direction
@@ -278,6 +319,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     ).trim();
     return {
       content_direction: contentDirection,
+      direction_frame: {
+        target_reader: String(directionFramePayload.target_reader || directionFramePayload.targetReader || '').trim(),
+        core_tension: String(directionFramePayload.core_tension || directionFramePayload.coreTension || '').trim(),
+        angle: String(directionFramePayload.angle || '').trim(),
+        material_entry: String(directionFramePayload.material_entry || directionFramePayload.materialEntry || '').trim(),
+      },
       topic: {
         title,
         connections: normalizeWanderConnections(topicPayload.connections ?? payload.connections),
@@ -339,12 +386,34 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return repairWanderResult({
       content_direction: primary.content_direction,
       thinking_process: thinkingProcessRaw.map((item) => String(item || '').trim()).filter(Boolean),
+      direction_frame: primary.direction_frame,
       topic: primary.topic,
       options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
       selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
         ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
         : 0,
     });
+  }
+
+  function normalizeWanderValidationIssues(raw: unknown): WanderValidationIssue[] {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw
+      .map((item) => {
+        const payload = item && typeof item === 'object'
+          ? item as Record<string, unknown>
+          : null;
+        if (!payload) return null;
+        const message = String(payload.message || '').trim();
+        if (!message) return null;
+        return {
+          path: String(payload.path || '').trim(),
+          code: String(payload.code || '').trim(),
+          message,
+        };
+      })
+      .filter((item): item is WanderValidationIssue => Boolean(item));
   }
 
   function resolveSelectedOptionIndex(result: WanderResult | null): number {
@@ -752,19 +821,25 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       }
 
       const error = String(data.error || '').trim();
+      const resultText = typeof data.result === 'string'
+        ? data.result.trim()
+        : '';
+      const historyId = String(data.historyId || '').trim();
+      const normalizedResult = normalizeWanderResultPayload(resultText);
+      const normalizedIssues = normalizeWanderValidationIssues(data.validationIssues);
       if (error) {
-        setParsedResult(null);
+        setParsedResult(normalizedResult);
         setParseError(error);
+        setValidationIssues(normalizedIssues);
+        if (normalizedResult) {
+          setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
+        }
         setLiveStatus(toStableTwoLineText('漫步失败'));
       } else {
-        const resultText = typeof data.result === 'string'
-          ? data.result.trim()
-          : '';
-        const historyId = String(data.historyId || '').trim();
-        const normalizedResult = normalizeWanderResultPayload(resultText);
         if (normalizedResult) {
           setParsedResult(normalizedResult);
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
+          setValidationIssues([]);
           setItems(activeItemsRef.current);
           setLiveStatus(toStableTwoLineText('漫步完成'));
           if (historyId) {
@@ -799,6 +874,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     setParsedResult(null);
     setSelectedOptionIndex(0);
     setParseError(null);
+    setValidationIssues([]);
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
@@ -1088,21 +1164,52 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
                         <div className="space-y-6">
                             <h2 className="text-3xl font-black text-text-primary leading-[1.15] tracking-tight">
-                                {(parsedResult.options?.[selectedOptionIndex]?.topic.title || parsedResult.topic.title)}
+                                {(activeOption?.topic.title || parsedResult.topic.title || '未命名选题')}
                             </h2>
 
                             <div className="flex items-start gap-3">
                                 <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-primary shrink-0" />
                                 <div className="text-[15px] font-bold text-text-secondary leading-relaxed">
-                                    {(parsedResult.options?.[selectedOptionIndex]?.content_direction || parsedResult.content_direction)}
+                                    {(activeOption?.content_direction || parsedResult.content_direction)}
                                 </div>
                             </div>
+
+                            {activeDirectionFrame && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                      ['目标读者', activeDirectionFrame.target_reader],
+                                      ['核心矛盾', activeDirectionFrame.core_tension],
+                                      ['叙事角度', activeDirectionFrame.angle],
+                                      ['素材切口', activeDirectionFrame.material_entry],
+                                    ].map(([label, value]) => (
+                                      <div key={label} className="rounded-2xl border border-black/[0.05] bg-black/[0.015] px-4 py-3">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-text-tertiary">{label}</div>
+                                        <div className="mt-1 text-[13px] font-bold leading-relaxed text-text-primary">{value || '待补充'}</div>
+                                      </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {parseError && (
-                            <div className="mt-6 flex items-center gap-2 text-[12px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
-                                <X className="w-4 h-4 shrink-0" />
-                                {parseError}
+                            <div className="mt-6 space-y-3">
+                                <div className="flex items-center gap-2 text-[12px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+                                    <X className="w-4 h-4 shrink-0" />
+                                    {parseError}
+                                </div>
+                                {validationIssues.length > 0 && (
+                                    <div className="rounded-2xl border border-red-100 bg-red-50/60 px-4 py-4">
+                                        <div className="text-[11px] font-black uppercase tracking-widest text-red-500">需要补强</div>
+                                        <div className="mt-2 space-y-2">
+                                            {validationIssues.slice(0, 6).map((issue) => (
+                                                <div key={`${issue.path}-${issue.code}`} className="flex items-start gap-2 text-[12px] font-bold text-red-500">
+                                                    <div className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" />
+                                                    <span>{issue.message}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                   </div>
@@ -1185,8 +1292,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
               )}
 
               {showFinal && !parsedResult && parseError && (
-                <div className="text-sm text-text-secondary bg-surface-secondary border border-border rounded-lg p-6 text-center">
-                  {parseError}
+                <div className="space-y-3 rounded-lg border border-border bg-surface-secondary p-6">
+                  <div className="text-sm text-center text-text-secondary">{parseError}</div>
+                  {validationIssues.length > 0 && (
+                    <div className="space-y-2">
+                      {validationIssues.slice(0, 6).map((issue) => (
+                        <div key={`${issue.path}-${issue.code}`} className="text-[12px] font-bold text-red-500">
+                          {issue.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
