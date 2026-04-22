@@ -129,6 +129,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 "Do not force every material into the final topic; weak materials may be dropped, and strong materials may be used only for hook, angle, tension, structure, or tone learning.",
                 "Quality, novelty, and publishability are more important than material coverage.",
                 "Never output generic titles such as '从某素材延展出的内容选题' or '未命名选题'.",
+                "The final title must stay within 20 Chinese characters or the equivalent concise length in other languages.",
                 "Never output generic directions such as '围绕这组素材提炼一个方向'.",
                 "A valid result must include direction_frame.target_reader, direction_frame.core_tension, direction_frame.angle, and direction_frame.material_entry before you finalize title and content_direction.",
                 "A valid content_direction must state the target audience, the core conflict/tension, the angle, and how the inspected materials informed that angle or sharpened its hook.",
