@@ -135,8 +135,11 @@ pub fn execute_grep(
                 continue;
             }
             hits.push(json!({
+                "documentId": format!("{}:{}", scope.advisor_id.clone().unwrap_or_default(), file.relative_path),
+                "blockId": Value::Null,
                 "path": file.relative_path,
                 "name": file.name,
+                "page": Value::Null,
                 "lineNumber": index + 1,
                 "snippet": truncate_chars(line.trim(), snippet_chars),
             }));
@@ -182,6 +185,7 @@ pub fn execute_read(
                     "absolutePath": block.absolute_path,
                     "title": block.title,
                     "language": block.language,
+                    "page": block.page,
                     "blockIndex": block.block_index,
                     "lineStart": block.line_start,
                     "lineEnd": block.line_end,
@@ -485,8 +489,13 @@ fn execute_source_search(
                 "documentId": document_id,
                 "sourceId": source_id,
                 "sourceName": scope.source_name,
+                "blockId": Value::Null,
                 "path": file.relative_path,
                 "absolutePath": file.absolute_path.display().to_string(),
+                "page": Value::Null,
+                "blockIndex": Value::Null,
+                "lineStart": index + 1,
+                "lineEnd": index + 1,
                 "lineNumber": index + 1,
                 "snippet": truncate_chars(line.trim(), snippet_chars),
             }));
