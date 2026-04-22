@@ -542,3 +542,59 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
         }
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::RuntimeContextBundleSummary;
+
+    #[test]
+    fn runtime_warm_summary_keeps_context_bundle_metrics() {
+        let summary = build_runtime_warm_summary(
+            vec![RuntimeWarmEntry {
+                mode: "redclaw".to_string(),
+                system_prompt: "system prompt".to_string(),
+                model_config: Some(json!({ "model": "gpt" })),
+                long_term_context: Some("long-term".to_string()),
+                context_bundle: RuntimeContextBundleSummary {
+                    runtime_mode: "redclaw".to_string(),
+                    tool_count: 4,
+                    active_skill_count: 2,
+                    project_context_chars: 18,
+                    host_context_chars: 22,
+                    advisor_context_chars: 11,
+                    memory_chars: 30,
+                    subjects_chars: 14,
+                    prompt_prefix_chars: 10,
+                    prompt_suffix_chars: 8,
+                    final_prompt_chars: 128,
+                },
+                warmed_at: 123,
+            }],
+            456,
+        );
+
+        assert_eq!(
+            summary.get("lastWarmedAt").and_then(Value::as_i64),
+            Some(456)
+        );
+        assert_eq!(
+            summary
+                .pointer("/entries/0/contextBundle/toolCount")
+                .and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            summary
+                .pointer("/entries/0/contextBundle/finalPromptChars")
+                .and_then(Value::as_i64),
+            Some(128)
+        );
+        assert_eq!(
+            summary
+                .pointer("/entries/0/hasModelConfig")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+}

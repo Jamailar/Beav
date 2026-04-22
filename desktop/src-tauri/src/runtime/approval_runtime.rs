@@ -287,4 +287,27 @@ mod tests {
         assert_eq!(rejected.status, "rejected");
         assert_eq!(rejected.confirmed, Some(false));
     }
+
+    #[test]
+    fn snapshot_keeps_recent_records_bounded() {
+        let mut state = ApprovalRuntimeState::default();
+        for index in 0..(APPROVAL_RECENT_LIMIT + 5) {
+            let approval_id = format!("approval-{index}");
+            let call_id = format!("call-{index}");
+            state.request(build_pending(&approval_id, &approval_id, Some(&call_id)));
+            let _ = state.resolve_by_call_id(&call_id, index % 2 == 0);
+        }
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.pending_count, 0);
+        assert_eq!(snapshot.resolved_count, APPROVAL_RECENT_LIMIT as i64);
+        assert_eq!(snapshot.recent.len(), APPROVAL_RECENT_LIMIT);
+        assert_eq!(
+            snapshot
+                .recent
+                .first()
+                .map(|item| item.approval_id.as_str()),
+            Some("approval-54")
+        );
+    }
 }
