@@ -9,11 +9,11 @@
 
 ## Existing Local Docs
 
-- [ATTRIBUTION.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/vendor/freecut/ATTRIBUTION.md)
+- [ATTRIBUTION.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/vendor/freecut/ATTRIBUTION.md)
 - `infrastructure/README.md`
 - `shared/README.md`
 - `shared/state/README.md`
-- [docs/freecut-vendoring.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/freecut-vendoring.md)
+- [docs/freecut-vendoring.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/freecut-vendoring.md)
 
 ## Maintenance Rule
 

@@ -17,7 +17,7 @@
 
 ## Routing Entry
 
-- 页面挂载入口在 [src/App.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/App.tsx)
+- 页面挂载入口在 [src/App.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/App.tsx)
 - 顶层导航容器在 `components/Layout.tsx`
 
 ## Rules

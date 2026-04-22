@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-- [ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/bridge/ipcRenderer.ts)
+- [ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/bridge/ipcRenderer.ts)
 
 ## Responsibilities
 

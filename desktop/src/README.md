@@ -4,8 +4,8 @@
 
 ## Entry Points
 
-- [main.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/main.tsx)
-- [App.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/App.tsx)
+- [main.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/main.tsx)
+- [App.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/App.tsx)
 
 ## Key Subdirectories
 

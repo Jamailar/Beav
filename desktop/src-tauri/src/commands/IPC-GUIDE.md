@@ -7,11 +7,11 @@
 ## 适用范围
 
 - Host command 模块：
-  - [src-tauri/src/commands](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/commands)
+  - [src-tauri/src/commands](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands)
 - Host 兼容入口：
-  - [src-tauri/src/main.rs](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/main.rs:6252)
+  - [src-tauri/src/main.rs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/main.rs:6252)
 - Renderer bridge：
-  - [src/bridge/ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/bridge/ipcRenderer.ts:1)
+  - [src/bridge/ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/bridge/ipcRenderer.ts:1)
 
 ## 一、总体原则
 
@@ -29,7 +29,7 @@
 
 ### 2. `main.rs` 是装配层，不是业务路由中心
 
-[src-tauri/src/main.rs](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/main.rs:1) 只应该承担：
+[src-tauri/src/main.rs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/main.rs:1) 只应该承担：
 
 - app setup
 - state manage
@@ -181,7 +181,7 @@ command 内不允许：
 
 bridge 文件：
 
-- [src/bridge/ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/bridge/ipcRenderer.ts:1)
+- [src/bridge/ipcRenderer.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/bridge/ipcRenderer.ts:1)
 
 bridge 必须负责：
 
@@ -268,7 +268,7 @@ knowledge: {
 
 所有 host -> renderer 事件必须通过统一事件出口组织，优先走：
 
-- [src-tauri/src/events](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/events)
+- [src-tauri/src/events](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/events)
 
 不要在随机 command handler 里手写大量散乱 emit 逻辑。
 
@@ -340,6 +340,6 @@ knowledge: {
 
 ## 十二、相关文档
 
-- [commands/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src-tauri/src/commands/README.md)
-- [docs/ipc-inventory.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/ipc-inventory.md)
-- [docs/ipc-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/ipc-optimization-plan.md)
+- [commands/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/README.md)
+- [docs/ipc-inventory.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ipc-inventory.md)
+- [docs/ipc-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ipc-optimization-plan.md)

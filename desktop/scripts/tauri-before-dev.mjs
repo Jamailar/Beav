@@ -5,8 +5,8 @@ import { syncVersion } from './sync-version.mjs';
 
 const execFile = promisify(execFileCallback);
 
-const PORT = Number(process.env.LEXBOX_DEV_PORT || 1420);
-const DEV_URL = process.env.LEXBOX_DEV_URL || `http://localhost:${PORT}`;
+const PORT = Number(process.env.REDBOX_DEV_PORT || process.env.LEXBOX_DEV_PORT || 1420);
+const DEV_URL = process.env.REDBOX_DEV_URL || process.env.LEXBOX_DEV_URL || `http://localhost:${PORT}`;
 const cwd = process.cwd();
 const isProbe = process.argv.includes('--probe');
 

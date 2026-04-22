@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-- [bootstrap.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/ipc/bootstrap.ts)
+- [bootstrap.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/ipc/bootstrap.ts)
 
 ## Rule
 

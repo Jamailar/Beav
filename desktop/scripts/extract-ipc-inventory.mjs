@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const desktopSrc = path.join(repoRoot, 'desktop', 'src');
-const electronMain = path.join(repoRoot, 'desktop', 'electron', 'main.ts');
+const rendererSrc = path.join(repoRoot, 'desktop', 'src');
+const bridgeFile = path.join(rendererSrc, 'bridge', 'ipcRenderer.ts');
+const hostSrc = path.join(repoRoot, 'desktop', 'src-tauri', 'src');
 const outputPath = path.resolve(__dirname, '..', 'docs', 'ipc-inventory.md');
 
 function run(command) {
@@ -14,7 +15,7 @@ function run(command) {
 }
 
 const frontendChannels = run(
-  `rg -o "invoke\\\\('([^']+)'|send\\\\('([^']+)'|on\\\\('([^']+)'" "${desktopSrc}" -g '!**/*.css'`,
+  `rg -o "invoke(Channel|ChannelGuarded)?\\\\('([^']+)'|send(Channel)?\\\\('([^']+)'|on\\\\('([^']+)'" "${rendererSrc}" -g '!**/*.css'`,
 )
   .split('\n')
   .map((line) => line.match(/'([^']+)'/)?.[1])
@@ -24,9 +25,29 @@ const frontendChannels = run(
     return acc;
   }, new Map());
 
-const backendHandlers = run(
-  `rg -n "ipcMain\\\\.(handle|on)\\\\(" "${electronMain}"`,
-).split('\n');
+const backendChannels = run(
+  `rg --pcre2 -o '\\"[a-z0-9][a-z0-9:-]*:[a-z0-9:-]+\\"(?=\\s*=>)' "${hostSrc}" -g '*.rs'`,
+)
+  .split('\n')
+  .map((line) => line.replaceAll('"', '').trim())
+  .filter(Boolean)
+  .reduce((acc, channel) => {
+    acc.set(channel, (acc.get(channel) || 0) + 1);
+    return acc;
+  }, new Map());
+
+const explicitCommandRoutes = run(
+  `rg -o "'([^']+)'\\s*:\\s*'([^']+)'" "${bridgeFile}"`,
+)
+  .split('\n')
+  .map((line) => {
+    const match = line.match(/'([^']+)'\s*:\s*'([^']+)'/);
+    if (!match) {
+      return null;
+    }
+    return { channel: match[1], command: match[2] };
+  })
+  .filter(Boolean);
 
 const lines = [
   '# IPC Inventory',
@@ -39,11 +60,21 @@ const lines = [
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([channel, count]) => `| \`${channel}\` | ${count} |`),
   '',
-  '## Electron main handlers',
+  '## Host handled channels',
   '',
-  '```text',
-  ...backendHandlers,
-  '```',
+  '| Channel | Handlers |',
+  '| --- | ---: |',
+  ...[...backendChannels.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([channel, count]) => `| \`${channel}\` | ${count} |`),
+  '',
+  '## Explicit Tauri command routes',
+  '',
+  '| Channel | Command |',
+  '| --- | --- |',
+  ...explicitCommandRoutes
+    .sort((a, b) => a.channel.localeCompare(b.channel))
+    .map(({ channel, command }) => `| \`${channel}\` | \`${command}\` |`),
   '',
 ];
 

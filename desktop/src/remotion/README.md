@@ -4,12 +4,12 @@
 
 ## Entry Points
 
-- [index.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/remotion/index.ts)
-- [Root.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/remotion/Root.tsx)
+- [index.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/remotion/index.ts)
+- [Root.tsx](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/remotion/Root.tsx)
 
 ## Relationship
 
-- CLI 渲染脚本在 [remotion/render.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/remotion/render.mjs)
+- CLI 渲染脚本在 [remotion/render.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/remotion/render.mjs)
 - 编辑器侧协议和预览壳层在 `src/components/manuscripts/`
 - 视频编辑器状态在 `src/features/video-editor/`
 

@@ -4,8 +4,8 @@
 
 ## Start Here
 
-1. 先读 [README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/README.md) 了解工作区边界。
-2. 再读 [AGENTS.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/AGENTS.md) 和 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/README.md)。
+1. 先读 [README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/README.md) 了解工作区边界。
+2. 再读 [AGENTS.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/AGENTS.md) 和 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/README.md)。
 3. 改具体模块前，先打开该目录旁边的 `README.md` 或 `*.README.md`。
 
 ## Repository Rules
@@ -49,6 +49,6 @@
 
 ## Release Hygiene
 
-- 版本号以根 [package.json](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/package.json) 为准。
-- Rust 版本同步由 [scripts/sync-version.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/scripts/sync-version.mjs) 处理。
-- 打包和运行方式见 [docs/development/setup.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/development/setup.md)。
+- 版本号以根 [package.json](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/package.json) 为准。
+- Rust 版本同步由 [scripts/sync-version.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/scripts/sync-version.mjs) 处理。
+- 打包和运行方式见 [docs/development/setup.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/development/setup.md)。

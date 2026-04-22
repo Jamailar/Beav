@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-- [render.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/remotion/render.mjs)
+- [render.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/remotion/render.mjs)
 
 ## Responsibilities
 

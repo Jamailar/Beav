@@ -18,4 +18,4 @@
 
 ## Related Docs
 
-- [docs/skill-runtime-v2.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/skill-runtime-v2.md)
+- [docs/skill-runtime-v2.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/skill-runtime-v2.md)

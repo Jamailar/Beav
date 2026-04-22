@@ -273,7 +273,7 @@ async function buildOnRemote({ target, runner, signCommand, requireSigning, remo
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help === true) {
-    console.log('Usage: pnpm release:win [-- --mode remote|local] [-- --host jamdebian] [-- --workdir /home/jam/build/lexbox-win-release] [-- --target x86_64-pc-windows-msvc] [-- --runner cargo-xwin] [-- --sign-command "<command with %1>"] [-- --require-signing]');
+    console.log('Usage: pnpm release:win [-- --mode remote|local] [-- --host jamdebian] [-- --workdir /home/jam/build/redbox-tauri-win-release] [-- --target x86_64-pc-windows-msvc] [-- --runner cargo-xwin] [-- --sign-command "<command with %1>"] [-- --require-signing]');
     return;
   }
 
@@ -298,7 +298,7 @@ async function main() {
 
   const remoteHost = String(args.host || process.env.REDBOX_REMOTE_HOST || 'jamdebian').trim();
   const remoteWorkdir = String(
-    args.workdir || process.env.REDBOX_REMOTE_WORKDIR || '/home/jam/build/lexbox-win-release',
+    args.workdir || process.env.REDBOX_REMOTE_WORKDIR || '/home/jam/build/redbox-tauri-win-release',
   ).trim();
 
   await buildOnRemote({

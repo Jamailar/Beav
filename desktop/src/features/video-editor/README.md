@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-- [store/useVideoEditorStore.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/features/video-editor/store/useVideoEditorStore.ts)
+- [store/useVideoEditorStore.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/features/video-editor/store/useVideoEditorStore.ts)
 
 ## State Areas
 

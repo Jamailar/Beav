@@ -1,13 +1,13 @@
 # RedBox
 
-`RedBox/` 是 RedConvert 桌面端迁移到 Tauri v2 + Rust 宿主的独立工作区。
+`desktop/` 是 RedConvert 当前桌面端工作区，基于 Tauri v2 + Rust 宿主。
 
 ## Boundaries
 
-- 只在 `RedBox/` 内开发、运行和构建。
-- `desktop/` 只作为只读参考源，不参与 `RedBox` 运行时与构建。
-- 前端源码在 `RedBox/src/` 独立维护。
-- 宿主源码在 `RedBox/src-tauri/` 独立维护。
+- 只在 `desktop/` 内开发、运行和构建。
+- `archive/desktop-electron/` 只作为历史参考源，不参与当前桌面端运行时与构建。
+- 前端源码在 `desktop/src/` 独立维护。
+- 宿主源码在 `desktop/src-tauri/` 独立维护。
 - 前端兼容面仍暴露 `window.ipcRenderer`，内部统一路由到 Tauri command/event。
 
 ## Commands
@@ -29,7 +29,7 @@
 - 前端 IPC channel 已全量有 Rust host 路由。
 - Tauri debug build 已通过。
 - macOS `.app` bundle 已启用。
-- `RedBox/src-tauri/src/main.rs` 目前承载 Rust host 内核：
+- `desktop/src-tauri/src/main.rs` 目前承载 Rust host 内核：
   - app / settings / spaces / subjects
   - manuscripts / media / cover / knowledge
   - chat / runtime / sessions / tasks / background
@@ -59,11 +59,11 @@
 
 当前调试产物：
 
-- `RedBox/src-tauri/target/debug/redbox`
+- `desktop/src-tauri/target/debug/redbox`
 
 ## Documentation
 
-- 开发文档总入口见 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/README.md)
-- 协作规则见 [CONTRIBUTING.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/CONTRIBUTING.md)
-- 发布与签名见 [docs/release-packaging.md](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/docs/release-packaging.md)
+- 开发文档总入口见 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/README.md)
+- 协作规则见 [CONTRIBUTING.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/CONTRIBUTING.md)
+- 发布与签名见 [docs/release-packaging.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/release-packaging.md)
 - 模块级说明优先查看对应目录旁边的 `README.md` 或 `*.README.md`

@@ -4,7 +4,7 @@
 
 ## Entry Point
 
-- [runtimeEventStream.ts](/Users/Jam/LocalDev/GitHub/RedConvert/LexBox/src/runtime/runtimeEventStream.ts)
+- [runtimeEventStream.ts](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src/runtime/runtimeEventStream.ts)
 
 ## Responsibilities
 
