@@ -59,6 +59,19 @@ type RuntimeDiagnosticsSummary = {
             systemPromptChars: number;
             longTermContextChars: number;
             hasModelConfig: boolean;
+            contextBundle?: {
+                runtimeMode?: string;
+                toolCount?: number;
+                activeSkillCount?: number;
+                projectContextChars?: number;
+                hostContextChars?: number;
+                advisorContextChars?: number;
+                memoryChars?: number;
+                subjectsChars?: number;
+                promptPrefixChars?: number;
+                promptSuffixChars?: number;
+                finalPromptChars?: number;
+            };
         }>;
     };
     approvals?: {
@@ -2644,6 +2657,12 @@ export function ToolsSettingsSection({
                                             </div>
                                             <div className="text-[10px] text-text-tertiary mt-1">
                                                 long-term {entry.longTermContextChars} chars
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                tools {Number(entry.contextBundle?.toolCount ?? 0)} / skills {Number(entry.contextBundle?.activeSkillCount ?? 0)}
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                memory {Number(entry.contextBundle?.memoryChars ?? 0)} / subjects {Number(entry.contextBundle?.subjectsChars ?? 0)}
                                             </div>
                                         </div>
                                     ))}

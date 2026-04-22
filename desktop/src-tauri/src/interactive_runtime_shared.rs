@@ -6,7 +6,10 @@ use tauri::State;
 
 use crate::persistence::ensure_store_hydrated_for_subjects;
 use crate::persistence::with_store;
-use crate::runtime::{load_session_bundle_messages, runtime_context_messages_for_session};
+use crate::runtime::{
+    build_runtime_context_bundle_summary, load_session_bundle_messages,
+    runtime_context_messages_for_session, RuntimeContextBundle,
+};
 use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, resolve_skill_set};
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
@@ -19,22 +22,26 @@ use crate::{
     truncate_chars, workspace_root, AppState,
 };
 
-pub(crate) fn interactive_runtime_system_prompt(
+pub(crate) fn interactive_runtime_context_bundle(
     state: &State<'_, AppState>,
     runtime_mode: &str,
     session_id: Option<&str>,
-) -> String {
+) -> RuntimeContextBundle {
     if session_id.is_none() {
         if let Ok(runtime_warm) = state.runtime_warm.lock() {
             if let Some(entry) = runtime_warm.entries.get(runtime_mode) {
                 if !entry.system_prompt.trim().is_empty() {
-                    return entry.system_prompt.clone();
+                    return RuntimeContextBundle::new(
+                        entry.system_prompt.clone(),
+                        entry.context_bundle.clone(),
+                    );
                 }
             }
         }
     }
     let (
         available_tools,
+        active_skill_count,
         project_context,
         skills_section,
         prompt_prefix,
@@ -73,6 +80,7 @@ pub(crate) fn interactive_runtime_system_prompt(
         }
         Ok((
             prompt_tool_lines_for_session(&store, runtime_mode, session_id),
+            resolved_skills.active_skills.len(),
             project_context,
             skill_prompt.skills_section,
             skill_prompt.prompt_prefix,
@@ -85,6 +93,7 @@ pub(crate) fn interactive_runtime_system_prompt(
         let host_context = current_host_runtime_context();
         (
             prompt_tool_lines_for_runtime_mode(runtime_mode),
+            0,
             format!(
                 "runtime_mode={runtime_mode}; {}",
                 compact_host_runtime_context(&host_context)
@@ -148,13 +157,29 @@ pub(crate) fn interactive_runtime_system_prompt(
         if !prompt_suffix.trim().is_empty() {
             sections.push(prompt_suffix.trim().to_string());
         }
-        return sections.join("\n\n");
+        let final_prompt = sections.join("\n\n");
+        return RuntimeContextBundle::new(
+            final_prompt.clone(),
+            build_runtime_context_bundle_summary(
+                runtime_mode,
+                &available_tools,
+                active_skill_count,
+                &project_context,
+                &host_runtime_context_section,
+                &advisor_context_section,
+                memory_section.as_ref().map(|item| item.summary.as_str()),
+                &subjects_section,
+                &prompt_prefix,
+                &prompt_suffix,
+                &final_prompt,
+            ),
+        );
     }
     if let Some(template) = load_redbox_prompt("runtime/pi/system_base.txt") {
         let mut rendered = render_redbox_prompt(
             &template,
             &[
-                ("available_tools", available_tools),
+                ("available_tools", available_tools.clone()),
                 ("workspace_root", workspace_root_value.clone()),
                 ("current_space_root", workspace_root_value.clone()),
                 ("skills_path", workspace_root_value.clone() + "/skills"),
@@ -183,7 +208,7 @@ pub(crate) fn interactive_runtime_system_prompt(
                     workspace_root_value.clone() + "/redclaw/profile",
                 ),
                 ("memory_path", workspace_root_value.clone() + "/memory"),
-                ("project_context", project_context),
+                ("project_context", project_context.clone()),
                 ("host_runtime_context", host_runtime_context_section.clone()),
                 ("skills_section", skills_section.clone()),
                 (
@@ -193,7 +218,7 @@ pub(crate) fn interactive_runtime_system_prompt(
                         .map(|item| item.summary.clone())
                         .unwrap_or_default(),
                 ),
-                ("subjects_section", subjects_section),
+                ("subjects_section", subjects_section.clone()),
                 ("current_date", now_iso()),
                 ("current_working_directory", workspace_root_value),
                 ("pi_documentation", "Tauri Rust host runtime".to_string()),
@@ -279,9 +304,24 @@ pub(crate) fn interactive_runtime_system_prompt(
             rendered.push_str("\n\n");
             rendered.push_str(prompt_suffix.trim());
         }
-        return rendered;
+        return RuntimeContextBundle::new(
+            rendered.clone(),
+            build_runtime_context_bundle_summary(
+                runtime_mode,
+                &available_tools,
+                active_skill_count,
+                &project_context,
+                &host_runtime_context_section,
+                &advisor_context_section,
+                memory_section.as_ref().map(|item| item.summary.as_str()),
+                &subjects_section,
+                &prompt_prefix,
+                &prompt_suffix,
+                &rendered,
+            ),
+        );
     }
-    format!(
+    let fallback = format!(
         "You are the RedClaw desktop AI runtime inside RedBox for mode `{}`. \
 Use tools when the user asks about app state, knowledge, advisors, work items, memories, sessions, or settings. \
 Do not invent workspace/app facts that you can fetch with tools. \
@@ -290,7 +330,31 @@ When using tools, synthesize the final answer in Chinese unless the user clearly
 Host runtime context: {}",
         runtime_mode,
         render_host_runtime_context_section(&current_host_runtime_context())
+    );
+    RuntimeContextBundle::new(
+        fallback.clone(),
+        build_runtime_context_bundle_summary(
+            runtime_mode,
+            "",
+            0,
+            "",
+            "",
+            "",
+            None,
+            "",
+            "",
+            "",
+            &fallback,
+        ),
     )
+}
+
+pub(crate) fn interactive_runtime_system_prompt(
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> String {
+    interactive_runtime_context_bundle(state, runtime_mode, session_id).system_prompt
 }
 
 fn advisor_runtime_context_section(

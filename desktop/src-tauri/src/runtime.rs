@@ -4,6 +4,8 @@ mod agent_engine;
 mod approval_runtime;
 #[path = "runtime/config_runtime.rs"]
 mod config_runtime;
+#[path = "runtime/context_bundle.rs"]
+mod context_bundle;
 #[path = "runtime/contracts.rs"]
 mod contracts;
 #[path = "runtime/events.rs"]
@@ -24,6 +26,7 @@ mod types;
 pub use agent_engine::*;
 pub use approval_runtime::*;
 pub use config_runtime::*;
+pub use context_bundle::*;
 pub use contracts::*;
 pub use events::*;
 pub use interactive_loop::*;

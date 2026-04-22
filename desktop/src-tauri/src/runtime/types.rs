@@ -5,6 +5,7 @@ use std::thread::JoinHandle;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::runtime::RuntimeContextBundleSummary;
 use crate::{make_id, now_i64};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -470,6 +471,7 @@ pub struct RuntimeWarmEntry {
     pub system_prompt: String,
     pub model_config: Option<Value>,
     pub long_term_context: Option<String>,
+    pub context_bundle: RuntimeContextBundleSummary,
     pub warmed_at: i64,
 }
 
