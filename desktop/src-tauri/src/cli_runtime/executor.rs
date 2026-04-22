@@ -7,10 +7,11 @@ use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
     authorize_cli_execution, emit_cli_escalation_requested, emit_cli_execution_log,
-    emit_cli_execution_started, emit_cli_execution_status, execution_log_metadata,
-    execution_log_paths, load_host_shell_env, merge_execution_env, resolve_cli_environment,
-    upsert_cli_execution_record, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
-    CliExecuteRequest, CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
+    emit_cli_execution_started, emit_cli_execution_status, emit_cli_verification_finished,
+    execution_log_metadata, execution_log_paths, load_host_shell_env, merge_execution_env,
+    resolve_cli_environment, run_cli_verification, upsert_cli_execution_record,
+    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest,
+    CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, AppState};
@@ -225,6 +226,11 @@ pub fn execute_cli_command(
     };
     record = upsert_cli_execution_record(state, record)?;
     emit_cli_execution_status(app, &record, reason);
+    if !request.verification_rules.is_empty() {
+        let outcome = run_cli_verification(state, record.clone(), &request.verification_rules)?;
+        emit_cli_verification_finished(app, &outcome.execution, &outcome.summary);
+        record = outcome.execution;
+    }
     Ok(record)
 }
 

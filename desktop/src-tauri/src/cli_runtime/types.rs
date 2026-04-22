@@ -296,6 +296,19 @@ pub struct CliExecuteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
+pub struct CliInstallRequest {
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
+    pub runtime_id: Option<String>,
+    pub environment_id: Option<String>,
+    pub install_method: CliInstallMethod,
+    pub spec: String,
+    pub tool_name: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CliApproveEscalationRequest {
     pub escalation_id: String,
     pub scope: String,
@@ -306,6 +319,13 @@ pub struct CliApproveEscalationRequest {
 pub struct CliDenyEscalationRequest {
     pub escalation_id: String,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CliVerifyExecutionRequest {
+    pub execution_id: String,
+    pub rules: Vec<CliVerifyRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +349,34 @@ pub enum CliVerifyRule {
         argv: Vec<String>,
         cwd: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CliInstallResult {
+    pub success: bool,
+    pub installed: bool,
+    pub install_id: String,
+    pub status: CliExecutionStatus,
+    pub environment_id: String,
+    pub tool_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub install_method: CliInstallMethod,
+    pub spec: String,
+    pub summary: String,
+    pub execution: Option<CliExecutionRecord>,
+    pub tool: Option<CliToolRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CliVerifyResult {
+    pub success: bool,
+    pub execution_id: String,
+    pub status: CliVerificationStatus,
+    pub summary: String,
+    pub verifications: Vec<CliVerificationRecord>,
+    pub execution: Option<CliExecutionRecord>,
 }
 
 pub fn cli_runtime_inventory_commands() -> [(&'static str, &'static str); 6] {

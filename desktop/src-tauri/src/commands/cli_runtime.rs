@@ -6,15 +6,18 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    approve_cli_escalation, create_task_ephemeral_environment, default_detect_commands,
-    deny_cli_escalation, detect_many, detect_tool, emit_cli_escalation_resolved,
-    emit_cli_execution_status, ensure_app_global_environment, ensure_workspace_environment,
-    ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_execution_by_id,
-    list_cli_environments, load_cli_execution_snapshot, load_host_shell_env,
+    add_installed_tool_to_environment, approve_cli_escalation, create_task_ephemeral_environment,
+    default_detect_commands, deny_cli_escalation, detect_many, detect_tool,
+    emit_cli_escalation_resolved, emit_cli_execution_status, emit_cli_install_finished,
+    emit_cli_install_started, emit_cli_verification_finished, ensure_app_global_environment,
+    ensure_workspace_environment, ensure_workspace_environment_for_active_space,
+    execute_cli_command, find_cli_environment_by_id, find_cli_execution_by_id,
+    list_cli_environments, load_cli_execution_snapshot, load_host_shell_env, run_cli_verification,
     CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
-    CliEnvironmentScope, CliExecuteRequest,
+    CliEnvironmentScope, CliExecuteRequest, CliExecutionStatus, CliInstallMethod,
+    CliInstallRequest, CliVerifyExecutionRequest,
 };
-use crate::{payload_string, AppState};
+use crate::{make_id, payload_string, AppState};
 
 fn load_host_env() -> std::collections::BTreeMap<String, String> {
     load_host_shell_env().unwrap_or_else(|_| std::env::vars().collect())
@@ -189,6 +192,144 @@ fn execute_value(
     to_cli_runtime_ipc_value(execution)
 }
 
+fn build_install_argv(
+    install_method: &CliInstallMethod,
+    spec: &str,
+    scope: &CliEnvironmentScope,
+) -> Result<Vec<String>, String> {
+    let normalized_spec = spec.trim();
+    if normalized_spec.is_empty() {
+        return Err("spec is required for cli install".to_string());
+    }
+    let argv = match install_method {
+        CliInstallMethod::Manual => {
+            return Err("manual install must be performed by the user".to_string());
+        }
+        CliInstallMethod::Npm => {
+            if matches!(scope, CliEnvironmentScope::AppGlobal) {
+                vec!["npm", "install", "-g", normalized_spec]
+            } else {
+                vec!["npm", "install", normalized_spec]
+            }
+        }
+        CliInstallMethod::Pnpm => {
+            if matches!(scope, CliEnvironmentScope::AppGlobal) {
+                vec!["pnpm", "add", "-g", normalized_spec]
+            } else {
+                vec!["pnpm", "add", normalized_spec]
+            }
+        }
+        CliInstallMethod::Python => vec!["python3", "-m", "pip", "install", normalized_spec],
+        CliInstallMethod::Uv => {
+            if matches!(scope, CliEnvironmentScope::AppGlobal) {
+                vec!["uv", "tool", "install", normalized_spec]
+            } else {
+                vec!["uv", "add", normalized_spec]
+            }
+        }
+        CliInstallMethod::Cargo => vec!["cargo", "install", normalized_spec],
+        CliInstallMethod::Go => vec!["go", "install", normalized_spec],
+        CliInstallMethod::Binary => {
+            return Err("binary install requires a dedicated installer backend".to_string());
+        }
+    };
+    Ok(argv.into_iter().map(str::to_string).collect())
+}
+
+fn install_summary(tool_name: &str, status: &CliExecutionStatus) -> String {
+    match status {
+        CliExecutionStatus::AwaitingEscalation => {
+            format!("安装 {tool_name} 需要额外授权，授权后请重新执行")
+        }
+        CliExecutionStatus::Completed => format!("安装完成：{tool_name}"),
+        CliExecutionStatus::Failed => format!("安装失败：{tool_name}"),
+        CliExecutionStatus::Cancelled => format!("安装已取消：{tool_name}"),
+        CliExecutionStatus::Running => format!("安装进行中：{tool_name}"),
+        CliExecutionStatus::Pending => format!("安装已排队：{tool_name}"),
+    }
+}
+
+fn install_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: CliInstallRequest = parse_cli_runtime_payload(payload)?;
+    let environment = if let Some(environment_id) = request
+        .environment_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        find_cli_environment_by_id(state, environment_id)?
+            .ok_or_else(|| format!("cli environment not found: {environment_id}"))?
+    } else {
+        ensure_app_global_environment(state)?
+    };
+    let install_id = make_id("cli-install");
+    let tool_name = request
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(request.spec.trim());
+    emit_cli_install_started(
+        app,
+        request.session_id.as_deref(),
+        request.task_id.as_deref(),
+        request.runtime_id.as_deref(),
+        &install_id,
+        Some(&environment.id),
+        tool_name,
+        &request.install_method,
+        request.spec.trim(),
+    );
+
+    let execution = execute_cli_command(
+        app,
+        state,
+        CliExecuteRequest {
+            session_id: request.session_id.clone(),
+            task_id: request.task_id.clone(),
+            runtime_id: request.runtime_id.clone(),
+            environment_id: Some(environment.id.clone()),
+            tool_id: Some(tool_name.to_string()),
+            argv: build_install_argv(&request.install_method, &request.spec, &environment.scope)?,
+            cwd: Some(environment.root_path.clone()),
+            use_pty: false,
+            verification_rules: Vec::new(),
+            env: Default::default(),
+        },
+    )?;
+
+    if execution.status == CliExecutionStatus::Completed {
+        let _ = add_installed_tool_to_environment(state, &environment.id, tool_name)?;
+    }
+
+    let summary = install_summary(tool_name, &execution.status);
+    emit_cli_install_finished(
+        app,
+        request.session_id.as_deref(),
+        request.task_id.as_deref(),
+        request.runtime_id.as_deref(),
+        &install_id,
+        Some(&execution.id),
+        Some(&environment.id),
+        tool_name,
+        &serde_json::to_value(&execution.status)
+            .ok()
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "unknown".to_string()),
+        &summary,
+    );
+
+    Ok(json!({
+        "success": execution.status != CliExecutionStatus::Failed,
+        "installId": install_id,
+        "execution": execution,
+    }))
+}
+
 fn poll_execution_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let execution_id = payload_string(payload, "executionId")
         .ok_or_else(|| "executionId is required".to_string())?;
@@ -201,6 +342,24 @@ fn poll_execution_value(state: &State<'_, AppState>, payload: &Value) -> Result<
         Some(snapshot) => to_cli_runtime_ipc_value(snapshot),
         None => Ok(Value::Null),
     }
+}
+
+fn verify_execution_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: CliVerifyExecutionRequest = parse_cli_runtime_payload(payload)?;
+    let execution = find_cli_execution_by_id(state, &request.execution_id)?
+        .ok_or_else(|| format!("cli execution not found: {}", request.execution_id))?;
+    let outcome = run_cli_verification(state, execution, &request.rules)?;
+    emit_cli_verification_finished(app, &outcome.execution, &outcome.summary);
+    Ok(json!({
+        "success": outcome.execution.verification_status != crate::cli_runtime::CliVerificationStatus::Failed,
+        "execution": outcome.execution,
+        "verifications": outcome.verifications,
+        "summary": outcome.summary,
+    }))
 }
 
 fn unsupported_execution_action(
@@ -305,9 +464,11 @@ pub fn handle_cli_runtime_channel(
             list_cli_environments(state).and_then(to_cli_runtime_ipc_value)
         }
         "cli-runtime:create-environment" => create_environment_value(state, payload),
+        "cli-runtime:install" => install_value(app, state, payload),
         "cli-runtime:execute" => execute_value(app, state, payload),
         "cli-runtime:poll-execution" => poll_execution_value(state, payload),
         "cli-runtime:cancel-execution" => unsupported_execution_action(state, payload),
+        "cli-runtime:verify" => verify_execution_value(app, state, payload),
         "cli-runtime:approve-escalation" => approve_escalation_value(app, state, payload),
         "cli-runtime:deny-escalation" => deny_escalation_value(app, state, payload),
         _ => return None,
@@ -360,6 +521,28 @@ mod tests {
         assert_eq!(
             normalized.get("status").and_then(Value::as_str),
             Some("waiting-approval")
+        );
+    }
+
+    #[test]
+    fn build_install_argv_uses_scope_specific_package_manager_forms() {
+        assert_eq!(
+            build_install_argv(
+                &CliInstallMethod::Pnpm,
+                "cowsay",
+                &CliEnvironmentScope::AppGlobal,
+            )
+            .expect("argv should build"),
+            vec!["pnpm", "add", "-g", "cowsay"]
+        );
+        assert_eq!(
+            build_install_argv(
+                &CliInstallMethod::Npm,
+                "eslint",
+                &CliEnvironmentScope::WorkspaceLocal,
+            )
+            .expect("argv should build"),
+            vec!["npm", "install", "eslint"]
         );
     }
 }

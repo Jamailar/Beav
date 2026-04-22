@@ -187,6 +187,47 @@ fn upsert_environment_record(
     record
 }
 
+pub fn upsert_cli_environment_record(
+    state: &State<'_, AppState>,
+    record: CliEnvironmentRecord,
+) -> Result<CliEnvironmentRecord, String> {
+    with_store_mut(state, |store| {
+        Ok(upsert_environment_record(store, record.clone()))
+    })
+}
+
+pub fn add_installed_tool_to_environment(
+    state: &State<'_, AppState>,
+    environment_id: &str,
+    tool_id: &str,
+) -> Result<Option<CliEnvironmentRecord>, String> {
+    let normalized_tool_id = tool_id.trim();
+    if normalized_tool_id.is_empty() {
+        return Ok(None);
+    }
+    with_store_mut(state, |store| {
+        let Some(existing) = store
+            .cli_environments
+            .iter_mut()
+            .find(|item| item.id == environment_id)
+        else {
+            return Ok(None);
+        };
+        if !existing
+            .installed_tool_ids
+            .iter()
+            .any(|item| item == normalized_tool_id)
+        {
+            existing
+                .installed_tool_ids
+                .push(normalized_tool_id.to_string());
+            existing.installed_tool_ids.sort();
+        }
+        existing.updated_at = now_i64();
+        Ok(Some(existing.clone()))
+    })
+}
+
 fn ensure_environment_record(
     state: &State<'_, AppState>,
     scope: CliEnvironmentScope,

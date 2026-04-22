@@ -474,6 +474,7 @@ pub fn default_store() -> AppStore {
         cli_environments: Vec::new(),
         cli_executions: Vec::new(),
         cli_escalations: Vec::new(),
+        cli_verifications: Vec::new(),
         debug_logs: Vec::new(),
         archive_profiles: Vec::new(),
         archive_samples: Vec::new(),
