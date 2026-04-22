@@ -111,6 +111,7 @@ export interface AgentTaskTrace {
 export type RuntimeUnifiedEventType =
   | 'runtime:stream-start'
   | 'runtime:text-delta'
+  | 'runtime:done'
   | 'runtime:tool-start'
   | 'runtime:tool-update'
   | 'runtime:tool-end'
@@ -263,6 +264,12 @@ export interface SessionBridgePermissionRequest {
   decision?: 'proceed_once' | 'proceed_always' | 'cancel';
 }
 
+export interface IpcInvokeGuardOptions<T = unknown> {
+  timeoutMs?: number;
+  fallback?: T | null | (() => T | null);
+  normalize?: (value: unknown) => T;
+}
+
 export interface RoleSpec {
   roleId: string;
   purpose: string;
@@ -279,6 +286,20 @@ declare global {
     id: string;
     title: string;
     updatedAt: string;
+  }
+
+  interface ContextChatSessionListItem {
+    id: string;
+    messageCount: number;
+    summary: string;
+    transcriptCount: number;
+    checkpointCount: number;
+    context?: unknown;
+    chatSession?: {
+      id: string;
+      title?: string;
+      updatedAt?: string;
+    } | null;
   }
 
   interface ChatMessage {
@@ -323,12 +344,125 @@ declare global {
 
   interface Window {
     ipcRenderer: {
-      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number }) => Promise<unknown>;
-      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number } | undefined>;
+      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number }) => Promise<unknown>;
+      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number } | undefined>;
+      pickWorkspaceDir: () => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
         getRecent: (limit?: number) => Promise<{ lines: string[] }>;
+        getRuntimeSummary: () => Promise<{
+          generatedAt?: number;
+          runtimeWarm?: {
+            lastWarmedAt?: number;
+            entries?: Array<{
+              mode: string;
+              warmedAt: number;
+              systemPromptChars: number;
+              longTermContextChars: number;
+              hasModelConfig: boolean;
+            }>;
+          };
+          phase0?: {
+            personaGeneration?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgSearchElapsedMs?: number;
+              avgKnowledgeFiles?: number;
+              avgSearchHits?: number;
+              avgAdvisorKnowledgeHits?: number;
+              avgManuscriptHits?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            knowledgeIngest?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgImportedFiles?: number;
+              avgTotalKnowledgeFiles?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            runtimeQueries?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgPromptChars?: number;
+              avgActiveSkillCount?: number;
+              avgResponseChars?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              byMode?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            skillInvocations?: {
+              count: number;
+              avgElapsedMs?: number;
+              avgActiveSkillCount?: number;
+              bySkill?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+            toolCalls?: {
+              count: number;
+              successCount?: number;
+              successRate?: number;
+              byAdvisor?: Array<Record<string, unknown>>;
+              byTool?: Array<Record<string, unknown>>;
+              recent?: Array<Record<string, unknown>>;
+            };
+          };
+        }>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
+      };
+      startupMigration: {
+        getStatus: () => Promise<{
+          status?: string;
+          needsDbImport?: boolean;
+          needsProjectUpgrade?: boolean;
+          shouldShowModal?: boolean;
+          legacyDbPath?: string | null;
+          legacyWorkspacePath?: string | null;
+          workspacePath?: string | null;
+          currentStep?: string | null;
+          message?: string | null;
+          error?: string | null;
+          progress?: number;
+          legacyMarkdownCount?: number | null;
+          importedCounts?: Record<string, number> | null;
+          projectUpgradeCounts?: Record<string, number> | null;
+        }>;
+        start: () => Promise<{
+          status?: string;
+          needsDbImport?: boolean;
+          needsProjectUpgrade?: boolean;
+          shouldShowModal?: boolean;
+          legacyDbPath?: string | null;
+          legacyWorkspacePath?: string | null;
+          workspacePath?: string | null;
+          currentStep?: string | null;
+          message?: string | null;
+          error?: string | null;
+          progress?: number;
+          legacyMarkdownCount?: number | null;
+          importedCounts?: Record<string, number> | null;
+          projectUpgradeCounts?: Record<string, number> | null;
+        }>;
+      };
+      officialAuth: {
+        bootstrap: (payload?: { reason?: string }) => Promise<{
+          success: boolean;
+          loggedIn?: boolean;
+          session?: Record<string, unknown> | null;
+          data?: Record<string, unknown> | null;
+          reason?: string;
+          error?: string;
+        }>;
+        refresh: () => Promise<{
+          success: boolean;
+          queued?: boolean;
+          tokenRefreshed?: boolean;
+          requestedAt?: string;
+          session?: Record<string, unknown> | null;
+          data?: Record<string, unknown> | null;
+          error?: string;
+        }>;
       };
       sessions: {
         list: () => Promise<Array<{
@@ -699,10 +833,14 @@ declare global {
       getAppVersion: () => Promise<string>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
       openAppReleasePage: (url?: string) => Promise<{ success: boolean; error?: string }>;
+      openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
+      clipboardReadText: () => Promise<string>;
+      openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
+      openRichpostThemeGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       browserPlugin: {
-        getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; error?: string }>;
-        prepare: () => Promise<{ success: boolean; path: string; alreadyPrepared?: boolean; error?: string }>;
-        openDir: () => Promise<{ success: boolean; path: string; error?: string }>;
+        getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; pluginPath?: string; checkedPaths?: string[]; error?: string }>;
+        prepare: () => Promise<{ success: boolean; path: string; pluginPath?: string; bundledPath?: string; alreadyPrepared?: boolean; error?: string }>;
+        openDir: () => Promise<{ success: boolean; path: string; pluginPath?: string; error?: string }>;
       };
       fetchModels: (config: { apiKey: string, baseURL: string, presetId?: string, protocol?: 'openai' | 'anthropic' | 'gemini', purpose?: 'chat' | 'image' }) => Promise<Array<{ id: string; capabilities?: Array<'chat' | 'image' | 'video' | 'audio' | 'transcription' | 'embedding'> }>>;
       aiRoles: {
@@ -714,6 +852,22 @@ declare global {
       cancelChat: () => void;
       confirmTool: (callId: string, confirmed: boolean) => void;
       listSkills: () => Promise<SkillDefinition[]>;
+      skills: {
+        save: (payload: Record<string, unknown>) => Promise<unknown>;
+        create: (payload: { name: string }) => Promise<unknown>;
+        enable: (payload: { name: string }) => Promise<unknown>;
+        disable: (payload: { name: string }) => Promise<unknown>;
+        marketInstall: (payload: { slug: string; tag?: string }) => Promise<unknown>;
+      };
+      cover: {
+        saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;
+        templates: {
+          list: () => Promise<unknown>;
+          save: (payload: { template: Record<string, unknown> }) => Promise<unknown>;
+          delete: (payload: { templateId: string }) => Promise<unknown>;
+          importLegacy: (payload: { templates: Record<string, unknown>[] }) => Promise<unknown>;
+        };
+      };
       toolDiagnostics: {
         list: () => Promise<ToolDiagnosticDescriptor[]>;
         runDirect: (toolName: string) => Promise<ToolDiagnosticRunResult>;
@@ -723,6 +877,65 @@ declare global {
       off: (channel: string, func: (...args: any[]) => void) => void;
       removeAllListeners: (channel: string) => void;
       invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
+      invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: IpcInvokeGuardOptions<T>) => Promise<T>;
+      command: <T = unknown>(command: string, args?: unknown) => Promise<T>;
+      commandGuarded: <T = unknown>(command: string, args?: unknown, options?: IpcInvokeGuardOptions<T> & { fallbackChannel?: string }) => Promise<T>;
+      spaces: {
+        list: () => Promise<{
+          activeSpaceId?: string;
+          spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }>;
+        }>;
+        switch: (spaceId: string) => Promise<unknown>;
+        create: (name: string) => Promise<unknown>;
+        rename: (payload: { id: string; name: string }) => Promise<unknown>;
+      };
+      advisors: {
+        list: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listTemplates: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        create: (payload: Record<string, unknown>) => Promise<unknown>;
+        update: (payload: Record<string, unknown>) => Promise<unknown>;
+        delete: (advisorId: string) => Promise<unknown>;
+        uploadKnowledge: (advisorId: string) => Promise<unknown>;
+        deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
+        optimizePrompt: (payload: Record<string, unknown>) => Promise<unknown>;
+        optimizePromptDeep: (payload: Record<string, unknown>) => Promise<unknown>;
+        generatePersona: (payload: Record<string, unknown>) => Promise<unknown>;
+        selectAvatar: () => Promise<unknown>;
+      };
+      knowledge: {
+        listNotes: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listYoutube: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listDocs: <T = Record<string, unknown>>() => Promise<Array<T>>;
+        listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => Promise<T>;
+        getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => Promise<T | null>;
+        getIndexStatus: <T = Record<string, unknown>>() => Promise<T>;
+        rebuildCatalog: () => Promise<unknown>;
+        openIndexRoot: () => Promise<unknown>;
+        deleteNote: (noteId: string) => Promise<unknown>;
+        transcribe: (noteId: string) => Promise<unknown>;
+        deleteYoutube: (videoId: string) => Promise<unknown>;
+        retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
+        regenerateYoutubeSummaries: () => Promise<unknown>;
+        addDocFiles: () => Promise<unknown>;
+        addDocFolder: () => Promise<unknown>;
+        addObsidianVault: () => Promise<unknown>;
+        deleteDocSource: (sourceId: string) => Promise<unknown>;
+      };
+      embedding: {
+        getManuscriptCache: (manuscriptId: string) => Promise<unknown>;
+        compute: (content: string) => Promise<unknown>;
+        saveManuscriptCache: (payload: Record<string, unknown>) => Promise<unknown>;
+        getSortedSources: (embedding: unknown) => Promise<unknown>;
+      };
+      similarity: {
+        getCache: (manuscriptId: string) => Promise<unknown>;
+        getKnowledgeVersion: () => Promise<unknown>;
+        saveCache: (payload: Record<string, unknown>) => Promise<unknown>;
+      };
+      files: {
+        showInFolder: (payload: { source: string }) => Promise<unknown>;
+        copyImage: (payload: { source: string }) => Promise<unknown>;
+      };
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;
@@ -769,7 +982,10 @@ declare global {
         confirmTool: (callId: string, confirmed: boolean) => void;
         getSessions: () => Promise<ChatSession[]>;
         createSession: (title?: string) => Promise<ChatSession>;
-        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext: string }) => Promise<ChatSession>;
+        createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
+        listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
+        createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) => Promise<ChatSession>;
+        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string }) => Promise<ChatSession>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
         clearMessages: (sessionId: string) => Promise<{ success: boolean }>;
@@ -784,6 +1000,7 @@ declare global {
           compactRounds?: number;
           compactUpdatedAt?: string | null;
           estimatedTotalTokens?: number;
+          estimatedEffectiveTokens?: number;
           compactSummaryTokens?: number;
           activeHistoryTokens?: number;
           compactThreshold?: number;
@@ -1027,6 +1244,10 @@ declare global {
             enabled: boolean;
             endpointPath: string;
             authToken?: string;
+            webhookUrl: string;
+          };
+          knowledgeApi: {
+            endpointPath: string;
             webhookUrl: string;
           };
           weixin: {

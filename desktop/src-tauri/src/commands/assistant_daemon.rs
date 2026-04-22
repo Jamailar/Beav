@@ -9,6 +9,101 @@ use std::sync::{
 };
 use tauri::{AppHandle, State};
 
+pub fn ensure_assistant_daemon_running(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    respect_auto_start: bool,
+) -> Result<Option<Value>, String> {
+    let assistant_snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+    if !assistant_snapshot.enabled || (respect_auto_start && !assistant_snapshot.auto_start) {
+        return Ok(None);
+    }
+
+    let feishu_receive_mode = assistant_snapshot
+        .feishu
+        .get("receiveMode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("webhook");
+    if feishu_receive_mode == "websocket" {
+        let snapshot = with_store_mut(state, |store| {
+            store.assistant_state.last_error =
+                Some("Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string());
+            Ok(store.assistant_state.clone())
+        })?;
+        emit_assistant_status(app, &snapshot);
+        return Err("Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string());
+    }
+
+    {
+        let mut runtime_guard = state
+            .assistant_runtime
+            .lock()
+            .map_err(|_| "assistant runtime lock 已损坏".to_string())?;
+        if runtime_guard.is_none() {
+            let stop = Arc::new(AtomicBool::new(false));
+            let join = run_assistant_listener(
+                app.clone(),
+                assistant_snapshot.host.clone(),
+                assistant_snapshot.port,
+                stop.clone(),
+            )?;
+            *runtime_guard = Some(AssistantRuntime {
+                stop,
+                join: Some(join),
+                host: assistant_snapshot.host.clone(),
+                port: assistant_snapshot.port,
+            });
+        }
+    }
+
+    let sidecar_status = {
+        let mut sidecar_guard = state
+            .assistant_sidecar
+            .lock()
+            .map_err(|_| "assistant sidecar lock 已损坏".to_string())?;
+        if sidecar_guard.is_none() {
+            match spawn_weixin_sidecar(&assistant_snapshot.weixin) {
+                Ok(Some(runtime)) => {
+                    let pid = runtime.pid;
+                    *sidecar_guard = Some(runtime);
+                    Some(Ok(pid))
+                }
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        } else {
+            sidecar_guard.as_ref().map(|runtime| Ok(runtime.pid))
+        }
+    };
+
+    let updated = with_store_mut(state, |store| {
+        store.assistant_state.listening = true;
+        store.assistant_state.last_error =
+            Some("RedClaw assistant daemon local listener is running.".to_string());
+        if let Some(status) = sidecar_status {
+            if let Some(object) = store.assistant_state.weixin.as_object_mut() {
+                match status {
+                    Ok(pid) => {
+                        object.insert("sidecarRunning".to_string(), json!(true));
+                        object.insert("sidecarPid".to_string(), json!(pid));
+                    }
+                    Err(error) => {
+                        object.insert("sidecarRunning".to_string(), json!(false));
+                        object.insert("lastSidecarError".to_string(), json!(error.clone()));
+                        store.assistant_state.last_error = Some(format!(
+                            "RedClaw assistant daemon is running; sidecar failed: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(assistant_state_value(&store.assistant_state))
+    })?;
+    let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
+    emit_assistant_status(app, &snapshot);
+    Ok(Some(updated))
+}
+
 pub fn handle_assistant_daemon_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -46,7 +141,7 @@ pub fn handle_assistant_daemon_channel(
             }),
             "assistant:daemon-set-config" | "assistant:daemon-start" => {
                 let enable_listening = channel == "assistant:daemon-start";
-                let (status, host, port) = with_store_mut(state, |store| {
+                let status = with_store_mut(state, |store| {
                     store.assistant_state.enabled = payload_field(payload, "enabled")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(store.assistant_state.enabled);
@@ -72,6 +167,9 @@ pub fn handle_assistant_daemon_channel(
                     if let Some(weixin) = payload_field(payload, "weixin") {
                         store.assistant_state.weixin = weixin.clone();
                     }
+                    if let Some(knowledge_api) = payload_field(payload, "knowledgeApi") {
+                        store.assistant_state.knowledge_api = knowledge_api.clone();
+                    }
                     if enable_listening {
                         store.assistant_state.enabled = true;
                         store.assistant_state.lock_state = "owner".to_string();
@@ -79,101 +177,13 @@ pub fn handle_assistant_daemon_channel(
                             "RedClaw assistant daemon is preparing local listener.".to_string(),
                         );
                     }
-                    Ok((
-                        assistant_state_value(&store.assistant_state),
-                        store.assistant_state.host.clone(),
-                        store.assistant_state.port,
-                    ))
+                    Ok(assistant_state_value(&store.assistant_state))
                 })?;
                 if enable_listening {
-                    let feishu_receive_mode = with_store(state, |store| {
-                        Ok(store
-                            .assistant_state
-                            .feishu
-                            .get("receiveMode")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("webhook")
-                            .to_string())
-                    })?;
-                    if feishu_receive_mode == "websocket" {
-                        let snapshot = with_store_mut(state, |store| {
-                            store.assistant_state.last_error = Some(
-                                "Feishu websocket 接入尚未实现，请先切回 webhook 模式。"
-                                    .to_string(),
-                            );
-                            Ok(store.assistant_state.clone())
-                        })?;
-                        emit_assistant_status(app, &snapshot);
-                        return Err(
-                            "Feishu websocket 接入尚未实现，请先切回 webhook 模式。".to_string()
-                        );
+                    if let Some(updated) = ensure_assistant_daemon_running(app, state, false)? {
+                        return Ok(updated);
                     }
-                    let mut runtime_guard = state
-                        .assistant_runtime
-                        .lock()
-                        .map_err(|_| "assistant runtime lock 已损坏".to_string())?;
-                    if runtime_guard.is_none() {
-                        let stop = Arc::new(AtomicBool::new(false));
-                        let join =
-                            run_assistant_listener(app.clone(), host.clone(), port, stop.clone())?;
-                        *runtime_guard = Some(AssistantRuntime {
-                            stop,
-                            join: Some(join),
-                            host: host.clone(),
-                            port,
-                        });
-                    }
-                    drop(runtime_guard);
-                    let sidecar_status = {
-                        let weixin =
-                            with_store(state, |store| Ok(store.assistant_state.weixin.clone()))?;
-                        let mut sidecar_guard = state
-                            .assistant_sidecar
-                            .lock()
-                            .map_err(|_| "assistant sidecar lock 已损坏".to_string())?;
-                        if sidecar_guard.is_none() {
-                            match spawn_weixin_sidecar(&weixin) {
-                                Ok(Some(runtime)) => {
-                                    let pid = runtime.pid;
-                                    *sidecar_guard = Some(runtime);
-                                    Some(Ok(pid))
-                                }
-                                Ok(None) => None,
-                                Err(error) => Some(Err(error)),
-                            }
-                        } else {
-                            sidecar_guard.as_ref().map(|runtime| Ok(runtime.pid))
-                        }
-                    };
-                    let updated = with_store_mut(state, |store| {
-                        store.assistant_state.listening = true;
-                        store.assistant_state.last_error =
-                            Some("RedClaw assistant daemon local listener is running.".to_string());
-                        if let Some(status) = sidecar_status {
-                            if let Some(object) = store.assistant_state.weixin.as_object_mut() {
-                                match status {
-                                    Ok(pid) => {
-                                        object.insert("sidecarRunning".to_string(), json!(true));
-                                        object.insert("sidecarPid".to_string(), json!(pid));
-                                    }
-                                    Err(error) => {
-                                        object.insert("sidecarRunning".to_string(), json!(false));
-                                        object.insert(
-                                            "lastSidecarError".to_string(),
-                                            json!(error.clone()),
-                                        );
-                                        store.assistant_state.last_error = Some(format!(
-                                            "RedClaw assistant daemon is running; sidecar failed: {error}"
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(assistant_state_value(&store.assistant_state))
-                    })?;
-                    let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
-                    emit_assistant_status(app, &snapshot);
-                    return Ok(updated);
+                    return Ok(status);
                 }
                 let snapshot = with_store(state, |store| Ok(store.assistant_state.clone()))?;
                 emit_assistant_status(app, &snapshot);

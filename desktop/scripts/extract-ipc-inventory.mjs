@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const desktopSrc = path.join(repoRoot, 'desktop', 'src');
 const electronMain = path.join(repoRoot, 'desktop', 'electron', 'main.ts');
-const outputPath = path.join(repoRoot, 'LexBox', 'docs', 'ipc-inventory.md');
+const outputPath = path.resolve(__dirname, '..', 'docs', 'ipc-inventory.md');
 
 function run(command) {
   return execSync(command, { cwd: repoRoot, encoding: 'utf8' }).trim();

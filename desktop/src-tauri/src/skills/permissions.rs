@@ -1,12 +1,20 @@
 use crate::skills::LoadedSkillRecord;
+use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::{pack_by_name, tool_names_for_pack};
 
 fn normalized_set(values: &[String]) -> Vec<String> {
-    values
+    let mut normalized = Vec::new();
+    for item in values
         .iter()
         .map(|item| item.trim().to_ascii_lowercase())
         .filter(|item| !item.is_empty())
-        .collect()
+        .map(|item| canonical_tool_name(&item).to_string())
+    {
+        if !normalized.iter().any(|existing| existing == &item) {
+            normalized.push(item);
+        }
+    }
+    normalized
 }
 
 pub fn skill_allows_runtime_mode(skill: &LoadedSkillRecord, runtime_mode: &str) -> bool {
@@ -26,7 +34,7 @@ pub fn apply_skill_tool_permissions(
     base_tools: &[String],
     active_skills: &[LoadedSkillRecord],
 ) -> Vec<String> {
-    let mut allowed = base_tools.to_vec();
+    let mut allowed = normalized_set(base_tools);
     for skill in active_skills {
         if let Some(pack_name) = skill.metadata.allowed_tool_pack.as_deref() {
             if let Some(pack) = pack_by_name(pack_name) {
@@ -38,22 +46,12 @@ pub fn apply_skill_tool_permissions(
             }
         }
         if !skill.metadata.allowed_tools.is_empty() {
-            allowed.retain(|tool| {
-                skill
-                    .metadata
-                    .allowed_tools
-                    .iter()
-                    .any(|candidate| candidate == tool)
-            });
+            let allowed_tools = normalized_set(&skill.metadata.allowed_tools);
+            allowed.retain(|tool| allowed_tools.iter().any(|candidate| candidate == tool));
         }
         if !skill.metadata.blocked_tools.is_empty() {
-            allowed.retain(|tool| {
-                !skill
-                    .metadata
-                    .blocked_tools
-                    .iter()
-                    .any(|candidate| candidate == tool)
-            });
+            let blocked_tools = normalized_set(&skill.metadata.blocked_tools);
+            allowed.retain(|tool| !blocked_tools.iter().any(|candidate| candidate == tool));
         }
     }
     allowed
@@ -75,13 +73,15 @@ mod tests {
             metadata: SkillMetadataRecord {
                 allowed_runtime_modes: vec!["redclaw".to_string()],
                 allowed_tool_pack: Some("knowledge".to_string()),
-                allowed_tools: vec!["redbox_app_query".to_string(), "redbox_mcp".to_string()],
-                blocked_tools: vec!["redbox_mcp".to_string()],
+                allowed_tools: vec!["redbox_app_query".to_string(), "redbox_fs".to_string()],
+                blocked_tools: vec!["redbox_fs".to_string()],
                 hook_mode: Some("inline".to_string()),
                 auto_activate: true,
+                activation_scope: None,
                 prompt_prefix: None,
                 prompt_suffix: None,
                 context_note: None,
+                activation_hint: None,
                 max_prompt_chars: None,
             },
             body: "# Skill".to_string(),
@@ -99,7 +99,7 @@ mod tests {
             ],
             &[test_skill()],
         );
-        assert_eq!(allowed, vec!["redbox_app_query".to_string()]);
+        assert_eq!(allowed, vec!["app_cli".to_string()]);
     }
 
     #[test]

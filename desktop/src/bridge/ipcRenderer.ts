@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 type Listener = (...args: any[]) => void;
+type GuardedFallbackValue<T> = T | null | (() => T | null);
+type InvokeGuardOptions<T> = {
+  timeoutMs?: number;
+  fallback?: GuardedFallbackValue<T>;
+  normalize?: (value: unknown) => T;
+};
 type ListenerRecord = {
   pending?: Promise<() => void>;
   dispose?: () => void;
@@ -9,9 +15,27 @@ type ListenerRecord = {
 };
 
 const channelListeners = new Map<string, Map<Listener, ListenerRecord>>();
+const explicitCommandRoutes: Record<string, string> = {
+  'spaces:list': 'spaces_list',
+  'advisors:list': 'advisors_list',
+  'advisors:list-templates': 'advisors_list_templates',
+  'knowledge:list': 'knowledge_list',
+  'knowledge:list-youtube': 'knowledge_list_youtube',
+  'knowledge:docs:list': 'knowledge_docs_list',
+  'knowledge:list-page': 'knowledge_list_page',
+  'knowledge:get-item-detail': 'knowledge_get_item_detail',
+  'knowledge:get-index-status': 'knowledge_get_index_status',
+  'knowledge:rebuild-catalog': 'knowledge_rebuild_catalog',
+  'knowledge:open-index-root': 'knowledge_open_index_root',
+  'redclaw:runner-status': 'redclaw_runner_status',
+};
 
 async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
   try {
+    const explicitCommand = explicitCommandRoutes[channel];
+    if (explicitCommand) {
+      return await invokeCommand(explicitCommand, payload);
+    }
     return await invoke('ipc_invoke', { channel, payload: payload ?? null });
   } catch (error) {
     console.warn(`[RedBox] invoke failed for ${channel}:`, error);
@@ -25,19 +49,140 @@ function sendChannel(channel: string, payload?: unknown): void {
   });
 }
 
+async function invokeCommand(command: string, args?: unknown): Promise<any> {
+  try {
+    return await invoke(command, args as Record<string, unknown> | undefined);
+  } catch (error) {
+    console.warn(`[RedBox] command invoke failed for ${command}:`, error);
+    throw error;
+  }
+}
+
+function resolveGuardFallback<T>(channel: string, error: unknown, fallback?: GuardedFallbackValue<T>): T {
+  if (typeof fallback === 'function') {
+    return (fallback as () => T | null)() as T;
+  }
+  if (fallback !== undefined) {
+    return fallback as T;
+  }
+  return buildFallbackResponse(channel, error) as T;
+}
+
+async function invokeChannelGuarded<T = unknown>(
+  channel: string,
+  payload?: unknown,
+  options?: InvokeGuardOptions<T>,
+): Promise<T> {
+  const timeoutMs = Math.max(1, Number(options?.timeoutMs || 0));
+
+  try {
+    const value = timeoutMs > 0
+      ? await Promise.race<unknown>([
+          invokeChannel(channel, payload),
+          new Promise((resolve) => {
+            window.setTimeout(() => resolve(Symbol.for('__redbox_ipc_timeout__')), timeoutMs);
+          }),
+        ])
+      : await invokeChannel(channel, payload);
+
+    if (value === Symbol.for('__redbox_ipc_timeout__')) {
+      const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
+      console.warn(`[RedBox] invoke timed out for ${channel}:`, timeoutError.message);
+      return resolveGuardFallback(channel, timeoutError, options?.fallback);
+    }
+
+    if (options?.normalize) {
+      try {
+        return options.normalize(value);
+      } catch (error) {
+        console.warn(`[RedBox] invoke normalization failed for ${channel}:`, error);
+        return resolveGuardFallback(channel, error, options?.fallback);
+      }
+    }
+
+    return value as T;
+  } catch (error) {
+    console.warn(`[RedBox] guarded invoke failed for ${channel}:`, error);
+    return resolveGuardFallback(channel, error, options?.fallback);
+  }
+}
+
+async function invokeCommandGuarded<T = unknown>(
+  command: string,
+  args?: unknown,
+  options?: InvokeGuardOptions<T> & { fallbackChannel?: string },
+): Promise<T> {
+  const timeoutMs = Math.max(1, Number(options?.timeoutMs || 0));
+  const fallbackKey = options?.fallbackChannel || command;
+
+  try {
+    const value = timeoutMs > 0
+      ? await Promise.race<unknown>([
+          invokeCommand(command, args),
+          new Promise((resolve) => {
+            window.setTimeout(() => resolve(Symbol.for('__redbox_ipc_timeout__')), timeoutMs);
+          }),
+        ])
+      : await invokeCommand(command, args);
+
+    if (value === Symbol.for('__redbox_ipc_timeout__')) {
+      const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
+      console.warn(`[RedBox] command invoke timed out for ${command}:`, timeoutError.message);
+      return resolveGuardFallback(fallbackKey, timeoutError, options?.fallback);
+    }
+
+    if (options?.normalize) {
+      try {
+        return options.normalize(value);
+      } catch (error) {
+        console.warn(`[RedBox] command normalization failed for ${command}:`, error);
+        return resolveGuardFallback(fallbackKey, error, options?.fallback);
+      }
+    }
+
+    return value as T;
+  } catch (error) {
+    return resolveGuardFallback(fallbackKey, error, options?.fallback);
+  }
+}
+
 function buildFallbackResponse(channel: string, error: unknown): any {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (channel === 'spaces:list') {
+    return {
+      activeSpaceId: 'default',
+      spaces: [{ id: 'default', name: '默认空间' }],
+    };
+  }
   if (channel === 'media:list') {
     return { success: true, assets: [] };
   }
   if (channel === 'cover:list') {
     return { success: true, assets: [] };
   }
-  if (channel === 'knowledge:list' || channel === 'knowledge:list-youtube' || channel === 'knowledge:docs:list') {
+  if (
+    channel === 'knowledge:list'
+    || channel === 'knowledge:list-youtube'
+    || channel === 'knowledge:docs:list'
+    || channel === 'knowledge:list-page'
+  ) {
     return [];
   }
+  if (channel === 'knowledge:get-index-status') {
+    return {
+      indexedCount: 0,
+      pendingCount: 0,
+      failedCount: 0,
+      lastIndexedAt: null,
+      isBuilding: false,
+      lastError: null,
+    };
+  }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
+    return [];
+  }
+  if (channel === 'chat:list-context-sessions') {
     return [];
   }
   if (channel === 'chat:get-messages') {
@@ -55,6 +200,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
     return {
       success: true,
       estimatedTotalTokens: 0,
+      estimatedEffectiveTokens: 0,
       compactThreshold: 0,
       compactRatio: 0,
       compactRounds: 0,
@@ -96,6 +242,19 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   }
   if (channel === 'app:check-update') {
     return { success: true, hasUpdate: false };
+  }
+  if (channel === 'debug:get-runtime-summary') {
+    return {
+      generatedAt: Date.now(),
+      runtimeWarm: { lastWarmedAt: 0, entries: [] },
+      phase0: {
+        personaGeneration: { count: 0, byAdvisor: [], recent: [] },
+        knowledgeIngest: { count: 0, byAdvisor: [], recent: [] },
+        runtimeQueries: { count: 0, byAdvisor: [], byMode: [], recent: [] },
+        skillInvocations: { count: 0, bySkill: [], recent: [] },
+        toolCalls: { count: 0, successCount: 0, successRate: 0, byAdvisor: [], byTool: [], recent: [] },
+      }
+    };
   }
   if (
     channel.endsWith(':list')
@@ -181,13 +340,236 @@ function createIpcRenderer() {
     removeAllListeners,
     send: (channel: string, ...args: unknown[]) => sendChannel(channel, args.length <= 1 ? args[0] : args),
     invoke: (channel: string, ...args: unknown[]) => invokeChannel(channel, args.length <= 1 ? args[0] : args),
+    invokeGuarded: <T = unknown>(channel: string, payload?: unknown, options?: InvokeGuardOptions<T>) =>
+      invokeChannelGuarded<T>(channel, payload, options),
+    command: <T = unknown>(command: string, args?: unknown) => invokeCommand(command, args) as Promise<T>,
+    commandGuarded: <T = unknown>(command: string, args?: unknown, options?: InvokeGuardOptions<T> & { fallbackChannel?: string }) =>
+      invokeCommandGuarded<T>(command, args, options),
+
+    spaces: {
+      list: () => invokeCommandGuarded<{ activeSpaceId?: string; spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> }>(
+        'spaces_list',
+        undefined,
+        {
+          timeoutMs: 2200,
+          fallbackChannel: 'spaces:list',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as {
+              activeSpaceId?: unknown;
+              spaces?: unknown;
+            } : {};
+            return {
+              activeSpaceId: typeof raw.activeSpaceId === 'string' ? raw.activeSpaceId : 'default',
+              spaces: Array.isArray(raw.spaces) ? raw.spaces as Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }> : [],
+            };
+          },
+        },
+      ),
+      switch: (spaceId: string) => invokeChannel('spaces:switch', spaceId),
+      create: (name: string) => invokeChannel('spaces:create', name),
+      rename: (payload: { id: string; name: string }) => invokeChannel('spaces:rename', payload),
+    },
+
+    advisors: {
+      list: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'advisors_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'advisors:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listTemplates: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'advisors_list_templates',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'advisors:list-templates',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      create: (payload: Record<string, unknown>) => invokeChannel('advisors:create', payload),
+      update: (payload: Record<string, unknown>) => invokeChannel('advisors:update', payload),
+      delete: (advisorId: string) => invokeChannel('advisors:delete', advisorId),
+      pickKnowledgeFiles: <T = Record<string, unknown>>() => invokeChannel('advisors:pick-knowledge-files') as Promise<T>,
+      uploadKnowledge: (payload: string | { advisorId: string; filePaths?: string[] }) => invokeChannel('advisors:upload-knowledge', payload),
+      deleteKnowledge: (payload: { advisorId: string; fileName: string }) => invokeChannel('advisors:delete-knowledge', payload),
+      optimizePrompt: (payload: Record<string, unknown>) => invokeChannel('advisors:optimize-prompt', payload),
+      optimizePromptDeep: (payload: Record<string, unknown>) => invokeChannel('advisors:optimize-prompt-deep', payload),
+      generatePersona: (payload: Record<string, unknown>) => invokeChannel('advisors:generate-persona', payload),
+      selectAvatar: () => invokeChannel('advisors:select-avatar'),
+    },
+
+    knowledge: {
+      listNotes: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listYoutube: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_list_youtube',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list-youtube',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listDocs: <T = Record<string, unknown>>() => invokeCommandGuarded<Array<T>>(
+        'knowledge_docs_list',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:docs:list',
+          normalize: (value) => Array.isArray(value) ? value as Array<T> : [],
+        },
+      ),
+      listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => invokeCommandGuarded<T>(
+        'knowledge_list_page',
+        { payload: payload || {} },
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:list-page',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            return {
+              items: Array.isArray(raw.items) ? raw.items : [],
+              nextCursor: typeof raw.nextCursor === 'string' ? raw.nextCursor : null,
+              total: typeof raw.total === 'number' ? raw.total : 0,
+              kindCounts: (raw.kindCounts && typeof raw.kindCounts === 'object') ? raw.kindCounts : {},
+            } as T;
+          },
+        },
+      ),
+      getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => invokeCommandGuarded<T | null>(
+        'knowledge_get_item_detail',
+        { payload },
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:get-item-detail',
+          normalize: (value) => (value && typeof value === 'object') ? value as T : null,
+        },
+      ),
+      getIndexStatus: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
+        'knowledge_get_index_status',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallbackChannel: 'knowledge:get-index-status',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            return {
+              indexedCount: typeof raw.indexedCount === 'number' ? raw.indexedCount : 0,
+              pendingCount: typeof raw.pendingCount === 'number' ? raw.pendingCount : 0,
+              failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
+              lastIndexedAt: typeof raw.lastIndexedAt === 'string' ? raw.lastIndexedAt : null,
+              isBuilding: raw.isBuilding === true,
+              lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+            } as T;
+          },
+        },
+      ),
+      rebuildCatalog: () => invokeCommandGuarded('knowledge_rebuild_catalog', undefined, {
+        timeoutMs: 1800,
+        fallbackChannel: 'knowledge:rebuild-catalog',
+      }),
+      openIndexRoot: () => invokeCommandGuarded('knowledge_open_index_root', undefined, {
+        timeoutMs: 1800,
+        fallbackChannel: 'knowledge:open-index-root',
+      }),
+      deleteNote: (noteId: string) => invokeChannel('knowledge:delete', noteId),
+      transcribe: (noteId: string) => invokeChannel('knowledge:transcribe', noteId),
+      deleteYoutube: (videoId: string) => invokeChannel('knowledge:delete-youtube', videoId),
+      retryYoutubeSubtitle: (videoId: string) => invokeChannel('knowledge:retry-youtube-subtitle', videoId),
+      regenerateYoutubeSummaries: () => invokeChannel('knowledge:youtube-regenerate-summaries'),
+      addDocFiles: () => invokeChannel('knowledge:docs:add-files'),
+      addDocFolder: () => invokeChannel('knowledge:docs:add-folder'),
+      addObsidianVault: () => invokeChannel('knowledge:docs:add-obsidian-vault'),
+      deleteDocSource: (sourceId: string) => invokeChannel('knowledge:docs:delete-source', sourceId),
+    },
+
+    embedding: {
+      getManuscriptCache: (manuscriptId: string) => invokeChannel('embedding:get-manuscript-cache', manuscriptId),
+      compute: (content: string) => invokeChannel('embedding:compute', content),
+      saveManuscriptCache: (payload: Record<string, unknown>) => invokeChannel('embedding:save-manuscript-cache', payload),
+      getSortedSources: (embedding: unknown) => invokeChannel('embedding:get-sorted-sources', embedding),
+    },
+
+    similarity: {
+      getCache: (manuscriptId: string) => invokeChannel('similarity:get-cache', manuscriptId),
+      getKnowledgeVersion: () => invokeChannel('similarity:get-knowledge-version'),
+      saveCache: (payload: Record<string, unknown>) => invokeChannel('similarity:save-cache', payload),
+    },
+
+    files: {
+      showInFolder: (payload: { source: string }) => invokeChannel('file:show-in-folder', payload),
+      copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
+    },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
+    pickWorkspaceDir: () => invokeChannel('settings:pick-workspace-dir'),
     debug: {
       getStatus: () => invokeChannel('debug:get-status'),
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
+      getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
+    },
+    startupMigration: {
+      getStatus: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(
+        'app:startup-migration-status',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallback: {
+            status: 'not-needed',
+            needsDbImport: false,
+            needsProjectUpgrade: false,
+            shouldShowModal: false,
+            progress: 0,
+            legacyMarkdownCount: 0,
+            projectUpgradeCounts: null,
+          } as T,
+        },
+      ),
+      start: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(
+        'app:startup-migration-start',
+        undefined,
+        {
+          timeoutMs: 1800,
+          fallback: {
+            status: 'failed',
+            needsDbImport: true,
+            needsProjectUpgrade: false,
+            shouldShowModal: true,
+            progress: 0,
+            legacyMarkdownCount: 0,
+            projectUpgradeCounts: null,
+            error: '启动迁移失败',
+          } as T,
+        },
+      ),
+    },
+    officialAuth: {
+      bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
+      refresh: () => invokeChannel('redbox-auth:refresh')
+    },
+    auth: {
+      getState: () => invokeChannel('auth:get-state'),
+      loginSms: (payload: { phone: string; code: string; inviteCode?: string }) => invokeChannel('auth:login-sms', payload),
+      loginWechatStart: (payload?: { state?: string }) => invokeChannel('auth:login-wechat-start', payload || {}),
+      loginWechatPoll: (payload: { sessionId: string }) => invokeChannel('auth:login-wechat-poll', payload),
+      logout: () => invokeChannel('auth:logout'),
+      refreshNow: () => invokeChannel('auth:refresh-now'),
+      onStateChanged: (listener: Listener) => on('auth:state-changed', listener),
+      offStateChanged: (listener: Listener) => off('auth:state-changed', listener),
+      onDataChanged: (listener: Listener) => on('auth:data-changed', listener),
+      offDataChanged: (listener: Listener) => off('auth:data-changed', listener),
     },
     sessions: {
       list: () => invokeChannel('sessions:list'),
@@ -260,6 +642,10 @@ function createIpcRenderer() {
     getAppVersion: () => invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => invokeChannel('app:check-update', { force }),
     openAppReleasePage: (url?: string) => invokeChannel('app:open-release-page', { url }),
+    openPath: (path: string) => invokeChannel('app:open-path', { path }),
+    clipboardReadText: () => invokeChannel('clipboard:read-text'),
+    openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
+    openRichpostThemeGuide: () => invokeChannel('app:open-richpost-theme-guide'),
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
       prepare: () => invokeChannel('plugin:prepare-browser-extension'),
@@ -282,6 +668,12 @@ function createIpcRenderer() {
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
       getSessions: () => invokeChannel('chat:get-sessions'),
       createSession: (title?: string) => invokeChannel('chat:create-session', title),
+      createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) =>
+        invokeChannel('chat:create-diagnostics-session', payload || {}),
+      listContextSessions: (payload: { contextId: string; contextType: string }) =>
+        invokeChannel('chat:list-context-sessions', payload),
+      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) =>
+        invokeChannel('chat:create-context-session', payload),
       getOrCreateContextSession: (params: Record<string, unknown>) => invokeChannel('chat:getOrCreateContextSession', params),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
@@ -291,7 +683,10 @@ function createIpcRenderer() {
       getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId)
     },
     redclawRunner: {
-      getStatus: () => invokeChannel('redclaw:runner-status'),
+      getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
+        timeoutMs: 2800,
+        fallbackChannel: 'redclaw:runner-status',
+      }),
       start: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-start', payload || {}),
       stop: () => invokeChannel('redclaw:runner-stop'),
       runNow: (payload?: Record<string, unknown>) => invokeChannel('redclaw:runner-run-now', payload || {}),
@@ -330,6 +725,13 @@ function createIpcRenderer() {
       createDraft: (payload: Record<string, unknown>) => invokeChannel('wechat-official:create-draft', payload)
     },
     listSkills: () => invokeChannel('skills:list'),
+    skills: {
+      save: (payload: Record<string, unknown>) => invokeChannel('skills:save', payload),
+      create: (payload: { name: string }) => invokeChannel('skills:create', payload),
+      enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
+      disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
+      marketInstall: (payload: { slug: string; tag?: string }) => invokeChannel('skills:market-install', payload),
+    },
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),
       runDirect: (toolName: string) => invokeChannel('tools:diagnostics:run-direct', { toolName }),
@@ -363,6 +765,16 @@ function createIpcRenderer() {
     updateAdvisorYoutubeSettings: (advisorId: string, settings: unknown) => invokeChannel('advisors:update-youtube-settings', { advisorId, settings }),
     getAdvisorYoutubeRunnerStatus: () => invokeChannel('advisors:youtube-runner-status'),
     runAdvisorYoutubeNow: (advisorId?: string) => invokeChannel('advisors:youtube-runner-run-now', { advisorId })
+    ,
+    cover: {
+      saveTemplateImage: (payload: { imageSource: string }) => invokeChannel('cover:save-template-image', payload),
+      templates: {
+        list: () => invokeChannel('cover:templates:list'),
+        save: (payload: { template: Record<string, unknown> }) => invokeChannel('cover:templates:save', payload),
+        delete: (payload: { templateId: string }) => invokeChannel('cover:templates:delete', payload),
+        importLegacy: (payload: { templates: Record<string, unknown>[] }) => invokeChannel('cover:templates:import-legacy', payload),
+      }
+    }
   };
 }
 

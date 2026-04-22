@@ -10,6 +10,20 @@ use crate::{
     payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
 };
 
+pub(crate) fn spaces_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    with_store(state, |store| {
+        Ok(json!({
+            "spaces": store.spaces.clone(),
+            "activeSpaceId": store.active_space_id,
+        }))
+    })
+}
+
+#[tauri::command]
+pub async fn spaces_list(state: State<'_, AppState>) -> Result<Value, String> {
+    spaces_list_value(&state)
+}
+
 pub fn handle_spaces_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -25,12 +39,7 @@ pub fn handle_spaces_channel(
 
     Some((|| -> Result<Value, String> {
         match channel {
-            "spaces:list" => with_store(state, |store| {
-                Ok(json!({
-                    "spaces": store.spaces.clone(),
-                    "activeSpaceId": store.active_space_id,
-                }))
-            }),
+            "spaces:list" => spaces_list_value(state),
             "spaces:create" => {
                 let name = payload_value_as_string(payload)
                     .or_else(|| payload_string(payload, "name"))

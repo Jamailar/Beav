@@ -1,5 +1,4 @@
 import type { RuntimeUnifiedEvent } from '../types';
-import { uiDebug } from '../utils/uiDebug';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -24,6 +23,12 @@ export interface RuntimeEventStreamHandlers {
   onThoughtStart?: (payload: RuntimeScopedPayload) => void;
   onThoughtDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
   onResponseDelta?: (payload: RuntimeScopedPayload & { content: string }) => void;
+  onChatDone?: (payload: RuntimeScopedPayload & {
+    status: string;
+    content: string;
+    runtimeMode: string;
+    reason: string;
+  }) => void;
   onToolRequest?: (payload: RuntimeScopedPayload & { callId: string; name: string; input: unknown; description: string }) => void;
   onToolResult?: (payload: RuntimeScopedPayload & { callId: string; name: string; output: UnknownRecord }) => void;
   onTaskNodeChanged?: (payload: TaskScopedPayload & {
@@ -152,6 +157,7 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
       return 'runtime:checkpoint';
     case 'runtime:stream-start':
     case 'runtime:text-delta':
+    case 'runtime:done':
     case 'runtime:tool-start':
     case 'runtime:tool-update':
     case 'runtime:tool-end':
@@ -214,6 +220,18 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       return;
     }
     handlers.onResponseDelta?.({ sessionId, ...runtimeMeta, content });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:done') {
+    handlers.onChatDone?.({
+      sessionId,
+      ...runtimeMeta,
+      status: toText(payload.status) || 'completed',
+      content: String(payload.content || ''),
+      runtimeMode: toText(payload.runtimeMode),
+      reason: toText(payload.reason),
+    });
     return;
   }
 
@@ -437,18 +455,6 @@ export function subscribeRuntimeEventStream(handlers: RuntimeEventStreamHandlers
     if (!parsed) return;
     const sessionId = toText(parsed.sessionId);
     if (shouldSkipBySession(handlers, sessionId)) return;
-    if (import.meta.env.DEV) {
-      const payload = toRecord(parsed.payload);
-      uiDebug('runtime-event', 'dispatch', {
-        eventType: parsed.eventType,
-        sessionId: parsed.sessionId,
-        taskId: parsed.taskId,
-        runtimeId: parsed.runtimeId,
-        checkpointType: toText(payload.checkpointType),
-        stream: toText(payload.stream),
-        contentChars: String(payload.content || '').length,
-      });
-    }
     dispatchRuntimeEnvelope(handlers, parsed);
   };
   window.ipcRenderer.on('runtime:event', listener as (...args: unknown[]) => void);

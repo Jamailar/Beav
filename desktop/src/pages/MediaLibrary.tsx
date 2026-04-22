@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, Pencil, X, Clapperboard, Trash2 } from 'lucide-react';
+import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
+import { MediaAssetPreviewOverlay } from './media-library/MediaAssetPreviewOverlay';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
 
@@ -71,6 +74,18 @@ interface ReferenceImageItem {
     dataUrl: string;
 }
 
+interface MediaAssetContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    asset: MediaAsset | null;
+}
+
+interface MediaAssetPreviewState {
+    asset: MediaAsset;
+    src: string;
+}
+
 interface SettingsShape {
     api_endpoint?: string;
     api_key?: string;
@@ -122,7 +137,23 @@ const VIDEO_GENERATION_MODE_OPTIONS = [
     { value: 'text-to-video', label: '文生视频' },
     { value: 'reference-guided', label: '参考图视频' },
     { value: 'first-last-frame', label: '首尾帧视频' },
+    { value: 'continuation', label: '视频续写' },
 ] as const;
+
+function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
+    const normalized = String(source || '').trim().toLowerCase();
+    if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') {
+        return normalized;
+    }
+    return 'imported';
+}
+
+function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
+    return {
+        ...asset,
+        source: normalizeMediaAssetSource(asset.source),
+    };
+}
 
 function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
@@ -154,12 +185,15 @@ function flattenManuscripts(nodes: FileNode[]): string[] {
     return result.sort((a, b) => a.localeCompare(b));
 }
 
-function getVideoReferenceModeHint(mode: 'text-to-video' | 'reference-guided' | 'first-last-frame'): string {
+function getVideoReferenceModeHint(mode: 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation'): string {
     if (mode === 'reference-guided') {
         return '上传 1 到 5 张参考图，视频会尽量复用这些图中的主体元素、风格和构图线索。';
     }
     if (mode === 'first-last-frame') {
         return '请上传 2 张图片，第一张作为首帧，第二张作为尾帧。';
+    }
+    if (mode === 'continuation') {
+        return '请上传 1 段起始视频，模型会沿着这段镜头继续生成后续内容。';
     }
     return '文生视频不需要参考图。';
 }
@@ -188,6 +222,61 @@ function inferImageAspectFromSize(size: string): string {
         }
     }
     return bestDelta <= 0.04 ? best : '';
+}
+
+function toSortableTime(value?: string): number {
+    return parseTimestampMs(value) ?? 0;
+}
+
+function compareMediaAssetsByCreatedAtDesc(a: MediaAsset, b: MediaAsset): number {
+    const createdDelta = toSortableTime(b.createdAt) - toSortableTime(a.createdAt);
+    if (createdDelta !== 0) return createdDelta;
+    const updatedDelta = toSortableTime(b.updatedAt) - toSortableTime(a.updatedAt);
+    if (updatedDelta !== 0) return updatedDelta;
+    return b.id.localeCompare(a.id);
+}
+
+function parseAspectRatio(value?: string): number | null {
+    const matched = String(value || '').trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (!matched) return null;
+    const width = Number(matched[1]);
+    const height = Number(matched[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+    }
+    return width / height;
+}
+
+function inferMediaAspectRatio(asset: MediaAsset): number {
+    const sizeMatched = String(asset.size || '').trim().match(/^(\d{2,5})x(\d{2,5})$/i);
+    if (sizeMatched) {
+        const width = Number(sizeMatched[1]);
+        const height = Number(sizeMatched[2]);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+            return width / height;
+        }
+    }
+    const explicitAspectRatio = parseAspectRatio(asset.aspectRatio);
+    if (explicitAspectRatio && Number.isFinite(explicitAspectRatio) && explicitAspectRatio > 0) {
+        return explicitAspectRatio;
+    }
+    return isVideoAsset(asset) ? 16 / 9 : 3 / 4;
+}
+
+function estimateMediaCardHeight(asset: MediaAsset, columnWidth: number): number {
+    const mediaAspectRatio = inferMediaAspectRatio(asset);
+    const mediaHeight = columnWidth / mediaAspectRatio;
+    const textBlockHeight = 152;
+    const headerHeight = 52;
+    return Math.round(mediaHeight + textBlockHeight + headerHeight);
+}
+
+function getMasonryColumnCount(width: number): number {
+    if (width >= 1536) return 5;
+    if (width >= 1280) return 4;
+    if (width >= 1024) return 3;
+    if (width >= 640) return 2;
+    return 1;
 }
 
 export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
@@ -219,23 +308,36 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoProjectId, setVideoProjectId] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
-    const [videoGenerationMode, setVideoGenerationMode] = useState<'text-to-video' | 'reference-guided' | 'first-last-frame'>('text-to-video');
+    const [videoGenerationMode, setVideoGenerationMode] = useState<'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation'>('text-to-video');
     const [videoReferenceImages, setVideoReferenceImages] = useState<Array<ReferenceImageItem | null>>([]);
     const [videoPrimaryReferenceImage, setVideoPrimaryReferenceImage] = useState<ReferenceImageItem | null>(null);
     const [videoLastFrameImage, setVideoLastFrameImage] = useState<ReferenceImageItem | null>(null);
+    const [videoFirstClip, setVideoFirstClip] = useState<ReferenceImageItem | null>(null);
+    const [videoDrivingAudio, setVideoDrivingAudio] = useState<ReferenceImageItem | null>(null);
     const [isReadingVideoRefImages, setIsReadingVideoRefImages] = useState(false);
     const [videoAspectRatio, setVideoAspectRatio] = useState<'16:9' | '9:16'>('16:9');
     const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>('720p');
     const [videoDurationSeconds, setVideoDurationSeconds] = useState(8);
+    const [videoGenerateAudio, setVideoGenerateAudio] = useState(false);
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
     const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
+    const [contextMenu, setContextMenu] = useState<MediaAssetContextMenuState>({
+        visible: false,
+        x: 0,
+        y: 0,
+        asset: null,
+    });
+    const [previewAsset, setPreviewAsset] = useState<MediaAssetPreviewState | null>(null);
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+    const [masonryColumnCount, setMasonryColumnCount] = useState(() => getMasonryColumnCount(typeof window === 'undefined' ? 1440 : window.innerWidth));
+    const [measuredCardHeights, setMeasuredCardHeights] = useState<Record<string, number>>({});
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const loadSettingsRequestRef = useRef(0);
+    const assetCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
     const loadData = useCallback(async () => {
         const requestId = loadDataRequestRef.current + 1;
@@ -254,7 +356,9 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             if (!mediaResult?.success) {
                 setError(mediaResult?.error || '加载媒体库失败');
             } else {
-                const nextAssets = Array.isArray(mediaResult.assets) ? mediaResult.assets : [];
+                const nextAssets = (Array.isArray(mediaResult.assets) ? mediaResult.assets : [])
+                    .map(normalizeMediaAsset)
+                    .sort(compareMediaAssetsByCreatedAtDesc);
                 setAssets(nextAssets);
                 setDrafts((prev) => Object.fromEntries(
                     Object.entries(prev).filter(([assetId]) => nextAssets.some((asset) => asset.id === assetId))
@@ -308,6 +412,39 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     }, [isActive, loadSettings]);
 
     useEffect(() => {
+        const updateColumnCount = () => {
+            setMasonryColumnCount(getMasonryColumnCount(window.innerWidth));
+        };
+        updateColumnCount();
+        window.addEventListener('resize', updateColumnCount);
+        return () => window.removeEventListener('resize', updateColumnCount);
+    }, []);
+
+    useEffect(() => {
+        if (!contextMenu.visible) return;
+        const close = () => setContextMenu((prev) => ({ ...prev, visible: false, asset: null }));
+        window.addEventListener('click', close);
+        window.addEventListener('scroll', close, true);
+        window.addEventListener('resize', close);
+        return () => {
+            window.removeEventListener('click', close);
+            window.removeEventListener('scroll', close, true);
+            window.removeEventListener('resize', close);
+        };
+    }, [contextMenu.visible]);
+
+    useEffect(() => {
+        if (!previewAsset) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setPreviewAsset(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [previewAsset]);
+
+    useEffect(() => {
         if (!size) return;
         const sizeAspect = inferImageAspectFromSize(size);
         if (sizeAspect && aspectRatio && aspectRatio !== 'auto' && sizeAspect !== aspectRatio) {
@@ -329,8 +466,59 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 asset.id,
             ].join('\n').toLowerCase();
             return text.includes(keyword);
-        });
+        }).sort(compareMediaAssetsByCreatedAtDesc);
     }, [assets, projectFilter, query, sourceFilter]);
+
+    const measureAssetCard = useCallback((assetId: string) => {
+        const node = assetCardRefs.current[assetId];
+        if (!node) return;
+        const nextHeight = Math.round(node.getBoundingClientRect().height);
+        if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+        setMeasuredCardHeights((prev) => {
+            if (prev[assetId] === nextHeight) return prev;
+            return {
+                ...prev,
+                [assetId]: nextHeight,
+            };
+        });
+    }, []);
+
+    useEffect(() => {
+        setMeasuredCardHeights((prev) => Object.fromEntries(
+            Object.entries(prev).filter(([assetId]) => filteredAssets.some((asset) => asset.id === assetId))
+        ));
+    }, [filteredAssets]);
+
+    useEffect(() => {
+        if (filteredAssets.length === 0) return;
+        const frame = window.requestAnimationFrame(() => {
+            for (const asset of filteredAssets) {
+                measureAssetCard(asset.id);
+            }
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [filteredAssets, masonryColumnCount, measureAssetCard]);
+
+    const masonryColumns = useMemo(() => {
+        const columns = Array.from({ length: masonryColumnCount }, () => [] as MediaAsset[]);
+        const columnHeights = Array.from({ length: masonryColumnCount }, () => 0);
+        const horizontalGap = 16;
+        const shellWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
+        const contentWidth = Math.max(320, shellWidth - 48);
+        const columnWidth = Math.max(220, (contentWidth - horizontalGap * (masonryColumnCount - 1)) / masonryColumnCount);
+
+        for (const asset of filteredAssets) {
+            let targetColumnIndex = 0;
+            for (let index = 1; index < columnHeights.length; index += 1) {
+                if (columnHeights[index] < columnHeights[targetColumnIndex]) {
+                    targetColumnIndex = index;
+                }
+            }
+            columns[targetColumnIndex].push(asset);
+            columnHeights[targetColumnIndex] += (measuredCardHeights[asset.id] ?? estimateMediaCardHeight(asset, columnWidth)) + 16;
+        }
+        return columns;
+    }, [filteredAssets, masonryColumnCount, measuredCardHeights]);
 
     const sourceStats = useMemo(() => {
         return assets.reduce<Record<'all' | MediaAssetSource, number>>((acc, asset) => {
@@ -450,6 +638,22 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         }
     }, [loadData]);
 
+    const openAssetContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
+        event.preventDefault();
+        setContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            asset,
+        });
+    }, []);
+
+    const openAssetPreview = useCallback((asset: MediaAsset) => {
+        const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+        if (!src || !asset.exists) return;
+        setPreviewAsset({ asset, src });
+    }, []);
+
     const handleGenerate = useCallback(async () => {
         if (!prompt.trim()) {
             setGenError('请先输入提示词');
@@ -532,6 +736,11 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             : videoGenerationMode === 'first-last-frame'
                 ? [videoPrimaryReferenceImage, videoLastFrameImage].filter(Boolean) as ReferenceImageItem[]
                 : [];
+        const effectiveGenerationMode = videoGenerationMode === 'continuation'
+            ? 'continuation'
+            : effectiveVideoReferenceImages.length > 0
+                ? videoGenerationMode
+                : 'text-to-video';
         if (!videoPrompt.trim()) {
             setVideoGenError('请先输入视频提示词');
             return;
@@ -542,6 +751,10 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         }
         if (videoGenerationMode === 'first-last-frame' && effectiveVideoReferenceImages.length < 2) {
             setVideoGenError('首尾帧视频模式需要 2 张参考图');
+            return;
+        }
+        if (videoGenerationMode === 'continuation' && !videoFirstClip?.dataUrl) {
+            setVideoGenError('视频续写模式需要 1 段起始视频');
             return;
         }
         if (!hasVideoConfig) {
@@ -557,13 +770,15 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 projectId: videoProjectId.trim() || undefined,
                 title: videoTitle.trim() || undefined,
                 model: effectiveVideoModel,
-                generationMode: effectiveVideoReferenceImages.length > 0 ? videoGenerationMode : 'text-to-video',
+                generationMode: effectiveGenerationMode,
                 referenceImages: effectiveVideoReferenceImages.map((item) => item.dataUrl),
+                firstClip: videoFirstClip?.dataUrl || undefined,
+                drivingAudio: videoDrivingAudio?.dataUrl || undefined,
                 aspectRatio: videoAspectRatio,
                 resolution: videoResolution,
                 durationSeconds: videoDurationSeconds,
                 count: 1,
-                generateAudio: false,
+                generateAudio: videoGenerateAudio,
             }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
 
             if (!result?.success) {
@@ -585,6 +800,9 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         videoAspectRatio,
         videoDurationSeconds,
         effectiveVideoModel,
+        videoDrivingAudio,
+        videoFirstClip,
+        videoGenerateAudio,
         videoLastFrameImage,
         videoPrimaryReferenceImage,
         videoReferenceImages,
@@ -619,6 +837,32 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
         } catch (uploadError) {
             console.error('Failed to parse video reference image:', uploadError);
             setVideoGenError('视频参考图读取失败，请重试');
+        } finally {
+            setIsReadingVideoRefImages(false);
+            event.target.value = '';
+        }
+    }, []);
+
+    const handleVideoMediaFile = useCallback(async (
+        event: React.ChangeEvent<HTMLInputElement>,
+        target: 'firstClip' | 'drivingAudio'
+    ) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        setIsReadingVideoRefImages(true);
+        try {
+            const item = {
+                name: file.name,
+                dataUrl: await readFileAsDataUrl(file),
+            };
+            if (target === 'firstClip') {
+                setVideoFirstClip(item);
+            } else {
+                setVideoDrivingAudio(item);
+            }
+        } catch (uploadError) {
+            console.error('Failed to parse video media file:', uploadError);
+            setVideoGenError(target === 'firstClip' ? '起始视频读取失败，请重试' : '驱动音频读取失败，请重试');
         } finally {
             setIsReadingVideoRefImages(false);
             event.target.value = '';
@@ -760,160 +1004,201 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 ) : filteredAssets.length === 0 ? (
                     <div className="text-sm text-text-tertiary">暂无媒体资产</div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                        {filteredAssets.map((asset) => {
-                            const draft = getDraft(asset);
-                            const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
-                            const busy = workingId === asset.id;
-                            const isExpanded = expandedAssetId === asset.id;
-                            const sourceMeta = SOURCE_META[asset.source];
-                            return (
-                                <div key={asset.id} className="group border border-border rounded-2xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                    <div className="relative aspect-[4/5] bg-surface-secondary">
-                                        {asset.previewUrl && asset.exists ? (
-                                            isVideoAsset(asset) ? (
-                                                <video src={resolveAssetUrl(asset.previewUrl)} className="w-full h-full object-cover bg-black" controls preload="metadata" />
-                                            ) : (
-                                                <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full h-full object-cover" />
-                                            )
-                                        ) : (
-                                            <div className="w-full h-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
-                                                {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
-                                            </div>
-                                        )}
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/15 to-transparent pointer-events-none" />
-                                        <div className="absolute top-2 left-2 right-2 flex items-start justify-between gap-2">
-                                            <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border backdrop-blur bg-black/15', sourceMeta.badgeClass)}>
-                                                {sourceMeta.label}
-                                            </span>
-                                            <span className="text-[10px] px-2 py-0.5 rounded-md border border-white/25 bg-black/25 text-white">
-                                                {new Date(asset.updatedAt).toLocaleDateString()}
-                                            </span>
-                                        </div>
-                                        <div className="absolute bottom-0 left-0 right-0 p-3 text-white">
-                                            <div className="text-sm font-medium truncate">{draft.title || asset.title || asset.id}</div>
-                                            <div className="text-[11px] text-white/80 truncate">
-                                                {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="p-3 space-y-2">
-                                        <div className="text-[11px] text-text-tertiary truncate">
-                                            提示词：{(draft.prompt || asset.prompt || '暂无提示词').replace(/\s+/g, ' ')}
-                                        </div>
-                                        <div className="text-[11px] text-text-tertiary truncate">
-                                            稿件：{asset.boundManuscriptPath || '(未绑定)'}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
-                                                className="flex-1 px-2.5 py-2 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <ExternalLink className="w-3.5 h-3.5" />
-                                                    打开
+                    <div className="flex items-start gap-4">
+                        {masonryColumns.map((columnAssets, columnIndex) => (
+                            <div key={`media-masonry-column-${columnIndex}`} className="min-w-0 flex-1 space-y-4">
+                                {columnAssets.map((asset) => {
+                                    const draft = getDraft(asset);
+                                    const sourceMeta = SOURCE_META[asset.source] ?? SOURCE_META.imported;
+                                    return (
+                                        <div
+                                            key={asset.id}
+                                            ref={(node) => {
+                                                assetCardRefs.current[asset.id] = node;
+                                                if (node) {
+                                                    window.requestAnimationFrame(() => measureAssetCard(asset.id));
+                                                }
+                                            }}
+                                            onClick={() => openAssetPreview(asset)}
+                                            onContextMenu={(event) => openAssetContextMenu(event, asset)}
+                                            className="group block w-full cursor-pointer overflow-hidden rounded-2xl border border-border bg-surface-primary text-left shadow-sm transition-shadow hover:shadow-md"
+                                        >
+                                            <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
+                                                <span className={clsx('text-[10px] px-2 py-0.5 rounded-md border', sourceMeta.badgeClass)}>
+                                                    {sourceMeta.label}
                                                 </span>
-                                            </button>
-                                            <button
-                                                onClick={() => setExpandedAssetId((prev) => (prev === asset.id ? null : asset.id))}
-                                                className={clsx(
-                                                    'px-2.5 py-2 text-xs rounded border transition-colors',
-                                                    isExpanded
-                                                        ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
-                                                        : 'border-border hover:bg-surface-secondary text-text-secondary'
+                                                <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-secondary/70 text-text-secondary">
+                                                    {formatTimestampDate(asset.createdAt)}
+                                                </span>
+                                            </div>
+
+                                            <div className="bg-surface-secondary">
+                                                {asset.previewUrl && asset.exists ? (
+                                                    isVideoAsset(asset) ? (
+                                                        <video
+                                                            src={resolveAssetUrl(asset.previewUrl)}
+                                                            className="block w-full h-auto bg-black"
+                                                            controls
+                                                            preload="metadata"
+                                                            onClick={(event) => event.stopPropagation()}
+                                                            onLoadedMetadata={() => measureAssetCard(asset.id)}
+                                                        />
+                                                    ) : (
+                                                        <img
+                                                            src={resolveAssetUrl(asset.previewUrl)}
+                                                            alt={asset.title || asset.id}
+                                                            className="block w-full h-auto"
+                                                            onLoad={() => measureAssetCard(asset.id)}
+                                                        />
+                                                    )
+                                                ) : (
+                                                    <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
+                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
+                                                    </div>
                                                 )}
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Pencil className="w-3.5 h-3.5" />
-                                                    {isExpanded ? '收起' : '编辑'}
-                                                </span>
-                                            </button>
-                                            <button
-                                                onClick={() => void handleDeleteAsset(asset)}
-                                                disabled={busy}
-                                                className="px-2.5 py-2 text-xs rounded border border-border hover:bg-red-50 hover:border-red-200 hover:text-red-600 text-text-secondary disabled:opacity-50"
-                                                title="删除媒体"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                    删除
-                                                </span>
-                                            </button>
-                                        </div>
-
-                                        {isExpanded && (
-                                            <div className="pt-2 mt-2 border-t border-border space-y-2">
-                                                <div className="grid grid-cols-1 gap-2">
-                                                    <input
-                                                        value={draft.title}
-                                                        onChange={(event) => updateDraft(asset.id, { title: event.target.value })}
-                                                        placeholder="标题"
-                                                        className="px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    />
-                                                    <input
-                                                        value={draft.projectId}
-                                                        onChange={(event) => updateDraft(asset.id, { projectId: event.target.value })}
-                                                        placeholder="项目ID"
-                                                        className="px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    />
-                                                </div>
-                                                <textarea
-                                                    value={draft.prompt}
-                                                    onChange={(event) => updateDraft(asset.id, { prompt: event.target.value })}
-                                                    placeholder="提示词"
-                                                    rows={3}
-                                                    className="w-full px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                />
-
-                                                <div className="text-[11px] text-text-tertiary break-all">
-                                                    {asset.relativePath || '(无文件路径)'}
-                                                </div>
-
-                                                <div className="flex items-center gap-2">
-                                                    <select
-                                                        value={selectedManuscript}
-                                                        onChange={(event) => setBindTarget((prev) => ({ ...prev, [asset.id]: event.target.value }))}
-                                                        className="flex-1 min-w-0 px-2.5 py-2 text-xs rounded border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                    >
-                                                        <option value="">选择稿件绑定</option>
-                                                        {manuscripts.map((filePath) => (
-                                                            <option key={filePath} value={filePath}>
-                                                                {filePath}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <button
-                                                        onClick={() => void handleBind(asset)}
-                                                        disabled={busy}
-                                                        className="px-2.5 py-2 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary disabled:opacity-50"
-                                                    >
-                                                        <span className="inline-flex items-center gap-1">
-                                                            <Link2 className="w-3.5 h-3.5" />
-                                                            绑定
-                                                        </span>
-                                                    </button>
-                                                </div>
-
-                                                <button
-                                                    onClick={() => void handleSaveMetadata(asset)}
-                                                    disabled={busy}
-                                                    className="w-full px-2.5 py-2 text-xs rounded bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50"
-                                                >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <Save className="w-3.5 h-3.5" />
-                                                        {busy ? '保存中...' : '保存元数据'}
-                                                    </span>
-                                                </button>
                                             </div>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })}
+
+                                            <div className="p-3 space-y-2">
+                                                <div>
+                                                    <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
+                                                    <div className="text-[11px] text-text-tertiary truncate">
+                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                                    </div>
+                                                </div>
+                                                <div className="text-[11px] text-text-tertiary truncate">
+                                                    提示词：{(draft.prompt || asset.prompt || '暂无提示词').replace(/\s+/g, ' ')}
+                                                </div>
+                                                <div className="text-[11px] text-text-tertiary truncate">
+                                                    稿件：{asset.boundManuscriptPath || '(未绑定)'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
+            {contextMenu.visible && contextMenu.asset && (
+                <LiquidGlassMenuPanel
+                    className="fixed z-50 min-w-[148px]"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setExpandedAssetId(contextMenu.asset!.id);
+                            setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                        }}
+                        className={getLiquidGlassMenuItemClassName()}
+                    >
+                        编辑
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const asset = contextMenu.asset;
+                            setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleDeleteAsset(asset);
+                            }
+                        }}
+                        className={getLiquidGlassMenuItemClassName({ destructive: true })}
+                    >
+                        删除
+                    </button>
+                </LiquidGlassMenuPanel>
+            )}
+            <MediaAssetPreviewOverlay preview={previewAsset} onClose={() => setPreviewAsset(null)} />
+            {expandedAssetId && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+                    <div className="w-full max-w-2xl rounded-2xl border border-border bg-surface-primary shadow-2xl">
+                        {(() => {
+                            const asset = assets.find((item) => item.id === expandedAssetId);
+                            if (!asset) return null;
+                            const draft = getDraft(asset);
+                            const selectedManuscript = bindTarget[asset.id] || asset.boundManuscriptPath || '';
+                            const busy = workingId === asset.id;
+                            return (
+                                <>
+                                    <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+                                        <div className="text-sm font-medium text-text-primary truncate">编辑素材</div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setExpandedAssetId(null)}
+                                            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-secondary hover:bg-surface-secondary"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <div className="p-5 space-y-3">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <input
+                                                value={draft.title}
+                                                onChange={(event) => updateDraft(asset.id, { title: event.target.value })}
+                                                placeholder="标题"
+                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            />
+                                            <input
+                                                value={draft.projectId}
+                                                onChange={(event) => updateDraft(asset.id, { projectId: event.target.value })}
+                                                placeholder="项目ID"
+                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            />
+                                        </div>
+                                        <textarea
+                                            value={draft.prompt}
+                                            onChange={(event) => updateDraft(asset.id, { prompt: event.target.value })}
+                                            placeholder="提示词"
+                                            rows={4}
+                                            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        />
+                                        <div className="text-[11px] text-text-tertiary break-all">
+                                            {asset.relativePath || '(无文件路径)'}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <select
+                                                value={selectedManuscript}
+                                                onChange={(event) => setBindTarget((prev) => ({ ...prev, [asset.id]: event.target.value }))}
+                                                className="flex-1 min-w-0 px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                            >
+                                                <option value="">选择稿件绑定</option>
+                                                {manuscripts.map((filePath) => (
+                                                    <option key={filePath} value={filePath}>
+                                                        {filePath}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => void handleBind(asset)}
+                                                disabled={busy}
+                                                className="px-3 py-2 text-sm rounded-md border border-border hover:bg-surface-secondary text-text-secondary disabled:opacity-50"
+                                            >
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Link2 className="w-4 h-4" />
+                                                    绑定
+                                                </span>
+                                            </button>
+                                        </div>
+                                        <button
+                                            onClick={() => void handleSaveMetadata(asset)}
+                                            disabled={busy}
+                                            className="w-full px-3 py-2 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50"
+                                        >
+                                            <span className="inline-flex items-center gap-1">
+                                                <Save className="w-4 h-4" />
+                                                {busy ? '保存中...' : '保存元数据'}
+                                            </span>
+                                        </button>
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </div>
+                </div>
+            )}
             {isImageModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
                     <div className="w-full max-w-5xl max-h-[88vh] overflow-auto rounded-2xl border border-border bg-surface-primary shadow-2xl">
@@ -937,9 +1222,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                         </div>
 
                         <div className="p-5 space-y-4">
-                            <div className="text-xs text-text-secondary">
-                                当前生图配置：provider=<span className="font-mono">{settings.image_provider || 'openai-compatible'}</span> · template=<span className="font-mono">{settings.image_provider_template || 'openai-images'}</span> · endpoint=<span className="font-mono">{resolvedEndpoint || '(未设置)'}</span>
-                            </div>
                             {!hasImageConfig && (
                                 <div className="text-xs text-status-error">
                                     未检测到生图配置。请先到“设置 → AI 模型”填写生图 Endpoint 和 API Key。
@@ -1135,9 +1417,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                         </div>
 
                         <div className="p-5 space-y-4">
-                            <div className="text-xs text-text-secondary">
-                                当前生视频配置：source=<span className="font-mono">RedBox 官方</span> · model=<span className="font-mono">{effectiveVideoModel}</span> · endpoint=<span className="font-mono">{resolvedVideoEndpoint || '(未设置)'}</span>
-                            </div>
                             {!hasVideoConfig && (
                                 <div className="text-xs text-status-error">
                                     未检测到可用的 RedBox 官方视频配置。请先登录或配置 RedBox 官方 AI 源。
@@ -1156,7 +1435,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <select
                                         value={videoGenerationMode}
-                                        onChange={(event) => setVideoGenerationMode(event.target.value as 'text-to-video' | 'reference-guided' | 'first-last-frame')}
+                                        onChange={(event) => setVideoGenerationMode(event.target.value as 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation')}
                                         className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
                                     >
                                         {VIDEO_GENERATION_MODE_OPTIONS.map((option) => (
@@ -1260,6 +1539,82 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                     </div>
                                 )}
 
+                                {videoGenerationMode === 'continuation' && (
+                                    <label className="group relative flex aspect-video max-w-[320px] cursor-pointer overflow-hidden rounded-xl border border-dashed border-border bg-surface-secondary/20 hover:border-accent-primary/40 hover:bg-surface-secondary/40">
+                                        {videoFirstClip ? (
+                                            <div className="flex h-full w-full items-end bg-gradient-to-br from-surface-secondary to-surface-primary p-4 text-text-primary">
+                                                <div className="space-y-1">
+                                                    <div className="text-xs text-text-tertiary">起始视频</div>
+                                                    <div className="text-sm font-medium truncate">{videoFirstClip.name}</div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-text-tertiary">
+                                                <Clapperboard className="h-5 w-5" />
+                                                <div className="text-xs">上传起始视频</div>
+                                                <div className="text-[11px]">支持 mp4 / mov / webm</div>
+                                            </div>
+                                        )}
+                                        <div className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] text-white">起始视频</div>
+                                        {videoFirstClip && (
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    setVideoFirstClip(null);
+                                                }}
+                                                className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/70"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        )}
+                                        <input
+                                            type="file"
+                                            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                                            className="hidden"
+                                            onChange={(event) => void handleVideoMediaFile(event, 'firstClip')}
+                                        />
+                                    </label>
+                                )}
+
+                                <label className="group relative flex aspect-[3/1] max-w-[320px] cursor-pointer overflow-hidden rounded-xl border border-dashed border-border bg-surface-secondary/20 hover:border-accent-primary/40 hover:bg-surface-secondary/40">
+                                    {videoDrivingAudio ? (
+                                        <div className="flex h-full w-full items-end bg-gradient-to-br from-surface-secondary to-surface-primary p-4 text-text-primary">
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-text-tertiary">驱动音频（可选）</div>
+                                                <div className="text-sm font-medium truncate">{videoDrivingAudio.name}</div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-text-tertiary">
+                                            <FolderOpen className="h-5 w-5" />
+                                            <div className="text-xs">上传驱动音频</div>
+                                            <div className="text-[11px]">可选，用于人物口播/声音参考</div>
+                                        </div>
+                                    )}
+                                    <div className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[10px] text-white">驱动音频</div>
+                                    {videoDrivingAudio && (
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                setVideoDrivingAudio(null);
+                                            }}
+                                            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/70"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </button>
+                                    )}
+                                    <input
+                                        type="file"
+                                        accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
+                                        className="hidden"
+                                        onChange={(event) => void handleVideoMediaFile(event, 'drivingAudio')}
+                                    />
+                                </label>
+
                                 <div className="text-[11px] text-text-tertiary">
                                     {isReadingVideoRefImages ? '正在读取参考图...' : getVideoReferenceModeHint(videoGenerationMode)}
                                 </div>
@@ -1268,9 +1623,6 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                                 <input value={videoTitle} onChange={(event) => setVideoTitle(event.target.value)} placeholder="视频标题（可选）" className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary" />
                                 <input value={videoProjectId} onChange={(event) => setVideoProjectId(event.target.value)} placeholder="项目ID（可选）" className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary" />
-                                <div className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary/70 text-text-secondary">
-                                    当前模式模型：<span className="font-mono text-text-primary">{effectiveVideoModel}</span>
-                                </div>
                                 <select value={videoAspectRatio} onChange={(event) => setVideoAspectRatio(event.target.value as '16:9' | '9:16')} className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary">
                                     {VIDEO_ASPECT_RATIO_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
@@ -1286,6 +1638,14 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                                     <option value={10}>10 秒</option>
                                     <option value={12}>12 秒</option>
                                 </select>
+                                <label className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 text-text-secondary inline-flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={videoGenerateAudio}
+                                        onChange={(event) => setVideoGenerateAudio(event.target.checked)}
+                                    />
+                                    让模型尝试生成音频
+                                </label>
                             </div>
 
                             <div className="flex items-center gap-2">

@@ -3,13 +3,43 @@ use std::fs;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    escape_html, normalize_base_url, now_ms, payload_field, payload_string, run_curl_json,
-    run_curl_json_with_timeout,
+    append_debug_trace_global, escape_html, format_http_error_message, http_error_debug_line,
+    http_error_details_from_value, normalize_base_url, now_ms, payload_field, payload_string,
+    run_curl_json, run_curl_json_response,
 };
 
 pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
+const REDBOX_APP_SLUG: &str = "redbox";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
+const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
+
+fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
+    let details = http_error_details_from_value(status, body);
+    append_debug_trace_global(http_error_debug_line(scope, method, url, &details));
+}
+
+fn ensure_successful_ai_response(
+    protocol: &str,
+    operation: &str,
+    method: &str,
+    url: &str,
+    model_name: &str,
+    response: crate::HttpJsonResponse,
+) -> Result<Value, String> {
+    if (200..300).contains(&response.status) {
+        return Ok(response.body);
+    }
+    let details = http_error_details_from_value(response.status, &response.body);
+    append_debug_trace_global(format!(
+        "{} | model={} protocol={} operation={}",
+        http_error_debug_line("ai-http", method, url, &details),
+        model_name,
+        protocol,
+        operation,
+    ));
+    Err(format_http_error_message("AI request", &details))
+}
 
 pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> String {
     let base = normalize_base_url(base_url);
@@ -19,37 +49,99 @@ pub(crate) fn gemini_url(base_url: &str, path: &str, api_key: Option<&str>) -> S
     }
 }
 
+fn build_openai_model_endpoint_candidates(base_url: &str) -> Vec<String> {
+    let normalized = normalize_base_url(base_url);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = vec![
+        format!("{normalized}/models"),
+        format!("{normalized}/v1/models"),
+    ];
+    if let Ok(parsed) = url::Url::parse(&normalized) {
+        let origin = format!(
+            "{}://{}",
+            parsed.scheme(),
+            parsed.host_str().unwrap_or_default()
+        );
+        let path = parsed.path().trim_end_matches('/');
+        for hint in [
+            "/v1",
+            "/openai",
+            "/api/v1",
+            "/openai/v1",
+            "/compatible-mode/v1",
+            "/compatible-mode",
+            "/compatibility/v1",
+            "/v2",
+            "/api/v3",
+            "/v1beta/openai",
+            "/api/paas/v4",
+        ] {
+            candidates.push(format!("{origin}{hint}/models"));
+        }
+        if !path.is_empty() && path != "/" {
+            candidates.push(format!("{origin}{path}/models"));
+        }
+    }
+    candidates.retain(|item| !item.trim().is_empty());
+    candidates.dedup();
+    candidates
+}
+
+fn response_model_items(response: &Value) -> Vec<Value> {
+    let data_items = response
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let fallback_items = response
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    data_items.into_iter().chain(fallback_items).collect()
+}
+
 pub(crate) fn fetch_openai_models(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<Value>, String> {
-    let response = run_curl_json(
-        "GET",
-        &format!("{}/models", normalize_base_url(base_url)),
-        api_key,
-        &[],
-        None,
-    )?;
-    let items = response
-        .get("data")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let models = items
-        .into_iter()
-        .filter_map(|item| {
-            let id = item
-                .get("id")
-                .and_then(|value| value.as_str())?
-                .trim()
-                .to_string();
-            if id.is_empty() {
-                return None;
+    let mut last_error = String::new();
+    for endpoint in build_openai_model_endpoint_candidates(base_url) {
+        match run_curl_json("GET", &endpoint, api_key, &[], None) {
+            Ok(response) => {
+                let models = response_model_items(&response)
+                    .into_iter()
+                    .filter_map(|item| {
+                        let id = item
+                            .get("id")
+                            .or_else(|| item.get("name"))
+                            .or_else(|| item.get("model"))
+                            .and_then(Value::as_str)?
+                            .trim()
+                            .to_string();
+                        if id.is_empty() {
+                            return None;
+                        }
+                        Some(json!({ "id": id }))
+                    })
+                    .collect::<Vec<_>>();
+                if !models.is_empty() {
+                    return Ok(models);
+                }
+                last_error = format!("empty model list from {endpoint}");
             }
-            Some(json!({ "id": id }))
-        })
-        .collect::<Vec<_>>();
-    Ok(models)
+            Err(error) => {
+                last_error = format!("{endpoint}: {error}");
+            }
+        }
+    }
+    Err(if last_error.is_empty() {
+        "failed to fetch OpenAI-compatible models".to_string()
+    } else {
+        format!("failed to fetch OpenAI-compatible models: {last_error}")
+    })
 }
 
 pub(crate) fn fetch_anthropic_models(
@@ -126,9 +218,10 @@ pub(crate) fn invoke_openai_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/chat/completions", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/chat/completions", normalize_base_url(base_url)),
+        &endpoint,
         api_key,
         &[],
         Some(json!({
@@ -140,6 +233,8 @@ pub(crate) fn invoke_openai_chat(
         })),
         Some(45),
     )?;
+    let response =
+        ensure_successful_ai_response("openai", "text", "POST", &endpoint, model_name, response)?;
     let content = response
         .get("choices")
         .and_then(|value| value.as_array())
@@ -174,13 +269,15 @@ pub(crate) fn invoke_openai_structured_chat(
     if require_json {
         body["response_format"] = json!({ "type": "json_object" });
     }
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/chat/completions", normalize_base_url(base_url));
+    let response = run_curl_json_response("POST", &endpoint, api_key, &[], Some(body), Some(45))?;
+    let response = ensure_successful_ai_response(
+        "openai",
+        "structured",
         "POST",
-        &format!("{}/chat/completions", normalize_base_url(base_url)),
-        api_key,
-        &[],
-        Some(body),
-        Some(45),
+        &endpoint,
+        model_name,
+        response,
     )?;
     let content = response
         .get("choices")
@@ -203,9 +300,10 @@ pub(crate) fn invoke_anthropic_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/messages", normalize_base_url(base_url)),
+        &endpoint,
         None,
         &[
             ("x-api-key", api_key.unwrap_or_default().to_string()),
@@ -219,6 +317,14 @@ pub(crate) fn invoke_anthropic_chat(
             ]
         })),
         Some(45),
+    )?;
+    let response = ensure_successful_ai_response(
+        "anthropic",
+        "text",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("content")
@@ -242,9 +348,10 @@ pub(crate) fn invoke_anthropic_structured_chat(
     user_prompt: &str,
     _require_json: bool,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let response = run_curl_json_response(
         "POST",
-        &format!("{}/messages", normalize_base_url(base_url)),
+        &endpoint,
         None,
         &[
             ("x-api-key", api_key.unwrap_or_default().to_string()),
@@ -259,6 +366,14 @@ pub(crate) fn invoke_anthropic_structured_chat(
             ]
         })),
         Some(45),
+    )?;
+    let response = ensure_successful_ai_response(
+        "anthropic",
+        "structured",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("content")
@@ -280,13 +395,14 @@ pub(crate) fn invoke_gemini_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let response = run_curl_json_with_timeout(
+    let endpoint = gemini_url(
+        base_url,
+        &format!("/models/{}:generateContent", model_name),
+        api_key,
+    );
+    let response = run_curl_json_response(
         "POST",
-        &gemini_url(
-            base_url,
-            &format!("/models/{}:generateContent", model_name),
-            api_key,
-        ),
+        &endpoint,
         None,
         &[],
         Some(json!({
@@ -299,6 +415,8 @@ pub(crate) fn invoke_gemini_chat(
         })),
         Some(45),
     )?;
+    let response =
+        ensure_successful_ai_response("gemini", "text", "POST", &endpoint, model_name, response)?;
     let text = response
         .get("candidates")
         .and_then(|value| value.as_array())
@@ -341,17 +459,19 @@ pub(crate) fn invoke_gemini_structured_chat(
             "responseMimeType": "application/json"
         });
     }
-    let response = run_curl_json_with_timeout(
+    let endpoint = gemini_url(
+        base_url,
+        &format!("/models/{}:generateContent", model_name),
+        api_key,
+    );
+    let response = run_curl_json_response("POST", &endpoint, None, &[], Some(body), Some(45))?;
+    let response = ensure_successful_ai_response(
+        "gemini",
+        "structured",
         "POST",
-        &gemini_url(
-            base_url,
-            &format!("/models/{}:generateContent", model_name),
-            api_key,
-        ),
-        None,
-        &[],
-        Some(body),
-        Some(45),
+        &endpoint,
+        model_name,
+        response,
     )?;
     let text = response
         .get("candidates")
@@ -404,30 +524,103 @@ pub(crate) fn official_settings_models(settings: &Value) -> Vec<Value> {
 }
 
 pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
-    payload_string(settings, "redbox_official_base_url")
+    fn normalize_gateway_root(value: &str) -> String {
+        let normalized = normalize_base_url(value);
+        if normalized.is_empty() {
+            return "https://api.ziz.hk".to_string();
+        }
+
+        if let Ok(mut url) = url::Url::parse(&normalized) {
+            let mut pathname = url.path().trim_end_matches('/').to_string();
+            for suffix in [
+                format!("/{REDBOX_APP_SLUG}/v1"),
+                format!("/{REDBOX_APP_SLUG}"),
+                "/api/v1".to_string(),
+                "/v1".to_string(),
+            ] {
+                if pathname.eq_ignore_ascii_case(&suffix) {
+                    pathname.clear();
+                    break;
+                }
+                let lower = pathname.to_lowercase();
+                let suffix_lower = suffix.to_lowercase();
+                if lower.ends_with(&suffix_lower) {
+                    pathname.truncate(pathname.len() - suffix.len());
+                    pathname = pathname.trim_end_matches('/').to_string();
+                    break;
+                }
+            }
+            url.set_path(if pathname.is_empty() { "/" } else { &pathname });
+            url.set_query(None);
+            url.set_fragment(None);
+            return normalize_base_url(url.as_str());
+        }
+
+        for suffix in [
+            format!("/{REDBOX_APP_SLUG}/v1"),
+            format!("/{REDBOX_APP_SLUG}"),
+            "/api/v1".to_string(),
+            "/v1".to_string(),
+        ] {
+            if normalized.to_lowercase().ends_with(&suffix.to_lowercase()) {
+                return normalize_base_url(&normalized[..normalized.len() - suffix.len()]);
+            }
+        }
+
+        normalized
+    }
+
+    let configured = payload_string(settings, "redbox_official_base_url")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string())
+        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string());
+    format!(
+        "{}/{REDBOX_APP_SLUG}/v1",
+        normalize_gateway_root(&configured)
+    )
 }
 
-pub(crate) fn official_auth_token_from_settings(settings: &Value) -> Option<String> {
+pub(crate) fn official_ai_api_key_from_settings(settings: &Value) -> Option<String> {
     let session = official_settings_session(settings)?;
-    payload_string(&session, "apiKey")
-        .or_else(|| payload_string(&session, "accessToken"))
-        .or_else(|| payload_string(settings, "video_api_key"))
-        .or_else(|| payload_string(settings, "api_key"))
-        .filter(|value| !value.trim().is_empty())
+    payload_string(&session, "apiKey").filter(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn official_access_token_from_settings(settings: &Value) -> Option<String> {
+    let session = official_settings_session(settings)?;
+    payload_string(&session, "accessToken").filter(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn official_response_items(response: &Value) -> Vec<Value> {
-    if let Some(items) = response.as_array() {
-        return items.clone();
-    }
-    for key in ["items", "data", "results", "orders", "products", "records"] {
-        if let Some(items) = response.get(key).and_then(|value| value.as_array()) {
-            return items.clone();
+    fn collect_items(node: &Value) -> Option<Vec<Value>> {
+        if let Some(items) = node.as_array() {
+            return Some(items.clone());
         }
+        for key in [
+            "items",
+            "data",
+            "results",
+            "orders",
+            "products",
+            "records",
+            "usage_records",
+            "call_records",
+            "inference_records",
+            "logs",
+            "rows",
+            "list",
+            "content",
+            "transactions",
+            "recent_records",
+        ] {
+            if let Some(value) = node.get(key) {
+                if let Some(items) = collect_items(value) {
+                    return Some(items);
+                }
+            }
+        }
+        None
     }
-    Vec::new()
+
+    collect_items(response).unwrap_or_default()
 }
 
 pub(crate) fn official_unwrap_response_payload(response: &Value) -> Value {
@@ -448,14 +641,115 @@ pub(crate) fn run_official_json_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
+    run_official_json_request_response(settings, method, path, body).map(|response| response.body)
+}
+
+pub(crate) fn run_official_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
     let base_url = official_base_url_from_settings(settings);
-    let api_key = official_auth_token_from_settings(settings);
+    let access_token = official_access_token_from_settings(settings);
     let endpoint = format!(
         "{}/{}",
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    run_curl_json(method, &endpoint, api_key.as_deref(), &[], body)
+    let response = crate::run_curl_json_response(
+        method,
+        &endpoint,
+        access_token.as_deref(),
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn run_official_ai_json_request(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    run_official_ai_json_request_response(settings, method, path, body)
+        .map(|response| response.body)
+}
+
+pub(crate) fn run_official_ai_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
+    let base_url = official_base_url_from_settings(settings);
+    let api_key = official_ai_api_key_from_settings(settings);
+    let endpoint = format!(
+        "{}/{}",
+        normalize_base_url(&base_url),
+        path.trim_start_matches('/')
+    );
+    let response = crate::run_curl_json_response(
+        method,
+        &endpoint,
+        api_key.as_deref(),
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn run_official_public_json_request_response(
+    settings: &Value,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Result<crate::HttpJsonResponse, String> {
+    let base_url = official_base_url_from_settings(settings);
+    let endpoint = format!(
+        "{}/{}",
+        normalize_base_url(&base_url),
+        path.trim_start_matches('/')
+    );
+    let response = crate::run_curl_json_response(
+        method,
+        &endpoint,
+        None,
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response)
 }
 
 pub(crate) fn run_official_public_json_request(
@@ -470,7 +764,24 @@ pub(crate) fn run_official_public_json_request(
         normalize_base_url(&base_url),
         path.trim_start_matches('/')
     );
-    run_curl_json(method, &endpoint, None, &[], body)
+    let response = run_curl_json_response(
+        method,
+        &endpoint,
+        None,
+        &[],
+        body,
+        Some(OFFICIAL_HTTP_TIMEOUT_SECONDS),
+    )?;
+    if !(200..300).contains(&response.status) {
+        log_non_200_http(
+            "official-http",
+            method,
+            &endpoint,
+            response.status,
+            &response.body,
+        );
+    }
+    Ok(response.body)
 }
 
 pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, String> {
@@ -489,20 +800,15 @@ pub(crate) fn normalize_official_auth_session(raw: &Value) -> Result<Value, Stri
         .unwrap_or_else(|| "Bearer".to_string());
     let expires_raw = payload_field(&payload, "expires_at")
         .or_else(|| payload_field(&payload, "expiresAt"))
-        .and_then(|value| value.as_i64())
-        .map(|value| {
-            if value > 10_000_000_000 {
-                value
-            } else {
-                value * 1000
-            }
-        });
+        .and_then(crate::auth::parse_time_candidate_ms);
     let expires_in = payload_field(&payload, "expires_in")
         .or_else(|| payload_field(&payload, "expiresIn"))
         .and_then(|value| value.as_i64())
         .filter(|value| *value > 0)
         .map(|value| (now_ms() as i64) + (value * 1000));
-    let expires_at = expires_raw.or(expires_in);
+    let expires_at = expires_raw
+        .or(expires_in)
+        .or_else(|| crate::auth::jwt_expiration_ms(&access_token));
     Ok(json!({
         "accessToken": access_token,
         "refreshToken": refresh_token,
@@ -519,10 +825,10 @@ pub(crate) fn official_account_summary_local(settings: &Value, models: &[Value])
     let session = official_settings_session(settings).unwrap_or_else(|| json!({}));
     let user = session.get("user").cloned().unwrap_or_else(|| json!({}));
     json!({
-        "loggedIn": official_auth_token_from_settings(settings).is_some(),
+        "loggedIn": official_access_token_from_settings(settings).is_some(),
         "displayName": user.get("displayName").cloned().or_else(|| user.get("name").cloned()).unwrap_or(Value::Null),
         "email": user.get("email").cloned().unwrap_or(Value::Null),
-        "apiKeyPresent": official_auth_token_from_settings(settings).is_some(),
+        "apiKeyPresent": official_ai_api_key_from_settings(settings).is_some(),
         "planName": user.get("planName").cloned().unwrap_or(json!("RedBox Official")),
         "pointsBalance": user.get("pointsBalance").cloned().unwrap_or(json!(0)),
         "officialBaseUrl": official_base_url_from_settings(settings),
@@ -599,7 +905,7 @@ pub(crate) fn choose_preferred_official_chat_model(
 }
 
 pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &[Value]) {
-    let api_key = official_auth_token_from_settings(settings).unwrap_or_default();
+    let api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
@@ -663,7 +969,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         fallback_chat_model,
     );
     let official_base_url = official_base_url_from_settings(settings);
-    let official_video_api_key = official_auth_token_from_settings(settings).unwrap_or_default();
+    let official_video_api_key = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let existing_models = existing_source
         .as_ref()
         .and_then(|value| value.get("models"))
@@ -752,7 +1058,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
 }
 
 pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value> {
-    run_official_json_request(settings, "GET", "/models", None)
+    run_official_ai_json_request(settings, "GET", "/models", None)
         .map(|remote| official_response_items(&remote))
         .unwrap_or_else(|_| official_settings_models(settings))
 }
@@ -811,7 +1117,9 @@ pub(crate) fn upsert_official_settings_session(settings: &mut Value, session: Op
             Some(session_value) => {
                 object.insert(
                     "redbox_auth_session_json".to_string(),
-                    json!(serde_json::to_string(session_value).unwrap_or_else(|_| "{}".to_string())),
+                    json!(
+                        serde_json::to_string(session_value).unwrap_or_else(|_| "{}".to_string())
+                    ),
                 );
             }
             None => {

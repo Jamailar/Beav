@@ -4,6 +4,10 @@ mod agent_engine;
 mod config_runtime;
 #[path = "runtime/events.rs"]
 mod events;
+#[path = "runtime/interactive_loop.rs"]
+mod interactive_loop;
+#[path = "runtime/interactive_recovery.rs"]
+mod interactive_recovery;
 #[path = "runtime/orchestration_runtime.rs"]
 mod orchestration_runtime;
 #[path = "runtime/session_runtime.rs"]
@@ -16,6 +20,8 @@ mod types;
 pub use agent_engine::*;
 pub use config_runtime::*;
 pub use events::*;
+pub use interactive_loop::*;
+pub use interactive_recovery::*;
 pub use orchestration_runtime::*;
 pub use session_runtime::*;
 pub use task_runtime::*;
@@ -46,14 +52,15 @@ mod tests {
 
     #[test]
     fn runtime_direct_route_marks_background_tasks_as_long_running() {
-        let route = runtime_direct_route(
+        let route = runtime_direct_route_record(
             "default",
             "run it",
             Some(&json!({
                 "scheduledTaskId": "scheduled-1",
                 "forceLongRunningTask": true
             })),
-        );
+        )
+        .into_value();
         assert_eq!(
             route.get("intent").and_then(Value::as_str),
             Some("automation")
@@ -68,13 +75,14 @@ mod tests {
 
     #[test]
     fn runtime_direct_route_promotes_advisor_persona_to_multi_agent() {
-        let route = runtime_direct_route(
+        let route = runtime_direct_route_record(
             "default",
             "generate persona",
             Some(&json!({
                 "intent": "advisor_persona"
             })),
-        );
+        )
+        .into_value();
         assert_eq!(
             route.get("requiresMultiAgent").and_then(Value::as_bool),
             Some(true)
@@ -397,6 +405,34 @@ mod tests {
                 base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
                 api_key: Some("default-key".to_string()),
                 model_name: "gemini-2.5-pro".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_chat_config_treats_empty_override_fields_as_missing() {
+        let config = resolve_chat_config(
+            &json!({
+                "api_endpoint": "https://example.invalid/v1",
+                "api_key": "rbx-live-1",
+                "model_name": "gpt-5.3-codex"
+            }),
+            Some(&json!({
+                "baseURL": "   ",
+                "apiKey": "",
+                "modelName": "gpt-5.3-codex",
+                "protocol": "   "
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            ResolvedChatConfig {
+                protocol: "openai".to_string(),
+                base_url: "https://example.invalid/v1".to_string(),
+                api_key: Some("rbx-live-1".to_string()),
+                model_name: "gpt-5.3-codex".to_string(),
             }
         );
     }

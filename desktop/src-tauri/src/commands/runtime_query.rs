@@ -8,12 +8,13 @@ use crate::agent::{
 use crate::commands::runtime_orchestration::run_subagent_orchestration_for_task;
 use crate::commands::runtime_routing::route_runtime_intent_with_settings;
 use crate::events::emit_runtime_task_checkpoint_saved;
+use crate::interactive_runtime_shared::interactive_runtime_system_prompt;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{persist_runtime_query_checkpoints, runtime_query_checkpoint_events};
 use crate::skills::active_skill_activation_items;
 use crate::{
-    log_timing_event, now_ms, payload_field, payload_string, resolve_runtime_mode_for_session,
-    AppState,
+    log_timing_event, now_i64, now_ms, payload_field, payload_string, record_runtime_query_metric,
+    resolve_runtime_mode_for_session, AppState, RuntimeQueryMetric,
 };
 
 pub fn handle_runtime_query(
@@ -77,7 +78,7 @@ pub fn handle_runtime_query(
     let turn = PreparedSessionAgentTurn::runtime_query(prepared);
     let checkpoint_bundle = turn.runtime_query_checkpoint_bundle();
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
-    let (resolved_runtime_mode, activated_skills) = with_store(state, |store| {
+    let (resolved_runtime_mode, activated_skills, advisor_id) = with_store(state, |store| {
         let runtime_mode = resolve_runtime_mode_for_session(&store, execution.session_id());
         let metadata = store
             .chat_sessions
@@ -85,8 +86,39 @@ pub fn handle_runtime_query(
             .find(|item| item.id == execution.session_id())
             .and_then(|item| item.metadata.as_ref());
         let items = active_skill_activation_items(&store.skills, &runtime_mode, metadata);
-        Ok((runtime_mode, items))
+        let advisor_id = metadata.and_then(|value| {
+            let advisor = payload_string(value, "advisorId");
+            if advisor.is_some() {
+                return advisor;
+            }
+            let context_type = payload_string(value, "contextType");
+            if context_type.as_deref() == Some("advisor-discussion") {
+                return payload_string(value, "contextId");
+            }
+            None
+        });
+        Ok((runtime_mode, items, advisor_id))
     })?;
+    let prompt_chars = interactive_runtime_system_prompt(
+        state,
+        &resolved_runtime_mode,
+        Some(execution.session_id()),
+    )
+    .chars()
+    .count() as i64;
+    let _ = record_runtime_query_metric(
+        state,
+        RuntimeQueryMetric {
+            session_id: execution.session_id().to_string(),
+            runtime_mode: resolved_runtime_mode.clone(),
+            advisor_id,
+            prompt_chars,
+            active_skill_count: activated_skills.len() as i64,
+            response_chars: execution.response().chars().count() as i64,
+            elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+            created_at: now_i64(),
+        },
+    );
     for (name, description) in activated_skills {
         emit_runtime_task_checkpoint_saved(
             app,

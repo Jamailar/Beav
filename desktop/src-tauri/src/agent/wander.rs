@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::agent::{
     resolve_chat_exchange_context, resolve_chat_exchange_response_stage, PreparedSessionAgentTurn,
@@ -8,6 +8,7 @@ use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_
 use crate::AppState;
 
 pub fn execute_prepared_wander_turn(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     turn: &PreparedWanderTurn<'_>,
 ) -> Result<SessionAgentTurnExecution, String> {
@@ -23,7 +24,7 @@ pub fn execute_prepared_wander_turn(
         None,
     );
     let response_stage = resolve_chat_exchange_response_stage(
-        None,
+        Some(app),
         state,
         &context,
         &request.message,

@@ -1,7 +1,7 @@
-import { memo, useMemo, type Dispatch, type SetStateAction } from 'react';
-import { Activity, AlertCircle, Database, Download, FolderOpen, Info, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { Activity, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
-import { PasswordInput } from './shared';
+import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
   AgentTaskSnapshot,
   AgentTaskTrace,
@@ -14,6 +14,9 @@ import type {
   MemoryMaintenanceStatus,
     MemorySearchResult,
     RoleSpec,
+    RuntimePerfBenchmarkMode,
+    RuntimePerfPreset,
+    RuntimePerfRunResult,
     RuntimeToolResultItem,
     ToolDiagnosticDescriptor,
     ToolDiagnosticRunResult,
@@ -23,9 +26,6 @@ import type {
 type SettingsFormData = {
     workspace_dir: string;
     debug_log_enabled: boolean;
-    search_provider: string;
-    search_endpoint: string;
-    search_api_key: string;
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
@@ -41,6 +41,7 @@ type BrowserPluginStatus = {
     success: boolean;
     bundled: boolean;
     exportPath: string;
+    pluginPath?: string;
     exported: boolean;
     bundledPath?: string;
     error?: string;
@@ -48,8 +49,60 @@ type BrowserPluginStatus = {
 
 type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } | undefined>;
 
-type FeatureFlags = {
-    vectorRecommendation: boolean;
+type RuntimeDiagnosticsSummary = {
+    generatedAt?: number;
+    runtimeWarm?: {
+        lastWarmedAt?: number;
+        entries?: Array<{
+            mode: string;
+            warmedAt: number;
+            systemPromptChars: number;
+            longTermContextChars: number;
+            hasModelConfig: boolean;
+        }>;
+    };
+    phase0?: {
+        personaGeneration?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgSearchElapsedMs?: number;
+            avgKnowledgeFiles?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        knowledgeIngest?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgImportedFiles?: number;
+            avgTotalKnowledgeFiles?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        runtimeQueries?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgPromptChars?: number;
+            avgActiveSkillCount?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            byMode?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        skillInvocations?: {
+            count?: number;
+            avgElapsedMs?: number;
+            avgActiveSkillCount?: number;
+            bySkill?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+        toolCalls?: {
+            count?: number;
+            successCount?: number;
+            successRate?: number;
+            byAdvisor?: Array<Record<string, unknown>>;
+            byTool?: Array<Record<string, unknown>>;
+            recent?: Array<Record<string, unknown>>;
+        };
+    };
 };
 
 type AssistantDaemonStatus = {
@@ -83,6 +136,10 @@ type AssistantDaemonStatus = {
         authToken?: string;
         webhookUrl: string;
     };
+    knowledgeApi: {
+        endpointPath: string;
+        webhookUrl: string;
+    };
     weixin: {
         enabled: boolean;
         endpointPath: string;
@@ -103,6 +160,56 @@ type AssistantDaemonStatus = {
         availableAccountIds: string[];
     };
 };
+
+const copyTextWithClipboard = async (text: string): Promise<boolean> => {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+};
+
+function DiagnosticCopyButton({ text, label = '复制' }: { text: string; label?: string }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        if (!String(text || '').trim()) return;
+        const ok = await copyTextWithClipboard(text);
+        if (!ok) return;
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1400);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={() => void handleCopy()}
+            className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-surface-primary/92 px-2 py-1 text-[11px] text-text-tertiary shadow-sm transition-colors hover:border-border hover:bg-surface-primary hover:text-text-primary"
+            title={label}
+        >
+            {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied ? '已复制' : label}</span>
+        </button>
+    );
+}
+
+function formatRuntimePerfRunIndex(index: number): string {
+    return `Run ${String(index).padStart(2, '0')}`;
+}
 
 type AssistantDaemonDraft = {
     enabled: boolean;
@@ -151,14 +258,20 @@ type AssistantDaemonWeixinLoginState = {
 };
 
 interface GeneralSettingsSectionProps {
-    appVersion: string;
+    appVersion: string | null;
     formData: SettingsFormData;
     setFormData: Dispatch<SetStateAction<any>>;
+    handlePickWorkspaceDir: () => Promise<void>;
+    handleResetWorkspaceDir: () => void;
+    handleOpenKnowledgeApiGuide: () => Promise<void>;
     recentDebugLogs: string[];
     isDebugLogsLoading: boolean;
     handleRefreshDebugLogs: () => Promise<void>;
     handleOpenDebugLogDir: () => Promise<void>;
     handleVersionTap: () => void;
+}
+
+interface RemoteConnectionSettingsSectionProps {
     assistantDaemonStatus: AssistantDaemonStatus | null;
     assistantDaemonDraft: AssistantDaemonDraft;
     setAssistantDaemonDraft: Dispatch<SetStateAction<AssistantDaemonDraft>>;
@@ -179,30 +292,16 @@ function GeneralSettingsSectionInner({
     appVersion,
     formData,
     setFormData,
+    handlePickWorkspaceDir,
+    handleResetWorkspaceDir,
+    handleOpenKnowledgeApiGuide,
     recentDebugLogs,
     isDebugLogsLoading,
     handleRefreshDebugLogs,
     handleOpenDebugLogDir,
     handleVersionTap,
-    assistantDaemonStatus,
-    assistantDaemonDraft,
-    setAssistantDaemonDraft,
-    assistantDaemonLogs,
-    assistantDaemonBusy,
-    assistantDaemonWeixinLogin,
-    assistantDaemonWeixinLoginBusy,
-    handleReloadAssistantDaemonStatus,
-    handleSaveAssistantDaemonConfig,
-    handleStartAssistantDaemon,
-    handleStopAssistantDaemon,
-    handleStartAssistantDaemonWeixinLogin,
-    handleCheckAssistantDaemonWeixinLogin,
-    handleClearAssistantDaemonWeixinLogin,
 }: GeneralSettingsSectionProps) {
-    const assistantDaemonLogText = useMemo(
-        () => (assistantDaemonLogs.length ? assistantDaemonLogs.join('\n') : '暂无 daemon 日志。'),
-        [assistantDaemonLogs],
-    );
+    const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
 
     return (
         <section className="space-y-6">
@@ -213,7 +312,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
                             <Info className="w-4 h-4" />
-                            红盒子 RedBox
+                            应用版本
                         </h3>
                         <p className="text-xs text-text-tertiary mt-1">
                             当前版本:{' '}
@@ -222,7 +321,7 @@ function GeneralSettingsSectionInner({
                                 onClick={handleVersionTap}
                                 className="font-mono hover:text-text-primary transition-colors"
                             >
-                                {appVersion || '加载中...'}
+                                {appVersion ?? '加载中...'}
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
@@ -259,592 +358,117 @@ function GeneralSettingsSectionInner({
                             className="w-full bg-surface-secondary/30 rounded border border-border pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                         />
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => void handlePickWorkspaceDir()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-surface-secondary transition-colors"
+                    >
+                        选择文件夹
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleResetWorkspaceDir}
+                        disabled={!String(formData.workspace_dir || '').trim()}
+                        className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        恢复默认
+                    </button>
                 </div>
                 <p className="text-[10px] text-text-tertiary mt-2">
                     不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
                 </p>
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div>
-                    <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                        <Search className="w-4 h-4" />
-                        联网搜索
-                    </h3>
-                    <p className="text-xs text-text-tertiary mt-1">
-                        `web_search` 和顾问画像外部检索会读取这里的供应商设置。未配置时默认使用 DuckDuckGo。
-                    </p>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            搜索供应商
-                        </label>
-                        <select
-                            value={formData.search_provider}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, search_provider: e.target.value }))}
-                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                        >
-                            <option value="duckduckgo">DuckDuckGo（免 Key）</option>
-                            <option value="tavily">Tavily API</option>
-                            <option value="searxng">SearXNG / 自建搜索</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            搜索服务地址
-                        </label>
-                        <input
-                            type="text"
-                            value={formData.search_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, search_endpoint: e.target.value }))}
-                            placeholder={formData.search_provider === 'tavily' ? 'https://api.tavily.com' : formData.search_provider === 'searxng' ? 'https://your-searxng.example.com' : 'DuckDuckGo 默认无需填写'}
-                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                        />
-                    </div>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                        搜索 API Key
-                    </label>
-                    <PasswordInput
-                        value={formData.search_api_key}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, search_api_key: e.target.value }))}
-                        placeholder={formData.search_provider === 'duckduckgo' ? 'DuckDuckGo 默认无需填写' : '按供应商要求填写'}
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                    />
-                </div>
-
-                <p className="text-[10px] text-text-tertiary">
-                    `Tavily` 需要 API Key。`SearXNG` 至少需要服务地址，如你的实例启用了鉴权，也可以在上方填写 Key。
-                </p>
-            </div>
-
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div>
-                    <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                        <Activity className="w-4 h-4" />
-                        全局网络代理
-                    </h3>
-                    <p className="text-xs text-text-tertiary mt-1">
-                        开启后，主进程的外网请求会统一走这里的代理，包括模型拉取、更新检查、飞书和微信扫码。
-                    </p>
-                </div>
-                <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-text-secondary">启用全局代理</label>
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isProxySettingsExpanded && 'border-accent-primary/30',
+            )}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={() => setIsProxySettingsExpanded((prev) => !prev)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        aria-expanded={isProxySettingsExpanded}
+                        aria-controls="general-proxy-settings-panel"
+                    >
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                            <ChevronDown className={clsx('h-4 w-4 transition-transform', isProxySettingsExpanded ? 'rotate-0' : '-rotate-90')} />
+                        </span>
+                        <h3 className="truncate text-sm font-medium text-text-primary">全局网络代理</h3>
+                    </button>
                     <button
                         type="button"
                         onClick={() => setFormData((prev: any) => ({ ...prev, proxy_enabled: !prev.proxy_enabled }))}
-                        className="ui-switch-track h-7 w-12"
+                        className="ui-switch-track shrink-0"
+                        data-size="lg"
                         data-state={formData.proxy_enabled ? 'on' : 'off'}
+                        aria-label="启用全局代理"
                     >
-                        <span className={clsx('ui-switch-thumb inline-block h-5 w-5', formData.proxy_enabled ? 'translate-x-6' : 'translate-x-1')} />
+                        <span className="ui-switch-thumb" />
                     </button>
                 </div>
-                <div>
-                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                        代理地址
-                    </label>
-                    <input
-                        type="text"
-                        value={formData.proxy_url}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
-                        placeholder="http://127.0.0.1:7890"
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                    />
-                </div>
-                <div>
-                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                        直连白名单
-                    </label>
-                    <input
-                        type="text"
-                        value={formData.proxy_bypass}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
-                        placeholder="localhost,127.0.0.1,::1"
-                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                    />
-                </div>
-                <p className="text-[10px] text-text-tertiary">
-                    保存后立即生效。默认会保留 `localhost`、`127.0.0.1` 和 `::1` 直连，避免本地 relay 与 daemon 回环请求走代理。
-                </p>
+
+                {isProxySettingsExpanded && (
+                    <div id="general-proxy-settings-panel" className="space-y-4 border-t border-border/70 px-4 py-4">
+                        <p className="text-xs text-text-tertiary">
+                            用于扫码登录、远程请求和需要走代理的外部连接。
+                        </p>
+                        <div>
+                            <label className="mb-1.5 block text-xs font-medium text-text-secondary">代理地址</label>
+                            <input
+                                type="text"
+                                value={formData.proxy_url}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_url: e.target.value }))}
+                                placeholder="http://127.0.0.1:7890"
+                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="mb-1.5 block text-xs font-medium text-text-secondary">直连白名单</label>
+                            <input
+                                type="text"
+                                value={formData.proxy_bypass}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, proxy_bypass: e.target.value }))}
+                                placeholder="localhost,127.0.0.1,::1"
+                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                            />
+                        </div>
+                        <p className="text-[10px] text-text-tertiary">
+                            默认保留 `localhost`、`127.0.0.1` 和 `::1` 直连。
+                        </p>
+                    </div>
+                )}
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div className="space-y-3">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                            <Activity className="w-4 h-4" />
-                            长期后台值守
-                        </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            用于长期在线接收飞书、微信和本地 relay 的消息。窗口关闭后，只要启用了后台保活，就会继续驻留。
-                        </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={() => void handleReloadAssistantDaemonStatus()}
-                            className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                        >
-                            刷新状态
-                        </button>
-                        {assistantDaemonStatus?.enabled ? (
-                            <button
-                                type="button"
-                                onClick={() => void handleStopAssistantDaemon()}
-                                disabled={assistantDaemonBusy}
-                                className="px-3 py-1.5 border border-red-300 text-red-600 rounded text-xs hover:bg-red-50 transition-colors disabled:opacity-50"
-                            >
-                                停止值守
-                            </button>
-                        ) : (
-                            <button
-                                type="button"
-                                onClick={() => void handleStartAssistantDaemon()}
-                                disabled={assistantDaemonBusy}
-                                className="px-3 py-1.5 bg-accent-primary text-white rounded text-xs hover:opacity-90 disabled:opacity-50"
-                            >
-                                启动值守
-                            </button>
-                        )}
-                    </div>
-                </div>
-
-                <div className="rounded border border-border bg-surface-primary/60 p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs text-text-tertiary">守护状态</span>
-                        <span className="text-sm font-medium text-text-primary">
-                            {assistantDaemonStatus?.enabled
-                                ? assistantDaemonStatus.listening ? '运行中' : '已启用，待启动'
-                                : '未启用'}
-                        </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs text-text-tertiary">锁状态</span>
-                        <span className="text-sm font-medium text-text-primary">
-                            {assistantDaemonStatus?.lockState === 'owner' ? '当前实例持有' : '被动等待'}
-                        </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs text-text-tertiary">处理中</span>
-                        <span className="text-sm font-medium text-text-primary">{assistantDaemonStatus?.activeTaskCount ?? 0}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs text-text-tertiary">排队会话</span>
-                        <span className="text-sm font-medium text-text-primary">{assistantDaemonStatus?.queuedPeerCount ?? 0}</span>
-                    </div>
-                </div>
-
-                {assistantDaemonStatus?.blockedBy && (
-                    <div className="text-xs text-amber-700 bg-amber-500/10 border border-amber-300 rounded p-3">
-                        当前实例未持有后台锁：{assistantDaemonStatus.blockedBy}
-                    </div>
-                )}
-                {assistantDaemonStatus?.lastError && (
-                    <div className="text-xs text-red-600 bg-red-500/10 border border-red-300 rounded p-3">
-                        最近错误：{assistantDaemonStatus.lastError}
-                    </div>
-                )}
-
-                <div className="rounded border border-border bg-surface-primary/60 p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-text-secondary">启用 daemon</label>
-                        <button
-                            type="button"
-                            onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, enabled: !prev.enabled }))}
-                            className="ui-switch-track h-7 w-12"
-                            data-state={assistantDaemonDraft.enabled ? 'on' : 'off'}
-                        >
-                            <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.enabled ? 'translate-x-6' : 'translate-x-1')} />
-                        </button>
-                    </div>
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-text-secondary">开机自动启用</label>
-                        <button
-                            type="button"
-                            onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, autoStart: !prev.autoStart }))}
-                            className="ui-switch-track h-7 w-12"
-                            data-state={assistantDaemonDraft.autoStart ? 'on' : 'off'}
-                        >
-                            <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.autoStart ? 'translate-x-6' : 'translate-x-1')} />
-                        </button>
-                    </div>
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-text-secondary">关闭窗口后继续后台运行</label>
-                        <button
-                            type="button"
-                            onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, keepAliveWhenNoWindow: !prev.keepAliveWhenNoWindow }))}
-                            className="ui-switch-track h-7 w-12"
-                            data-state={assistantDaemonDraft.keepAliveWhenNoWindow ? 'on' : 'off'}
-                        >
-                            <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.keepAliveWhenNoWindow ? 'translate-x-6' : 'translate-x-1')} />
-                        </button>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">监听地址</label>
-                        <input
-                            type="text"
-                            value={assistantDaemonDraft.host}
-                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, host: e.target.value }))}
-                            className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">监听端口</label>
-                        <input
-                            type="number"
-                            value={assistantDaemonDraft.port}
-                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, port: e.target.value }))}
-                            className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                        />
-                    </div>
-                </div>
-
-                <div className="space-y-3">
-                    <div className="rounded border border-border bg-surface-primary/60 p-3">
-                        <div className="text-[11px] text-text-tertiary mb-1">飞书接入</div>
-                        <div className="text-xs text-text-secondary">
-                            模式：{assistantDaemonStatus?.feishu.receiveMode || assistantDaemonDraft.feishu.receiveMode}
-                        </div>
-                        <div className="text-xs text-text-secondary mt-1">
-                            {assistantDaemonDraft.feishu.receiveMode === 'websocket'
-                                ? assistantDaemonStatus?.feishu.websocketRunning
-                                    ? '长连接已建立'
-                                    : `长连接待启动${assistantDaemonStatus?.feishu.websocketReconnectAt ? `，下次重连 ${new Date(assistantDaemonStatus.feishu.websocketReconnectAt).toLocaleString()}` : ''}`
-                                : `Webhook: ${assistantDaemonStatus?.feishu.webhookUrl || '未生成'}`}
-                        </div>
-                    </div>
-                    <div className="rounded border border-border bg-surface-primary/60 p-3">
-                        <div className="text-[11px] text-text-tertiary mb-1">微信接入</div>
-                        <div className="text-xs text-text-secondary">
-                            Relay: {assistantDaemonStatus?.weixin.webhookUrl || '未生成'}
-                        </div>
-                        <div className="text-xs text-text-secondary mt-1">
-                            sidecar: {assistantDaemonStatus?.weixin.sidecarRunning ? `运行中 (pid ${assistantDaemonStatus.weixin.sidecarPid})` : '未运行'}
-                        </div>
-                        <div className="text-xs text-text-secondary mt-1">
-                            账号: {assistantDaemonStatus?.weixin.connected ? `已登录${assistantDaemonStatus.weixin.accountId ? ` (${assistantDaemonStatus.weixin.accountId})` : ''}` : '未登录'}
-                        </div>
-                    </div>
-                    <details className="rounded border border-border bg-surface-primary/60 p-3">
-                        <summary className="cursor-pointer list-none text-[11px] text-text-tertiary">
-                            最近 daemon 日志
-                        </summary>
-                        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
-                            {assistantDaemonLogText}
-                        </pre>
-                    </details>
-                </div>
-
-                <details className="rounded border border-border bg-surface-primary/60 p-4">
-                    <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
-                        <div>
-                            <h4 className="text-sm font-medium text-text-primary">飞书</h4>
-                            <p className="text-[11px] text-text-tertiary mt-1">
-                                默认折叠。需要时再展开填写 App ID、Secret 和接收模式。
-                            </p>
-                        </div>
-                        <span className="text-[11px] text-text-tertiary">
-                            {assistantDaemonDraft.feishu.enabled ? '已启用' : '未启用'}
-                        </span>
-                    </summary>
-                    <div className="mt-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <label className="text-xs font-medium text-text-secondary">启用飞书接入</label>
-                            <button
-                                type="button"
-                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, enabled: !prev.feishu.enabled } }))}
-                                className="ui-switch-track h-7 w-12"
-                                data-state={assistantDaemonDraft.feishu.enabled ? 'on' : 'off'}
-                            >
-                                <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.feishu.enabled ? 'translate-x-6' : 'translate-x-1')} />
-                            </button>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">接收模式</label>
-                            <select
-                                value={assistantDaemonDraft.feishu.receiveMode}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, receiveMode: e.target.value as 'webhook' | 'websocket' } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            >
-                                <option value="webhook">Webhook</option>
-                                <option value="websocket">官方长连接</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">事件路径</label>
-                            <input
-                                type="text"
-                                value={assistantDaemonDraft.feishu.endpointPath}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, endpointPath: e.target.value } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">App ID</label>
-                            <input
-                                type="text"
-                                value={assistantDaemonDraft.feishu.appId}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, appId: e.target.value } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">App Secret</label>
-                            <PasswordInput
-                                value={assistantDaemonDraft.feishu.appSecret}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, appSecret: e.target.value } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">Verification Token</label>
-                            <PasswordInput
-                                value={assistantDaemonDraft.feishu.verificationToken}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, verificationToken: e.target.value } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">Encrypt Key</label>
-                            <PasswordInput
-                                value={assistantDaemonDraft.feishu.encryptKey}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, encryptKey: e.target.value } }))}
-                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                            />
-                        </div>
-                        <label className="flex items-center gap-2 text-xs text-text-secondary">
-                            <input
-                                type="checkbox"
-                                checked={assistantDaemonDraft.feishu.replyUsingChatId}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, replyUsingChatId: e.target.checked } }))}
-                                className="rounded border-border"
-                            />
-                            优先按 chat_id 回复
-                        </label>
-                    </div>
-                </details>
-
-                <details className="rounded border border-border bg-surface-primary/60 p-4">
-                    <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
-                        <div>
-                            <h4 className="text-sm font-medium text-text-primary">微信 sidecar</h4>
-                            <p className="text-[11px] text-text-tertiary mt-1">
-                                默认折叠。正常情况下只需要扫码登录，其他参数都藏在高级设置里。
-                            </p>
-                        </div>
-                        <span className="text-[11px] text-text-tertiary">
-                            {assistantDaemonDraft.weixin.enabled ? '已启用' : '未启用'}
-                        </span>
-                    </summary>
-                    <div className="mt-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <label className="text-xs font-medium text-text-secondary">启用微信 sidecar</label>
-                            <button
-                                type="button"
-                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, enabled: !prev.weixin.enabled } }))}
-                                className="ui-switch-track h-7 w-12"
-                                data-state={assistantDaemonDraft.weixin.enabled ? 'on' : 'off'}
-                            >
-                                <span className={clsx('ui-switch-thumb inline-block h-5 w-5', assistantDaemonDraft.weixin.enabled ? 'translate-x-6' : 'translate-x-1')} />
-                            </button>
-                        </div>
-                        <div className="rounded border border-border bg-surface-secondary/20 p-3 space-y-3">
-                            <div className="text-[11px] text-text-tertiary">
-                                连接方式：应用会调用 `@weixin-claw/core` 访问腾讯 iLink 网关拉取登录二维码。扫码成功后，本地会保存 bot token 和 accountId，后续由内置 sidecar 长连收发消息。
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => void handleStartAssistantDaemonWeixinLogin()}
-                                    disabled={assistantDaemonWeixinLoginBusy}
-                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                                >
-                                    开始扫码
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleCheckAssistantDaemonWeixinLogin()}
-                                    disabled={assistantDaemonWeixinLoginBusy || !assistantDaemonWeixinLogin?.sessionKey}
-                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                                >
-                                    检查登录结果
-                                </button>
-                                {assistantDaemonWeixinLogin && (
-                                    <button
-                                        type="button"
-                                        onClick={handleClearAssistantDaemonWeixinLogin}
-                                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                                    >
-                                        清空二维码
-                                    </button>
-                                )}
-                            </div>
-                            {assistantDaemonWeixinLogin?.message && (
-                                <p className="text-[11px] text-text-tertiary">{assistantDaemonWeixinLogin.message}</p>
-                            )}
-                            {!assistantDaemonWeixinLogin?.qrcodeUrl && (
-                                <p className="text-[10px] text-text-tertiary">
-                                    如果这里直接报 `fetch failed`，通常不是扫码逻辑问题，而是当前机器访问 `https://ilinkai.weixin.qq.com` 失败。先在上面的“全局网络代理”里配好代理，再保存设置后重试。
-                                </p>
-                            )}
-                            {assistantDaemonWeixinLogin?.qrcodeUrl && (
-                                <div className="space-y-2">
-                                    <img
-                                        src={assistantDaemonWeixinLogin.qrcodeImageUrl || assistantDaemonWeixinLogin.qrcodeUrl}
-                                        alt="微信登录二维码"
-                                        className="h-40 w-40 rounded border border-border bg-surface-secondary/30 object-contain p-2"
-                                    />
-                                    <p className="text-[10px] text-text-tertiary break-all">{assistantDaemonWeixinLogin.qrcodeUrl}</p>
-                                </div>
-                            )}
-                        </div>
-                        <label className="flex items-center gap-2 text-xs text-text-secondary">
-                            <input
-                                type="checkbox"
-                                checked={assistantDaemonDraft.weixin.autoStartSidecar}
-                                onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, autoStartSidecar: e.target.checked } }))}
-                                className="rounded border-border"
-                            />
-                            daemon 启动时自动拉起微信 sidecar
-                        </label>
-                        <div className="text-[10px] text-text-tertiary">
-                            当前登录：{assistantDaemonStatus?.weixin.connected ? '已连接' : '未连接'}
-                            {assistantDaemonStatus?.weixin.accountId ? ` / ${assistantDaemonStatus.weixin.accountId}` : ''}
-                            {assistantDaemonStatus?.weixin.userId ? ` / 用户 ${assistantDaemonStatus.weixin.userId}` : ''}
-                        </div>
-                        <div className="text-[10px] text-text-tertiary">
-                            状态目录：<code className="bg-surface-secondary px-1 rounded">{assistantDaemonStatus?.weixin.stateDir || '未初始化'}</code>
-                        </div>
-                        {!!assistantDaemonStatus?.weixin.availableAccountIds?.length && (
-                            <div className="text-[10px] text-text-tertiary">
-                                已保存账号：{assistantDaemonStatus.weixin.availableAccountIds.join(', ')}
-                            </div>
-                        )}
-                        <details className="rounded border border-border bg-surface-primary/60 p-3">
-                            <summary className="cursor-pointer list-none text-[11px] text-text-tertiary">
-                                微信高级设置
-                            </summary>
-                            <div className="mt-3 space-y-3">
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">Relay 路径</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.endpointPath}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, endpointPath: e.target.value } }))}
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">Relay Token</label>
-                                    <PasswordInput
-                                        value={assistantDaemonDraft.weixin.authToken}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, authToken: e.target.value } }))}
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">微信账号 ID</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.accountId}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, accountId: e.target.value } }))}
-                                        placeholder="扫码成功后会自动写入，也可以手动指定"
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">Cursor 文件</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.cursorFile}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, cursorFile: e.target.value } }))}
-                                        placeholder="留空使用 redclaw/weixin-sidecar.cursor.json"
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">启动命令</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.sidecarCommand}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarCommand: e.target.value } }))}
-                                        placeholder="留空使用当前 Electron 运行时"
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">启动参数</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.sidecarArgs}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarArgs: e.target.value } }))}
-                                        placeholder="留空使用内置 bootstrap"
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">工作目录</label>
-                                    <input
-                                        type="text"
-                                        value={assistantDaemonDraft.weixin.sidecarCwd}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarCwd: e.target.value } }))}
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-text-secondary mb-1.5">sidecar 环境变量（JSON）</label>
-                                    <textarea
-                                        value={assistantDaemonDraft.weixin.sidecarEnvText}
-                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarEnvText: e.target.value } }))}
-                                        rows={4}
-                                        placeholder='{"HTTP_PROXY":"http://127.0.0.1:7890"}'
-                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-xs font-mono focus:outline-none focus:border-accent-primary"
-                                    />
-                                </div>
-                            </div>
-                        </details>
-                        <p className="text-[10px] text-text-tertiary">
-                            已改为使用正式版 `@weixin-claw/core`。默认直接复用当前 Electron 39 / Node 22 运行时，不再要求单独安装 `node22`。
-                        </p>
-                    </div>
-                </details>
-
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-text-primary">知识库导入</span>
                     <button
                         type="button"
-                        onClick={() => void handleSaveAssistantDaemonConfig()}
-                        disabled={assistantDaemonBusy}
-                        className="inline-flex items-center gap-2 px-3 py-2 bg-accent-primary text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                        onClick={() => void handleOpenKnowledgeApiGuide()}
+                        className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
                     >
-                        <Save className="w-3.5 h-3.5" />
-                        保存后台通信配置
+                        打开 API 文档
                     </button>
-                    <span className="text-[11px] text-text-tertiary">
-                        保存后不会自动重启现有进程；如改动了端口或接入方式，建议再点一次“启动值守/停止值守”。
-                    </span>
                 </div>
             </div>
+
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            开启后会把主进程日志、聊天日志和工具诊断日志写入本地日志文件，便于追踪 RedClaw 工具调用失败。
+                            开启后会保留当前运行期间的主进程日志、聊天日志和工具诊断日志预览，便于追踪 RedClaw 工具调用失败。
                         </p>
                     </div>
                     <button
                         type="button"
                         onClick={() => setFormData((prev: any) => ({ ...prev, debug_log_enabled: !prev.debug_log_enabled }))}
-                        className="ui-switch-track h-7 w-12"
+                        className="ui-switch-track"
+                        data-size="lg"
                         data-state={formData.debug_log_enabled ? 'on' : 'off'}
                     >
-                        <span
-                            className={clsx('ui-switch-thumb inline-block h-5 w-5', formData.debug_log_enabled ? 'translate-x-6' : 'translate-x-1')}
-                        />
+                        <span className="ui-switch-thumb" />
                     </button>
                 </div>
                 <div className="flex items-center gap-2">
@@ -860,7 +484,7 @@ function GeneralSettingsSectionInner({
                         onClick={() => void handleOpenDebugLogDir()}
                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                     >
-                        打开日志目录
+                        打开数据目录
                     </button>
                 </div>
                 <div className="rounded-lg border border-border bg-surface-primary/60 p-3">
@@ -875,6 +499,757 @@ function GeneralSettingsSectionInner({
 }
 
 export const GeneralSettingsSection = memo(GeneralSettingsSectionInner);
+
+type RemoteConnectionSubTab = 'api' | 'channels';
+type RemoteChannelId = 'feishu' | 'weixin';
+type RemotePlatformLogoId = 'telegram' | 'lark' | 'dingtalk' | 'weixin' | 'wecom' | 'slack' | 'discord';
+
+const REMOTE_PLATFORM_LOGO_PATHS: Record<RemotePlatformLogoId, { path: string; alt: string }> = {
+    telegram: { path: 'channel-logos/telegram.svg', alt: 'Telegram' },
+    lark: { path: 'channel-logos/lark.svg', alt: 'Lark' },
+    dingtalk: { path: 'channel-logos/dingtalk.svg', alt: '钉钉' },
+    weixin: { path: 'channel-logos/weixin.svg', alt: '微信' },
+    wecom: { path: 'channel-logos/wecom.svg', alt: '企业微信' },
+    slack: { path: 'channel-logos/slack.svg', alt: 'Slack' },
+    discord: { path: 'channel-logos/discord.svg', alt: 'Discord' },
+};
+
+const REMOTE_CHANNEL_TAB_LOGO_IDS: RemotePlatformLogoId[] = [
+    'lark',
+    'weixin',
+];
+
+const resolveRemotePlatformLogo = (id: RemotePlatformLogoId) => {
+    const logo = REMOTE_PLATFORM_LOGO_PATHS[id];
+    return {
+        ...logo,
+        src: resolveRuntimeAssetUrl(logo.path),
+    };
+};
+
+interface RemoteChannelCardProps {
+    id: RemoteChannelId;
+    title: string;
+    description: string;
+    enabled: boolean;
+    expanded: boolean;
+    onToggleExpanded: (id: RemoteChannelId) => void;
+    onToggleEnabled?: () => void;
+    iconSrc?: string;
+    iconAlt?: string;
+    iconNode?: ReactNode;
+    badgeLabel?: string;
+    badgeToneClassName?: string;
+    toggleDisabled?: boolean;
+    children: ReactNode;
+}
+
+type ApiSectionId = 'overview' | 'daemon' | 'listen' | 'status' | 'logs';
+
+interface ApiSectionCardProps {
+    title: string;
+    eyebrow?: string;
+    description: string;
+    expanded: boolean;
+    onToggle: () => void;
+    actions?: ReactNode;
+    children?: ReactNode;
+}
+
+function ApiSectionCard({
+    title,
+    eyebrow,
+    description,
+    expanded,
+    onToggle,
+    actions,
+    children,
+}: ApiSectionCardProps) {
+    return (
+        <section className={clsx(
+            'overflow-hidden rounded-[22px] border border-border bg-surface-primary/90 shadow-[0_14px_32px_rgba(15,23,42,0.045)] transition-colors',
+            expanded && 'border-accent-primary/30',
+        )}>
+            <div className="flex items-start gap-3 px-4 py-3.5 sm:px-5">
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                >
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                        <ChevronDown className={clsx('h-4 w-4 transition-transform', expanded ? 'rotate-0' : '-rotate-90')} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                        {eyebrow && (
+                            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-tertiary">{eyebrow}</div>
+                        )}
+                        <h3 className="mt-1 text-sm font-medium text-text-primary">{title}</h3>
+                        <p className="mt-1 text-xs leading-5 text-text-secondary">{description}</p>
+                    </div>
+                </button>
+                {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+            </div>
+            {expanded && children && (
+                <div className="border-t border-border/70 bg-surface-secondary/10 px-4 py-4 sm:px-5">
+                    {children}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function RemoteChannelCard({
+    id,
+    title,
+    description,
+    enabled,
+    expanded,
+    onToggleExpanded,
+    onToggleEnabled,
+    iconSrc,
+    iconAlt,
+    iconNode,
+    badgeLabel,
+    badgeToneClassName,
+    toggleDisabled,
+    children,
+}: RemoteChannelCardProps) {
+    const showToggle = Boolean(onToggleEnabled) || toggleDisabled;
+    return (
+        <div className={clsx(
+            'overflow-hidden rounded-[24px] border border-border bg-surface-primary/80 shadow-[0_18px_40px_rgba(15,23,42,0.06)] transition-colors',
+            expanded && 'border-accent-primary/40',
+        )}>
+            <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
+                <button
+                    type="button"
+                    onClick={() => onToggleExpanded(id)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                        <ChevronDown className={clsx('h-4 w-4 transition-transform', expanded ? 'rotate-0' : '-rotate-90')} />
+                    </span>
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                        {iconSrc ? (
+                            <img src={iconSrc} alt={iconAlt || title} className="h-4.5 w-4.5 object-contain" />
+                        ) : iconNode ? (
+                            <span className="text-text-secondary">{iconNode}</span>
+                        ) : null}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate text-sm font-medium text-text-primary">{title}</h3>
+                            {badgeLabel && (
+                                <span className={clsx(
+                                    'inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-medium',
+                                    badgeToneClassName || 'border-border bg-surface-secondary/40 text-text-tertiary',
+                                )}>
+                                    {badgeLabel}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                    {showToggle && (
+                        <button
+                            type="button"
+                            onClick={onToggleEnabled}
+                            disabled={toggleDisabled || !onToggleEnabled}
+                            className="ui-switch-track disabled:cursor-not-allowed disabled:opacity-55"
+                            data-size="md"
+                            data-state={enabled ? 'on' : 'off'}
+                            aria-label={`${title} 开关`}
+                            aria-disabled={toggleDisabled || !onToggleEnabled ? true : undefined}
+                        >
+                            <span className="ui-switch-thumb" />
+                        </button>
+                    )}
+                </div>
+            </div>
+            {expanded && (
+                <div className="border-t border-border/80 bg-surface-secondary/10 px-4 py-3.5 sm:px-5">
+                    <p className="mb-3 text-xs leading-5 text-text-secondary">{description}</p>
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function RemoteConnectionSettingsSectionInner({
+    assistantDaemonStatus,
+    assistantDaemonDraft,
+    setAssistantDaemonDraft,
+    assistantDaemonLogs,
+    assistantDaemonBusy,
+    assistantDaemonWeixinLogin,
+    assistantDaemonWeixinLoginBusy,
+    handleReloadAssistantDaemonStatus,
+    handleSaveAssistantDaemonConfig,
+    handleStartAssistantDaemon,
+    handleStopAssistantDaemon,
+    handleStartAssistantDaemonWeixinLogin,
+    handleCheckAssistantDaemonWeixinLogin,
+    handleClearAssistantDaemonWeixinLogin,
+}: RemoteConnectionSettingsSectionProps) {
+    const [activeSubTab, setActiveSubTab] = useState<RemoteConnectionSubTab>('channels');
+    const [expandedChannelId, setExpandedChannelId] = useState<RemoteChannelId | null>('weixin');
+    const [expandedApiSections, setExpandedApiSections] = useState<Record<ApiSectionId, boolean>>({
+        overview: true,
+        daemon: true,
+        listen: true,
+        status: true,
+        logs: true,
+    });
+    const assistantDaemonLogText = useMemo(
+        () => (assistantDaemonLogs.length ? assistantDaemonLogs.join('\n') : '暂无 daemon 日志。'),
+        [assistantDaemonLogs],
+    );
+    const handleToggleExpandedChannel = (id: RemoteChannelId) => {
+        setExpandedChannelId((current) => current === id ? null : id);
+    };
+    const handleToggleApiSection = (id: ApiSectionId) => {
+        setExpandedApiSections((current) => ({ ...current, [id]: !current[id] }));
+    };
+
+    return (
+        <section className="space-y-6">
+            <div className="flex justify-center">
+                <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/40 p-1 shadow-sm">
+                    <button
+                        type="button"
+                        onClick={() => setActiveSubTab('api')}
+                        className={clsx(
+                            'inline-flex items-center gap-2 rounded-full px-5 py-2 text-xs transition-colors',
+                            activeSubTab === 'api'
+                                ? 'border border-border bg-surface-primary text-text-primary shadow-sm'
+                                : 'text-text-secondary hover:text-text-primary',
+                        )}
+                    >
+                        <Database className="h-4 w-4" />
+                        API
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setActiveSubTab('channels')}
+                        className={clsx(
+                            'inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs transition-colors',
+                            activeSubTab === 'channels'
+                                ? 'border border-border bg-surface-primary text-text-primary shadow-sm'
+                                : 'text-text-secondary hover:text-text-primary',
+                        )}
+                    >
+                        <MessageSquareText className="h-4 w-4" />
+                        <span>频道</span>
+                        <span className="hidden items-center gap-1.5 sm:inline-flex">
+                            {REMOTE_CHANNEL_TAB_LOGO_IDS.map((logoId) => {
+                                const logo = resolveRemotePlatformLogo(logoId);
+                                return (
+                                    <span
+                                        key={logoId}
+                                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-border/70 bg-surface-primary/80"
+                                        title={logo.alt}
+                                        aria-label={logo.alt}
+                                    >
+                                        <img src={logo.src} alt={logo.alt} className="h-3.5 w-3.5 object-contain" />
+                                    </span>
+                                );
+                            })}
+                        </span>
+                    </button>
+                </div>
+            </div>
+
+            {activeSubTab === 'api' ? (
+                <div className="space-y-4">
+                    <ApiSectionCard
+                        title="远程 API 与后台值守"
+                        eyebrow="概览"
+                        description="管理本地监听地址、后台常驻与第三方接入方式。"
+                        expanded={expandedApiSections.overview}
+                        onToggle={() => handleToggleApiSection('overview')}
+                        actions={(
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleReloadAssistantDaemonStatus()}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-3 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary"
+                                >
+                                    <RefreshCw className="h-3 w-3" />
+                                    刷新
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSaveAssistantDaemonConfig()}
+                                    disabled={assistantDaemonBusy}
+                                    className="inline-flex items-center gap-1.5 rounded-full bg-accent-primary px-3 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                >
+                                    <Save className="h-3 w-3" />
+                                    保存
+                                </button>
+                            </>
+                        )}
+                    >
+                        <div className="flex flex-wrap gap-2">
+                            <span className={clsx(
+                                'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium',
+                                assistantDaemonDraft.enabled
+                                    ? 'border-sky-300/70 bg-sky-500/10 text-sky-700'
+                                    : 'border-border bg-surface-secondary/60 text-text-tertiary',
+                            )}>
+                                后台值守 {assistantDaemonDraft.enabled ? '已开启' : '已关闭'}
+                            </span>
+                            <span className="inline-flex items-center rounded-full border border-border bg-surface-secondary/50 px-2.5 py-1 text-[10px] font-medium text-text-secondary">
+                                监听 {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
+                            </span>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="后台值守"
+                        eyebrow="Step 1"
+                        description="控制后台进程常驻、任务处理与远程入口的长期运行方式。"
+                        expanded={expandedApiSections.daemon}
+                        onToggle={() => handleToggleApiSection('daemon')}
+                        actions={(
+                            <button
+                                type="button"
+                                onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, enabled: !prev.enabled }))}
+                                className="ui-switch-track"
+                                data-size="md"
+                                data-state={assistantDaemonDraft.enabled ? 'on' : 'off'}
+                                aria-label="后台值守开关"
+                            >
+                                <span className="ui-switch-thumb" />
+                            </button>
+                        )}
+                    >
+                        <div className="space-y-2.5">
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div>
+                                    <div className="text-sm font-medium text-text-primary">开机自动启用</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">适合长期运行的本机环境。</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, autoStart: !prev.autoStart }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.autoStart ? 'on' : 'off'}
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between rounded-[16px] border border-border bg-surface-secondary/20 px-3.5 py-3">
+                                <div>
+                                    <div className="text-sm font-medium text-text-primary">关闭窗口后继续后台运行</div>
+                                    <div className="mt-1 text-[11px] text-text-tertiary">适合扫码接入和常驻消息处理。</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssistantDaemonDraft((prev) => ({ ...prev, keepAliveWhenNoWindow: !prev.keepAliveWhenNoWindow }))}
+                                    className="ui-switch-track"
+                                    data-size="md"
+                                    data-state={assistantDaemonDraft.keepAliveWhenNoWindow ? 'on' : 'off'}
+                                >
+                                    <span className="ui-switch-thumb" />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                            {assistantDaemonStatus?.enabled ? (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleStopAssistantDaemon()}
+                                    disabled={assistantDaemonBusy}
+                                    className="rounded-full border border-red-300 px-3.5 py-1.5 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
+                                >
+                                    停止值守
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleStartAssistantDaemon()}
+                                    disabled={assistantDaemonBusy}
+                                    className="rounded-full bg-accent-primary px-3.5 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                >
+                                    启动值守
+                                </button>
+                            )}
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="监听配置"
+                        eyebrow="Step 3"
+                        description="API、Webhook 和频道接入都复用这组监听地址。"
+                        expanded={expandedApiSections.listen}
+                        onToggle={() => handleToggleApiSection('listen')}
+                    >
+                        <div className="space-y-3">
+                            <div>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听地址</label>
+                                <input
+                                    type="text"
+                                    value={assistantDaemonDraft.host}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, host: e.target.value }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="mb-1.5 block text-xs font-medium text-text-secondary">监听端口</label>
+                                <input
+                                    type="number"
+                                    value={assistantDaemonDraft.port}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, port: e.target.value }))}
+                                    className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                />
+                            </div>
+                        </div>
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="运行状态"
+                        eyebrow="Step 4"
+                        description="观察当前值守实例、监听状态和任务负载。"
+                        expanded={expandedApiSections.status}
+                        onToggle={() => handleToggleApiSection('status')}
+                    >
+                        <div className="flex flex-wrap gap-2.5">
+                            <div className="min-w-[200px] flex-1 rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">入口地址</div>
+                                <div className="mt-1.5 break-all text-sm font-medium text-text-primary">
+                                    {String(assistantDaemonDraft.host || '').trim() || '127.0.0.1'}:{String(assistantDaemonDraft.port || '').trim() || '31937'}
+                                </div>
+                                <p className="mt-1 text-[11px] text-text-tertiary">
+                                    {assistantDaemonStatus?.listening ? '监听中' : '未监听'}
+                                </p>
+                            </div>
+                            <div className="min-w-[200px] flex-1 rounded-[16px] border border-border bg-surface-secondary/20 p-3.5">
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-text-tertiary">任务负载</div>
+                                <div className="mt-1.5 text-sm font-medium text-text-primary">
+                                    {assistantDaemonStatus?.activeTaskCount ?? 0} 处理中 / {assistantDaemonStatus?.queuedPeerCount ?? 0} 排队
+                                </div>
+                                <p className="mt-1 text-[11px] text-text-tertiary">当前任务状态。</p>
+                            </div>
+                        </div>
+
+                        {assistantDaemonStatus?.blockedBy && (
+                            <div className="mt-3 rounded-[16px] border border-amber-300 bg-amber-500/10 px-3.5 py-3 text-[11px] text-amber-700">
+                                当前实例未持有后台锁：{assistantDaemonStatus.blockedBy}
+                            </div>
+                        )}
+                        {assistantDaemonStatus?.lastError && (
+                            <div className="mt-3 rounded-[16px] border border-red-300 bg-red-500/10 px-3.5 py-3 text-[11px] text-red-600">
+                                最近错误：{assistantDaemonStatus.lastError}
+                            </div>
+                        )}
+                    </ApiSectionCard>
+
+                    <ApiSectionCard
+                        title="最近 daemon 日志"
+                        eyebrow="Step 5"
+                        description="只保留最近的后台日志，便于快速定位远程连接问题。"
+                        expanded={expandedApiSections.logs}
+                        onToggle={() => handleToggleApiSection('logs')}
+                    >
+                        <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-[16px] border border-border bg-surface-secondary/25 p-3 text-[11px] leading-5 text-text-secondary">
+                            {assistantDaemonLogText}
+                        </pre>
+                    </ApiSectionCard>
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    <div className="px-1 pb-2 pt-1">
+                        <h3 className="text-[28px] font-medium tracking-[0.01em] text-text-primary">渠道配置</h3>
+                        <p className="mt-8 text-lg leading-8 text-text-secondary">
+                            连接飞书、微信等渠道。
+                        </p>
+                        <div className="mt-6 flex flex-col gap-3 text-sm text-text-secondary md:flex-row md:flex-wrap md:items-center md:gap-6">
+                            <div className="flex items-center gap-3">
+                                <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-full bg-surface-secondary px-2 text-sm font-semibold text-text-primary">1</span>
+                                <span>选择一个渠道并完成凭据配置。</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-full bg-surface-secondary px-2 text-sm font-semibold text-text-primary">2</span>
+                                <span>启用该渠道后，即可开始收发远程消息。</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <RemoteChannelCard
+                        id="feishu"
+                        title="飞书"
+                        description="配置飞书接入参数。"
+                        enabled={assistantDaemonDraft.feishu.enabled}
+                        expanded={expandedChannelId === 'feishu'}
+                        onToggleExpanded={handleToggleExpandedChannel}
+                        onToggleEnabled={() => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, enabled: !prev.feishu.enabled } }))}
+                        iconSrc={resolveRemotePlatformLogo('lark').src}
+                        iconAlt="飞书"
+                    >
+                        <div className="space-y-4">
+                            <div className="rounded-2xl border border-border bg-surface-primary/70 p-4 text-xs leading-6 text-text-secondary">
+                                {assistantDaemonDraft.feishu.receiveMode === 'websocket'
+                                    ? assistantDaemonStatus?.feishu?.websocketRunning
+                                        ? '长连接已建立。'
+                                        : `等待建立长连接${assistantDaemonStatus?.feishu?.websocketReconnectAt ? `；下次重连 ${new Date(assistantDaemonStatus.feishu.websocketReconnectAt).toLocaleString()}` : '。'}`
+                                    : `当前 Webhook 地址：${assistantDaemonStatus?.feishu?.webhookUrl || '未生成'}`}
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">接收模式</label>
+                                    <select
+                                        value={assistantDaemonDraft.feishu.receiveMode}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, receiveMode: e.target.value as 'webhook' | 'websocket' } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    >
+                                        <option value="webhook">Webhook</option>
+                                        <option value="websocket">官方长连接</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">事件路径</label>
+                                    <input
+                                        type="text"
+                                        value={assistantDaemonDraft.feishu.endpointPath}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, endpointPath: e.target.value } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">App ID</label>
+                                    <input
+                                        type="text"
+                                        value={assistantDaemonDraft.feishu.appId}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, appId: e.target.value } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">App Secret</label>
+                                    <PasswordInput
+                                        value={assistantDaemonDraft.feishu.appSecret}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, appSecret: e.target.value } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Verification Token</label>
+                                    <PasswordInput
+                                        value={assistantDaemonDraft.feishu.verificationToken}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, verificationToken: e.target.value } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Encrypt Key</label>
+                                    <PasswordInput
+                                        value={assistantDaemonDraft.feishu.encryptKey}
+                                        onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, encryptKey: e.target.value } }))}
+                                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                    />
+                                </div>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={assistantDaemonDraft.feishu.replyUsingChatId}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, feishu: { ...prev.feishu, replyUsingChatId: e.target.checked } }))}
+                                    className="rounded border-border"
+                                />
+                                优先按 chat_id 回复
+                            </label>
+                        </div>
+                    </RemoteChannelCard>
+
+                    <RemoteChannelCard
+                        id="weixin"
+                        title="微信 sidecar"
+                        description="扫码登录并配置微信接入。"
+                        enabled={assistantDaemonDraft.weixin.enabled}
+                        expanded={expandedChannelId === 'weixin'}
+                        onToggleExpanded={handleToggleExpandedChannel}
+                        onToggleEnabled={() => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, enabled: !prev.weixin.enabled } }))}
+                        iconSrc={resolveRemotePlatformLogo('weixin').src}
+                        iconAlt="微信"
+                    >
+                        <div className="space-y-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleStartAssistantDaemonWeixinLogin()}
+                                    disabled={assistantDaemonWeixinLoginBusy}
+                                    className="rounded-full border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                >
+                                    开始扫码
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleCheckAssistantDaemonWeixinLogin()}
+                                    disabled={assistantDaemonWeixinLoginBusy || !assistantDaemonWeixinLogin?.sessionKey}
+                                    className="rounded-full border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                >
+                                    检查登录结果
+                                </button>
+                                {assistantDaemonWeixinLogin && (
+                                    <button
+                                        type="button"
+                                        onClick={handleClearAssistantDaemonWeixinLogin}
+                                        className="rounded-full border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-secondary"
+                                    >
+                                        清空二维码
+                                    </button>
+                                )}
+                            </div>
+
+                            {assistantDaemonWeixinLogin?.message && (
+                                <p className="text-xs text-text-tertiary">{assistantDaemonWeixinLogin.message}</p>
+                            )}
+
+                            {!assistantDaemonWeixinLogin?.qrcodeUrl && (
+                                <p className="text-[11px] leading-5 text-text-tertiary">
+                                    如果这里直接报 `fetch failed`，通常不是扫码逻辑本身有问题，而是当前机器访问 `https://ilinkai.weixin.qq.com` 失败。先在“常规设置”里配好全局代理，再保存设置后重试。
+                                </p>
+                            )}
+
+                            {assistantDaemonWeixinLogin?.qrcodeUrl && (
+                                <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-secondary/20 p-4 md:flex-row md:items-center">
+                                    <img
+                                        src={assistantDaemonWeixinLogin.qrcodeImageUrl || assistantDaemonWeixinLogin.qrcodeUrl}
+                                        alt="微信登录二维码"
+                                        className="h-40 w-40 rounded-xl border border-border bg-surface-primary/70 object-contain p-2"
+                                    />
+                                    <div className="space-y-2 text-xs text-text-tertiary">
+                                        <div>使用微信扫码完成设备登录。</div>
+                                        <div className="break-all">{assistantDaemonWeixinLogin.qrcodeUrl}</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <label className="flex items-center gap-2 text-xs text-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={assistantDaemonDraft.weixin.autoStartSidecar}
+                                    onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, autoStartSidecar: e.target.checked } }))}
+                                    className="rounded border-border"
+                                />
+                                daemon 启动时自动拉起微信 sidecar
+                            </label>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div className="rounded-2xl border border-border bg-surface-secondary/20 p-4 text-xs text-text-tertiary">
+                                    当前登录：{assistantDaemonStatus?.weixin?.connected ? '已连接' : '未连接'}
+                                    {assistantDaemonStatus?.weixin?.accountId ? ` / ${assistantDaemonStatus.weixin.accountId}` : ''}
+                                    {assistantDaemonStatus?.weixin?.userId ? ` / 用户 ${assistantDaemonStatus.weixin.userId}` : ''}
+                                </div>
+                                <div className="rounded-2xl border border-border bg-surface-secondary/20 p-4 text-xs text-text-tertiary">
+                                    状态目录：
+                                    <code className="ml-1 rounded bg-surface-secondary px-1.5 py-0.5">
+                                        {assistantDaemonStatus?.weixin?.stateDir || '未初始化'}
+                                    </code>
+                                </div>
+                            </div>
+
+                            {!!assistantDaemonStatus?.weixin?.availableAccountIds?.length && (
+                                <div className="text-[11px] text-text-tertiary">
+                                    已保存账号：{assistantDaemonStatus.weixin?.availableAccountIds?.join(', ')}
+                                </div>
+                            )}
+
+                            <details className="rounded-2xl border border-border bg-surface-primary/70 p-4">
+                                <summary className="cursor-pointer list-none text-xs font-medium text-text-secondary">微信高级设置</summary>
+                                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Relay 路径</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.endpointPath}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, endpointPath: e.target.value } }))}
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Relay Token</label>
+                                        <PasswordInput
+                                            value={assistantDaemonDraft.weixin.authToken}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, authToken: e.target.value } }))}
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">微信账号 ID</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.accountId}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, accountId: e.target.value } }))}
+                                            placeholder="可手动填写"
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Cursor 文件</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.cursorFile}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, cursorFile: e.target.value } }))}
+                                            placeholder="留空使用 redclaw/weixin-sidecar.cursor.json"
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">启动命令</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.sidecarCommand}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarCommand: e.target.value } }))}
+                                            placeholder="留空使用当前 Electron 运行时"
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">启动参数</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.sidecarArgs}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarArgs: e.target.value } }))}
+                                            placeholder="留空使用内置 bootstrap"
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">工作目录</label>
+                                        <input
+                                            type="text"
+                                            value={assistantDaemonDraft.weixin.sidecarCwd}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarCwd: e.target.value } }))}
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">sidecar 环境变量（JSON）</label>
+                                        <textarea
+                                            value={assistantDaemonDraft.weixin.sidecarEnvText}
+                                            onChange={(e) => setAssistantDaemonDraft((prev) => ({ ...prev, weixin: { ...prev.weixin, sidecarEnvText: e.target.value } }))}
+                                            rows={4}
+                                            placeholder='{"HTTP_PROXY":"http://127.0.0.1:7890"}'
+                                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-xs font-mono focus:border-accent-primary focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+                            </details>
+
+                        </div>
+                    </RemoteChannelCard>
+                </div>
+            )}
+        </section>
+    );
+}
+
+export const RemoteConnectionSettingsSection = memo(RemoteConnectionSettingsSectionInner);
 
 interface MemorySettingsSectionProps {
     newMemoryType: UserMemory['type'];
@@ -1288,58 +1663,6 @@ export function MemorySettingsSection({
     );
 }
 
-interface KnowledgeSettingsSectionProps {
-    vectorStats: { documents?: number; vectors?: number } | null;
-    handleRebuildIndex: () => Promise<void>;
-    isRebuilding: boolean;
-}
-
-export function KnowledgeSettingsSection({ vectorStats, handleRebuildIndex, isRebuilding }: KnowledgeSettingsSectionProps) {
-    return (
-        <section className="space-y-6">
-            <h2 className="text-lg font-medium text-text-primary mb-6">知识库索引管理</h2>
-
-            <div className="grid grid-cols-2 gap-4">
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="text-xs text-text-tertiary mb-1">已索引文档</div>
-                    <div className="text-2xl font-bold text-text-primary">
-                        {vectorStats?.documents || 0}
-                    </div>
-                </div>
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="text-xs text-text-tertiary mb-1">向量切片数</div>
-                    <div className="text-2xl font-bold text-text-primary">
-                        {vectorStats?.vectors || 0}
-                    </div>
-                </div>
-            </div>
-
-            <div className="bg-surface-secondary/20 rounded-lg border border-border p-4">
-                <h3 className="text-sm font-medium text-text-primary mb-2 flex items-center gap-2">
-                    <Database className="w-4 h-4" />
-                    索引操作
-                </h3>
-                <p className="text-xs text-text-tertiary mb-4">
-                    如果发现检索结果不准确或知识库内容未更新，可以尝试重建索引。
-                    此操作会清空当前所有向量数据并重新扫描知识库文件。
-                </p>
-
-                <div className="flex gap-3">
-                    <button
-                        type="button"
-                        onClick={() => void handleRebuildIndex()}
-                        disabled={isRebuilding}
-                        className="flex items-center px-4 py-2 border border-red-200 bg-red-50/50 text-red-600 text-xs font-medium rounded hover:bg-red-100/50 transition-colors disabled:opacity-50"
-                    >
-                        {isRebuilding ? <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
-                        {isRebuilding ? '重建中...' : '重建所有索引'}
-                    </button>
-                </div>
-            </div>
-        </section>
-    );
-}
-
 interface ToolsSettingsSectionProps {
     isSyncingMcp: boolean;
     handleDiscoverAndImportMcp: () => Promise<void>;
@@ -1378,10 +1701,33 @@ interface ToolsSettingsSectionProps {
     handleRefreshToolDiagnostics: () => Promise<void>;
     handleRunAllDirectToolDiagnostics: () => Promise<void>;
     handleRunAllAiToolDiagnostics: () => Promise<void>;
+    runtimePerfPresets: RuntimePerfPreset[];
+    runtimePerfMode: RuntimePerfBenchmarkMode;
+    setRuntimePerfMode: Dispatch<SetStateAction<RuntimePerfBenchmarkMode>>;
+    runtimePerfPresetId: string;
+    setRuntimePerfPresetId: Dispatch<SetStateAction<string>>;
+    runtimePerfMessage: string;
+    setRuntimePerfMessage: Dispatch<SetStateAction<string>>;
+    runtimePerfIterations: number;
+    setRuntimePerfIterations: Dispatch<SetStateAction<number>>;
+    runtimePerfResults: RuntimePerfRunResult[];
+    activeRuntimePerfRunId: string;
+    isRuntimePerfRunning: boolean;
+    runtimePerfStatusMessage: string;
+    handleApplyRuntimePerfPreset: (presetId: string) => void;
+    handleRunRuntimePerfBenchmark: () => Promise<void>;
+    handleClearRuntimePerfResults: () => void;
     runtimeTasks: AgentTaskSnapshot[];
     runtimeRoles: RoleSpec[];
+    runtimeDiagnosticsSummary: RuntimeDiagnosticsSummary | null;
     runtimeSessions: Array<{
         id: string;
+        runtimeMode?: string;
+        contextBinding?: {
+            contextType?: string;
+            contextId?: string;
+            isContextBound?: boolean;
+        } | null;
         transcriptCount: number;
         checkpointCount: number;
         chatSession?: { id: string; title?: string; updatedAt?: string } | null;
@@ -1422,8 +1768,8 @@ interface ToolsSettingsSectionProps {
     }>;
     runtimeDraftInput: string;
     setRuntimeDraftInput: Dispatch<SetStateAction<string>>;
-    runtimeDraftMode: 'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance';
-    setRuntimeDraftMode: Dispatch<SetStateAction<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance'>>;
+    runtimeDraftMode: 'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics';
+    setRuntimeDraftMode: Dispatch<SetStateAction<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>>;
     isRuntimeLoading: boolean;
     isRuntimeTraceLoading: boolean;
     isRuntimeSessionLoading: boolean;
@@ -1476,8 +1822,25 @@ export function ToolsSettingsSection({
     handleRefreshToolDiagnostics,
     handleRunAllDirectToolDiagnostics,
     handleRunAllAiToolDiagnostics,
+    runtimePerfPresets,
+    runtimePerfMode,
+    setRuntimePerfMode,
+    runtimePerfPresetId,
+    setRuntimePerfPresetId,
+    runtimePerfMessage,
+    setRuntimePerfMessage,
+    runtimePerfIterations,
+    setRuntimePerfIterations,
+    runtimePerfResults,
+    activeRuntimePerfRunId,
+    isRuntimePerfRunning,
+    runtimePerfStatusMessage,
+    handleApplyRuntimePerfPreset,
+    handleRunRuntimePerfBenchmark,
+    handleClearRuntimePerfResults,
     runtimeTasks,
     runtimeRoles,
+    runtimeDiagnosticsSummary,
     runtimeSessions,
     backgroundTasks,
     backgroundWorkerPool,
@@ -1509,6 +1872,7 @@ export function ToolsSettingsSection({
     handleCancelRuntimeTask,
     handleCancelBackgroundTask,
 }: ToolsSettingsSectionProps) {
+    const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -1516,6 +1880,49 @@ export function ToolsSettingsSection({
             ) as Record<string, McpSessionState | null>,
         [mcpRuntimeItems],
     );
+
+    const runtimeSessionSourceLabel = (session: {
+        id: string;
+        runtimeMode?: string;
+        contextBinding?: { contextType?: string | null } | null;
+    }) => {
+        const runtimeMode = String(session.runtimeMode || '').trim();
+        const contextType = String(session.contextBinding?.contextType || '').trim();
+        if (runtimeMode === 'wander' || contextType === 'wander' || session.id.startsWith('session_wander_')) {
+            return 'wander';
+        }
+        if (runtimeMode === 'chatroom' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
+            return 'chatroom';
+        }
+        if (runtimeMode === 'video-editor') {
+            return 'video';
+        }
+        if (runtimeMode === 'audio-editor') {
+            return 'audio';
+        }
+        if (contextType === 'file' || contextType === 'theme' || contextType === 'project') {
+            return contextType;
+        }
+        return runtimeMode || contextType || 'chat';
+    };
+
+    const filteredRuntimeSessions = useMemo(() => {
+        const keyword = runtimeSessionQuery.trim().toLowerCase();
+        if (!keyword) return runtimeSessions;
+        return runtimeSessions.filter((session) => {
+            const haystack = [
+                session.id,
+                session.chatSession?.title,
+                session.runtimeMode,
+                session.contextBinding?.contextType,
+                runtimeSessionSourceLabel(session),
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+            return haystack.includes(keyword);
+        });
+    }, [runtimeSessionQuery, runtimeSessions]);
 
     const formatMcpTime = (value?: number) => {
         if (!value) return '未使用';
@@ -1541,6 +1948,118 @@ export function ToolsSettingsSection({
     const selectedRuntimeTask = runtimeTasks.find((task) => task.id === selectedRuntimeTaskId) || null;
     const selectedRuntimeSession = runtimeSessions.find((session) => session.id === selectedRuntimeSessionId) || null;
     const selectedBackgroundTask = backgroundTasks.find((task) => task.id === selectedBackgroundTaskId) || null;
+
+    const runtimeSessionMetaText = useMemo(() => {
+        if (!selectedRuntimeSession) return '';
+        return [
+            `session: ${selectedRuntimeSession.id}`,
+            `title: ${selectedRuntimeSession.chatSession?.title || selectedRuntimeSession.id}`,
+            `source: ${runtimeSessionSourceLabel(selectedRuntimeSession)}`,
+            selectedRuntimeSession.runtimeMode ? `runtimeMode: ${selectedRuntimeSession.runtimeMode}` : '',
+            selectedRuntimeSession.contextBinding?.contextType ? `contextType: ${selectedRuntimeSession.contextBinding.contextType}` : '',
+            selectedRuntimeSession.contextBinding?.contextId ? `contextId: ${selectedRuntimeSession.contextBinding.contextId}` : '',
+            selectedRuntimeSession.chatSession?.updatedAt ? `updatedAt: ${new Date(selectedRuntimeSession.chatSession.updatedAt).toLocaleString()}` : '',
+            `transcriptCount: ${selectedRuntimeSession.transcriptCount}`,
+            `checkpointCount: ${selectedRuntimeSession.checkpointCount}`,
+            `toolResultCount: ${runtimeSessionToolResults.length}`,
+        ].filter(Boolean).join('\n');
+    }, [runtimeSessionToolResults.length, selectedRuntimeSession]);
+
+    const runtimeSessionCheckpointsText = useMemo(() => {
+        if (runtimeSessionCheckpoints.length === 0) return '暂无 checkpoint。';
+        return runtimeSessionCheckpoints.map((checkpoint, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(checkpoint.createdAt).toLocaleString()}`,
+            `type: ${checkpoint.checkpointType}`,
+            `summary: ${checkpoint.summary || '(empty)'}`,
+            checkpoint.payload ? `payload:\n${JSON.stringify(checkpoint.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionCheckpoints]);
+
+    const runtimeSessionTranscriptText = useMemo(() => {
+        if (runtimeSessionTranscript.length === 0) return '暂无 transcript。';
+        return runtimeSessionTranscript.map((item, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(item.createdAt).toLocaleString()}`,
+            `recordType: ${item.recordType}`,
+            `role: ${item.role}`,
+            `content:\n${item.content || '(empty)'}`,
+            item.payload ? `payload:\n${JSON.stringify(item.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionTranscript]);
+
+    const runtimeSessionToolResultsText = useMemo(() => {
+        if (runtimeSessionToolResults.length === 0) return '暂无完整 tool result 记录。';
+        return runtimeSessionToolResults.map((item, index) => [
+            `#${index + 1}`,
+            `time: ${new Date(item.createdAt).toLocaleString()}`,
+            `tool: ${item.toolName}`,
+            `status: ${item.success ? 'success' : 'error'}`,
+            `callId: ${item.callId}`,
+            item.command ? `command: ${item.command}` : '',
+            item.truncated ? `budget: ${item.originalChars ?? 0} -> ${item.promptChars ?? 0}` : 'budget: full',
+            item.promptText ? `promptText:\n${item.promptText}` : '',
+            item.summaryText ? `summaryText:\n${item.summaryText}` : '',
+            item.resultText ? `resultText:\n${item.resultText}` : '',
+            item.payload ? `payload:\n${JSON.stringify(item.payload, null, 2)}` : '',
+        ].filter(Boolean).join('\n')).join('\n\n');
+    }, [runtimeSessionToolResults]);
+
+    const runtimeSessionFullLogText = useMemo(() => {
+        if (!selectedRuntimeSession) return '';
+        return [
+            '[Session]',
+            runtimeSessionMetaText,
+            '',
+            '[Checkpoints]',
+            runtimeSessionCheckpointsText,
+            '',
+            '[Transcript]',
+            runtimeSessionTranscriptText,
+            '',
+            '[Tool Results]',
+            runtimeSessionToolResultsText,
+        ].join('\n');
+    }, [
+        runtimeSessionCheckpointsText,
+        runtimeSessionMetaText,
+        runtimeSessionToolResultsText,
+        runtimeSessionTranscriptText,
+        selectedRuntimeSession,
+    ]);
+
+    const selectedRuntimePerfPreset = useMemo(
+        () => runtimePerfPresets.find((item) => item.id === runtimePerfPresetId) || runtimePerfPresets[0] || null,
+        [runtimePerfPresetId, runtimePerfPresets],
+    );
+
+    const runtimePerfSummary = useMemo(() => {
+        const completedRuns = runtimePerfResults.filter((item) => item.status === 'completed');
+        if (completedRuns.length === 0) {
+            return null;
+        }
+        const average = (values: number[]) => {
+            if (values.length === 0) return 0;
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        };
+        const completedCount = completedRuns.length;
+        const toolCallCount = completedRuns.reduce((sum, item) => sum + item.toolCalls, 0);
+        const toolSuccessCount = completedRuns.reduce((sum, item) => sum + item.toolSuccessCount, 0);
+        return {
+            completedCount,
+            avgTotalElapsedMs: average(completedRuns.map((item) => item.totalElapsedMs || 0)),
+            avgFirstResponseMs: average(completedRuns.map((item) => item.firstResponseMs || 0).filter((item) => item > 0)),
+            avgThinkingStartedMs: average(completedRuns.map((item) => item.thinkingStartedMs || 0).filter((item) => item > 0)),
+            avgPromptChars: average(completedRuns.map((item) => item.promptChars || 0).filter((item) => item > 0)),
+            avgResponseChars: average(completedRuns.map((item) => item.responseChars || 0).filter((item) => item > 0)),
+            toolSuccessRate: toolCallCount > 0 ? toolSuccessCount / toolCallCount : 0,
+        };
+    }, [runtimePerfResults]);
+
+    const runtimePerfResultsText = useMemo(() => {
+        if (runtimePerfResults.length === 0) return '暂无 benchmark 结果。';
+        return JSON.stringify(runtimePerfResults, null, 2);
+    }, [runtimePerfResults]);
 
     const availabilityLabel = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
@@ -1874,12 +2393,13 @@ export function ToolsSettingsSection({
                         <div className="mt-2 text-[10px] text-text-tertiary font-mono space-y-1">
                             <div>状态: {browserPluginStatus?.bundled ? '内置资源可用' : (browserPluginStatus?.error || '插件资源缺失')}</div>
                             <div>内置路径: {browserPluginStatus?.bundledPath || '未解析到'}</div>
-                            <div>导出目录: {browserPluginStatus?.exportPath || '尚未生成'}</div>
+                            <div>外层目录: {browserPluginStatus?.exportPath || '尚未生成'}</div>
+                            <div>插件目录: {browserPluginStatus?.pluginPath || '尚未生成'}</div>
                         </div>
                         <div className="mt-3 text-[11px] text-text-secondary space-y-1">
                             <div>1. 点击“一键准备插件”</div>
-                            <div>2. 在 Chrome / Edge 打开扩展管理页并开启开发者模式</div>
-                            <div>3. 点击“加载已解压的扩展程序”，选择上方导出目录</div>
+                            <div>2. 在 Chrome 或 Edge 打开扩展管理页并开启开发者模式</div>
+                            <div>3. 把“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹</div>
                         </div>
                     </div>
                     <div className="flex flex-col gap-2 shrink-0">
@@ -1970,6 +2490,454 @@ export function ToolsSettingsSection({
                     <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                         <div className="flex items-start justify-between gap-3">
                             <div>
+                                <h3 className="text-sm font-medium text-text-primary">阶段 0 基线观测</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    汇总成员 persona 生成、知识导入、runtime 查询、skill 激活和工具调用的最近 100 条基线数据。
+                                </p>
+                            </div>
+                            <div className="text-[11px] text-text-tertiary">
+                                {runtimeDiagnosticsSummary?.generatedAt
+                                    ? `更新于 ${new Date(runtimeDiagnosticsSummary.generatedAt).toLocaleString()}`
+                                    : '暂无观测数据'}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">Persona 生成</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.personaGeneration?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均耗时 {Number(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.avgElapsedMs ?? 0).toFixed(1)} ms
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">知识导入</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.knowledgeIngest?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均导入 {Number(runtimeDiagnosticsSummary?.phase0?.knowledgeIngest?.avgImportedFiles ?? 0).toFixed(1)} 个文件
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">Runtime 查询</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均 prompt {Number(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.avgPromptChars ?? 0).toFixed(1)} chars
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    平均 active skills {Number(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.avgActiveSkillCount ?? 0).toFixed(1)}
+                                </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                                <div className="text-[11px] text-text-tertiary">工具调用</div>
+                                <div className="text-lg font-semibold text-text-primary mt-1">
+                                    {runtimeDiagnosticsSummary?.phase0?.toolCalls?.count ?? 0}
+                                </div>
+                                <div className="text-[11px] text-text-tertiary mt-1">
+                                    成功率 {(Number(runtimeDiagnosticsSummary?.phase0?.toolCalls?.successRate ?? 0) * 100).toFixed(1)}%
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">按成员</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.byAdvisor ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.personaGeneration?.byAdvisor ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.advisorId ?? index)}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">
+                                                        {String(row.advisorName ?? row.advisorId ?? '未知成员')}
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary">
+                                                        {String(row.count ?? 0)} 次
+                                                    </div>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    persona {Number(row.avgElapsedMs ?? 0).toFixed(1)} ms
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无成员基线数据。</div>
+                                )}
+                            </div>
+
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">按 Runtime Mode</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.byMode ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.runtimeQueries?.byMode ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.runtimeMode ?? index)}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">{String(row.runtimeMode ?? 'unknown')}</div>
+                                                    <div className="text-[10px] text-text-tertiary">{String(row.count ?? 0)} 次</div>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    prompt {Number(row.avgPromptChars ?? 0).toFixed(1)} chars
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    active skills {Number(row.avgActiveSkillCount ?? 0).toFixed(1)}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无 runtime 查询数据。</div>
+                                )}
+                            </div>
+
+                            <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                                <div className="text-xs font-medium text-text-primary">最近工具结果</div>
+                                {(runtimeDiagnosticsSummary?.phase0?.toolCalls?.recent ?? []).length ? (
+                                    <div className="space-y-2">
+                                        {(runtimeDiagnosticsSummary?.phase0?.toolCalls?.recent ?? []).slice(0, 6).map((row, index) => (
+                                            <div key={`${String(row.sessionId ?? 'session')}:${String(row.toolName ?? index)}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">{String(row.toolName ?? 'tool')}</div>
+                                                    <span className={clsx(
+                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                        Boolean(row.success) ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'
+                                                    )}>
+                                                        {Boolean(row.success) ? 'success' : 'failed'}
+                                                    </span>
+                                                </div>
+                                                <div className="text-[10px] text-text-tertiary mt-1">
+                                                    {String(row.advisorName ?? row.advisorId ?? row.sessionId ?? '未绑定成员')}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-[11px] text-text-tertiary">暂无工具调用结果。</div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">Runtime Warm</div>
+                            {(runtimeDiagnosticsSummary?.runtimeWarm?.entries ?? []).length ? (
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                                    {(runtimeDiagnosticsSummary?.runtimeWarm?.entries ?? []).map((entry) => (
+                                        <div key={entry.mode} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-[11px] font-medium text-text-primary">{entry.mode}</div>
+                                                <div className="text-[10px] text-text-tertiary">
+                                                    {entry.hasModelConfig ? 'model' : 'default'}
+                                                </div>
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                prompt {entry.systemPromptChars} chars
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                long-term {entry.longTermContextChars} chars
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-[11px] text-text-tertiary">暂无 runtime warm 数据。</div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-text-primary">AI Runtime 性能测试</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    用真实 `runtime.query` 跑 benchmark，采集 `runtime:event` 时间线，并把耗时、checkpoint、tool 调用结果结构化保留下来。
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {runtimePerfResults.length > 0 ? (
+                                    <DiagnosticCopyButton text={runtimePerfResultsText} label="复制 JSON" />
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => void handleClearRuntimePerfResults()}
+                                    disabled={isRuntimePerfRunning || runtimePerfResults.length === 0}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                >
+                                    清空结果
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">测试配置</div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Runtime Mode</label>
+                                        <select
+                                            value={runtimePerfMode}
+                                            onChange={(event) => setRuntimePerfMode(event.target.value as RuntimePerfBenchmarkMode)}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="diagnostics">diagnostics</option>
+                                            <option value="chatroom">chatroom</option>
+                                            <option value="knowledge">knowledge</option>
+                                            <option value="advisor-discussion">advisor-discussion</option>
+                                            <option value="redclaw">redclaw</option>
+                                            <option value="background-maintenance">background-maintenance</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Benchmark Preset</label>
+                                        <select
+                                            value={runtimePerfPresetId}
+                                            onChange={(event) => {
+                                                setRuntimePerfPresetId(event.target.value);
+                                                handleApplyRuntimePerfPreset(event.target.value);
+                                            }}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            {runtimePerfPresets.map((preset) => (
+                                                <option key={preset.id} value={preset.id}>{preset.label}</option>
+                                            ))}
+                                        </select>
+                                        <div className="text-[11px] text-text-tertiary">
+                                            {selectedRuntimePerfPreset?.description || '选择一个预设后会自动填充 prompt。'}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">执行轮次</label>
+                                        <select
+                                            value={String(runtimePerfIterations)}
+                                            onChange={(event) => setRuntimePerfIterations(Math.max(1, Number(event.target.value) || 1))}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="1">1 轮</option>
+                                            <option value="3">3 轮</option>
+                                            <option value="5">5 轮</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">测试 Prompt</label>
+                                        <textarea
+                                            value={runtimePerfMessage}
+                                            onChange={(event) => setRuntimePerfMessage(event.target.value)}
+                                            rows={6}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        />
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleRunRuntimePerfBenchmark()}
+                                        disabled={isRuntimePerfRunning || !runtimePerfMessage.trim()}
+                                        className="w-full px-3 py-2 bg-accent-primary text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                                    >
+                                        {isRuntimePerfRunning ? 'Benchmark 执行中...' : '运行 Runtime Benchmark'}
+                                    </button>
+
+                                    <div className="text-[11px] text-text-tertiary">
+                                        {runtimePerfStatusMessage || '每轮都会创建独立 session，避免历史上下文污染结果。'}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">聚合指标</div>
+                                    {!runtimePerfSummary ? (
+                                        <div className="text-[11px] text-text-tertiary">先执行 benchmark，再看均值对比。</div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-2">
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">已完成轮次</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.completedCount}</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均总耗时</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.avgTotalElapsedMs.toFixed(1)} ms</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均首个响应</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgFirstResponseMs > 0 ? `${runtimePerfSummary.avgFirstResponseMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 thinking 开始</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgThinkingStartedMs > 0 ? `${runtimePerfSummary.avgThinkingStartedMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 prompt chars</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgPromptChars > 0 ? runtimePerfSummary.avgPromptChars.toFixed(1) : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">工具成功率</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {(runtimePerfSummary.toolSuccessRate * 100).toFixed(1)}%
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-medium text-text-primary">Run 结果</div>
+                                        <span className="text-[11px] text-text-tertiary">最近 {runtimePerfResults.length} 条</span>
+                                    </div>
+                                    {runtimePerfResults.length === 0 ? (
+                                        <div className="text-[11px] text-text-tertiary">暂无 runtime benchmark 结果。</div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {runtimePerfResults.map((run) => {
+                                                const isActiveRun = activeRuntimePerfRunId === run.id;
+                                                return (
+                                                    <div
+                                                        key={run.id}
+                                                        className={clsx(
+                                                            'rounded border p-3 space-y-3',
+                                                            isActiveRun
+                                                                ? 'border-accent-primary bg-accent-primary/5'
+                                                                : 'border-border bg-surface-secondary/20'
+                                                        )}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <div className="text-sm font-medium text-text-primary">{formatRuntimePerfRunIndex(run.index)}</div>
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary border border-border text-text-tertiary">
+                                                                        {run.runtimeMode}
+                                                                    </span>
+                                                                    <span className={clsx(
+                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                        run.status === 'completed'
+                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                            : run.status === 'failed'
+                                                                                ? 'bg-red-500/10 text-red-600'
+                                                                                : 'bg-blue-500/10 text-blue-600'
+                                                                    )}>
+                                                                        {run.status}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                                    {run.sessionId}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedRuntimeSessionId(run.sessionId)}
+                                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                                            >
+                                                                查看 Session
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">总耗时</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.totalElapsedMs != null ? `${run.totalElapsedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个响应</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstResponseMs != null ? `${run.firstResponseMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">thinking</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.thinkingStartedMs != null ? `${run.thinkingStartedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个工具</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstToolStartMs != null ? `${run.firstToolStartMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">prompt chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.promptChars ?? '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">response chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.responseChars ?? '--'}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-1 text-[11px] text-text-secondary">
+                                                                <div>tool calls: {run.toolCalls}</div>
+                                                                <div>tool success: {run.toolSuccessCount}</div>
+                                                                <div>tool failed: {run.toolFailureCount}</div>
+                                                                <div>checkpoints: {run.checkpointCount}</div>
+                                                                <div>active skills: {run.activeSkillCount ?? '--'}</div>
+                                                                {run.checkpointTypes.length > 0 ? (
+                                                                    <div className="text-text-tertiary break-words">
+                                                                        checkpoint types: {run.checkpointTypes.join(', ')}
+                                                                    </div>
+                                                                ) : null}
+                                                                {run.error ? <div className="text-red-600 break-words">error: {run.error}</div> : null}
+                                                            </div>
+
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-2">
+                                                                <div className="text-[11px] font-medium text-text-primary">事件时间线</div>
+                                                                {run.timeline.length === 0 ? (
+                                                                    <div className="text-[11px] text-text-tertiary">暂无事件。</div>
+                                                                ) : (
+                                                                    <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                                        {run.timeline.map((item) => (
+                                                                            <div key={item.id} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                                                <div className="flex items-center justify-between gap-2">
+                                                                                    <div className="text-[11px] font-medium text-text-primary">{item.label}</div>
+                                                                                    <span className={clsx(
+                                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                                        item.tone === 'success'
+                                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                                            : item.tone === 'warning'
+                                                                                                ? 'bg-amber-500/10 text-amber-600'
+                                                                                                : item.tone === 'error'
+                                                                                                    ? 'bg-red-500/10 text-red-600'
+                                                                                                    : 'bg-surface-secondary border border-border text-text-tertiary'
+                                                                                    )}>
+                                                                                        +{item.offsetMs} ms
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div className="mt-1 text-[10px] text-text-tertiary">{item.eventType}</div>
+                                                                                {item.detail ? (
+                                                                                    <div className="mt-1 text-[11px] text-text-secondary whitespace-pre-wrap break-words">
+                                                                                        {item.detail}
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
                                 <h3 className="text-sm font-medium text-text-primary">AI Runtime 调试中心</h3>
                                 <p className="text-xs text-text-tertiary mt-1">
                                     查看当前角色注册表、任务图运行状态和单任务 trace，确认新 runtime 是否按预期执行。
@@ -1984,7 +2952,7 @@ export function ToolsSettingsSection({
                             </button>
                         </div>
 
-                        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+                        <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-4">
                             <div className="space-y-4">
                                 <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
                                     <div className="text-xs font-medium text-text-primary">角色注册表</div>
@@ -2019,6 +2987,7 @@ export function ToolsSettingsSection({
                                         <option value="chatroom">chatroom</option>
                                         <option value="advisor-discussion">advisor-discussion</option>
                                         <option value="background-maintenance">background-maintenance</option>
+                                        <option value="diagnostics">diagnostics</option>
                                     </select>
                                     <textarea
                                         value={runtimeDraftInput}
@@ -2455,17 +3424,24 @@ export function ToolsSettingsSection({
                                         <div className="text-xs font-medium text-text-primary">运行时会话</div>
                                         <span className="text-[11px] text-text-tertiary">共 {runtimeSessions.length} 条</span>
                                     </div>
-                                    {runtimeSessions.length === 0 ? (
+                                    <input
+                                        type="text"
+                                        value={runtimeSessionQuery}
+                                        onChange={(event) => setRuntimeSessionQuery(event.target.value)}
+                                        placeholder="搜索 session / wander / chatroom / video..."
+                                        className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                    />
+                                    {filteredRuntimeSessions.length === 0 ? (
                                         <div className="text-[11px] text-text-tertiary">暂无 runtime session。</div>
                                     ) : (
                                         <div className="space-y-2 max-h-80 overflow-auto pr-1">
-                                            {runtimeSessions.map((session) => (
+                                            {filteredRuntimeSessions.map((session) => (
                                                 <button
                                                     key={session.id}
                                                     type="button"
                                                     onClick={() => setSelectedRuntimeSessionId(session.id)}
                                                     className={clsx(
-                                                        'w-full text-left rounded border p-3 transition-colors',
+                                                        'w-full text-left rounded border px-2.5 py-2 transition-colors',
                                                         selectedRuntimeSessionId === session.id
                                                             ? 'border-accent-primary bg-accent-primary/5'
                                                             : 'border-border bg-surface-secondary/20 hover:bg-surface-secondary/30'
@@ -2474,10 +3450,23 @@ export function ToolsSettingsSection({
                                                     <div className="text-xs font-medium text-text-primary truncate">
                                                         {session.chatSession?.title || session.id}
                                                     </div>
-                                                    <div className="text-[11px] text-text-tertiary mt-1 font-mono truncate">
+                                                    <div className="text-[10px] text-text-tertiary mt-1 font-mono truncate">
                                                         {session.id}
                                                     </div>
-                                                    <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-text-tertiary">
+                                                    <div className="flex flex-wrap gap-1.5 mt-2 text-[10px] text-text-tertiary">
+                                                        <span className="px-1.5 py-0.5 rounded bg-surface-secondary border border-border text-text-secondary">
+                                                            {runtimeSessionSourceLabel(session)}
+                                                        </span>
+                                                        {session.runtimeMode ? (
+                                                            <span className="px-1.5 py-0.5 rounded bg-surface-secondary/60 border border-border text-text-tertiary">
+                                                                mode: {session.runtimeMode}
+                                                            </span>
+                                                        ) : null}
+                                                        {session.contextBinding?.contextType ? (
+                                                            <span className="px-1.5 py-0.5 rounded bg-surface-secondary/60 border border-border text-text-tertiary">
+                                                                ctx: {session.contextBinding.contextType}
+                                                            </span>
+                                                        ) : null}
                                                         <span>transcript: {session.transcriptCount}</span>
                                                         <span>checkpoint: {session.checkpointCount}</span>
                                                     </div>
@@ -2519,10 +3508,13 @@ export function ToolsSettingsSection({
                             <div className="space-y-4">
                                 <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
                                     <div className="flex items-center justify-between gap-2">
-                                        <div className="text-xs font-medium text-text-primary">Session Transcript / Checkpoints</div>
-                                        {selectedRuntimeSession ? (
-                                            <span className="text-[11px] text-text-tertiary font-mono truncate">{selectedRuntimeSession.id}</span>
-                                        ) : null}
+                                        <div className="text-xs font-medium text-text-primary">Session Logs</div>
+                                        <div className="flex items-center gap-2">
+                                            {selectedRuntimeSession ? (
+                                                <span className="text-[11px] text-text-tertiary font-mono truncate">{selectedRuntimeSession.id}</span>
+                                            ) : null}
+                                            {selectedRuntimeSession ? <DiagnosticCopyButton text={runtimeSessionFullLogText} label="复制全部" /> : null}
+                                        </div>
                                     </div>
                                     {!selectedRuntimeSession ? (
                                         <div className="text-[11px] text-text-tertiary">请选择左侧一条 runtime session。</div>
@@ -2531,90 +3523,43 @@ export function ToolsSettingsSection({
                                     ) : (
                                         <div className="space-y-3">
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">最近 Checkpoints</div>
-                                                <div className="mt-2 space-y-2">
-                                                    {runtimeSessionCheckpoints.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无 checkpoint。</div>
-                                                    ) : runtimeSessionCheckpoints.map((checkpoint) => (
-                                                        <div key={checkpoint.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <span className="text-[11px] font-medium text-text-primary">{checkpoint.summary}</span>
-                                                                <span className="text-[10px] text-text-tertiary">{checkpoint.checkpointType}</span>
-                                                            </div>
-                                                            <div className="text-[10px] text-text-tertiary mt-1">
-                                                                {new Date(checkpoint.createdAt).toLocaleString()}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Session Meta</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionMetaText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionMetaText || '暂无 session 元数据。'}
+                                                </pre>
                                             </div>
 
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">最近 Transcript</div>
-                                                <div className="mt-2 max-h-[32rem] overflow-auto space-y-2 pr-1">
-                                                    {runtimeSessionTranscript.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无 transcript。</div>
-                                                    ) : runtimeSessionTranscript.map((item) => (
-                                                        <details key={item.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
-                                                                <span className="font-medium text-text-primary">
-                                                                    {item.recordType} · {item.role}
-                                                                </span>
-                                                                <span className="text-text-tertiary">{new Date(item.createdAt).toLocaleString()}</span>
-                                                            </summary>
-                                                            <pre className="mt-2 whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
-                                                                {item.content || '(empty)'}
-                                                            </pre>
-                                                        </details>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Checkpoints</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionCheckpointsText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionCheckpointsText}
+                                                </pre>
                                             </div>
 
                                             <div className="rounded border border-border bg-surface-secondary/20 p-3">
-                                                <div className="text-[11px] font-medium text-text-primary">Tool Result Store</div>
-                                                <div className="mt-2 max-h-[24rem] overflow-auto space-y-2 pr-1">
-                                                    {runtimeSessionToolResults.length === 0 ? (
-                                                        <div className="text-[11px] text-text-tertiary">暂无完整 tool result 记录。</div>
-                                                    ) : runtimeSessionToolResults.map((item) => (
-                                                        <details key={item.id} className="rounded border border-border bg-surface-primary/60 p-2">
-                                                            <summary className="cursor-pointer flex items-center justify-between gap-2 text-[11px]">
-                                                                <span className="font-medium text-text-primary">
-                                                                    {item.toolName} · {item.success ? 'success' : 'error'}
-                                                                </span>
-                                                                <span className="text-text-tertiary">{new Date(item.createdAt).toLocaleString()}</span>
-                                                            </summary>
-                                                            <div className="mt-2 space-y-2 text-[11px] text-text-secondary">
-                                                                <div className="flex flex-wrap gap-2 text-text-tertiary">
-                                                                    <span className="font-mono break-all">call: {item.callId}</span>
-                                                                    {item.command ? <span className="font-mono break-all">cmd: {item.command}</span> : null}
-                                                                    {item.truncated ? (
-                                                                        <span>budget: {item.originalChars ?? 0} → {item.promptChars ?? 0}</span>
-                                                                    ) : (
-                                                                        <span>budget: full</span>
-                                                                    )}
-                                                                </div>
-                                                                {item.promptText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">Prompt 注入文本</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.promptText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                                {item.summaryText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">摘要</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.summaryText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                                {item.resultText ? (
-                                                                    <div>
-                                                                        <div className="text-[10px] text-text-tertiary mb-1">完整结果</div>
-                                                                        <pre className="whitespace-pre-wrap break-all leading-5">{item.resultText}</pre>
-                                                                    </div>
-                                                                ) : null}
-                                                            </div>
-                                                        </details>
-                                                    ))}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Transcript</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionTranscriptText} />
                                                 </div>
+                                                <pre className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionTranscriptText}
+                                                </pre>
+                                            </div>
+
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-3">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="text-[11px] font-medium text-text-primary">Tool Result Store</div>
+                                                    <DiagnosticCopyButton text={runtimeSessionToolResultsText} />
+                                                </div>
+                                                <pre className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                                                    {runtimeSessionToolResultsText}
+                                                </pre>
                                             </div>
                                         </div>
                                     )}
@@ -2746,63 +3691,8 @@ export function ToolsSettingsSection({
     );
 }
 
-interface ExperimentalSettingsSectionProps {
-    flags: FeatureFlags;
-    updateFlag: (key: keyof FeatureFlags, value: boolean) => void;
-}
-
-export function ExperimentalSettingsSection({ flags, updateFlag }: ExperimentalSettingsSectionProps) {
-    return (
-        <section className="space-y-6">
-            <div>
-                <h2 className="text-lg font-medium text-text-primary mb-2">实验性功能</h2>
-                <p className="text-xs text-text-tertiary">
-                    以下功能仍在开发和测试中，可能不稳定或影响性能。请谨慎开启。
-                </p>
-            </div>
-
-            <div className="space-y-4">
-                <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                    <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-4">
-                            <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                                向量推荐
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600 font-medium">
-                                    Beta
-                                </span>
-                            </h3>
-                            <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
-                                在稿件编辑器的分栏视图中，根据当前稿件内容的向量相似度对知识库进行智能排序。
-                                开启后，与当前内容最相关的素材会优先显示。
-                            </p>
-                            <p className="text-[10px] text-text-tertiary mt-2 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                此功能会调用 Embedding API 计算向量，可能产生额外费用
-                            </p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => updateFlag('vectorRecommendation', !flags.vectorRecommendation)}
-                            className="ui-switch-track w-11 h-6 shrink-0"
-                            data-state={flags.vectorRecommendation ? 'on' : 'off'}
-                        >
-                            <div
-                                className={clsx(
-                                    'ui-switch-thumb top-1 w-4 h-4',
-                                    flags.vectorRecommendation ? 'translate-x-6' : 'translate-x-1'
-                                )}
-                            />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-        </section>
-    );
-}
-
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'knowledge' | 'tools' | 'memory' | 'experimental';
+    activeTab: 'general' | 'ai' | 'tools' | 'memory' | 'remote';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 

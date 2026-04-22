@@ -51,6 +51,8 @@ interface CoverTitleEntry {
     text: string;
 }
 
+type CoverTitleInputMode = 'titles' | 'prompt';
+
 interface CoverPromptSwitches {
     learnTypography: boolean;
     learnColorMood: boolean;
@@ -81,8 +83,27 @@ interface CoverListResponse {
     assets?: CoverAsset[];
 }
 
+interface CoverTemplateListResponse {
+    success?: boolean;
+    error?: string;
+    templates?: unknown[];
+    template?: unknown;
+    imported?: number;
+}
+
 interface CoverStudioProps {
     isActive?: boolean;
+}
+
+interface CoverGenerationJob {
+    id: string;
+    status: 'pending' | 'success' | 'error';
+    mode: CoverTitleInputMode;
+    summary: string;
+    submittedAt: string;
+    count: number;
+    assets: CoverAsset[];
+    error?: string;
 }
 
 const DEFAULT_PROMPT_SWITCHES: CoverPromptSwitches = {
@@ -252,6 +273,11 @@ const TITLE_TYPE_OPTIONS: Array<{ value: CoverTitleEntry['type']; label: string 
     { value: 'custom', label: '自定义' },
 ];
 
+const TITLE_INPUT_MODE_OPTIONS: Array<{ value: CoverTitleInputMode; label: string; description: string }> = [
+    { value: 'titles', label: '标题模式', description: '你自己写封面文案，AI按这些字来出图。' },
+    { value: 'prompt', label: '提示词模式', description: '你只写意图和方向，AI自己决定封面上写什么。' },
+];
+
 const PROMPT_SWITCH_OPTIONS: Array<{
     key: keyof CoverPromptSwitches;
     label: string;
@@ -265,6 +291,7 @@ const PROMPT_SWITCH_OPTIONS: Array<{
 
 const createTemplateId = () => `cover_tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const createTitleId = () => `cover_title_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const createCoverGenerationJobId = () => `cover_job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const createTemplateName = () => {
     const now = new Date();
     const pad = (value: number) => String(value).padStart(2, '0');
@@ -336,8 +363,6 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
 
-    const [templatesReady, setTemplatesReady] = useState(false);
-    const [loadedTemplatesStorageKey, setLoadedTemplatesStorageKey] = useState('');
     const [templates, setTemplates] = useState<CoverTemplate[]>([]);
     const [activeTemplateId, setActiveTemplateId] = useState('');
 
@@ -348,19 +373,25 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
 
     const [baseImage, setBaseImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [promptSwitches, setPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_PROMPT_SWITCHES);
+    const [titleInputMode, setTitleInputMode] = useState<CoverTitleInputMode>('titles');
     const [titleEntries, setTitleEntries] = useState<CoverTitleEntry[]>([
         { id: createTitleId(), type: 'main', text: '' },
     ]);
+    const [titlePrompt, setTitlePrompt] = useState('');
 
     const [isReadingTemplateImage, setIsReadingTemplateImage] = useState(false);
     const [isReadingBaseImage, setIsReadingBaseImage] = useState(false);
-    const [isGenerating, setIsGenerating] = useState(false);
     const [generateError, setGenerateError] = useState('');
 
-    const [generatedAssets, setGeneratedAssets] = useState<CoverAsset[]>([]);
+    const [generationJobs, setGenerationJobs] = useState<CoverGenerationJob[]>([]);
     const [recentAssets, setRecentAssets] = useState<CoverAsset[]>([]);
 
     const storageKey = useMemo(() => getTemplateStorageKey(spaceId), [spaceId]);
+    const normalizeTemplateList = useCallback((items: unknown[] | undefined): CoverTemplate[] => (
+        Array.isArray(items)
+            ? items.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            : []
+    ), []);
     const imageTemplate = useMemo(
         () => inferImageTemplateByProvider(settings.image_provider || 'openai-compatible', settings.image_provider_template || ''),
         [settings.image_provider, settings.image_provider_template]
@@ -369,7 +400,18 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const resolvedApiKey = (settings.image_api_key || settings.api_key || '').trim();
     const hasImageConfig = Boolean(resolvedEndpoint) && Boolean(resolvedApiKey);
     const normalizedTitles = useMemo(() => normalizeTitleEntries(titleEntries), [titleEntries]);
-    const hasRequiredInputs = Boolean(templateImage?.dataUrl) && Boolean(baseImage?.dataUrl) && normalizedTitles.length > 0;
+    const normalizedTitlePrompt = useMemo(() => titlePrompt.trim(), [titlePrompt]);
+    const hasRequiredInputs = Boolean(templateImage?.dataUrl)
+        && Boolean(baseImage?.dataUrl)
+        && (
+            titleInputMode === 'prompt'
+                ? Boolean(normalizedTitlePrompt)
+                : normalizedTitles.length > 0
+        );
+    const pendingJobCount = useMemo(
+        () => generationJobs.filter((item) => item.status === 'pending').length,
+        [generationJobs]
+    );
 
     const resetEditor = useCallback(() => {
         setActiveTemplateId('');
@@ -379,7 +421,10 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         setQuality(settings.image_quality || 'standard');
         setBaseImage(null);
         setPromptSwitches(DEFAULT_PROMPT_SWITCHES);
+        setTitleInputMode('titles');
         setTitleEntries([{ id: createTitleId(), type: 'main', text: '' }]);
+        setTitlePrompt('');
+        setGenerateError('');
     }, [settings.image_model, settings.image_quality]);
 
     const loadSettings = useCallback(async () => {
@@ -412,43 +457,77 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const loadTemplates = useCallback(() => {
         if (!storageKey) {
             setTemplates([]);
-            setLoadedTemplatesStorageKey(storageKey);
-            setTemplatesReady(true);
-            return;
+            return Promise.resolve();
         }
+        return (async () => {
+            try {
+                const result = await window.ipcRenderer.cover.templates.list() as CoverTemplateListResponse;
+                if (!result?.success) {
+                    console.error('Failed to load cover templates:', result?.error || 'unknown error');
+                    return;
+                }
+                setTemplates(normalizeTemplateList(result.templates));
+            } catch (error) {
+                console.error('Failed to load cover templates:', error);
+            }
+        })();
+    }, [normalizeTemplateList, storageKey]);
+
+    const migrateLegacyTemplates = useCallback(async () => {
+        if (!storageKey) return false;
+        let legacyTemplates: CoverTemplate[] = [];
         try {
             const raw = window.localStorage.getItem(storageKey);
-            if (!raw) {
-                setTemplates([]);
-                setLoadedTemplatesStorageKey(storageKey);
-                setTemplatesReady(true);
-                return;
-            }
+            if (!raw) return false;
             const parsed = JSON.parse(raw);
-            const list = Array.isArray(parsed)
+            legacyTemplates = Array.isArray(parsed)
                 ? parsed.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item))
                 : [];
-            setTemplates(list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-            setLoadedTemplatesStorageKey(storageKey);
         } catch (error) {
-            console.error('Failed to parse cover templates:', error);
-            setTemplates([]);
-            setLoadedTemplatesStorageKey(storageKey);
-        } finally {
-            setTemplatesReady(true);
+            console.error('Failed to parse legacy cover templates:', error);
+            return false;
         }
-    }, [storageKey]);
+        if (legacyTemplates.length === 0) {
+            return false;
+        }
+        try {
+            const result = await window.ipcRenderer.cover.templates.importLegacy({
+                templates: legacyTemplates as unknown as Record<string, unknown>[],
+            }) as CoverTemplateListResponse;
+            if (!result?.success) {
+                console.error('Failed to migrate legacy cover templates:', result?.error || 'unknown error');
+                return false;
+            }
+            window.localStorage.removeItem(storageKey);
+            setTemplates(normalizeTemplateList(result.templates));
+            return (result.imported || 0) > 0;
+        } catch (error) {
+            console.error('Failed to migrate legacy cover templates:', error);
+            return false;
+        }
+    }, [normalizeTemplateList, storageKey]);
 
     useEffect(() => {
         if (!isActive) return;
         void loadSettings();
         void loadRecentAssets();
-        loadTemplates();
-    }, [isActive, loadRecentAssets, loadSettings, loadTemplates]);
+    }, [isActive, loadRecentAssets, loadSettings]);
 
     useEffect(() => {
-        setTemplatesReady(false);
-    }, [storageKey]);
+        if (!isActive) return;
+        let cancelled = false;
+        void (async () => {
+            await loadTemplates();
+            if (cancelled) return;
+            const migrated = await migrateLegacyTemplates();
+            if (!cancelled && migrated) {
+                await loadTemplates();
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [isActive, loadTemplates, migrateLegacyTemplates]);
 
     useEffect(() => {
         const handleTemplatesUpdated = (event: Event) => {
@@ -456,23 +535,13 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             if (detail?.spaceId && String(detail.spaceId) !== String(spaceId)) {
                 return;
             }
-            loadTemplates();
+            void loadTemplates();
         };
         window.addEventListener('cover:templates-updated', handleTemplatesUpdated as EventListener);
         return () => {
             window.removeEventListener('cover:templates-updated', handleTemplatesUpdated as EventListener);
         };
     }, [loadTemplates, spaceId]);
-
-    useEffect(() => {
-        if (!templatesReady) return;
-        if (loadedTemplatesStorageKey !== storageKey) return;
-        try {
-            window.localStorage.setItem(storageKey, JSON.stringify(templates));
-        } catch (error) {
-            console.error('Failed to persist cover templates:', error);
-        }
-    }, [loadedTemplatesStorageKey, storageKey, templates, templatesReady]);
 
     const applyTemplate = useCallback((template: CoverTemplate) => {
         setActiveTemplateId(template.id);
@@ -486,7 +555,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         );
     }, []);
 
-    const saveTemplate = useCallback(() => {
+    const saveTemplate = useCallback(async () => {
         if (!templateImage?.dataUrl) {
             void appAlert('请先上传模板图');
             return;
@@ -497,49 +566,54 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             ? templates.find((item) => item.id === activeTemplateId)
             : null;
         const name = (existing?.name || '').trim() || createTemplateName();
-        setTemplates((prev) => {
-            if (activeTemplateId) {
-                return prev.map((item) => item.id === activeTemplateId
-                    ? {
-                        ...item,
-                        name,
-                        templateImage: templateImage.dataUrl,
-                        promptSwitches: { ...promptSwitches },
-                        model: model.trim() || 'gpt-image-1',
-                        quality,
-                        count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
-                        updatedAt: now,
-                    }
-                    : item
-                ).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-            }
-            const created: CoverTemplate = {
-                id: createTemplateId(),
+        const result = await window.ipcRenderer.cover.templates.save({
+            template: {
+                ...(existing || {}),
+                id: existing?.id || activeTemplateId || createTemplateId(),
                 name,
                 templateImage: templateImage.dataUrl,
-                styleHint: '',
-                titleGuide: '',
                 promptSwitches: { ...promptSwitches },
                 model: model.trim() || 'gpt-image-1',
                 quality,
                 count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
                 updatedAt: now,
-                referenceImages: [templateImage.dataUrl],
-            };
-            setActiveTemplateId(created.id);
-            return [created, ...prev].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        });
-    }, [activeTemplateId, count, model, promptSwitches, quality, templateImage, templates]);
+            }
+        }) as CoverTemplateListResponse;
+        if (!result?.success) {
+            void appAlert(result?.error || '保存模板失败');
+            return;
+        }
+
+        const nextTemplates = normalizeTemplateList(result.templates);
+        setTemplates(nextTemplates);
+        const savedTemplate = normalizeTemplate(result.template);
+        if (savedTemplate?.id) {
+            setActiveTemplateId(savedTemplate.id);
+        }
+        window.dispatchEvent(new CustomEvent('cover:templates-updated', {
+            detail: { spaceId },
+        }));
+    }, [activeTemplateId, count, model, normalizeTemplateList, promptSwitches, quality, spaceId, templateImage, templates]);
 
     const deleteTemplate = useCallback(async (templateId: string) => {
         const target = templates.find((item) => item.id === templateId);
         if (!target) return;
         if (!(await appConfirm(`确认删除模板「${target.name}」吗？`, { title: '删除模板', confirmLabel: '删除', tone: 'danger' }))) return;
-        setTemplates((prev) => prev.filter((item) => item.id !== templateId));
+        const result = await window.ipcRenderer.cover.templates.delete({
+            templateId,
+        }) as CoverTemplateListResponse;
+        if (!result?.success) {
+            void appAlert(result?.error || '删除模板失败');
+            return;
+        }
+        setTemplates(normalizeTemplateList(result.templates));
         if (activeTemplateId === templateId) {
             resetEditor();
         }
-    }, [activeTemplateId, resetEditor, templates]);
+        window.dispatchEvent(new CustomEvent('cover:templates-updated', {
+            detail: { spaceId },
+        }));
+    }, [activeTemplateId, normalizeTemplateList, resetEditor, spaceId, templates]);
 
     const handleTemplateImageFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -588,7 +662,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         });
     }, []);
 
-    const handleGenerate = useCallback(async () => {
+    const handleGenerate = useCallback(() => {
         if (!templateImage?.dataUrl) {
             setGenerateError('请先上传模板图');
             return;
@@ -597,42 +671,95 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             setGenerateError('请先上传底图');
             return;
         }
-        if (normalizedTitles.length === 0) {
+        if (titleInputMode === 'prompt' && !normalizedTitlePrompt) {
+            setGenerateError('请先填写提示词');
+            return;
+        }
+        if (titleInputMode === 'titles' && normalizedTitles.length === 0) {
             setGenerateError('请至少填写一条标题内容');
             return;
         }
 
-        setIsGenerating(true);
         setGenerateError('');
-        try {
-            const result = await window.ipcRenderer.invoke('cover:generate', {
-                templateImage: templateImage.dataUrl,
-                baseImage: baseImage.dataUrl,
-                titles: normalizedTitles,
-                styleHint: templates.find((item) => item.id === activeTemplateId)?.styleHint || undefined,
-                promptSwitches,
-                templateName: templates.find((item) => item.id === activeTemplateId)?.name || undefined,
-                count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
-                model: model.trim() || undefined,
-                provider: settings.image_provider || undefined,
-                providerTemplate: imageTemplate || undefined,
-                quality: quality.trim() || undefined,
-            }) as { success?: boolean; error?: string; assets?: CoverAsset[] };
+        const jobId = createCoverGenerationJobId();
+        const submittedAt = new Date().toISOString();
+        const summary = titleInputMode === 'prompt'
+            ? normalizedTitlePrompt
+            : normalizedTitles.map((item) => `${item.type}：${item.text}`).join(' / ');
+        const nextJob: CoverGenerationJob = {
+            id: jobId,
+            status: 'pending',
+            mode: titleInputMode,
+            summary,
+            submittedAt,
+            count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
+            assets: [],
+        };
+        setGenerationJobs((prev) => [nextJob, ...prev].slice(0, 24));
 
-            if (!result?.success) {
-                setGenerateError(result?.error || '封面生成失败');
-                return;
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.invoke('cover:generate', {
+                    templateImage: templateImage.dataUrl,
+                    baseImage: baseImage.dataUrl,
+                    titles: normalizedTitles,
+                    titleMode: titleInputMode,
+                    titlePrompt: titleInputMode === 'prompt' ? normalizedTitlePrompt : undefined,
+                    styleHint: templates.find((item) => item.id === activeTemplateId)?.styleHint || undefined,
+                    titleGuide: templates.find((item) => item.id === activeTemplateId)?.titleGuide || undefined,
+                    promptSwitches,
+                    templateName: templates.find((item) => item.id === activeTemplateId)?.name || undefined,
+                    count: Math.max(1, Math.min(4, Math.floor(Number(count) || 1))),
+                    model: model.trim() || undefined,
+                    provider: settings.image_provider || undefined,
+                    providerTemplate: imageTemplate || undefined,
+                    quality: quality.trim() || undefined,
+                }) as { success?: boolean; error?: string; assets?: CoverAsset[] };
+
+                if (!result?.success) {
+                    setGenerationJobs((prev) => prev.map((item) => (
+                        item.id === jobId
+                            ? { ...item, status: 'error', error: result?.error || '封面生成失败' }
+                            : item
+                    )));
+                    return;
+                }
+                const list = Array.isArray(result.assets) ? result.assets : [];
+                setGenerationJobs((prev) => prev.map((item) => (
+                    item.id === jobId
+                        ? { ...item, status: 'success', assets: list, error: '' }
+                        : item
+                )));
+                await loadRecentAssets();
+            } catch (error) {
+                console.error('Failed to generate cover assets:', error);
+                setGenerationJobs((prev) => prev.map((item) => (
+                    item.id === jobId
+                        ? { ...item, status: 'error', error: '封面生成失败' }
+                        : item
+                )));
             }
-            const list = Array.isArray(result.assets) ? result.assets : [];
-            setGeneratedAssets(list);
-            await loadRecentAssets();
-        } catch (error) {
-            console.error('Failed to generate cover assets:', error);
-            setGenerateError('封面生成失败');
-        } finally {
-            setIsGenerating(false);
-        }
-    }, [activeTemplateId, baseImage, count, imageTemplate, loadRecentAssets, model, normalizedTitles, promptSwitches, quality, settings.image_provider, templateImage, templates]);
+        })();
+    }, [
+        activeTemplateId,
+        baseImage,
+        count,
+        imageTemplate,
+        loadRecentAssets,
+        model,
+        normalizedTitlePrompt,
+        normalizedTitles,
+        promptSwitches,
+        quality,
+        settings.image_provider,
+        templateImage,
+        templates,
+        titleInputMode,
+    ]);
+
+    const removeGenerationJob = useCallback((jobId: string) => {
+        setGenerationJobs((prev) => prev.filter((item) => item.id !== jobId));
+    }, []);
 
     return (
         <div className="flex h-full min-h-0 bg-background overflow-hidden">
@@ -843,17 +970,13 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                                         [item.key]: !prev[item.key],
                                                     }));
                                                 }}
-                                                className="ui-switch-track h-6 w-11"
+                                                className="ui-switch-track"
+                                                data-size="md"
                                                 data-state={promptSwitches[item.key] ? 'on' : 'off'}
                                                 aria-label={item.label}
                                                 aria-pressed={Boolean(promptSwitches[item.key])}
                                             >
-                                                <span
-                                                    className={clsx(
-                                                        'ui-switch-thumb left-0.5 top-0.5 h-5 w-5',
-                                                        promptSwitches[item.key] ? 'translate-x-5' : 'translate-x-0'
-                                                    )}
-                                                />
+                                                <span className="ui-switch-thumb" />
                                             </button>
                                         </div>
                                     ))}
@@ -861,49 +984,91 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                             </div>
 
                             <div className="border border-border rounded-lg p-3 space-y-3 bg-surface-secondary/10">
-                                <div className="flex items-center justify-between">
-                                    <div className="text-xs font-medium text-text-primary inline-flex items-center gap-1.5">
-                                        <Type className="w-3.5 h-3.5" />
-                                        标题组（必填，支持多类型）
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={addTitleEntry}
-                                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-[11px] text-text-secondary hover:text-text-primary hover:border-accent-primary"
-                                    >
-                                        <Plus className="w-3 h-3" />
-                                        新增一条
-                                    </button>
-                                </div>
-                                <div className="space-y-2">
-                                    {titleEntries.map((entry) => (
-                                        <div key={entry.id} className="grid grid-cols-[120px_minmax(0,1fr)_34px] gap-2 items-center">
-                                            <select
-                                                value={entry.type}
-                                                onChange={(event) => updateTitleEntry(entry.id, { type: event.target.value as CoverTitleEntry['type'] })}
-                                                className="px-2.5 py-2 text-xs rounded-md border border-border bg-surface-secondary/20 focus:outline-none"
-                                            >
-                                                {TITLE_TYPE_OPTIONS.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                            <input
-                                                value={entry.text}
-                                                onChange={(event) => updateTitleEntry(entry.id, { text: event.target.value })}
-                                                placeholder="输入这一类标题文本"
-                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => removeTitleEntry(entry.id)}
-                                                className="w-8 h-8 rounded border border-border text-text-tertiary hover:text-text-primary hover:bg-surface-secondary"
-                                                title="删除"
-                                            >
-                                                <Trash2 className="w-3.5 h-3.5 mx-auto" />
-                                            </button>
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="text-xs font-medium text-text-primary inline-flex items-center gap-1.5">
+                                            <Type className="w-3.5 h-3.5" />
+                                            标题输入（必填）
                                         </div>
-                                    ))}
+                                        <div className="mt-1 text-[11px] text-text-tertiary">
+                                            {TITLE_INPUT_MODE_OPTIONS.find((item) => item.value === titleInputMode)?.description}
+                                        </div>
+                                    </div>
+                                    {titleInputMode === 'titles' && (
+                                        <button
+                                            type="button"
+                                            onClick={addTitleEntry}
+                                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-[11px] text-text-secondary hover:text-text-primary hover:border-accent-primary shrink-0"
+                                        >
+                                            <Plus className="w-3 h-3" />
+                                            新增一条
+                                        </button>
+                                    )}
                                 </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    {TITLE_INPUT_MODE_OPTIONS.map((option) => {
+                                        const active = titleInputMode === option.value;
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => setTitleInputMode(option.value)}
+                                                className={clsx(
+                                                    'rounded-lg border px-3 py-2.5 text-left transition-colors',
+                                                    active
+                                                        ? 'border-accent-primary bg-accent-primary/8 shadow-sm'
+                                                        : 'border-border bg-surface-primary hover:border-accent-primary/40'
+                                                )}
+                                            >
+                                                <div className="text-sm font-medium text-text-primary">{option.label}</div>
+                                                <div className="mt-1 text-[11px] text-text-tertiary">{option.description}</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {titleInputMode === 'titles' ? (
+                                    <div className="space-y-2">
+                                        {titleEntries.map((entry) => (
+                                            <div key={entry.id} className="grid grid-cols-[120px_minmax(0,1fr)_34px] gap-2 items-center">
+                                                <select
+                                                    value={entry.type}
+                                                    onChange={(event) => updateTitleEntry(entry.id, { type: event.target.value as CoverTitleEntry['type'] })}
+                                                    className="px-2.5 py-2 text-xs rounded-md border border-border bg-surface-secondary/20 focus:outline-none"
+                                                >
+                                                    {TITLE_TYPE_OPTIONS.map((option) => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                                <input
+                                                    value={entry.text}
+                                                    onChange={(event) => updateTitleEntry(entry.id, { text: event.target.value })}
+                                                    placeholder="输入这一类标题文本"
+                                                    className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeTitleEntry(entry.id)}
+                                                    className="w-8 h-8 rounded border border-border text-text-tertiary hover:text-text-primary hover:bg-surface-secondary"
+                                                    title="删除"
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5 mx-auto" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <textarea
+                                            value={titlePrompt}
+                                            onChange={(event) => setTitlePrompt(event.target.value)}
+                                            placeholder="写你想让 AI 自己决定封面文案的方向，例如：突出反差感、像真人经验分享、主标题短促有记忆点，副标题补充结果或场景。"
+                                            className="min-h-[120px] w-full resize-y rounded-md border border-border bg-surface-secondary/20 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        />
+                                        <div className="text-[11px] text-text-tertiary">
+                                            这里不用自己写最终标题，直接描述你想要的语气、信息重心、受众和点击感即可。
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -943,12 +1108,12 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                                 </button>
                                 <button
                                     onClick={() => void handleGenerate()}
-                                    disabled={isGenerating || !hasImageConfig || !hasRequiredInputs}
+                                    disabled={!hasImageConfig || !hasRequiredInputs}
                                     className="px-4 py-2 text-sm rounded-md bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50"
                                 >
                                     <span className="inline-flex items-center gap-1.5">
-                                        {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ImagePlus className="w-4 h-4" />}
-                                        {isGenerating ? '生成中...' : '生成封面'}
+                                        <ImagePlus className="w-4 h-4" />
+                                        生成封面
                                     </span>
                                 </button>
                                 <button
@@ -960,35 +1125,102 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                             </div>
 
                             {generateError && <div className="text-xs text-status-error">{generateError}</div>}
+                            {pendingJobCount > 0 && (
+                                <div className="text-[11px] text-text-tertiary">
+                                    当前还有 {pendingJobCount} 个任务在后台生成。你可以继续提交下一条，或切去别的页面等结果回来。
+                                </div>
+                            )}
                         </div>
 
-                        {generatedAssets.length > 0 && (
+                        {generationJobs.length > 0 && (
                             <div className="space-y-3">
                                 <div className="text-sm font-medium text-text-primary inline-flex items-center gap-2">
                                     <Sparkles className="w-4 h-4 text-accent-primary" />
-                                    本次生成结果（{generatedAssets.length}）
+                                    生成任务（{generationJobs.length}）
                                 </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                                    {generatedAssets.map((asset) => (
-                                        <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                            {asset.previewUrl && asset.exists ? (
-                                                <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-[3/4] object-cover" />
-                                            ) : (
-                                                <div className="w-full aspect-[3/4] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
-                                            )}
-                                            <div className="p-3 space-y-1.5">
-                                                <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
-                                                <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || '3:4'} · {asset.quality || ''}</div>
+                                <div className="space-y-4">
+                                    {generationJobs.map((job) => (
+                                        <div key={job.id} className="border border-border rounded-xl bg-surface-primary p-4 shadow-sm space-y-3">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span
+                                                            className={clsx(
+                                                                'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] border',
+                                                                job.status === 'pending'
+                                                                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-700'
+                                                                    : job.status === 'success'
+                                                                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700'
+                                                                        : 'border-red-500/30 bg-red-500/10 text-red-700'
+                                                            )}
+                                                        >
+                                                            {job.status === 'pending' ? '生成中' : job.status === 'success' ? '已完成' : '失败'}
+                                                        </span>
+                                                        <span className="text-[11px] text-text-tertiary">
+                                                            {job.mode === 'prompt' ? '提示词模式' : '标题模式'} · {new Date(job.submittedAt).toLocaleString()}
+                                                        </span>
+                                                    </div>
+                                                    <div className="mt-2 text-sm text-text-primary break-words">{job.summary}</div>
+                                                </div>
                                                 <button
-                                                    onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
-                                                    className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
+                                                    type="button"
+                                                    onClick={() => removeGenerationJob(job.id)}
+                                                    className="w-8 h-8 rounded border border-border text-text-tertiary hover:text-text-primary hover:bg-surface-secondary shrink-0"
+                                                    title="移除任务"
                                                 >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <ExternalLink className="w-3.5 h-3.5" />
-                                                        打开文件
-                                                    </span>
+                                                    <Trash2 className="w-3.5 h-3.5 mx-auto" />
                                                 </button>
                                             </div>
+
+                                            {job.status === 'pending' && (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                                                    {Array.from({ length: job.count }).map((_, index) => (
+                                                        <div key={`${job.id}-${index}`} className="border border-border rounded-xl overflow-hidden bg-surface-secondary/20">
+                                                            <div className="w-full aspect-[3/4] bg-surface-secondary/60 animate-pulse" />
+                                                            <div className="p-3 space-y-2">
+                                                                <div className="flex items-center gap-2 text-xs text-text-secondary">
+                                                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                                                    正在排队生成第 {index + 1} 张
+                                                                </div>
+                                                                <div className="text-[11px] text-text-tertiary">
+                                                                    任务已提交，你现在可以继续发下一条。
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {job.status === 'error' && (
+                                                <div className="text-xs text-status-error">{job.error || '封面生成失败'}</div>
+                                            )}
+
+                                            {job.status === 'success' && (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                                                    {job.assets.map((asset) => (
+                                                        <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                                                            {asset.previewUrl && asset.exists ? (
+                                                                <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-[3/4] object-cover" />
+                                                            ) : (
+                                                                <div className="w-full aspect-[3/4] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                            )}
+                                                            <div className="p-3 space-y-1.5">
+                                                                <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
+                                                                <div className="text-[11px] text-text-tertiary truncate">{asset.model || ''} · {asset.aspectRatio || '3:4'} · {asset.quality || ''}</div>
+                                                                <button
+                                                                    onClick={() => void window.ipcRenderer.invoke('cover:open', { assetId: asset.id })}
+                                                                    className="mt-1 px-2.5 py-1.5 text-xs rounded border border-border hover:bg-surface-secondary text-text-secondary"
+                                                                >
+                                                                    <span className="inline-flex items-center gap-1">
+                                                                        <ExternalLink className="w-3.5 h-3.5" />
+                                                                        打开文件
+                                                                    </span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>

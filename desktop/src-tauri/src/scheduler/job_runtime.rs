@@ -22,7 +22,6 @@ pub struct PreparedJobExecution {
     pub source_task_id: Option<String>,
     pub kind: String,
     pub title: String,
-    pub project_id: Option<String>,
     pub prompt: String,
     pub source_label: String,
 }
@@ -418,7 +417,6 @@ fn prepare_execution(
         source_task_id: definition.source_task_id.clone(),
         kind: definition.kind.clone(),
         title: definition.title.clone(),
-        project_id: definition.owner_context_id.clone(),
         prompt: definition_prompt(&definition),
         source_label: definition_source_label(&definition).to_string(),
     })
@@ -695,13 +693,7 @@ pub fn run_job_queue_once(
 
     let heartbeat =
         start_execution_heartbeat(app, prepared.execution_id.clone(), Duration::from_secs(5));
-    let result = execute_redclaw_run(
-        app,
-        state,
-        prepared.prompt.clone(),
-        prepared.project_id.clone(),
-        &prepared.source_label,
-    );
+    let result = execute_redclaw_run(app, state, prepared.prompt.clone(), &prepared.source_label);
     heartbeat.stop();
 
     match result {
@@ -925,7 +917,7 @@ mod tests {
                 enabled: true,
                 mode: "interval".to_string(),
                 prompt: "hello".to_string(),
-                project_id: Some("project-1".to_string()),
+                project_id: None,
                 interval_minutes: Some(15),
                 time: None,
                 weekdays: None,

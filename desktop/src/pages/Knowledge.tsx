@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2 } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -47,12 +47,13 @@ interface YouTubeVideo {
     thumbnailUrl: string;
     hasSubtitle: boolean;
     subtitleContent?: string;
+    subtitleError?: string;
     status?: 'processing' | 'completed' | 'failed';
     createdAt: string;
     folderPath?: string;
 }
 
-type KnowledgeTypeFilter = 'all' | 'xhs-image' | 'xhs-video' | 'link-article' | 'wechat-article' | 'youtube' | 'docs';
+type KnowledgeTypeFilter = 'all' | 'xhs-image' | 'xhs-video' | 'douyin-video' | 'link-article' | 'wechat-article' | 'youtube' | 'docs';
 
 interface DocumentKnowledgeSource {
     id: string;
@@ -66,6 +67,47 @@ interface DocumentKnowledgeSource {
     sampleFiles: string[];
     createdAt: string;
     updatedAt: string;
+}
+
+interface KnowledgeCatalogSummary {
+    itemId: string;
+    kind: 'redbook-note' | 'youtube-video' | 'document-source';
+    noteType?: string;
+    captureKind?: string;
+    title: string;
+    author: string;
+    siteName?: string;
+    sourceUrl?: string;
+    folderPath?: string;
+    rootPath?: string;
+    coverUrl?: string;
+    thumbnailUrl?: string;
+    previewText: string;
+    createdAt: string;
+    updatedAt: string;
+    language?: string;
+    hasVideo: boolean;
+    hasTranscript: boolean;
+    tags: string[];
+    status?: string;
+    sampleFiles: string[];
+    fileCount: number;
+}
+
+interface KnowledgeListPageResponse {
+    items: KnowledgeCatalogSummary[];
+    nextCursor?: string | null;
+    total: number;
+    kindCounts?: Record<string, number>;
+}
+
+interface KnowledgeIndexStatus {
+    indexedCount: number;
+    pendingCount: number;
+    failedCount: number;
+    lastIndexedAt?: string | null;
+    isBuilding: boolean;
+    lastError?: string | null;
 }
 
 interface KnowledgeCardItem {
@@ -90,22 +132,6 @@ interface KnowledgeProps {
     referenceContent?: string; // 用于相似度排序的参考内容
 }
 
-interface CoverTemplate {
-    id: string;
-    name: string;
-    prompt: string;
-    styleHint: string;
-    model: string;
-    aspectRatio: string;
-    size: string;
-    quality: string;
-    count: number;
-    projectId: string;
-    titlePrefix: string;
-    referenceImages?: string[];
-    updatedAt: string;
-}
-
 interface SettingsShape {
     image_model?: string;
     image_aspect_ratio?: string;
@@ -115,35 +141,65 @@ interface SettingsShape {
 }
 
 const SHOW_WECHAT_KNOWLEDGE_ACTIONS = false;
-const COVER_TEMPLATE_STORAGE_PREFIX = 'redbox:cover-templates:v1';
-const getCoverTemplateStorageKey = (spaceId: string) => `${COVER_TEMPLATE_STORAGE_PREFIX}:${spaceId || 'default'}`;
-const createCoverTemplateId = () => `cover_tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const INLINE_TAG_LIMIT = 8;
 
-const normalizeCoverTemplate = (raw: unknown): CoverTemplate | null => {
-    if (!raw || typeof raw !== 'object') return null;
-    const item = raw as Record<string, unknown>;
-    const name = String(item.name || '').trim();
-    const prompt = String(item.prompt || '').trim();
-    if (!name || !prompt) return null;
-    const count = Number(item.count || 1);
-    return {
-        id: String(item.id || createCoverTemplateId()),
-        name,
-        prompt,
-        styleHint: String(item.styleHint || ''),
-        model: String(item.model || 'gpt-image-1'),
-        aspectRatio: String(item.aspectRatio || '3:4'),
-        size: String(item.size || '1024x1024'),
-        quality: String(item.quality || 'standard'),
-        count: Math.max(1, Math.min(4, Number.isFinite(count) ? Math.floor(count) : 1)),
-        projectId: String(item.projectId || ''),
-        titlePrefix: String(item.titlePrefix || ''),
-        referenceImages: Array.isArray(item.referenceImages)
-            ? item.referenceImages.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 4)
-            : [],
-        updatedAt: String(item.updatedAt || new Date().toISOString()),
-    };
-};
+const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
+    id: item.itemId,
+    type: item.noteType,
+    sourceUrl: item.sourceUrl,
+    title: item.title,
+    author: item.author || '原文链接',
+    content: '',
+    excerpt: item.previewText,
+    siteName: item.siteName,
+    captureKind: item.captureKind,
+    htmlFile: undefined,
+    htmlFileUrl: undefined,
+    images: [],
+    tags: item.tags,
+    cover: item.coverUrl,
+    video: undefined,
+    videoUrl: undefined,
+    transcript: item.hasTranscript ? '' : undefined,
+    transcriptionStatus: item.status as Note['transcriptionStatus'],
+    stats: {
+        likes: 0,
+        collects: undefined,
+    },
+    createdAt: item.createdAt,
+    folderPath: item.folderPath,
+});
+
+const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => ({
+    id: item.itemId,
+    videoId: item.itemId,
+    videoUrl: item.sourceUrl || '',
+    title: item.title,
+    originalTitle: undefined,
+    description: item.previewText,
+    summary: item.previewText,
+    thumbnailUrl: item.thumbnailUrl || '',
+    hasSubtitle: item.hasTranscript,
+    subtitleContent: undefined,
+    subtitleError: item.status === 'failed' ? item.previewText : undefined,
+    status: item.status as YouTubeVideo['status'],
+    createdAt: item.createdAt,
+    folderPath: item.folderPath,
+});
+
+const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): DocumentKnowledgeSource => ({
+    id: item.itemId,
+    kind: 'tracked-folder',
+    name: item.title,
+    rootPath: item.rootPath || '',
+    locked: false,
+    indexing: item.status === 'indexing',
+    indexError: undefined,
+    fileCount: Number(item.fileCount || 0),
+    sampleFiles: Array.isArray(item.sampleFiles) ? item.sampleFiles : [],
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+});
 
 // 轻量级关键词提取（用于判断内容变化率）
 const extractKeywords = (text: string): Set<string> => {
@@ -198,6 +254,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedTypeFilter, setSelectedTypeFilter] = useState<KnowledgeTypeFilter>('all');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
+    const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [imageAspectMap, setImageAspectMap] = useState<Record<string, 'portrait' | 'landscape'>>({});
     const [showSubtitle, setShowSubtitle] = useState(false);
@@ -205,17 +262,29 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isSubtitleLoading, setIsSubtitleLoading] = useState(false);
     const [isRefreshingYoutubeSummaries, setIsRefreshingYoutubeSummaries] = useState(false);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isSelectedNoteVideoPlaying, setIsSelectedNoteVideoPlaying] = useState(false);
     const [embeddedViewportWidth, setEmbeddedViewportWidth] = useState(0);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [kindCounts, setKindCounts] = useState<Record<string, number>>({});
+    const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus>({
+        indexedCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        lastIndexedAt: null,
+        isBuilding: false,
+        lastError: null,
+    });
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
+    const selectedNoteVideoRef = useRef<HTMLVideoElement>(null);
+    const allTagsDrawerRef = useRef<HTMLDivElement>(null);
     const notesRef = useRef<Note[]>([]);
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
     const hasKnowledgeSnapshotRef = useRef(false);
-    const loadNotesRequestRef = useRef(0);
-    const loadYoutubeVideosRequestRef = useRef(0);
-    const loadDocumentSourcesRequestRef = useRef(0);
     const loadAllKnowledgeRequestRef = useRef(0);
+    const loadDetailRequestRef = useRef(0);
 
     // 搜索框状态
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -271,6 +340,26 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         observer.observe(node);
         return () => observer.disconnect();
     }, [isEmbedded]);
+
+    useEffect(() => {
+        if (!isAllTagsDrawerOpen) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!allTagsDrawerRef.current?.contains(event.target as Node)) {
+                setIsAllTagsDrawerOpen(false);
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsAllTagsDrawerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isAllTagsDrawerOpen]);
 
     const embeddedUsesSingleColumn = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 640;
     const embeddedUsesCompactCard = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 420;
@@ -342,7 +431,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         // 立即尝试从缓存读取
         (async () => {
             try {
-                const cacheResult = await window.ipcRenderer.invoke('similarity:get-cache', manuscriptId) as any;
+                const cacheResult = await window.ipcRenderer.similarity.getCache(manuscriptId) as any;
 
                 if (!isMountedRef.current) return;
 
@@ -366,18 +455,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     if (!isMountedRef.current) return;
 
                     try {
-                        const embCacheResult = await window.ipcRenderer.invoke('embedding:get-manuscript-cache', manuscriptId) as any;
+                        const embCacheResult = await window.ipcRenderer.embedding.getManuscriptCache(manuscriptId) as any;
                         if (!isMountedRef.current) return;
 
                         let embedding: number[] | null = null;
-                        const currentVersion = await window.ipcRenderer.invoke('similarity:get-knowledge-version');
+                        const currentVersion = await window.ipcRenderer.similarity.getKnowledgeVersion();
 
                         if (embCacheResult?.success && embCacheResult?.cached?.contentHash === contentHash) {
                             console.log('[Knowledge] Using cached embedding');
                             embedding = embCacheResult.cached.embedding;
                         } else {
                             console.log('[Knowledge] Computing embedding...');
-                            const computeResult = await window.ipcRenderer.invoke('embedding:compute', referenceContent) as any;
+                            const computeResult = await window.ipcRenderer.embedding.compute(referenceContent) as any;
                             if (!isMountedRef.current) return;
 
                             if (!computeResult?.success || !computeResult?.embedding) {
@@ -388,7 +477,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                             embedding = computeResult.embedding;
 
-                            window.ipcRenderer.invoke('embedding:save-manuscript-cache', {
+                            window.ipcRenderer.embedding.saveManuscriptCache({
                                 filePath: manuscriptId,
                                 contentHash,
                                 embedding
@@ -397,7 +486,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                         if (!isMountedRef.current) return;
 
-                        const sortResult = await window.ipcRenderer.invoke('embedding:get-sorted-sources', embedding) as any;
+                        const sortResult = await window.ipcRenderer.embedding.getSortedSources(embedding) as any;
                         if (!isMountedRef.current) return;
 
                         if (sortResult?.success && sortResult?.sorted) {
@@ -406,7 +495,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             sortedIds.forEach((id: string, index: number) => orderMap.set(id, index));
                             setSimilarityOrder(orderMap);
                             lastContentHashRef.current = contentHash;
-                            window.ipcRenderer.invoke('similarity:save-cache', {
+                            window.ipcRenderer.similarity.saveCache({
                                 manuscriptId,
                                 contentHash,
                                 knowledgeVersion: currentVersion,
@@ -489,103 +578,79 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         setSelectedNote(null);
     }, [isExpandableXiaohongshuNote, onNavigateToRedClaw]);
 
-    const loadNotes = useCallback(async () => {
-        const requestId = loadNotesRequestRef.current + 1;
-        loadNotesRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
+    const refreshIndexStatus = useCallback(async () => {
         try {
-            const list = await window.ipcRenderer.invoke('knowledge:list') as Note[];
-            if (requestId !== loadNotesRequestRef.current) return;
-            setNotes(list || []);
-            hasKnowledgeSnapshotRef.current = true;
-        } catch (e) {
-            if (requestId !== loadNotesRequestRef.current) return;
-            console.error('Failed to load notes:', e);
-            if (!hasLocalData) {
-                setNotes([]);
-            }
-        } finally {
-            if (requestId === loadNotesRequestRef.current) {
-                setIsLoading(false);
-            }
-        }
-    }, [hasKnowledgeDataSnapshot]);
-
-    const loadYoutubeVideos = useCallback(async () => {
-        const requestId = loadYoutubeVideosRequestRef.current + 1;
-        loadYoutubeVideosRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
-        try {
-            const list = await window.ipcRenderer.invoke('knowledge:list-youtube') as YouTubeVideo[];
-            if (requestId !== loadYoutubeVideosRequestRef.current) return;
-            setYoutubeVideos(list || []);
-            hasKnowledgeSnapshotRef.current = true;
-        } catch (e) {
-            if (requestId !== loadYoutubeVideosRequestRef.current) return;
-            console.error('Failed to load YouTube videos:', e);
-            if (!hasLocalData) {
-                setYoutubeVideos([]);
-            }
-        } finally {
-            if (requestId === loadYoutubeVideosRequestRef.current) {
-                setIsLoading(false);
-            }
-        }
-    }, [hasKnowledgeDataSnapshot]);
-
-    const loadDocumentSources = useCallback(async () => {
-        const requestId = loadDocumentSourcesRequestRef.current + 1;
-        loadDocumentSourcesRequestRef.current = requestId;
-        const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
-        }
-        try {
-            const list = await window.ipcRenderer.invoke('knowledge:docs:list') as DocumentKnowledgeSource[];
-            if (requestId !== loadDocumentSourcesRequestRef.current) return;
-            setDocumentSources(Array.isArray(list) ? list : []);
-            hasKnowledgeSnapshotRef.current = true;
+            const status = await window.ipcRenderer.knowledge.getIndexStatus<KnowledgeIndexStatus>();
+            setIndexStatus(status);
         } catch (error) {
-            if (requestId !== loadDocumentSourcesRequestRef.current) return;
-            console.error('Failed to load document sources:', error);
-            if (!hasLocalData) {
-                setDocumentSources([]);
-            }
-        } finally {
-            if (requestId === loadDocumentSourcesRequestRef.current) {
-                setIsLoading(false);
-            }
+            console.error('Failed to load knowledge index status:', error);
         }
-    }, [hasKnowledgeDataSnapshot]);
+    }, []);
 
-    const loadAllKnowledge = useCallback(async () => {
+    const resolveBackendKind = useCallback((typeFilter: KnowledgeTypeFilter): string | undefined => {
+        if (typeFilter === 'youtube') return 'youtube-video';
+        if (typeFilter === 'docs') return 'document-source';
+        if (typeFilter === 'all') return undefined;
+        return 'redbook-note';
+    }, []);
+
+    const applyCatalogPage = useCallback((items: KnowledgeCatalogSummary[], append: boolean) => {
+        const nextNotes = items
+            .filter((item) => item.kind === 'redbook-note')
+            .map(catalogSummaryToNote);
+        const nextVideos = items
+            .filter((item) => item.kind === 'youtube-video')
+            .map(catalogSummaryToVideo);
+        const nextDocs = items
+            .filter((item) => item.kind === 'document-source')
+            .map(catalogSummaryToDocSource);
+        const mergeById = <T extends { id: string }>(current: T[], incoming: T[]) => {
+            const merged = new Map<string, T>();
+            current.forEach((item) => merged.set(item.id, item));
+            incoming.forEach((item) => merged.set(item.id, item));
+            return Array.from(merged.values());
+        };
+        setNotes((prev) => append ? mergeById(prev, nextNotes) : nextNotes);
+        setYoutubeVideos((prev) => append ? mergeById(prev, nextVideos) : nextVideos);
+        setDocumentSources((prev) => append ? mergeById(prev, nextDocs) : nextDocs);
+        hasKnowledgeSnapshotRef.current = hasKnowledgeSnapshotRef.current || items.length > 0;
+    }, []);
+
+    const loadCatalogPage = useCallback(async (reset: boolean) => {
         const requestId = loadAllKnowledgeRequestRef.current + 1;
         loadAllKnowledgeRequestRef.current = requestId;
         const hasLocalData = hasKnowledgeDataSnapshot();
-        if (!hasLocalData) {
-            setIsLoading(true);
+        if (reset) {
+            if (!hasLocalData) {
+                setIsLoading(true);
+            }
+        } else {
+            setIsLoadingMore(true);
         }
         try {
-            const [noteList, videoList, docList] = await Promise.all([
-                window.ipcRenderer.invoke('knowledge:list') as Promise<Note[]>,
-                window.ipcRenderer.invoke('knowledge:list-youtube') as Promise<YouTubeVideo[]>,
-                window.ipcRenderer.invoke('knowledge:docs:list') as Promise<DocumentKnowledgeSource[]>,
-            ]);
+            const response = await window.ipcRenderer.knowledge.listPage<KnowledgeListPageResponse>({
+                cursor: reset ? null : nextCursor,
+                limit: 200,
+                kind: resolveBackendKind(selectedTypeFilter),
+                query: searchQuery.trim() || undefined,
+                sort: 'updated-desc',
+            });
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
-            setNotes(Array.isArray(noteList) ? noteList : []);
-            setYoutubeVideos(Array.isArray(videoList) ? videoList : []);
-            setDocumentSources(Array.isArray(docList) ? docList : []);
-            hasKnowledgeSnapshotRef.current = true;
+            const pageItems = Array.isArray(response?.items) ? response.items : [];
+            applyCatalogPage(pageItems, !reset);
+            setNextCursor(typeof response?.nextCursor === 'string' ? response.nextCursor : null);
+            setKindCounts((response?.kindCounts && typeof response.kindCounts === 'object')
+                ? response.kindCounts
+                : {});
+            if (reset && pageItems.length === 0 && !hasLocalData) {
+                setNotes([]);
+                setYoutubeVideos([]);
+                setDocumentSources([]);
+            }
         } catch (error) {
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
-            console.error('Failed to load knowledge:', error);
-            if (!hasLocalData) {
+            console.error('Failed to load knowledge catalog page:', error);
+            if (reset && !hasLocalData) {
                 setNotes([]);
                 setYoutubeVideos([]);
                 setDocumentSources([]);
@@ -593,13 +658,67 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         } finally {
             if (requestId === loadAllKnowledgeRequestRef.current) {
                 setIsLoading(false);
+                setIsLoadingMore(false);
             }
         }
-    }, [hasKnowledgeDataSnapshot]);
+    }, [applyCatalogPage, hasKnowledgeDataSnapshot, nextCursor, resolveBackendKind, searchQuery, selectedTypeFilter]);
+
+    const loadAllKnowledge = useCallback(async () => {
+        await Promise.all([refreshIndexStatus(), loadCatalogPage(true)]);
+    }, [loadCatalogPage, refreshIndexStatus]);
+
+    const loadNotes = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadYoutubeVideos = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadDocumentSources = useCallback(async () => {
+        await loadCatalogPage(true);
+    }, [loadCatalogPage]);
+
+    const loadKnowledgeDetail = useCallback(async (itemId: string, kind: 'redbook-note' | 'youtube-video' | 'document-source') => {
+        const requestId = loadDetailRequestRef.current + 1;
+        loadDetailRequestRef.current = requestId;
+        try {
+            return await window.ipcRenderer.knowledge.getItemDetail<Record<string, unknown>>({
+                itemId,
+                kind,
+            });
+        } catch (error) {
+            console.error('Failed to load knowledge detail:', error);
+            return null;
+        }
+    }, []);
+
+    const openNoteDetail = useCallback(async (note: Note) => {
+        setSelectedNote(note);
+        const detail = await loadKnowledgeDetail(note.id, 'redbook-note');
+        if (detail && loadDetailRequestRef.current > 0) {
+            setSelectedNote(detail as unknown as Note);
+        }
+    }, [loadKnowledgeDetail]);
+
+    const openVideoDetail = useCallback(async (video: YouTubeVideo) => {
+        setSelectedVideo(video);
+        const detail = await loadKnowledgeDetail(video.id, 'youtube-video');
+        if (detail && loadDetailRequestRef.current > 0) {
+            setSelectedVideo(detail as unknown as YouTubeVideo);
+        }
+    }, [loadKnowledgeDetail]);
 
     useEffect(() => {
         void loadAllKnowledge();
     }, [loadAllKnowledge]);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            void loadAllKnowledge();
+        }, 180);
+        return () => window.clearTimeout(timeout);
+    }, [searchQuery, selectedTypeFilter, loadAllKnowledge]);
 
     // 每次从其他页面切回知识库时，强制刷新当前列表，避免页面显示旧缓存。
     useEffect(() => {
@@ -611,56 +730,49 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         void loadAllKnowledge();
     }, [isActive, loadAllKnowledge]);
 
+    const loadMoreKnowledge = useCallback(async () => {
+        if (!nextCursor || isLoadingMore) return;
+        await loadCatalogPage(false);
+    }, [isLoadingMore, loadCatalogPage, nextCursor]);
+
     // 监听 YouTube 视频更新事件
     useEffect(() => {
         const handleVideoUpdated = (_event: unknown, data: { noteId: string; status: string; hasSubtitle?: boolean; title?: string; summary?: string }) => {
             console.log('[Knowledge] Video updated:', data);
-            setYoutubeVideos(prev => prev.map(video =>
-                video.id === data.noteId
-                    ? {
-                        ...video,
-                        status: data.status as YouTubeVideo['status'],
-                        hasSubtitle: data.hasSubtitle ?? video.hasSubtitle,
-                        title: typeof data.title === 'string' && data.title.trim() ? data.title : video.title,
-                        summary: typeof data.summary === 'string' ? data.summary : video.summary,
-                    }
-                    : video
-            ));
-            // 如果当前选中的视频更新了，也更新选中状态
-            if (selectedVideo?.id === data.noteId) {
-                setSelectedVideo(prev => prev ? {
-                    ...prev,
-                    status: data.status as YouTubeVideo['status'],
-                    hasSubtitle: data.hasSubtitle ?? prev.hasSubtitle,
-                    title: typeof data.title === 'string' && data.title.trim() ? data.title : prev.title,
-                    summary: typeof data.summary === 'string' ? data.summary : prev.summary,
-                } : null);
-            }
+            void Promise.all([refreshIndexStatus(), loadYoutubeVideos()]);
         };
 
         const handleNewVideo = (_event: unknown, data: { noteId: string; title: string; status?: string }) => {
             console.log('[Knowledge] New video added:', data);
-            void loadYoutubeVideos();
+            void Promise.all([refreshIndexStatus(), loadYoutubeVideos()]);
+        };
+
+        const handleKnowledgeChanged = () => {
+            void Promise.all([refreshIndexStatus(), loadAllKnowledge()]);
         };
 
         window.ipcRenderer.on('knowledge:youtube-video-updated', handleVideoUpdated);
         window.ipcRenderer.on('knowledge:new-youtube-video', handleNewVideo);
+        window.ipcRenderer.on('knowledge:changed', handleKnowledgeChanged);
+        window.ipcRenderer.on('knowledge:catalog-updated', handleKnowledgeChanged);
 
         return () => {
             window.ipcRenderer.off('knowledge:youtube-video-updated', handleVideoUpdated);
             window.ipcRenderer.off('knowledge:new-youtube-video', handleNewVideo);
+            window.ipcRenderer.off('knowledge:changed', handleKnowledgeChanged);
+            window.ipcRenderer.off('knowledge:catalog-updated', handleKnowledgeChanged);
         };
-    }, [loadYoutubeVideos, selectedVideo?.id]);
+    }, [loadAllKnowledge, loadYoutubeVideos, refreshIndexStatus]);
 
     useEffect(() => {
         const handleDocsUpdated = () => {
-            void loadDocumentSources();
+            void Promise.all([refreshIndexStatus(), loadDocumentSources()]);
         };
         window.ipcRenderer.on('knowledge:docs-updated', handleDocsUpdated);
         return () => {
             window.ipcRenderer.off('knowledge:docs-updated', handleDocsUpdated);
         };
-    }, [loadDocumentSources]);
+    }, [loadDocumentSources, refreshIndexStatus]);
 
     // Aggregate tags from notes
     const allTags = useMemo(() => {
@@ -677,6 +789,31 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             .map(([tag, count]) => ({ tag, count }));
     }, [notes]);
 
+    useEffect(() => {
+        if (!selectedTag) return;
+        if (!allTags.some((item) => item.tag === selectedTag)) {
+            setSelectedTag(null);
+            setIsAllTagsDrawerOpen(false);
+        }
+    }, [allTags, selectedTag]);
+
+    const inlineTagItems = useMemo(() => {
+        const leadingTags = allTags.slice(0, INLINE_TAG_LIMIT);
+        if (!selectedTag) {
+            return leadingTags;
+        }
+        if (leadingTags.some((item) => item.tag === selectedTag)) {
+            return leadingTags;
+        }
+        const selectedEntry = allTags.find((item) => item.tag === selectedTag);
+        if (!selectedEntry) {
+            return leadingTags;
+        }
+        return [...leadingTags.slice(0, Math.max(0, INLINE_TAG_LIMIT - 1)), selectedEntry];
+    }, [allTags, selectedTag]);
+
+    const hasHiddenTags = allTags.length > inlineTagItems.length;
+
     const orderImages = (images: string[]) => {
         return [...images].sort((a, b) => {
             const extractIndex = (value: string) => {
@@ -692,6 +829,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         });
     };
 
+    const getNoteCoverImage = (note: Note) => {
+        const orderedImages = orderImages(note.images || []);
+        return note.cover || orderedImages[0] || '';
+    };
+
     const knowledgeItems = useMemo<KnowledgeCardItem[]>(() => {
         const noteItems: KnowledgeCardItem[] = notes.map((note) => {
             const orderedImages = orderImages(note.images || []);
@@ -699,7 +841,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 ? note.captureKind === 'wechat-article'
                     ? 'wechat-article'
                     : 'link-article'
-                : note.video
+                : note.captureKind === 'douyin-video'
+                    ? 'douyin-video'
+                    : (note.captureKind === 'xhs-video' || note.video)
                     ? 'xhs-video'
                     : 'xhs-image';
 
@@ -714,7 +858,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     note.author,
                     note.siteName,
                     note.excerpt,
-                    note.content,
                     note.sourceUrl,
                     ...(note.tags || []),
                 ].join('\n').toLowerCase(),
@@ -754,31 +897,35 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         const counts: Record<Exclude<KnowledgeTypeFilter, 'all'>, number> = {
             'xhs-image': 0,
             'xhs-video': 0,
+            'douyin-video': 0,
             'link-article': 0,
             'wechat-article': 0,
-            'youtube': 0,
-            'docs': 0,
+            'youtube': Number(kindCounts['youtube-video'] || 0),
+            'docs': Number(kindCounts['document-source'] || 0),
         };
         knowledgeItems.forEach((item) => {
+            if (item.kind === 'youtube' || item.kind === 'docs') {
+                return;
+            }
             counts[item.kind] += 1;
         });
         return [
-            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
+            { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
+            { key: 'douyin-video' as const, label: '抖音视频', count: counts['douyin-video'] },
             { key: 'link-article' as const, label: '链接文章', count: counts['link-article'] },
             ...(SHOW_WECHAT_KNOWLEDGE_ACTIONS ? [{ key: 'wechat-article' as const, label: '公众号文章', count: counts['wechat-article'] }] : []),
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
             { key: 'docs' as const, label: '文档', count: counts.docs },
         ].filter((item) => item.key === 'all' || item.count > 0);
-    }, [knowledgeItems]);
+    }, [kindCounts, knowledgeItems]);
 
     const youtubeSummaryPendingCount = useMemo(() => {
         return youtubeVideos.filter((video) => video.hasSubtitle && !String(video.summary || '').trim()).length;
     }, [youtubeVideos]);
 
     const filteredKnowledgeItems = useMemo(() => {
-        const query = searchQuery.trim().toLowerCase();
         const filtered = knowledgeItems.filter((item) => {
             if (selectedTypeFilter !== 'all' && item.kind !== selectedTypeFilter) {
                 return false;
@@ -786,10 +933,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             if (selectedTag && !item.tags.includes(selectedTag)) {
                 return false;
             }
-            if (!query) {
-                return true;
-            }
-            return item.searchText.includes(query);
+            return true;
         });
 
         if (similarityOrder.size > 0) {
@@ -809,6 +953,23 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         return aspect === 'landscape' ? 'aspect-[4/3]' : 'aspect-[3/4]';
     };
 
+    const handleAllTagsClick = useCallback(() => {
+        if (selectedTag) {
+            setSelectedTag(null);
+            setIsAllTagsDrawerOpen(false);
+            return;
+        }
+        if (!hasHiddenTags) {
+            return;
+        }
+        setIsAllTagsDrawerOpen((prev) => !prev);
+    }, [hasHiddenTags, selectedTag]);
+
+    const handleTagSelection = useCallback((tag: string) => {
+        setSelectedTag((prev) => prev === tag ? null : tag);
+        setIsAllTagsDrawerOpen(false);
+    }, []);
+
     const handleImageLoad = (key: string, event: SyntheticEvent<HTMLImageElement>) => {
         const img = event.currentTarget;
         const aspect = img.naturalWidth > img.naturalHeight ? 'landscape' : 'portrait';
@@ -820,14 +981,49 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setSelectedImageIndex(0);
             setIsImagePreviewOpen(false);
             setShowTranscript(false);
+            setIsSelectedNoteVideoPlaying(false);
         }
     }, [selectedNote]);
+
+    useEffect(() => {
+        if (!isSelectedNoteVideoPlaying) return;
+        selectedNoteVideoRef.current?.play().catch(() => {});
+    }, [isSelectedNoteVideoPlaying]);
 
     useEffect(() => {
         if (selectedVideo) {
             setShowSubtitle(false);
         }
     }, [selectedVideo]);
+
+    useEffect(() => {
+        if (!selectedVideo) return;
+        const latest = youtubeVideos.find(video => video.id === selectedVideo.id);
+        if (!latest) return;
+        setSelectedVideo(prev => {
+            if (!prev || prev.id !== latest.id) return prev;
+            const nextSubtitleContent = prev.subtitleContent || latest.subtitleContent;
+            if (
+                prev.title === latest.title &&
+                prev.description === latest.description &&
+                prev.summary === latest.summary &&
+                prev.thumbnailUrl === latest.thumbnailUrl &&
+                prev.hasSubtitle === latest.hasSubtitle &&
+                prev.subtitleError === latest.subtitleError &&
+                prev.status === latest.status &&
+                prev.createdAt === latest.createdAt &&
+                prev.folderPath === latest.folderPath &&
+                prev.subtitleContent === nextSubtitleContent
+            ) {
+                return prev;
+            }
+            return {
+                ...prev,
+                ...latest,
+                subtitleContent: nextSubtitleContent,
+            };
+        });
+    }, [selectedVideo, youtubeVideos]);
 
     const loadSelectedVideoSubtitle = useCallback(async (video: YouTubeVideo) => {
         if (!video?.id) return;
@@ -861,33 +1057,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
     useEffect(() => {
         const handleNoteUpdated = (_event: unknown, data: { noteId: string; hasTranscript?: boolean; transcriptionStatus?: 'processing' | 'completed' | 'failed' }) => {
-            setNotes(prev => prev.map(note => {
-                if (note.id !== data.noteId) return note;
-                return {
-                    ...note,
-                    transcript: data.hasTranscript ? note.transcript : note.transcript,
-                    transcriptionStatus: data.transcriptionStatus || note.transcriptionStatus,
-                };
-            }));
-            if (selectedNote?.id === data.noteId && data.transcriptionStatus) {
-                setSelectedNote(prev => prev && prev.id === data.noteId
-                    ? { ...prev, transcriptionStatus: data.transcriptionStatus }
-                    : prev
-                );
-            }
-            void loadNotes();
+            void Promise.all([refreshIndexStatus(), loadNotes()]);
         };
         window.ipcRenderer.on('knowledge:note-updated', handleNoteUpdated);
         return () => {
             window.ipcRenderer.off('knowledge:note-updated', handleNoteUpdated);
         };
-    }, [loadNotes, selectedNote]);
+    }, [loadNotes, refreshIndexStatus]);
 
     const handleDeleteNote = async (noteId: string) => {
         if (!(await appConfirm('确定要删除这篇笔记吗？', { title: '删除笔记', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
-            await window.ipcRenderer.invoke('knowledge:delete', noteId);
+            await window.ipcRenderer.knowledge.deleteNote(noteId);
             setNotes(notes.filter(n => n.id !== noteId));
             if (selectedNote?.id === noteId) {
                 setSelectedNote(null);
@@ -902,13 +1084,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             setIsTranscribing(true);
             setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'processing' } : note));
             setSelectedNote(prev => prev && prev.id === noteId ? { ...prev, transcriptionStatus: 'processing' } : prev);
-            const res = await window.ipcRenderer.invoke('knowledge:transcribe', noteId) as { success: boolean; transcript?: string; error?: string };
+            const res = await window.ipcRenderer.knowledge.transcribe(noteId) as { success: boolean; transcript?: string; error?: string };
             if (res.success) {
-                await loadNotes();
-                const updated = await window.ipcRenderer.invoke('knowledge:list') as Note[];
-                setNotes(updated || []);
-                const refreshed = (updated || []).find(n => n.id === noteId) || null;
-                setSelectedNote(refreshed);
+                await Promise.all([refreshIndexStatus(), loadNotes()]);
+                const refreshed = await loadKnowledgeDetail(noteId, 'redbook-note');
+                setSelectedNote((refreshed as unknown as Note) || null);
                 setShowTranscript(true);
             } else {
                 setNotes(prev => prev.map(note => note.id === noteId ? { ...note, transcriptionStatus: 'failed' } : note));
@@ -936,7 +1116,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
             const settings = await window.ipcRenderer.getSettings() as SettingsShape | undefined;
             const spaceId = String(settings?.active_space_id || 'default').trim() || 'default';
-            const storageKey = getCoverTemplateStorageKey(spaceId);
 
             const now = new Date().toISOString();
             const title = String(note.title || '未命名笔记').trim();
@@ -955,54 +1134,26 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 note.sourceUrl ? `原文：${note.sourceUrl}` : '',
                 `已绑定封面参考图，可在生成时直接复用。`,
             ].filter(Boolean).join('\n');
-
-            let persistedCoverImage = coverImage;
-            try {
-                const saved = await window.ipcRenderer.invoke('cover:save-template-image', {
-                    imageSource: coverImage,
-                }) as { success?: boolean; previewUrl?: string; error?: string };
-                if (saved?.success && saved.previewUrl) {
-                    persistedCoverImage = saved.previewUrl;
-                } else if (saved?.error) {
-                    console.warn('cover:save-template-image returned fallback:', saved.error);
-                }
-            } catch (error) {
-                console.warn('Failed to persist cover template image to cover folder, fallback to original url:', error);
+            const result = await window.ipcRenderer.cover.templates.save({
+                template: {
+                    name: templateName,
+                    prompt,
+                    styleHint,
+                    model: String(settings?.image_model || 'gpt-image-1'),
+                    aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
+                    size: String(settings?.image_size || ''),
+                    quality: String(settings?.image_quality || 'standard'),
+                    count: 1,
+                    projectId: '',
+                    titlePrefix: title.slice(0, 32),
+                    templateImage: coverImage,
+                    updatedAt: now,
+                },
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '保存封面模板失败');
+                return;
             }
-
-            let existing: CoverTemplate[] = [];
-            try {
-                const raw = window.localStorage.getItem(storageKey);
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    existing = Array.isArray(parsed)
-                        ? parsed.map(normalizeCoverTemplate).filter((item): item is CoverTemplate => Boolean(item))
-                        : [];
-                }
-            } catch (error) {
-                console.error('Failed to parse existing cover templates:', error);
-            }
-
-            const created: CoverTemplate = {
-                id: createCoverTemplateId(),
-                name: templateName,
-                prompt,
-                styleHint,
-                model: String(settings?.image_model || 'gpt-image-1'),
-                aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
-                size: String(settings?.image_size || ''),
-                quality: String(settings?.image_quality || 'standard'),
-                count: 1,
-                projectId: '',
-                titlePrefix: title.slice(0, 32),
-                referenceImages: [persistedCoverImage],
-                updatedAt: now,
-            };
-
-            const nextTemplates = [created, ...existing]
-                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                .slice(0, 300);
-            window.localStorage.setItem(storageKey, JSON.stringify(nextTemplates));
             window.dispatchEvent(new CustomEvent('cover:templates-updated', {
                 detail: { spaceId },
             }));
@@ -1017,7 +1168,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         if (!(await appConfirm('确定要删除这个视频吗？', { title: '删除视频', confirmLabel: '删除', tone: 'danger' }))) return;
 
         try {
-            await window.ipcRenderer.invoke('knowledge:delete-youtube', videoId);
+            await window.ipcRenderer.knowledge.deleteYoutube(videoId);
             setYoutubeVideos(youtubeVideos.filter(v => v.id !== videoId));
             if (selectedVideo?.id === videoId) {
                 setSelectedVideo(null);
@@ -1035,13 +1186,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         try {
             // 更新本地状态为处理中
             setYoutubeVideos(prev => prev.map(v =>
-                v.id === videoId ? { ...v, status: 'processing' as const } : v
+                v.id === videoId ? { ...v, status: 'processing' as const, subtitleError: undefined } : v
             ));
             if (selectedVideo?.id === videoId) {
-                setSelectedVideo(prev => prev ? { ...prev, status: 'processing' } : null);
+                setSelectedVideo(prev => prev ? { ...prev, status: 'processing', subtitleError: undefined } : null);
             }
 
-            await window.ipcRenderer.invoke('knowledge:retry-youtube-subtitle', videoId);
+            await window.ipcRenderer.knowledge.retryYoutubeSubtitle(videoId);
             // 状态更新会通过 IPC 事件 'knowledge:youtube-video-updated' 自动处理
         } catch (e) {
             console.error('Failed to retry subtitle:', e);
@@ -1051,7 +1202,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleRefreshYoutubeSummaries = async () => {
         try {
             setIsRefreshingYoutubeSummaries(true);
-            const result = await window.ipcRenderer.invoke('knowledge:youtube-regenerate-summaries') as {
+            const result = await window.ipcRenderer.knowledge.regenerateYoutubeSummaries() as {
                 success?: boolean;
                 updated?: number;
                 skipped?: number;
@@ -1074,7 +1225,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddDocumentFiles = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-files') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addDocFiles() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加文件失败');
             return;
@@ -1083,7 +1234,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddDocumentFolder = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-folder') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addDocFolder() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加文件夹失败');
             return;
@@ -1092,7 +1243,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     };
 
     const handleAddObsidianVault = async () => {
-        const result = await window.ipcRenderer.invoke('knowledge:docs:add-obsidian-vault') as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.addObsidianVault() as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '添加 Obsidian 仓库失败');
             return;
@@ -1102,7 +1253,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
     const handleDeleteDocumentSource = async (source: DocumentKnowledgeSource) => {
         if (!(await appConfirm(`确定要移除文档源“${source.name}”吗？`, { title: '移除文档源', confirmLabel: '移除', tone: 'danger' }))) return;
-        const result = await window.ipcRenderer.invoke('knowledge:docs:delete-source', source.id) as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.knowledge.deleteDocSource(source.id) as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '删除文档源失败');
             return;
@@ -1113,7 +1264,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const handleShowInFolder = async (source?: string) => {
         const normalized = String(source || '').trim();
         if (!normalized) return;
-        const result = await window.ipcRenderer.invoke('file:show-in-folder', { source: normalized }) as { success?: boolean; error?: string };
+        const result = await window.ipcRenderer.files.showInFolder({ source: normalized }) as { success?: boolean; error?: string };
         if (!result?.success) {
             void appAlert(result?.error || '打开文件夹失败');
         }
@@ -1125,6 +1276,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 return '小红书图文';
             case 'xhs-video':
                 return '小红书视频';
+            case 'douyin-video':
+                return '抖音视频';
             case 'link-article':
                 return '链接文章';
             case 'wechat-article':
@@ -1144,6 +1297,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 return 'bg-rose-500/90 text-white';
             case 'xhs-video':
                 return 'bg-red-500/90 text-white';
+            case 'douyin-video':
+                return 'bg-neutral-900 text-white';
             case 'link-article':
                 return 'bg-sky-500/90 text-white';
             case 'wechat-article':
@@ -1215,10 +1370,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         )}
                         <button
                             onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded hover:bg-surface-hover transition-colors"
+                            className="inline-flex h-9 items-center gap-2 rounded-xl bg-amber-500 px-3.5 text-[12px] font-bold text-white shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-600 active:scale-95"
                             title="保存封面为模板"
                         >
-                            <BookmarkPlus className="w-3 h-3" />
+                            <BookmarkPlus className="w-3.5 h-3.5" />
                             存为封面模板
                         </button>
                         {selectedNote.video && !selectedNote.transcript && (
@@ -1243,19 +1398,43 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 
                 {selectedNote.video && (
                     <div className="relative mx-auto w-full mb-4">
-                        <div className="relative rounded-lg overflow-hidden border border-border bg-surface-secondary">
-                            <video
-                                src={resolveAssetUrl(selectedNote.video)}
-                                className="block w-full h-auto max-h-[300px] object-contain"
-                                controls
-                                playsInline
-                                preload="metadata"
-                            />
+                        <div className="flex justify-center">
+                        <div className="relative inline-flex max-w-full overflow-hidden rounded-lg border border-border bg-black">
+                            {isSelectedNoteVideoPlaying || !getNoteCoverImage(selectedNote) ? (
+                                <video
+                                    ref={selectedNoteVideoRef}
+                                    src={resolveAssetUrl(selectedNote.video)}
+                                    className="block max-h-[300px] w-auto max-w-full object-contain"
+                                    controls
+                                    autoPlay
+                                    playsInline
+                                    preload="metadata"
+                                />
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSelectedNoteVideoPlaying(true)}
+                                    className="group relative block h-full w-full"
+                                >
+                                    <img
+                                        src={resolveAssetUrl(getNoteCoverImage(selectedNote))}
+                                        alt={selectedNote.title}
+                                        className="block max-h-[300px] w-auto max-w-full object-contain"
+                                    />
+                                    <div className="absolute inset-0 bg-black/20 transition-all group-hover:bg-black/30" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-xl backdrop-blur-md transition-transform group-hover:scale-105">
+                                            <Play className="ml-1 h-7 w-7 fill-current" />
+                                        </div>
+                                    </div>
+                                </button>
+                            )}
+                        </div>
                         </div>
                     </div>
                 )}
 
-                {selectedNote.images && selectedNote.images.length > 0 && (() => {
+                {!selectedNote.video && selectedNote.images && selectedNote.images.length > 0 && (() => {
                    const orderedImages = orderImages(selectedNote.images);
                    const currentImage = orderedImages[selectedImageIndex];
                    return (
@@ -1418,33 +1597,33 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     }
 
     return (
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col bg-surface-primary">
             <div
                 className={clsx(
-                    'border-b border-border bg-surface-primary',
+                    'z-30 border-b border-border/50 bg-surface-primary/90 backdrop-blur-[32px]',
                     isEmbedded ? 'px-3 py-2' : 'px-6 py-4'
                 )}
             >
-                <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3')}>
-                    <div className="flex items-center gap-2 py-1">
+                <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3.5')}>
+                    <div className="flex items-center gap-3 py-1">
                         <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar">
                             {typeFilters.map((item) => (
                                 <button
                                     key={item.key}
                                     onClick={() => setSelectedTypeFilter(item.key)}
                                     className={clsx(
-                                        'shrink-0 px-3.5 py-2 text-xs rounded-xl border transition-all flex items-center gap-2 backdrop-blur-sm',
+                                        'shrink-0 px-3.5 py-1.5 text-[12px] font-bold rounded-xl border transition-all flex items-center gap-2 active:scale-95',
                                         selectedTypeFilter === item.key
-                                            ? 'bg-text-primary text-white border-text-primary shadow-md'
-                                            : 'bg-surface-primary text-text-secondary border-border hover:border-text-tertiary/30 hover:bg-surface-secondary hover:text-text-primary'
+                                            ? 'border-transparent bg-accent-primary text-white shadow-lg shadow-accent-primary/20'
+                                            : 'border-border/70 bg-surface-secondary/70 text-text-secondary hover:bg-surface-tertiary/70 hover:text-text-primary'
                                     )}
                                 >
-                                    <span className="font-medium tracking-[0.01em]">{item.label}</span>
+                                    <span>{item.label}</span>
                                     <span className={clsx(
-                                        'text-[10px] px-1.5 py-0.5 rounded-lg',
+                                        'text-[10px] px-1.5 py-0.5 rounded-lg font-bold',
                                         selectedTypeFilter === item.key
-                                            ? 'bg-white/15 text-white'
-                                            : 'bg-surface-secondary text-text-tertiary'
+                                            ? 'bg-white/20 text-white'
+                                            : 'bg-surface-primary/70 text-text-tertiary'
                                     )}>
                                         {item.count}
                                     </span>
@@ -1453,9 +1632,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         </div>
 
                         {isSearchOpen ? (
-                            <div className="flex items-center gap-2 shrink-0">
-                                <div className="relative w-[220px] sm:w-[260px]">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
+                            <div className="flex items-center gap-2 shrink-0 animate-in fade-in slide-in-from-right-4 duration-300">
+                                <div className="relative w-[240px] sm:w-[300px]">
+                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary" />
                                     <input
                                         ref={searchInputRef}
                                         type="text"
@@ -1463,14 +1642,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         placeholder="搜索知识库..."
                                         autoFocus
-                                        className="w-full bg-surface-secondary border border-border rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        className="w-full rounded-xl border border-border/70 bg-surface-secondary/70 pl-9 pr-8 py-2 text-[13px] font-bold text-text-primary placeholder:text-text-tertiary/70 focus:bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-primary/10 transition-all"
                                     />
                                     {searchQuery && (
                                         <button
                                             onClick={() => setSearchQuery('')}
-                                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary"
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary transition-colors"
                                         >
-                                            <X className="w-3 h-3" />
+                                            <X className="w-3.5 h-3.5" />
                                         </button>
                                     )}
                                 </div>
@@ -1479,56 +1658,63 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         setIsSearchOpen(false);
                                         setSearchQuery('');
                                     }}
-                                    className="px-3 py-2 text-sm text-text-tertiary hover:text-text-primary hover:bg-surface-secondary rounded-lg transition-colors"
+                                    className="rounded-xl px-3.5 py-2 text-[12px] font-bold text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all"
                                 >
                                     取消
                                 </button>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-center gap-1.5 shrink-0">
                                 <button
                                     onClick={() => setIsSearchOpen(true)}
-                                    className="inline-flex h-9 px-3 text-text-tertiary hover:text-text-primary hover:bg-surface-secondary rounded-lg transition-colors border border-border/60 items-center justify-center"
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all active:scale-90"
                                     title="搜索 (Cmd+F)"
                                 >
                                     <Search className="w-4 h-4" />
                                 </button>
                                 {!isEmbedded && (
                                     <>
+                                        <div className="mx-1 h-4 w-[1px] bg-border/80" />
+                                        
                                         {(selectedTypeFilter === 'all' || selectedTypeFilter === 'youtube') && youtubeSummaryPendingCount > 0 && (
                                             <button
                                                 onClick={() => void handleRefreshYoutubeSummaries()}
                                                 disabled={isRefreshingYoutubeSummaries}
-                                                className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                                className="inline-flex items-center gap-1.5 h-9 px-3.5 text-[12px] font-bold rounded-xl bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20 transition-all disabled:opacity-40 active:scale-95"
                                             >
                                                 {isRefreshingYoutubeSummaries ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                                                补全 YouTube 摘要
-                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-secondary text-text-tertiary">
+                                                补全摘要
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-lg bg-accent-primary/10 font-bold">
                                                     {youtubeSummaryPendingCount}
                                                 </span>
                                             </button>
                                         )}
+
                                         <button
-                                            onClick={handleAddDocumentFiles}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
+                                            onClick={() => void window.ipcRenderer.knowledge.rebuildCatalog().then(() => refreshIndexStatus())}
+                                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/70 bg-surface-secondary/75 px-3.5 text-[12px] font-bold text-text-primary hover:bg-surface-tertiary/80 transition-all active:scale-95"
+                                            title="重建知识索引"
                                         >
-                                            <Plus className="w-3.5 h-3.5" />
-                                            文件
+                                            <RefreshCw className="w-3.5 h-3.5" />
+                                            重建索引
                                         </button>
-                                        <button
-                                            onClick={handleAddDocumentFolder}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
-                                        >
-                                            <FolderPlus className="w-3.5 h-3.5" />
-                                            文件夹
-                                        </button>
-                                        <button
-                                            onClick={handleAddObsidianVault}
-                                            className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium border border-border rounded-lg bg-surface-primary hover:bg-surface-secondary transition-colors"
-                                        >
-                                            <FolderOpen className="w-3.5 h-3.5" />
-                                            Obsidian
-                                        </button>
+                                        
+                                        <div className="flex items-center gap-1 rounded-xl border border-border/80 bg-surface-elevated p-1 shadow-lg shadow-black/10">
+                                            <button
+                                                onClick={handleAddDocumentFiles}
+                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
+                                            >
+                                                <Plus className="w-3.5 h-3.5" />
+                                                文件
+                                            </button>
+                                            <button
+                                                onClick={handleAddDocumentFolder}
+                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
+                                            >
+                                                <FolderPlus className="w-3.5 h-3.5" />
+                                                文件夹
+                                            </button>
+                                        </div>
                                     </>
                                 )}
                             </div>
@@ -1536,51 +1722,130 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     </div>
 
                     {!isEmbedded && allTags.length > 0 && (
-                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                            <button
-                                onClick={() => setSelectedTag(null)}
-                                className={clsx(
-                                    'shrink-0 px-3 py-1 text-xs font-medium rounded-full transition-all border',
-                                    !selectedTag
-                                        ? 'bg-surface-primary text-text-primary border-border shadow-sm ring-1 ring-border/50'
-                                        : 'bg-transparent text-text-tertiary border-transparent hover:bg-surface-secondary hover:text-text-secondary'
-                                )}
-                            >
-                                全部标签
-                            </button>
-                            {allTags.map(({ tag, count }) => (
+                        <div ref={allTagsDrawerRef} className="relative py-0.5">
+                            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                                 <button
-                                    key={tag}
-                                    onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                                    onClick={handleAllTagsClick}
                                     className={clsx(
-                                        'shrink-0 px-3 py-1 text-xs rounded-full transition-all flex items-center gap-1.5 border',
-                                        selectedTag === tag
-                                            ? tag === '公众号文章'
-                                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20'
-                                                : tag === '网页文章'
-                                                    ? 'bg-sky-600 text-white border-sky-600 shadow-md shadow-sky-600/20'
-                                                    : 'bg-accent-primary text-white border-accent-primary shadow-md shadow-accent-primary/20'
-                                            : clsx('bg-surface-secondary/50 border-transparent hover:bg-surface-secondary hover:text-text-primary', getKnowledgeTagClass(tag))
+                                        'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider inline-flex items-center gap-1.5',
+                                        !selectedTag
+                                            ? 'bg-black/[0.04] text-text-primary border-transparent shadow-sm'
+                                            : 'bg-transparent text-text-tertiary border-transparent hover:bg-black/[0.03] hover:text-text-secondary'
                                     )}
                                 >
-                                    <span className="opacity-70">#</span>
-                                    {tag}
+                                    <span>All Tags</span>
                                     <span
                                         className={clsx(
-                                            'text-[10px] py-0.5 px-1.5 rounded-full',
-                                            selectedTag === tag
-                                                ? 'bg-white/20 text-white'
-                                                : tag === '公众号文章'
-                                                    ? 'bg-emerald-100 text-emerald-700'
-                                                    : tag === '网页文章'
-                                                        ? 'bg-sky-100 text-sky-700'
-                                                        : 'bg-surface-tertiary text-text-tertiary'
+                                            'inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[9px] font-bold',
+                                            !selectedTag
+                                                ? 'bg-black/5 text-text-tertiary/80'
+                                                : 'bg-black/[0.04] text-text-tertiary/70'
                                         )}
                                     >
-                                        {count}
+                                        {allTags.length}
                                     </span>
+                                    {hasHiddenTags && (
+                                        <ChevronRight
+                                            className={clsx(
+                                                'w-3 h-3 opacity-60 transition-transform duration-200',
+                                                !selectedTag && isAllTagsDrawerOpen && 'rotate-90'
+                                            )}
+                                        />
+                                    )}
                                 </button>
-                            ))}
+                                {inlineTagItems.map(({ tag, count }) => (
+                                    <button
+                                        key={tag}
+                                        onClick={() => handleTagSelection(tag)}
+                                        className={clsx(
+                                            'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
+                                            selectedTag === tag
+                                                ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                                : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                        )}
+                                    >
+                                        <span className="opacity-40">#</span>
+                                        {tag}
+                                        <span
+                                            className={clsx(
+                                                'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
+                                                selectedTag === tag
+                                                    ? 'bg-white/20 text-white'
+                                                    : 'bg-black/5 text-text-tertiary/60'
+                                            )}
+                                        >
+                                            {count}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {!selectedTag && isAllTagsDrawerOpen && hasHiddenTags && (
+                                <div className="absolute left-0 right-0 top-full z-20 mt-3">
+                                    <div className="rounded-2xl border border-black/[0.05] bg-white/95 shadow-xl shadow-black/[0.08] backdrop-blur-xl">
+                                    <div className="flex items-center justify-between gap-3 border-b border-black/[0.04] px-4 py-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[12px] font-extrabold text-text-primary tracking-tight">全部标签</div>
+                                            <div className="mt-1 text-[10px] font-medium text-text-tertiary/70">
+                                                共 {allTags.length} 个标签，点击即可筛选内容
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => setIsAllTagsDrawerOpen(false)}
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-text-tertiary hover:bg-black/[0.04] hover:text-text-primary transition-all active:scale-90"
+                                            title="收起标签抽屉"
+                                        >
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                    <div className="max-h-[240px] overflow-y-auto px-4 py-4">
+                                        <div className="flex flex-wrap gap-2">
+                                            {allTags.map(({ tag, count }) => (
+                                                <button
+                                                    key={`drawer-${tag}`}
+                                                    onClick={() => handleTagSelection(tag)}
+                                                    className={clsx(
+                                                        'px-3 py-1.5 text-[11px] rounded-xl transition-all flex items-center gap-1.5 border font-bold',
+                                                        selectedTag === tag
+                                                            ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
+                                                            : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                                    )}
+                                                >
+                                                    <span className="opacity-40">#</span>
+                                                    {tag}
+                                                    <span
+                                                        className={clsx(
+                                                            'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
+                                                            selectedTag === tag
+                                                                ? 'bg-white/20 text-white'
+                                                                : 'bg-black/5 text-text-tertiary/60'
+                                                        )}
+                                                    >
+                                                        {count}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {!isEmbedded && (
+                        <div className="flex items-center gap-3 text-[11px] font-medium text-text-tertiary/70">
+                            <span>已索引 {indexStatus.indexedCount}</span>
+                            {indexStatus.isBuilding && (
+                                <span className="inline-flex items-center gap-1.5 text-amber-600">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    索引构建中
+                                </span>
+                            )}
+                            {indexStatus.pendingCount > 0 && <span>待处理 {indexStatus.pendingCount}</span>}
+                            {indexStatus.failedCount > 0 && <span className="text-red-500">失败 {indexStatus.failedCount}</span>}
+                            {indexStatus.lastIndexedAt && <span>最近更新 {new Date(indexStatus.lastIndexedAt).toLocaleString()}</span>}
+                            {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}
                         </div>
                     )}
                 </div>
@@ -1606,58 +1871,47 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         return (
                                             <div
                                                 key={item.id}
-                                                className="mb-3 break-inside-avoid rounded-xl border border-border bg-surface-primary p-3 shadow-sm"
+                                                className="mb-3 break-inside-avoid rounded-2xl border border-black/[0.04] bg-white shadow-sm p-4 transition-all"
                                             >
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div className="min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="text-sm font-semibold text-text-primary truncate">{source.name}</div>
-                                                            <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', getKnowledgeKindBadgeClass('docs'))}>
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <div className="text-[14px] font-extrabold text-text-primary truncate tracking-tight">{source.name}</div>
+                                                            <span className={clsx('text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg', getKnowledgeKindBadgeClass('docs'))}>
                                                                 {getKnowledgeKindLabel('docs')}
                                                             </span>
                                                             {source.locked && (
-                                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                                                                    锁定目录
+                                                                <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-600 border border-amber-100">
+                                                                    LOCKED
                                                                 </span>
                                                             )}
                                                         </div>
-                                                        <div className="mt-1 text-[11px] text-text-tertiary break-all">{source.rootPath}</div>
+                                                        <div className="mt-1.5 text-[10px] font-bold text-text-tertiary/60 break-all uppercase tracking-tighter">{source.rootPath}</div>
                                                     </div>
                                                     <button
                                                         type="button"
                                                         onClick={() => void handleDeleteDocumentSource(source)}
-                                                        className="p-1.5 rounded-md text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                                                        className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 transition-all active:scale-90"
                                                         title="移除此文档源"
                                                     >
                                                         <Trash2 className="w-3.5 h-3.5" />
                                                     </button>
                                                 </div>
-                                                <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px] text-text-secondary">
-                                                    <span className="inline-flex items-center gap-1 rounded-md bg-surface-secondary px-2 py-1">
-                                                        <FileText className="w-3 h-3" />
-                                                        {source.fileCount} 个文档
+                                                <div className="mt-3.5 flex flex-wrap gap-1.5 text-[10px] font-bold">
+                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.03] px-2.5 py-1.5 text-text-secondary border border-black/[0.02]">
+                                                        <FileText className="w-3 h-3 opacity-60" />
+                                                        {source.fileCount} DOCUMENTS
                                                     </span>
-                                                    {source.indexing && (
-                                                        <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 text-blue-700 px-2 py-1">
-                                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                                            建立索引中
-                                                        </span>
-                                                    )}
-                                                    {!source.indexing && source.indexError && (
-                                                        <span className="inline-flex items-center gap-1 rounded-md bg-red-100 text-red-700 px-2 py-1">
-                                                            索引失败
-                                                        </span>
-                                                    )}
                                                 </div>
                                                 {source.sampleFiles.length > 0 && (
-                                                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                                                    <div className="mt-3.5 flex flex-wrap gap-1.5">
                                                         {source.sampleFiles.slice(0, 6).map((file) => (
                                                             <span
                                                                 key={`${source.id}-${file}`}
-                                                                className="inline-flex max-w-full items-start gap-1 text-[11px] px-2 py-1 rounded-md bg-surface-secondary text-text-secondary"
+                                                                className="inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg bg-black/[0.02] text-text-tertiary border border-black/[0.01]"
                                                             >
-                                                                <FileText className="w-3 h-3 shrink-0 mt-0.5" />
-                                                                <span className="min-w-0 break-all leading-relaxed">{file}</span>
+                                                                <FileText className="w-3 h-3 shrink-0 mt-0.5 opacity-40" />
+                                                                <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
                                                             </span>
                                                         ))}
                                                     </div>
@@ -1673,71 +1927,66 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         return (
                                             <button
                                                 key={item.id}
-                                                onClick={() => setSelectedVideo(video)}
+                                                onClick={() => void openVideoDetail(video)}
                                                 className={clsx(
-                                                    'group mb-3 break-inside-avoid w-full text-left bg-surface-primary border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow',
-                                                    isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-border'
+                                                    'group mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
+                                                    isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
                                                 )}
                                             >
-                                                <div className="relative aspect-[16/10] bg-surface-secondary overflow-hidden">
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass('youtube'))}>
+                                                <div className="relative aspect-[16/10] bg-black/[0.02] overflow-hidden">
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md', getKnowledgeKindBadgeClass('youtube'))}>
                                                         {getKnowledgeKindLabel('youtube')}
                                                     </span>
                                                     {video.thumbnailUrl && !isProcessing ? (
                                                         <img
                                                             src={resolveAssetUrl(video.thumbnailUrl)}
                                                             alt={video.title}
-                                                            className="w-full h-full object-cover"
+                                                            className="w-full h-full object-cover transition-transform duration-500"
+
                                                         />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center text-text-tertiary">
                                                             {isProcessing ? (
                                                                 <div className="flex flex-col items-center gap-2">
-                                                                    <div className="w-8 h-8 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
-                                                                    <span className="text-xs text-yellow-600">处理中...</span>
+                                                                    <Loader2 className="w-8 h-8 animate-spin text-yellow-500" />
                                                                 </div>
                                                             ) : (
-                                                                <Play className="w-8 h-8" />
+                                                                <Play className="w-8 h-8 opacity-20" />
                                                             )}
                                                         </div>
                                                     )}
-                                                    {isProcessing && video.thumbnailUrl && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                                                            <div className="flex flex-col items-center gap-2">
-                                                                <div className="w-10 h-10 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                                                                <span className="text-xs text-white font-medium">下载字幕中...</span>
-                                                            </div>
-                                                        </div>
-                                                    )}
+                                                    
                                                     {!isProcessing && !isFailed && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 hover:opacity-100 transition-opacity">
-                                                            <div className="w-12 h-12 rounded-full bg-red-600 flex items-center justify-center">
-                                                                <Play className="w-6 h-6 text-white ml-1" fill="white" />
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-xl">
+                                                                <Play className="w-5 h-5 fill-current ml-0.5" />
                                                             </div>
                                                         </div>
                                                     )}
+                                                    
                                                     {video.summary && !isProcessing && (
-                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                                                            {video.originalTitle && video.originalTitle.trim() && video.originalTitle !== video.title && (
-                                                                <div className="mb-1 text-[10px] text-white/70 line-clamp-2">
-                                                                    原始标题：{video.originalTitle}
-                                                                </div>
-                                                            )}
-                                                            <div className="text-[11px] leading-relaxed text-white line-clamp-4">
+                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                                                            <div className="text-[11px] leading-relaxed text-white/90 line-clamp-3 font-medium">
                                                                 {video.summary}
                                                             </div>
                                                         </div>
                                                     )}
                                                 </div>
-                                                <div className="p-2.5">
-                                                    <div className="text-xs font-semibold text-text-primary line-clamp-2">{video.title}</div>
-                                                    <div className="mt-1 text-[11px] text-text-tertiary line-clamp-2">
-                                                        {isProcessing ? '正在下载字幕和封面...' : (video.summary || video.description || '暂无描述')}
+                                                <div className="p-4">
+                                                    <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{video.title}</div>
+                                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/70 line-clamp-2 leading-relaxed">
+                                                        {isProcessing ? '正在智能解析内容细节...' : (video.summary || video.description || '暂无描述信息')}
                                                     </div>
-                                                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
+                                                    <div className="mt-3.5 flex items-center justify-between gap-2 text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter border-t border-black/[0.02] pt-3">
                                                         <span>{new Date(video.createdAt).toLocaleDateString()}</span>
-                                                        {video.hasSubtitle && !isProcessing && <span>已提取字幕</span>}
-                                                        {isFailed && <span className="text-red-500">处理失败</span>}
+                                                        <div className="flex items-center gap-2">
+                                                            {video.hasSubtitle && !isProcessing && (
+                                                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
+                                                                    SUBTITLES
+                                                                </span>
+                                                            )}
+                                                            {isFailed && <span className="text-red-500">FAILED</span>}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </button>
@@ -1759,48 +2008,48 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     return (
                                         <button
                                             key={item.id}
-                                            onClick={() => setSelectedNote(note)}
+                                            onClick={() => void openNoteDetail(note)}
                                             className={clsx(
-                                                'mb-3 break-inside-avoid w-full text-left bg-surface-primary border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow',
-                                                isTextArticleCard ? 'overflow-visible p-3' : 'overflow-hidden'
+                                                'mb-4 break-inside-avoid w-full text-left bg-white border border-black/[0.04] rounded-[20px] shadow-sm transition-all duration-300',
+                                                isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
                                             )}
                                         >
                                             {isTextArticleCard ? (
-                                                <div className={clsx('flex gap-3', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
+                                                <div className={clsx('flex gap-4', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
                                                     <div className={clsx(
-                                                        'flex shrink-0 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600',
-                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-10 w-10',
+                                                        'flex shrink-0 items-center justify-center rounded-[14px] bg-sky-500/10 text-sky-600 border border-sky-100',
+                                                        embeddedUsesCompactCard ? 'h-9 w-9' : 'h-11 w-11',
                                                     )}>
                                                         <FileText className="w-5 h-5" />
                                                     </div>
                                                     <div className="min-w-0 flex-1">
-                                                        <div className="flex items-start justify-between gap-2">
+                                                        <div className="flex items-start justify-between gap-3">
                                                             <div className={clsx(
-                                                                'font-semibold text-text-primary',
-                                                                embeddedUsesCompactCard ? 'text-[13px] line-clamp-3' : 'text-xs line-clamp-2',
+                                                                'font-extrabold text-text-primary tracking-tight group-hover:text-accent-primary transition-colors',
+                                                                embeddedUsesCompactCard ? 'text-[14px] line-clamp-3' : 'text-[15px] line-clamp-2',
                                                             )}>
                                                                 {note.title}
                                                             </div>
-                                                            <span className={clsx('shrink-0 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                            <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
                                                                 {getKnowledgeKindLabel(item.kind)}
                                                             </span>
                                                         </div>
                                                         <div className={clsx(
-                                                            'mt-2 text-text-tertiary leading-relaxed',
-                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-7' : 'text-[11px] line-clamp-6',
+                                                            'mt-2.5 text-text-tertiary leading-relaxed font-medium',
+                                                            embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
                                                         )}>
                                                             {notePreviewText}
                                                         </div>
-                                                        <div className="mt-3 flex items-center gap-2 text-[10px] text-text-tertiary flex-wrap">
+                                                        <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
                                                             <span>{new Date(note.createdAt).toLocaleDateString()}</span>
                                                             {note.sourceUrl && (
                                                                 <span className="flex items-center gap-1 max-w-full">
-                                                                    <ExternalLink className="w-3 h-3" />
-                                                                    <span className="truncate max-w-[140px]">{note.author || '原文链接'}</span>
+                                                                    <ExternalLink className="w-3 h-3 opacity-40" />
+                                                                    <span className="truncate max-w-[140px]">{note.author || 'SOURCE'}</span>
                                                                 </span>
                                                             )}
                                                             {note.tags?.slice(0, 2).map((tag) => (
-                                                                <span key={tag} className={clsx('text-[10px] px-1.5 py-0.5 rounded border', getKnowledgeTagClass(tag))}>
+                                                                <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
                                                                     #{tag}
                                                                 </span>
                                                             ))}
@@ -1810,151 +2059,144 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             ) : coverImage ? (
                                                 <div
                                                     className={clsx(
-                                                        'relative w-full bg-surface-secondary overflow-hidden',
+                                                        'relative w-full bg-black/[0.02] overflow-hidden',
                                                         (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/3]' : resolveAspectClass(note.id)
                                                     )}
                                                 >
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
                                                     <img
                                                         src={resolveAssetUrl(coverImage)}
                                                         alt={note.title}
-                                                        className="w-full h-full object-cover"
+                                                        className="w-full h-full object-cover transition-transform duration-500"
+
                                                         onLoad={(event) => handleImageLoad(note.id, event)}
                                                     />
                                                     {isNoteTranscribing && (
-                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
-                                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                                            <span className="text-[11px] font-medium">转录中...</span>
+                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/40 text-white backdrop-blur-sm">
+                                                            <Loader2 className="w-6 h-6 animate-spin text-white" />
+                                                            <span className="text-[11px] font-bold tracking-widest uppercase">Transcribing</span>
                                                         </div>
                                                     )}
                                                 </div>
                                             ) : note.video ? (
-                                                <div className="relative w-full aspect-[3/4] bg-surface-secondary overflow-hidden flex items-center justify-center">
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                <div className="relative w-full aspect-[3/4] bg-black/[0.02] overflow-hidden flex items-center justify-center">
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
                                                     <video
                                                         src={resolveAssetUrl(note.video)}
-                                                        className="w-full h-full object-contain"
+                                                        className="w-full h-full object-contain bg-black"
                                                         muted
                                                         playsInline
                                                         preload="metadata"
                                                     />
-                                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                                        <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
-                                                            <Play className="w-5 h-5 text-white ml-0.5" fill="white" />
+                                                    <div className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-xl">
+                                                            <Play className="w-5 h-5 fill-current ml-0.5" />
                                                         </div>
                                                     </div>
-                                                    {isNoteTranscribing && (
-                                                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/45 text-white">
-                                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                                            <span className="text-[11px] font-medium">转录中...</span>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             ) : (
                                                 <div
                                                     className={clsx(
-                                                        'relative bg-surface-secondary flex items-center justify-center text-text-tertiary',
+                                                        'relative bg-black/[0.02] flex items-center justify-center text-text-tertiary',
                                                         (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'aspect-[4/2.6]' : 'aspect-[3/4]'
                                                     )}
                                                 >
-                                                    <span className={clsx('absolute top-2 right-2 z-10 text-[10px] px-2 py-1 rounded-full shadow-sm', getKnowledgeKindBadgeClass(item.kind))}>
+                                                    <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md border border-white/20', getKnowledgeKindBadgeClass(item.kind))}>
                                                         {getKnowledgeKindLabel(item.kind)}
                                                     </span>
-                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') ? <FileText className="w-6 h-6" /> : <Image className="w-6 h-6" />}
+                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') ? <FileText className="w-8 h-8 opacity-20" /> : <Image className="w-8 h-8 opacity-20" />}
                                                 </div>
                                             )}
-                                            <div className="p-2.5">
-                                                <div className="text-xs font-semibold text-text-primary line-clamp-2">{note.title}</div>
-                                                <div
-                                                    className={clsx(
-                                                        'text-[11px] text-text-tertiary',
-                                                        (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1 line-clamp-5' : 'mt-1 line-clamp-3'
+                                            {!isTextArticleCard && (
+                                                <div className="p-4">
+                                                    <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{note.title}</div>
+                                                    <div
+                                                        className={clsx(
+                                                            'text-[11px] font-medium text-text-tertiary/70 leading-relaxed',
+                                                            (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1.5 line-clamp-4' : 'mt-1.5 line-clamp-2'
+                                                        )}
+                                                    >
+                                                        {notePreviewText}
+                                                    </div>
+                                                    {!isEmbedded && note.tags && note.tags.length > 0 && (
+                                                        <div className="mt-2.5 flex flex-wrap gap-1">
+                                                            {note.tags.slice(0, 3).map((tag) => (
+                                                                <span key={tag} className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
+                                                                    #{tag}
+                                                                </span>
+                                                            ))}
+                                                        </div>
                                                     )}
-                                                >
-                                                    {notePreviewText}
-                                                </div>
-                                                {!isEmbedded && note.tags && note.tags.length > 0 && (
-                                                    <div className="mt-1.5 flex flex-wrap gap-1">
-                                                        {note.tags.slice(0, 3).map((tag) => (
-                                                            <span key={tag} className={clsx('text-[10px] px-1.5 py-0.5 rounded border', getKnowledgeTagClass(tag))}>
-                                                                #{tag}
+                                                    <div className="mt-3.5 flex items-center gap-3 text-[9px] font-bold text-text-tertiary/40 flex-wrap uppercase tracking-tighter border-t border-black/[0.02] pt-3">
+                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                                                        
+                                                        {item.kind !== 'link-article' && (
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="flex items-center gap-1">
+                                                                    <Heart className="w-3 h-3 opacity-60" />
+                                                                    {note.stats?.likes || 0}
+                                                                </span>
+                                                                {typeof note.stats?.collects === 'number' && (
+                                                                    <span className="flex items-center gap-1">
+                                                                        <Star className="w-3 h-3 opacity-60" />
+                                                                        {note.stats.collects}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {note.images?.length > 0 && (
+                                                            <span className="flex items-center gap-1">
+                                                                <Image className="w-3 h-3 opacity-60" />
+                                                                {note.images.length}
                                                             </span>
-                                                        ))}
-                                                        {note.tags.length > 3 && (
-                                                            <span className="text-[10px] text-text-tertiary px-1">+{note.tags.length - 3}</span>
+                                                        )}
+                                                        
+                                                        {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
+                                                            <span className="flex items-center gap-1 max-w-full">
+                                                                <ExternalLink className="w-3 h-3 opacity-40" />
+                                                                <span className="truncate max-w-[120px]">{note.author || 'SOURCE'}</span>
+                                                            </span>
                                                         )}
                                                     </div>
-                                                )}
-                                                <div className="mt-2 flex items-center gap-2 text-[10px] text-text-tertiary flex-wrap">
-                                                    <span>{new Date(note.createdAt).toLocaleDateString()}</span>
-                                                    {isNoteTranscribing && (
-                                                        <span className="flex items-center gap-1 text-blue-600">
-                                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                                            转录中
-                                                        </span>
-                                                    )}
-                                                    {item.kind !== 'link-article' && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Heart className="w-3 h-3" />
-                                                            {note.stats?.likes || 0}
-                                                        </span>
-                                                    )}
-                                                    {typeof note.stats?.collects === 'number' && item.kind !== 'link-article' && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Star className="w-3 h-3" />
-                                                            {note.stats.collects}
-                                                        </span>
-                                                    )}
-                                                    {note.images?.length > 0 && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Image className="w-3 h-3" />
-                                                            {note.images.length}
-                                                        </span>
-                                                    )}
-                                                    {note.video && (
-                                                        <span className="flex items-center gap-1">
-                                                            <Play className="w-3 h-3" />
-                                                            视频
-                                                        </span>
-                                                    )}
-                                                    {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
-                                                        <span className="flex items-center gap-1 max-w-full">
-                                                            <ExternalLink className="w-3 h-3" />
-                                                            <span className="truncate max-w-[120px]">{note.author || '原文链接'}</span>
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {canExpandToWechat && (
-                                                    <div className="mt-2">
-                                                        <span
-                                                            role="button"
-                                                            tabIndex={0}
-                                                            onClick={(event) => {
-                                                                event.stopPropagation();
-                                                                handleExpandToWechat(note);
-                                                            }}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter' || event.key === ' ') {
-                                                                    event.preventDefault();
+                                                    {canExpandToWechat && (
+                                                        <div className="mt-3">
+                                                            <span
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={(event) => {
                                                                     event.stopPropagation();
                                                                     handleExpandToWechat(note);
-                                                                }
-                                                            }}
-                                                            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
-                                                        >
-                                                            <Sparkles className="w-3 h-3" />
-                                                            扩写为公众号
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
+                                                                }}
+                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-extrabold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-95 shadow-sm"
+                                                            >
+                                                                <Sparkles className="w-3.5 h-3.5" />
+                                                                扩写为公众号
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </button>
                                     );
                                 })}
+                            </div>
+                        )}
+
+                        {nextCursor && filteredKnowledgeItems.length > 0 && (
+                            <div className="flex justify-center pt-2">
+                                <button
+                                    onClick={() => void loadMoreKnowledge()}
+                                    disabled={isLoadingMore}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-4 py-2 text-[12px] font-bold text-text-primary shadow-sm hover:bg-black/[0.02] disabled:opacity-50"
+                                >
+                                    {isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                    {isLoadingMore ? '加载中...' : '加载更多'}
+                                </button>
                             </div>
                         )}
 
@@ -1965,36 +2207,36 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             {/* Xiaohongshu Note Detail Modal */}
             {selectedNote && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
                     onClick={() => setSelectedNote(null)}
                 >
                     <div
-                        className="w-full max-w-3xl mx-4 bg-surface-primary rounded-2xl border border-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col"
+                        className="w-full max-w-[860px] mx-4 bg-white rounded-[28px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] overflow-hidden max-h-[90vh] flex flex-col"
                         onClick={(event) => event.stopPropagation()}
                     >
                         {(() => {
                             const showRichArticle = Boolean(selectedNote.htmlFileUrl && selectedNote.captureKind === 'wechat-article');
                             return (
                         <>
-                        <div className="px-6 py-4 border-b border-border flex items-start justify-between">
+                        <div className="px-8 py-6 border-b border-black/[0.04] flex items-start justify-between bg-white relative z-10">
                             <div className="min-w-0">
-                                <h1 className="text-lg font-semibold text-text-primary line-clamp-2">{selectedNote.title}</h1>
-                                <div className="flex items-center gap-3 mt-1 text-xs text-text-tertiary">
-                                    <span>作者: {selectedNote.author}</span>
+                                <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedNote.title}</h1>
+                                <div className="flex flex-wrap items-center gap-4 mt-2 text-[11px] font-bold text-text-tertiary uppercase tracking-wider">
+                                    <span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5 opacity-60" /> {selectedNote.author}</span>
                                     {selectedNote.siteName && (
-                                        <span>{selectedNote.siteName}</span>
+                                        <span className="flex items-center gap-1.5"><ExternalLink className="w-3.5 h-3.5 opacity-60" /> {selectedNote.siteName}</span>
                                     )}
-                                    <span className="flex items-center gap-1">
-                                        <Heart className="w-3 h-3" /> {selectedNote.stats?.likes || 0}
+                                    <span className="flex items-center gap-1.5 text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-100">
+                                        <Heart className="w-3.5 h-3.5 fill-current" /> {selectedNote.stats?.likes || 0}
                                     </span>
                                     {typeof selectedNote.stats?.collects === 'number' && (
-                                        <span className="flex items-center gap-1">
-                                            <Star className="w-3 h-3" /> {selectedNote.stats.collects}
+                                        <span className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-100">
+                                            <Star className="w-3.5 h-3.5 fill-current" /> {selectedNote.stats.collects}
                                         </span>
                                     )}
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 ml-4">
                                 <button
                                     onClick={() => openChat(
                                         selectedNote.id,
@@ -2002,87 +2244,103 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         selectedNote.title,
                                         selectedNote.content + (selectedNote.transcript ? `\n\nVideo Transcript:\n${selectedNote.transcript}` : '')
                                     )}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
+                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
-                                    <MessageCircle className="w-3.5 h-3.5" />
-                                    AI 助手
+                                    <MessageCircle className="w-4 h-4" />
+                                    对话
+                                </button>
+                                <button
+                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
+                                    className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-amber-500 text-white text-[13px] font-extrabold shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all active:scale-95"
+                                >
+                                    <BookmarkPlus className="w-4 h-4" />
+                                    存为封面模板
                                 </button>
                                 {SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(selectedNote) && onNavigateToRedClaw && (
                                     <button
                                         onClick={() => handleExpandToWechat(selectedNote)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-500 rounded-lg hover:from-emerald-600 hover:to-teal-600 transition-all shadow-sm"
+                                        className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-emerald-500 text-white text-[13px] font-extrabold shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all active:scale-95"
                                     >
-                                        <Sparkles className="w-3.5 h-3.5" />
-                                        扩写为公众号稿件
+                                        <Sparkles className="w-4 h-4" />
+                                        扩写
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
-                                    title="保存封面为模板"
+                                    onClick={() => setSelectedNote(null)}
+                                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90"
                                 >
-                                    <BookmarkPlus className="w-3.5 h-3.5" />
-                                    存为封面模板
+                                    <X className="w-5 h-5" />
                                 </button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-8 py-8 space-y-8 custom-scrollbar bg-white">
+                            <div className="flex flex-wrap items-center gap-2">
                                 <button
                                     onClick={() => void handleShowInFolder(selectedNote.folderPath)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="在文件夹中打开"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
                                 >
-                                    <FolderOpen className="w-4 h-4" />
+                                    <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
                                 </button>
                                 {selectedNote.video && !selectedNote.transcript && (
                                     <button
                                         onClick={() => handleTranscribeNote(selectedNote.id)}
                                         disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg hover:from-blue-600 hover:to-cyan-600 transition-all shadow-sm disabled:opacity-60"
-                                        title="提取文字"
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-[11px] font-bold hover:bg-blue-600 transition-all disabled:opacity-40"
                                     >
-                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? (
-                                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                        ) : (
-                                            <FileText className="w-3.5 h-3.5" />
-                                        )}
-                                        {selectedNote.transcriptionStatus === 'processing' || isTranscribing ? '转录中...' : '提取文字'}
+                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                        提取文字
                                     </button>
                                 )}
-                                <button
-                                    onClick={() => setSelectedNote(null)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="关闭"
-                                >
-                                    <X className="w-4 h-4" />
-                                </button>
                             </div>
-                        </div>
 
-                        <div className="flex-1 overflow-auto p-6 space-y-6" onClick={(event) => event.stopPropagation()}>
                             {selectedNote.video && (
-                                <div className="relative mx-auto w-full max-w-[480px]">
-                                    <div className="relative rounded-xl overflow-hidden border border-border bg-surface-secondary">
-                                        <video
-                                            src={resolveAssetUrl(selectedNote.video)}
-                                            className="block w-full h-auto max-h-[60vh] object-contain"
-                                            controls
-                                            playsInline
-                                            preload="metadata"
-                                        />
+                                <div className="relative mx-auto w-full max-w-[640px]">
+                                    <div className="flex justify-center">
+                                    <div className="relative inline-flex max-w-full rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl">
+                                        {isSelectedNoteVideoPlaying || !getNoteCoverImage(selectedNote) ? (
+                                            <video
+                                                ref={selectedNoteVideoRef}
+                                                src={resolveAssetUrl(selectedNote.video)}
+                                                className="block max-h-[60vh] w-auto max-w-full object-contain"
+                                                controls
+                                                autoPlay
+                                                playsInline
+                                                preload="metadata"
+                                            />
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsSelectedNoteVideoPlaying(true)}
+                                                className="group relative block h-full w-full"
+                                            >
+                                                <img
+                                                    src={resolveAssetUrl(getNoteCoverImage(selectedNote))}
+                                                    alt={selectedNote.title}
+                                                    className="block max-h-[60vh] w-auto max-w-full object-contain"
+                                                />
+                                                <div className="absolute inset-0 bg-black/20 transition-all group-hover:bg-black/35" />
+                                                <div className="absolute inset-0 flex items-center justify-center">
+                                                    <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/30 bg-white/20 text-white shadow-2xl backdrop-blur-md transition-transform duration-300 group-hover:scale-110">
+                                                        <Play className="ml-1 h-8 w-8 fill-current" />
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        )}
+                                    </div>
                                     </div>
                                 </div>
                             )}
 
-                            {!showRichArticle && selectedNote.images && selectedNote.images.length > 0 && (() => {
+                            {!showRichArticle && !selectedNote.video && selectedNote.images && selectedNote.images.length > 0 && (() => {
                                 const orderedImages = orderImages(selectedNote.images);
-                                const currentImage = orderedImages[selectedImageIndex];
-                                const aspectClass = resolveAspectClass(currentImage);
                                 return (
-                                    <div className="relative mx-auto w-full max-w-[360px]">
-                                        <div className={`relative rounded-xl overflow-hidden border border-border bg-surface-secondary ${aspectClass}`}>
+                                    <div className="relative group">
+                                        <div className="aspect-[4/3] rounded-[24px] overflow-hidden border border-black/[0.04] bg-black/[0.02]">
                                             <img
-                                                src={resolveAssetUrl(currentImage)}
-                                                alt={`图片 ${selectedImageIndex + 1}`}
-                                                className="w-full h-full object-cover"
-                                                onLoad={(event) => handleImageLoad(currentImage, event)}
+                                                src={resolveAssetUrl(orderedImages[selectedImageIndex])}
+                                                alt={`${selectedNote.title} - ${selectedImageIndex + 1}`}
+                                                className="w-full h-full object-contain"
                                                 onClick={() => setIsImagePreviewOpen(true)}
                                             />
                                         </div>
@@ -2090,18 +2348,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             <>
                                                 <button
                                                     onClick={() => setSelectedImageIndex((prev) => (prev === 0 ? orderedImages.length - 1 : prev - 1))}
-                                                    className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60"
+                                                    className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/20 backdrop-blur-xl border border-white/30 text-white flex items-center justify-center hover:bg-white/40 shadow-xl transition-all"
                                                 >
-                                                    <ChevronLeft className="w-4 h-4" />
+                                                    <ChevronLeft className="w-5 h-5" />
                                                 </button>
                                                 <button
                                                     onClick={() => setSelectedImageIndex((prev) => (prev === orderedImages.length - 1 ? 0 : prev + 1))}
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60"
+                                                    className="absolute right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/20 backdrop-blur-xl border border-white/30 text-white flex items-center justify-center hover:bg-white/40 shadow-xl transition-all"
                                                 >
-                                                    <ChevronRight className="w-4 h-4" />
+                                                    <ChevronRight className="w-5 h-5" />
                                                 </button>
-                                                <div className="absolute bottom-3 right-3 text-[11px] text-white bg-black/50 rounded-full px-2 py-0.5">
-                                                    {selectedImageIndex + 1}/{orderedImages.length}
+                                                <div className="absolute bottom-4 right-4 text-[10px] font-bold text-white bg-black/40 backdrop-blur-md rounded-lg px-2.5 py-1.5 uppercase tracking-widest border border-white/10">
+                                                    IMAGE {selectedImageIndex + 1} OF {orderedImages.length}
                                                 </div>
                                             </>
                                         )}
@@ -2110,7 +2368,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             })()}
 
                             {showRichArticle ? (
-                                <div className="rounded-xl border border-border overflow-hidden bg-white">
+                                <div className="rounded-[20px] border border-black/[0.04] overflow-hidden bg-white shadow-inner">
                                     <iframe
                                         src={resolveAssetUrl(selectedNote.htmlFileUrl)}
                                         title={selectedNote.title}
@@ -2118,39 +2376,45 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         className="block w-full h-[72vh] bg-white"
                                     />
                                 </div>
-                            ) : renderNoteBody(selectedNote)}
+                            ) : (
+                                <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-headings:font-extrabold prose-headings:tracking-tight">
+                                    {renderNoteBody(selectedNote)}
+                                </div>
+                            )}
 
                             {selectedNote.video && selectedNote.transcript && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden transition-all hover:bg-black/[0.03]">
                                     <button
                                         onClick={() => setShowTranscript(!showTranscript)}
-                                        className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
+                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary transition-colors"
                                     >
-                                        <span className="flex items-center gap-2">
-                                            <FileText className="w-4 h-4" />
-                                            视频转录
+                                        <span className="flex items-center gap-2.5">
+                                            <FileText className="w-4 h-4 text-accent-primary" />
+                                            视频转录文本
                                         </span>
-                                        <ChevronRight className={`w-4 h-4 transition-transform ${showTranscript ? 'rotate-90' : ''}`} />
+                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showTranscript ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
                                     </button>
                                     {showTranscript && (
-                                        <div className="px-4 pb-4">
-                                            <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-80 overflow-auto">
-                                                {selectedNote.transcript}
-                                            </pre>
+                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
+                                            <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
+                                                <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
+                                                    {selectedNote.transcript}
+                                                </pre>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
                             )}
                         </div>
 
-                        <div className="px-6 py-4 border-t border-border flex items-center justify-between" onClick={(event) => event.stopPropagation()}>
-                            <div className="text-xs text-text-tertiary">保存时间 {selectedNote.createdAt}</div>
+                        <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>
+                            <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-widest">SAVED ON {selectedNote.createdAt}</div>
                             <button
                                 onClick={() => handleDeleteNote(selectedNote.id)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50"
+                                className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-bold text-rose-500 hover:bg-rose-50 rounded-xl transition-all active:scale-95"
                             >
                                 <Trash2 className="w-3.5 h-3.5" />
-                                删除笔记
+                                移除记录
                             </button>
                         </div>
                         </>
@@ -2163,36 +2427,36 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             {/* YouTube Video Detail Modal */}
             {selectedVideo && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
                     onClick={() => setSelectedVideo(null)}
                 >
                     <div
-                        className="w-full max-w-4xl mx-4 bg-surface-primary rounded-2xl border border-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col"
+                        className="w-full max-w-[920px] mx-4 bg-white rounded-[32px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] overflow-hidden max-h-[90vh] flex flex-col"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="px-6 py-4 border-b border-border flex items-start justify-between">
+                        <div className="px-8 py-7 border-b border-black/[0.04] flex items-start justify-between bg-white relative z-10">
                             <div className="min-w-0 flex-1">
-                                <h1 className="text-lg font-semibold text-text-primary line-clamp-2">{selectedVideo.title}</h1>
-                                <div className="flex items-center gap-3 mt-1 text-xs text-text-tertiary">
-                                    <span>保存于 {new Date(selectedVideo.createdAt).toLocaleDateString()}</span>
+                                <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedVideo.title}</h1>
+                                <div className="flex items-center gap-4 mt-2.5 text-[11px] font-bold text-text-tertiary uppercase tracking-wider">
+                                    <span className="flex items-center gap-1.5 bg-black/[0.03] px-2 py-0.5 rounded-md">SAVED {new Date(selectedVideo.createdAt).toLocaleDateString()}</span>
                                     {selectedVideo.hasSubtitle && (
-                                        <span className="flex items-center gap-1 text-green-600">
-                                            <FileText className="w-3 h-3" /> 有字幕
+                                        <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                                            <FileText className="w-3.5 h-3.5" /> SUBTITLES INCLUDED
                                         </span>
                                     )}
                                 </div>
                                 {selectedVideo.summary && (
-                                    <div className="mt-2 text-sm text-text-secondary line-clamp-3">
+                                    <div className="mt-4 text-[13px] font-medium leading-relaxed text-text-secondary line-clamp-3 bg-black/[0.02] p-4 rounded-2xl border border-black/[0.01]">
                                         {selectedVideo.summary}
                                     </div>
                                 )}
                                 {selectedVideo.originalTitle && selectedVideo.originalTitle.trim() && selectedVideo.originalTitle !== selectedVideo.title && (
-                                    <div className="mt-1 text-xs text-text-tertiary line-clamp-2">
-                                        原始标题：{selectedVideo.originalTitle}
+                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
+                                        Original Title: {selectedVideo.originalTitle}
                                     </div>
                                 )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 ml-6">
                                 <button
                                     onClick={() => openChat(
                                         selectedVideo.id,
@@ -2200,134 +2464,143 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         selectedVideo.title,
                                         `Title: ${selectedVideo.title}\nDescription: ${selectedVideo.description || 'None'}\n\nSubtitle:\n${selectedVideo.subtitleContent || '(No subtitle)'}`
                                     )}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded-lg hover:bg-surface-hover transition-all"
+                                    className="inline-flex h-11 px-5 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
-                                    <MessageCircle className="w-3.5 h-3.5" />
-                                    AI 助手
-                                </button>
-                                <button
-                                    onClick={() => void handleShowInFolder(selectedVideo.folderPath)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="在文件夹中打开"
-                                >
-                                    <FolderOpen className="w-4 h-4" />
+                                    <MessageCircle className="w-4.5 h-4.5" />
+                                    AI 分析
                                 </button>
                                 <button
                                     onClick={() => setSelectedVideo(null)}
-                                    className="p-2 text-text-tertiary hover:text-text-primary transition-colors"
-                                    title="关闭"
+                                    className="flex h-11 w-11 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90"
                                 >
-                                    <X className="w-4 h-4" />
+                                    <X className="w-5.5 h-5.5" />
                                 </button>
                             </div>
                         </div>
 
-                        <div className="flex-1 overflow-auto p-6 space-y-6" onClick={(event) => event.stopPropagation()}>
-                            {/* Thumbnail */}
-                            <div className="relative mx-auto w-full max-w-2xl">
-                                <div className="relative rounded-xl overflow-hidden border border-border bg-surface-secondary aspect-video">
+                        <div className="flex-1 overflow-y-auto px-8 py-8 space-y-8 custom-scrollbar bg-white">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                    onClick={() => void handleShowInFolder(selectedVideo.folderPath)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/[0.03] text-text-secondary text-[11px] font-bold hover:bg-black/[0.06] transition-all"
+                                >
+                                    <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
+                                </button>
+                                <button
+                                    onClick={() => openYouTube(selectedVideo.videoUrl)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 text-rose-600 text-[11px] font-bold hover:bg-rose-100 border border-rose-100 transition-all"
+                                >
+                                    <ExternalLink className="w-3.5 h-3.5" /> 在 YouTube 打开
+                                </button>
+                            </div>
+
+                            <div className="relative mx-auto w-full max-w-[640px]">
+                                <div className="relative rounded-[24px] overflow-hidden border border-black/[0.04] bg-black shadow-2xl aspect-video">
                                     {selectedVideo.thumbnailUrl ? (
                                         <img
                                             src={resolveAssetUrl(selectedVideo.thumbnailUrl)}
                                             alt={selectedVideo.title}
-                                            className="w-full h-full object-cover"
+                                            className="w-full h-full object-cover opacity-80"
                                         />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center text-text-tertiary">
-                                            <Play className="w-12 h-12" />
+                                            <Play className="w-12 h-12 opacity-20" />
                                         </div>
                                     )}
-                                    {/* Play button overlay */}
                                     <button
                                         onClick={() => openYouTube(selectedVideo.videoUrl)}
-                                        className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/40 transition-colors"
+                                        className="absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/40 transition-all group"
                                     >
-                                        <div className="w-16 h-16 rounded-full bg-red-600 flex items-center justify-center shadow-lg">
-                                            <Play className="w-8 h-8 text-white ml-1" fill="white" />
+                                        <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-2xl group-hover:scale-110 transition-transform duration-300">
+                                            <Play className="w-8 h-8 fill-current ml-1" />
                                         </div>
                                     </button>
                                 </div>
                             </div>
 
-                            {/* Description */}
                             {selectedVideo.description && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
-                                    <h3 className="text-sm font-semibold text-text-primary mb-2">视频描述</h3>
-                                    <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed">
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.01] p-6">
+                                    <h3 className="text-[14px] font-extrabold text-text-primary mb-4 uppercase tracking-wider">视频描述</h3>
+                                    <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed">
                                         {selectedVideo.description}
                                     </pre>
                                 </div>
                             )}
 
-                            {/* Subtitle */}
-                            {selectedVideo.hasSubtitle && selectedVideo.subtitleContent && (
-                                <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
+                            {selectedVideo.status === 'failed' && selectedVideo.subtitleError && (
+                                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-6 flex items-start justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <div className="text-[13px] font-bold text-rose-700">字幕处理失败</div>
+                                        <pre className="mt-2 text-[12px] text-rose-600 whitespace-pre-wrap font-sans leading-relaxed">
+                                            {selectedVideo.subtitleError}
+                                        </pre>
+                                    </div>
+                                    <button
+                                        onClick={() => handleRetrySubtitle(selectedVideo.id)}
+                                        className="shrink-0 flex items-center gap-2 px-4 py-2 text-[11px] font-bold text-rose-700 bg-white border border-rose-200 rounded-lg hover:bg-rose-50 transition-all active:scale-95"
+                                    >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                        重新尝试
+                                    </button>
+                                </div>
+                            )}
+
+                            {selectedVideo.hasSubtitle && (
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden">
                                     <button
                                         onClick={() => setShowSubtitle(!showSubtitle)}
-                                        className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
+                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary"
                                     >
-                                        <span className="flex items-center gap-2">
-                                            <FileText className="w-4 h-4" />
+                                        <span className="flex items-center gap-2.5">
+                                            <FileText className="w-4 h-4 text-accent-primary" />
                                             字幕内容
                                         </span>
-                                        <ChevronRight className={`w-4 h-4 transition-transform ${showSubtitle ? 'rotate-90' : ''}`} />
+                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showSubtitle ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
                                     </button>
-                                    {showSubtitle && (
-                                        <div className="px-4 pb-4">
-                                            <pre className="text-sm text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-80 overflow-auto">
-                                                {selectedVideo.subtitleContent}
-                                            </pre>
+                                    {(showSubtitle || (selectedVideo.hasSubtitle && !selectedVideo.subtitleContent && isSubtitleLoading)) && (
+                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
+                                            {isSubtitleLoading ? (
+                                                <div className="flex items-center gap-3 bg-white p-5 rounded-xl border border-black/[0.02]">
+                                                    <Loader2 className="w-5 h-5 animate-spin text-accent-primary" />
+                                                    <span className="text-[13px] font-bold text-accent-primary uppercase tracking-widest">Loading Subtitles...</span>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
+                                                    <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
+                                                        {selectedVideo.subtitleContent}
+                                                    </pre>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
                             )}
-                            {selectedVideo.hasSubtitle && !selectedVideo.subtitleContent && isSubtitleLoading && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
-                                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-blue-700">正在加载字幕...</span>
-                                </div>
-                            )}
 
-                            {/* No Subtitle - Retry Button */}
                             {!selectedVideo.hasSubtitle && selectedVideo.status === 'completed' && (
-                                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-2 text-yellow-700">
-                                        <FileText className="w-4 h-4" />
-                                        <span className="text-sm">该视频暂无字幕</span>
+                                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 flex items-center justify-between">
+                                    <div className="flex items-center gap-3 text-amber-700">
+                                        <FileText className="w-5 h-5 opacity-60" />
+                                        <span className="text-[13px] font-bold">该视频暂无可用字幕</span>
                                     </div>
                                     <button
                                         onClick={() => handleRetrySubtitle(selectedVideo.id)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-yellow-700 border border-yellow-400 rounded hover:bg-yellow-100 transition-colors"
+                                        className="flex items-center gap-2 px-4 py-2 text-[11px] font-bold text-amber-700 bg-white border border-amber-200 rounded-lg hover:bg-amber-50 transition-all active:scale-95"
                                     >
                                         <RefreshCw className="w-3.5 h-3.5" />
-                                        重新获取字幕
+                                        重新尝试获取
                                     </button>
-                                </div>
-                            )}
-
-                            {/* Processing Status */}
-                            {selectedVideo.status === 'processing' && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
-                                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-blue-700">正在获取字幕...</span>
                                 </div>
                             )}
                         </div>
 
-                        <div className="px-6 py-4 border-t border-border flex items-center justify-between" onClick={(event) => event.stopPropagation()}>
-                            <button
-                                onClick={() => openYouTube(selectedVideo.videoUrl)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50"
-                            >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                在 YouTube 打开
-                            </button>
+                        <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>
+                            <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-widest">YouTube Knowledge Source</div>
                             <button
                                 onClick={() => handleDeleteVideo(selectedVideo.id)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50"
+                                className="flex items-center gap-1.5 px-4 py-2 text-[12px] font-bold text-rose-500 hover:bg-rose-50 rounded-xl transition-all active:scale-95"
                             >
                                 <Trash2 className="w-3.5 h-3.5" />
-                                删除视频
+                                移除视频
                             </button>
                         </div>
                     </div>

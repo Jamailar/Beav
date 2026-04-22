@@ -4,10 +4,11 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use normalized_line_endings::Normalized;
 use serde::{Deserialize, Serialize};
 
-use crate::lexbox_project_root;
 use crate::runtime::SkillRecord;
+use crate::{redbox_builtin_skill_roots, slug_from_relative_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -18,9 +19,11 @@ pub struct SkillMetadataRecord {
     pub blocked_tools: Vec<String>,
     pub hook_mode: Option<String>,
     pub auto_activate: bool,
+    pub activation_scope: Option<String>,
     pub prompt_prefix: Option<String>,
     pub prompt_suffix: Option<String>,
     pub context_note: Option<String>,
+    pub activation_hint: Option<String>,
     pub max_prompt_chars: Option<usize>,
 }
 
@@ -75,6 +78,14 @@ fn parse_bool(value: &str) -> bool {
     )
 }
 
+pub fn normalize_skill_text(value: &str) -> String {
+    value.chars().normalized().collect()
+}
+
+pub fn normalize_skill_logical_path(value: &str) -> String {
+    value.trim().replace('\\', "/")
+}
+
 fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
     let mut metadata = SkillMetadataRecord::default();
     for line in frontmatter.lines() {
@@ -108,6 +119,10 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
             "autoactivate" | "auto_activate" | "auto-activate" => {
                 metadata.auto_activate = parse_bool(value);
             }
+            "activationscope" | "activation_scope" | "activation-scope" => {
+                let normalized = normalize_string(value).to_ascii_lowercase();
+                metadata.activation_scope = (!normalized.is_empty()).then_some(normalized);
+            }
             "promptprefix" | "prompt_prefix" | "prompt-prefix" => {
                 let normalized = normalize_string(value);
                 metadata.prompt_prefix = (!normalized.is_empty()).then_some(normalized);
@@ -120,6 +135,10 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
                 let normalized = normalize_string(value);
                 metadata.context_note = (!normalized.is_empty()).then_some(normalized);
             }
+            "activationhint" | "activation_hint" | "activation-hint" => {
+                let normalized = normalize_string(value);
+                metadata.activation_hint = (!normalized.is_empty()).then_some(normalized);
+            }
             "maxpromptchars" | "max_prompt_chars" | "max-prompt-chars" => {
                 metadata.max_prompt_chars = value.parse::<usize>().ok();
             }
@@ -129,13 +148,40 @@ fn parse_frontmatter_metadata(frontmatter: &str) -> SkillMetadataRecord {
     metadata
 }
 
+fn legacy_default_activation_scope(skill_name: &str) -> Option<&'static str> {
+    match skill_name.trim().to_ascii_lowercase().as_str() {
+        "writing-style" | "writing-style-creator" => Some("turn"),
+        _ => None,
+    }
+}
+
+pub fn normalized_activation_scope(value: Option<&str>) -> &'static str {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("session")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "turn" | "single-turn" | "single_turn" | "ephemeral" => "turn",
+        _ => "session",
+    }
+}
+
 pub fn split_skill_body(body: &str) -> (SkillMetadataRecord, String) {
-    let trimmed = body.trim_start();
+    let normalized = normalize_skill_text(body);
+    let trimmed = normalized.trim_start();
     let Some(rest) = trimmed.strip_prefix("---\n") else {
-        return (SkillMetadataRecord::default(), body.trim().to_string());
+        return (
+            SkillMetadataRecord::default(),
+            normalized.trim().to_string(),
+        );
     };
     let Some((frontmatter, content)) = rest.split_once("\n---\n") else {
-        return (SkillMetadataRecord::default(), body.trim().to_string());
+        return (
+            SkillMetadataRecord::default(),
+            normalized.trim().to_string(),
+        );
     };
     (
         parse_frontmatter_metadata(frontmatter),
@@ -162,15 +208,21 @@ fn fingerprint_for_loaded_skill(
     metadata.blocked_tools.hash(&mut hasher);
     metadata.hook_mode.hash(&mut hasher);
     metadata.auto_activate.hash(&mut hasher);
+    metadata.activation_scope.hash(&mut hasher);
     metadata.prompt_prefix.hash(&mut hasher);
     metadata.prompt_suffix.hash(&mut hasher);
     metadata.context_note.hash(&mut hasher);
+    metadata.activation_hint.hash(&mut hasher);
     metadata.max_prompt_chars.hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
 
 pub fn load_skill_record(record: &SkillRecord) -> LoadedSkillRecord {
-    let (metadata, body) = split_skill_body(&record.body);
+    let (mut metadata, body) = split_skill_body(&record.body);
+    if metadata.activation_scope.is_none() {
+        metadata.activation_scope =
+            legacy_default_activation_scope(&record.name).map(ToString::to_string);
+    }
     let fingerprint = fingerprint_for_loaded_skill(record, &metadata, &body);
     LoadedSkillRecord {
         name: record.name.clone(),
@@ -187,6 +239,124 @@ pub fn load_skill_record(record: &SkillRecord) -> LoadedSkillRecord {
 
 pub fn load_skill_catalog(skills: &[SkillRecord]) -> Vec<LoadedSkillRecord> {
     skills.iter().map(load_skill_record).collect()
+}
+
+fn parse_frontmatter_string(raw_body: &str, accepted_keys: &[&str]) -> Option<String> {
+    let normalized = normalize_skill_text(raw_body);
+    let trimmed = normalized.trim_start();
+    let rest = trimmed.strip_prefix("---\n")?;
+    let (frontmatter, _) = rest.split_once("\n---\n")?;
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = raw_key.trim().to_ascii_lowercase();
+        if accepted_keys
+            .iter()
+            .any(|accepted| key == accepted.trim().to_ascii_lowercase())
+        {
+            let value = normalize_string(raw_value);
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn derive_skill_description_from_content(content: &str) -> String {
+    let mut paragraph = Vec::<String>::new();
+    let mut skipped_heading = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !skipped_heading && trimmed.starts_with('#') {
+            skipped_heading = true;
+            continue;
+        }
+        paragraph.push(trimmed.to_string());
+    }
+    let description = paragraph.join(" ");
+    if description.is_empty() {
+        "Skill".to_string()
+    } else {
+        description
+    }
+}
+
+pub fn discover_skill_records_from_root(
+    root: &Path,
+    source_scope: &str,
+    is_builtin: bool,
+) -> Vec<SkillRecord> {
+    if !root.exists() || !root.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut records = Vec::<SkillRecord>::new();
+    for entry in entries.flatten() {
+        let skill_root = entry.path();
+        if !skill_root.is_dir() {
+            continue;
+        }
+        let skill_file = skill_root.join("SKILL.md");
+        if !skill_file.is_file() {
+            continue;
+        }
+        let Ok(raw_body) =
+            fs::read_to_string(&skill_file).map(|value| normalize_skill_text(&value))
+        else {
+            continue;
+        };
+        let directory_name = entry.file_name().to_string_lossy().trim().to_string();
+        if directory_name.is_empty() {
+            continue;
+        }
+        let name = parse_frontmatter_string(&raw_body, &["name"]).unwrap_or(directory_name);
+        let (_, content) = split_skill_body(&raw_body);
+        let description = parse_frontmatter_string(
+            &raw_body,
+            &["description", "short-description", "short_description"],
+        )
+        .unwrap_or_else(|| derive_skill_description_from_content(&content));
+        records.push(SkillRecord {
+            name: name.clone(),
+            description,
+            location: format!("redbox://skills/{}", slug_from_relative_path(&name)),
+            body: raw_body,
+            source_scope: Some(source_scope.to_string()),
+            is_builtin: Some(is_builtin),
+            disabled: Some(false),
+        });
+    }
+    records.sort_by_key(|item| item.name.to_ascii_lowercase());
+    records
+}
+
+pub fn discover_builtin_skill_records() -> Vec<SkillRecord> {
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut records = Vec::<SkillRecord>::new();
+    for root in redbox_builtin_skill_roots() {
+        for record in discover_skill_records_from_root(&root, "builtin", true) {
+            let key = record.name.to_ascii_lowercase();
+            if seen.insert(key) {
+                records.push(record);
+            }
+        }
+    }
+    records.sort_by_key(|item| item.name.to_ascii_lowercase());
+    records
 }
 
 pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {
@@ -214,7 +384,9 @@ fn load_section_folder(folder: &Path) -> String {
             if !path.is_file() {
                 continue;
             }
-            let content = fs::read_to_string(&path).unwrap_or_default();
+            let content = fs::read_to_string(&path)
+                .map(|value| normalize_skill_text(&value))
+                .unwrap_or_default();
             let name = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -241,7 +413,9 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        let content = fs::read_to_string(&path)
+            .map(|value| normalize_skill_text(&value))
+            .unwrap_or_default();
         if content.trim().is_empty() {
             continue;
         }
@@ -250,48 +424,58 @@ fn load_named_markdown_folder(folder: &Path) -> BTreeMap<String, String> {
     parts
 }
 
-fn builtin_skill_root(skill_name: &str) -> PathBuf {
-    lexbox_project_root()
-        .join("builtin-skills")
-        .join(skill_name)
+fn builtin_skill_roots(skill_name: &str) -> Vec<PathBuf> {
+    redbox_builtin_skill_roots()
+        .into_iter()
+        .map(|root| root.join(skill_name))
+        .collect()
+}
+
+pub fn load_skill_bundle_sections_from_root(
+    skill_name: &str,
+    skill_root: &Path,
+) -> SkillBundleSections {
+    let skill_file = skill_root.join("SKILL.md");
+    if !skill_file.exists() || !skill_file.is_file() {
+        return SkillBundleSections {
+            skill_name: skill_name.to_string(),
+            body: String::new(),
+            references: String::new(),
+            scripts: String::new(),
+            rules: BTreeMap::new(),
+        };
+    }
+    let body = fs::read_to_string(&skill_file)
+        .map(|value| normalize_skill_text(&value))
+        .unwrap_or_default();
+    let references = load_section_folder(&skill_root.join("references"));
+    let scripts = load_section_folder(&skill_root.join("scripts"));
+    let rules = load_named_markdown_folder(&skill_root.join("rules"));
+    SkillBundleSections {
+        skill_name: skill_name.to_string(),
+        body,
+        references,
+        scripts,
+        rules,
+    }
 }
 
 pub fn load_skill_bundle_sections_from_sources(
     skill_name: &str,
     workspace_root: Option<&Path>,
 ) -> SkillBundleSections {
-    let builtin_root = builtin_skill_root(skill_name);
-    let builtin_skill_file = builtin_root.join("SKILL.md");
-    if builtin_skill_file.exists() && builtin_skill_file.is_file() {
-        let body = fs::read_to_string(&builtin_skill_file).unwrap_or_default();
-        let references = load_section_folder(&builtin_root.join("references"));
-        let scripts = load_section_folder(&builtin_root.join("scripts"));
-        let rules = load_named_markdown_folder(&builtin_root.join("rules"));
-        return SkillBundleSections {
-            skill_name: skill_name.to_string(),
-            body,
-            references,
-            scripts,
-            rules,
-        };
+    for builtin_root in builtin_skill_roots(skill_name) {
+        let builtin_bundle = load_skill_bundle_sections_from_root(skill_name, &builtin_root);
+        if !builtin_bundle.body.trim().is_empty() {
+            return builtin_bundle;
+        }
     }
     for root in skill_source_roots(workspace_root) {
         let skill_root = root.join(skill_name);
-        let skill_file = skill_root.join("SKILL.md");
-        if !skill_file.exists() || !skill_file.is_file() {
-            continue;
+        let bundle = load_skill_bundle_sections_from_root(skill_name, &skill_root);
+        if !bundle.body.trim().is_empty() {
+            return bundle;
         }
-        let body = fs::read_to_string(&skill_file).unwrap_or_default();
-        let references = load_section_folder(&skill_root.join("references"));
-        let scripts = load_section_folder(&skill_root.join("scripts"));
-        let rules = load_named_markdown_folder(&skill_root.join("rules"));
-        return SkillBundleSections {
-            skill_name: skill_name.to_string(),
-            body,
-            references,
-            scripts,
-            rules,
-        };
     }
     SkillBundleSections {
         skill_name: skill_name.to_string(),
@@ -309,11 +493,12 @@ mod tests {
     #[test]
     fn split_skill_body_extracts_frontmatter_metadata() {
         let (metadata, body) = split_skill_body(
-            "---\nallowedRuntimeModes: [redclaw, knowledge]\nallowedTools: [redbox_fs, redbox_mcp]\nautoActivate: true\nhookMode: forked\nmaxPromptChars: 1200\n---\n# Skill\n\nBody",
+            "---\nallowedRuntimeModes: [redclaw, knowledge]\nallowedTools: [redbox_fs, redbox_mcp]\nautoActivate: true\nactivationScope: turn\nhookMode: forked\nmaxPromptChars: 1200\n---\n# Skill\n\nBody",
         );
         assert_eq!(metadata.allowed_runtime_modes, vec!["redclaw", "knowledge"]);
         assert_eq!(metadata.allowed_tools, vec!["redbox_fs", "redbox_mcp"]);
         assert!(metadata.auto_activate);
+        assert_eq!(metadata.activation_scope.as_deref(), Some("turn"));
         assert_eq!(metadata.hook_mode.as_deref(), Some("forked"));
         assert_eq!(metadata.max_prompt_chars, Some(1200));
         assert_eq!(body, "# Skill\n\nBody");
@@ -333,6 +518,62 @@ mod tests {
         assert_eq!(loaded.body, "# Legacy\n\nBody");
         assert!(loaded.metadata.allowed_runtime_modes.is_empty());
         assert!(!loaded.fingerprint.is_empty());
+    }
+
+    #[test]
+    fn load_skill_record_applies_legacy_turn_scope_for_writing_style() {
+        let loaded = load_skill_record(&SkillRecord {
+            name: "writing-style".to_string(),
+            description: "Writing style".to_string(),
+            location: "redbox://skills/writing-style".to_string(),
+            body: "# Writing Style\n\nBody".to_string(),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        });
+        assert_eq!(
+            normalized_activation_scope(loaded.metadata.activation_scope.as_deref()),
+            "turn"
+        );
+    }
+
+    #[test]
+    fn split_skill_body_normalizes_crlf_frontmatter() {
+        let (metadata, body) = split_skill_body(
+            "---\r\nallowedRuntimeModes: [wander]\r\nhookMode: inline\r\n---\r\n# Skill\r\n\r\nBody",
+        );
+        assert_eq!(metadata.allowed_runtime_modes, vec!["wander"]);
+        assert_eq!(metadata.hook_mode.as_deref(), Some("inline"));
+        assert_eq!(body, "# Skill\n\nBody");
+    }
+
+    #[test]
+    fn normalize_skill_logical_path_converts_backslashes() {
+        assert_eq!(
+            normalize_skill_logical_path(r"builtin-skills\writing-style\SKILL.md"),
+            "builtin-skills/writing-style/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn discover_skill_records_from_root_reads_directory_skills() {
+        let root = std::env::temp_dir().join(format!("redbox-skill-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("demo-skill")).expect("root should be created");
+        fs::write(
+            root.join("demo-skill").join("SKILL.md"),
+            "---\ndescription: Demo description\n---\n# Demo Skill\n\nBody",
+        )
+        .expect("skill file should be written");
+
+        let discovered = discover_skill_records_from_root(&root, "user", false);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].name, "demo-skill");
+        assert_eq!(discovered[0].description, "Demo description");
+        assert_eq!(discovered[0].source_scope.as_deref(), Some("user"));
+        assert_eq!(discovered[0].is_builtin, Some(false));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

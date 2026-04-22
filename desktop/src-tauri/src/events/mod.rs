@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{now_i64, payload_field, payload_string};
+use crate::{append_debug_trace_state, now_i64, payload_field, payload_string, AppState};
 
 fn should_emit_legacy_chat_compat(session_id: Option<&str>) -> bool {
     let Some(id) = session_id else {
@@ -151,6 +151,65 @@ fn emit_legacy_chat_compat_event(
     }
 }
 
+fn log_runtime_event_emit(
+    app: &AppHandle,
+    event_type: &str,
+    session_id: Option<&str>,
+    task_id: Option<&str>,
+    payload: &Value,
+) {
+    let line = match event_type {
+        "runtime:stream-start" => Some(format!(
+            "[runtime][emit] event={} session={} task={} phase={} runtimeMode={}",
+            event_type,
+            session_id.unwrap_or(""),
+            task_id.unwrap_or(""),
+            payload_string(payload, "phase").unwrap_or_default(),
+            payload_string(payload, "runtimeMode").unwrap_or_default(),
+        )),
+        "runtime:done" => Some(format!(
+            "[runtime][emit] event={} session={} task={} status={} reason={} content_chars={}",
+            event_type,
+            session_id.unwrap_or(""),
+            task_id.unwrap_or(""),
+            payload_string(payload, "status").unwrap_or_default(),
+            payload_string(payload, "reason").unwrap_or_default(),
+            payload_string(payload, "content")
+                .unwrap_or_default()
+                .chars()
+                .count(),
+        )),
+        "runtime:checkpoint" => {
+            let checkpoint_type = payload_string(payload, "checkpointType").unwrap_or_default();
+            if checkpoint_type.starts_with("chat.") {
+                Some(format!(
+                    "[runtime][emit] event={} session={} task={} checkpointType={} summary={} content_chars={}",
+                    event_type,
+                    session_id.unwrap_or(""),
+                    task_id.unwrap_or(""),
+                    checkpoint_type,
+                    payload_string(payload, "summary").unwrap_or_default(),
+                    payload
+                        .get("payload")
+                        .and_then(|value| value.get("content"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .chars()
+                        .count(),
+                ))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let Some(line) = line else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    append_debug_trace_state(&state, line);
+}
+
 pub fn emit_runtime_event(
     app: &AppHandle,
     event_type: &str,
@@ -182,6 +241,7 @@ pub fn emit_runtime_event_with_lineage(
             "timestamp": now_i64(),
         }),
     );
+    log_runtime_event_emit(app, event_type, session_id, task_id, &payload);
     emit_legacy_chat_compat_event(app, event_type, session_id, &payload);
 }
 
@@ -289,6 +349,14 @@ pub fn emit_chat_sequence(
         "chat response completed",
         Some(json!({ "content": response })),
     );
+    emit_runtime_done(
+        app,
+        session_id,
+        "completed",
+        Some(runtime_mode),
+        Some(response),
+        Some("response_end"),
+    );
 }
 
 pub fn emit_runtime_tool_request(
@@ -309,6 +377,28 @@ pub fn emit_runtime_tool_request(
             "name": name,
             "input": input,
             "description": description.unwrap_or(""),
+        }),
+    );
+}
+
+pub fn emit_runtime_done(
+    app: &AppHandle,
+    session_id: &str,
+    status: &str,
+    runtime_mode: Option<&str>,
+    content: Option<&str>,
+    reason: Option<&str>,
+) {
+    emit_runtime_event(
+        app,
+        "runtime:done",
+        Some(session_id),
+        None,
+        json!({
+            "status": status,
+            "runtimeMode": runtime_mode,
+            "content": content,
+            "reason": reason,
         }),
     );
 }
@@ -465,6 +555,21 @@ pub fn emit_runtime_task_checkpoint_saved(
             "checkpointType": checkpoint_type,
             "summary": summary,
             "payload": payload,
+        }),
+    );
+}
+
+pub fn emit_manuscript_write_proposal_changed(
+    app: &AppHandle,
+    file_path: &str,
+    proposal: Option<Value>,
+) {
+    let _ = app.emit(
+        "manuscripts:write-proposal",
+        json!({
+            "filePath": file_path,
+            "proposal": proposal,
+            "timestamp": now_i64(),
         }),
     );
 }

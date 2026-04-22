@@ -1,10 +1,96 @@
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
+use url::Url;
 
 use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostRuntimeContext {
+    pub os_family: &'static str,
+    pub path_style: &'static str,
+    pub path_separator: &'static str,
+    pub shell_hint: &'static str,
+    pub exe_suffix: &'static str,
+    pub line_ending: &'static str,
+}
+
+pub(crate) fn current_host_runtime_context() -> HostRuntimeContext {
+    #[cfg(target_os = "windows")]
+    {
+        return HostRuntimeContext {
+            os_family: "windows",
+            path_style: "windows",
+            path_separator: "\\",
+            shell_hint: "powershell",
+            exe_suffix: ".exe",
+            line_ending: "crlf",
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return HostRuntimeContext {
+            os_family: "macos",
+            path_style: "posix",
+            path_separator: "/",
+            shell_hint: "zsh",
+            exe_suffix: "",
+            line_ending: "lf",
+        };
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        HostRuntimeContext {
+            os_family: "linux",
+            path_style: "posix",
+            path_separator: "/",
+            shell_hint: "bash",
+            exe_suffix: "",
+            line_ending: "lf",
+        }
+    }
+}
+
+pub(crate) fn compact_host_runtime_context(context: &HostRuntimeContext) -> String {
+    format!(
+        "host_os={}; path_style={}; path_separator={}; shell_hint={}; exe_suffix={}; line_ending={}",
+        context.os_family,
+        context.path_style,
+        context.path_separator,
+        context.shell_hint,
+        if context.exe_suffix.is_empty() {
+            "(none)"
+        } else {
+            context.exe_suffix
+        },
+        context.line_ending
+    )
+}
+
+pub(crate) fn render_host_runtime_context_section(context: &HostRuntimeContext) -> String {
+    [
+        format!("- Host OS: {}", context.os_family),
+        format!("- Path style: {}", context.path_style),
+        format!("- Path separator: {}", context.path_separator),
+        format!("- Preferred shell syntax hint: {}", context.shell_hint),
+        format!(
+            "- Executable suffix: {}",
+            if context.exe_suffix.is_empty() {
+                "(none)"
+            } else {
+                context.exe_suffix
+            }
+        ),
+        format!("- Default line ending: {}", context.line_ending),
+        "- When suggesting manual file paths or shell examples, prefer the host OS format unless a tool contract explicitly requires normalized logical paths.".to_string(),
+    ]
+    .join("\n")
+}
 
 pub(crate) fn normalize_relative_path(value: &str) -> String {
     value
@@ -136,6 +222,143 @@ pub(crate) fn package_scene_ui_path(package_path: &Path) -> PathBuf {
     package_path.join("scene-ui.json")
 }
 
+pub(crate) fn package_layout_html_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.html")
+}
+
+pub(crate) fn package_wechat_html_path(package_path: &Path) -> PathBuf {
+    package_path.join("wechat.html")
+}
+
+pub(crate) fn package_content_map_path(package_path: &Path) -> PathBuf {
+    package_path.join("content-map.json")
+}
+
+pub(crate) fn package_layout_template_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.template.html")
+}
+
+pub(crate) fn package_wechat_template_path(package_path: &Path) -> PathBuf {
+    package_path.join("wechat.template.html")
+}
+
+pub(crate) fn package_layout_tokens_path(package_path: &Path) -> PathBuf {
+    package_path.join("layout.tokens.json")
+}
+
+pub(crate) fn package_richpost_page_plan_path(package_path: &Path) -> PathBuf {
+    package_path.join("richpost-page-plan.json")
+}
+
+pub(crate) fn package_workspace_root_path(package_path: &Path) -> PathBuf {
+    let start = if package_path.is_dir() {
+        package_path
+    } else {
+        package_path.parent().unwrap_or(package_path)
+    };
+    for ancestor in start.ancestors() {
+        if ancestor
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value == "manuscripts")
+            .unwrap_or(false)
+        {
+            return ancestor.parent().unwrap_or(ancestor).to_path_buf();
+        }
+    }
+    start.parent().unwrap_or(start).to_path_buf()
+}
+
+pub(crate) fn legacy_package_richpost_themes_path(package_path: &Path) -> PathBuf {
+    package_path.join("richpost-themes.json")
+}
+
+pub(crate) fn legacy_package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    package_path.join("themes")
+}
+
+pub(crate) fn legacy_package_richpost_theme_template_path(package_path: &Path) -> PathBuf {
+    legacy_package_richpost_theme_store_dir(package_path).join("richpost-theme-template.md")
+}
+
+pub(crate) fn workspace_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    package_workspace_root_path(package_path).join("themes")
+}
+
+pub(crate) fn workspace_richpost_themes_path(package_path: &Path) -> PathBuf {
+    workspace_richpost_theme_store_dir(package_path).join("richpost-themes.json")
+}
+
+pub(crate) fn package_richpost_theme_store_dir(package_path: &Path) -> PathBuf {
+    workspace_richpost_theme_store_dir(package_path)
+}
+
+pub(crate) fn package_richpost_themes_path(package_path: &Path) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join("index.json")
+}
+
+pub(crate) fn package_richpost_theme_template_path(package_path: &Path) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join("richpost-theme-template.md")
+}
+
+pub(crate) fn package_richpost_theme_root_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_store_dir(package_path).join(theme_id)
+}
+
+pub(crate) fn package_richpost_theme_config_file_name(theme_id: &str) -> String {
+    format!("{theme_id}.json")
+}
+
+pub(crate) fn package_richpost_theme_config_path(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id)
+        .join(package_richpost_theme_config_file_name(theme_id))
+}
+
+pub(crate) fn package_richpost_theme_tokens_path(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("layout.tokens.json")
+}
+
+pub(crate) fn package_richpost_theme_masters_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("masters")
+}
+
+pub(crate) fn package_richpost_theme_master_path(
+    package_path: &Path,
+    theme_id: &str,
+    master_name: &str,
+) -> PathBuf {
+    package_richpost_theme_masters_dir(package_path, theme_id)
+        .join(format!("{master_name}.master.html"))
+}
+
+pub(crate) fn package_richpost_theme_assets_dir(package_path: &Path, theme_id: &str) -> PathBuf {
+    package_richpost_theme_root_dir(package_path, theme_id).join("assets")
+}
+
+pub(crate) fn package_richpost_masters_dir(package_path: &Path) -> PathBuf {
+    package_path.join("masters")
+}
+
+pub(crate) fn package_richpost_master_path(package_path: &Path, master_name: &str) -> PathBuf {
+    package_richpost_masters_dir(package_path).join(format!("{master_name}.master.html"))
+}
+
+pub(crate) fn package_richpost_pages_dir(package_path: &Path) -> PathBuf {
+    package_path.join("pages")
+}
+
+pub(crate) fn package_richpost_preview_dir(package_path: &Path) -> PathBuf {
+    package_path.join("previews")
+}
+
+pub(crate) fn package_richpost_page_html_path(package_path: &Path, page_id: &str) -> PathBuf {
+    package_richpost_pages_dir(package_path).join(format!("{page_id}.html"))
+}
+
+pub(crate) fn package_richpost_card_preview_image_path(package_path: &Path) -> PathBuf {
+    package_richpost_preview_dir(package_path).join("card-first-page.png")
+}
+
 pub(crate) fn read_json_value_or(path: &Path, fallback: Value) -> Value {
     fs::read_to_string(path)
         .ok()
@@ -182,15 +405,69 @@ pub(crate) fn parse_json_value_from_text(raw: &str) -> Option<Value> {
     serde_json::from_str::<Value>(&trimmed[first..=last]).ok()
 }
 
-pub(crate) fn lexbox_project_root() -> PathBuf {
+pub(crate) fn redbox_project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
+fn bundled_resource_roots_for_install_root(install_root: &Path) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            roots.push(path);
+        }
+    };
+
+    push(install_root.to_path_buf());
+    push(install_root.join("resources"));
+    push(install_root.join("_up_"));
+    push(install_root.join("_up_").join("resources"));
+
+    roots
+}
+
+pub(crate) fn redbox_bundled_resource_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(install_root) = current_exe.parent() {
+            roots.extend(bundled_resource_roots_for_install_root(install_root));
+        }
+    }
+    roots
+}
+
+pub(crate) fn redbox_builtin_skill_roots() -> Vec<PathBuf> {
+    let mut roots = redbox_bundled_resource_roots()
+        .into_iter()
+        .map(|root| root.join("builtin-skills"))
+        .filter(|root| root.exists() && root.is_dir())
+        .collect::<Vec<_>>();
+    let source_root = redbox_project_root().join("builtin-skills");
+    if source_root.exists()
+        && source_root.is_dir()
+        && !roots.iter().any(|root| root == &source_root)
+    {
+        roots.push(source_root);
+    }
+    if roots.is_empty() {
+        roots.push(redbox_project_root().join("builtin-skills"));
+    }
+    roots
+}
+
+pub(crate) fn redbox_builtin_skills_root() -> PathBuf {
+    redbox_builtin_skill_roots()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| redbox_project_root().join("builtin-skills"))
+}
+
 pub(crate) fn redbox_prompt_library_root() -> PathBuf {
-    lexbox_project_root().join("prompts").join("library")
+    redbox_project_root().join("prompts").join("library")
 }
 
 pub(crate) fn load_redbox_prompt(relative_path: &str) -> Option<String> {
@@ -250,7 +527,7 @@ fn parse_optional_i64_from_value(value: Option<&Value>) -> Option<i64> {
     })
 }
 
-fn markdown_summary(content: &str, max_chars: usize) -> String {
+pub(crate) fn markdown_summary(content: &str, max_chars: usize) -> String {
     let plain = String::from(content)
         .replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -270,20 +547,70 @@ fn markdown_summary(content: &str, max_chars: usize) -> String {
     }
 }
 
-fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
+pub(crate) fn split_markdown_frontmatter(content: &str) -> Option<(String, String)> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
         return None;
     }
-    let mut lines = trimmed.lines();
+    let normalized = content.replace("\r\n", "\n");
+    if !normalized.starts_with("---\n") {
+        return None;
+    }
+    let mut lines = normalized.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
         return None;
     }
+    let mut raw_lines = Vec::<String>::new();
+    let mut body_start_line = None;
+    for (index, line) in normalized.lines().enumerate().skip(1) {
+        let trimmed = line.trim();
+        if trimmed == "---" || trimmed == "..." {
+            body_start_line = Some(index + 1);
+            break;
+        }
+        raw_lines.push(line.to_string());
+    }
+    let body_start_line = body_start_line?;
+    let all_lines = normalized.lines().collect::<Vec<_>>();
+    let block = all_lines[..body_start_line].join("\n");
+    let body = all_lines[body_start_line..]
+        .join("\n")
+        .trim_start_matches('\n')
+        .to_string();
+    Some((block, body))
+}
+
+pub(crate) fn strip_markdown_frontmatter(content: &str) -> String {
+    split_markdown_frontmatter(content)
+        .map(|(_, body)| body)
+        .unwrap_or_else(|| content.replace("\r\n", "\n"))
+}
+
+pub(crate) fn extract_markdown_frontmatter_block(content: &str) -> Option<String> {
+    split_markdown_frontmatter(content).map(|(block, _)| block)
+}
+
+pub(crate) fn compose_markdown_with_frontmatter(body: &str, block: Option<&str>) -> String {
+    let normalized_body = body.replace("\r\n", "\n");
+    let Some(frontmatter_block) = block.map(|value| value.replace("\r\n", "\n")) else {
+        return normalized_body;
+    };
+    let normalized_block = frontmatter_block.trim_end_matches('\n');
+    let next_body = normalized_body.trim_start_matches('\n');
+    if next_body.is_empty() {
+        format!("{normalized_block}\n")
+    } else {
+        format!("{normalized_block}\n\n{next_body}")
+    }
+}
+
+pub(crate) fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
+    let (block, _) = split_markdown_frontmatter(content)?;
     let mut object = serde_json::Map::new();
-    for line in lines {
+    for line in block.lines().skip(1) {
         let normalized = line.trim();
-        if normalized == "---" {
+        if normalized == "---" || normalized == "..." {
             break;
         }
         let Some((key, raw_value)) = normalized.split_once(':') else {
@@ -336,6 +663,18 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
     } else {
         Some(markdown_summary(&entry_content, 72))
     };
+    let (
+        richpost_preview_file,
+        richpost_preview_file_url,
+        richpost_preview_updated_at,
+        richpost_preview_page_file,
+        richpost_preview_page_file_url,
+        richpost_preview_page_updated_at,
+    ) = if draft_type == "richpost" {
+        resolve_richpost_first_page_preview(path)
+    } else {
+        (None, None, None, None, None, None)
+    };
     FileNode {
         name: file_name.to_string(),
         path: relative,
@@ -346,6 +685,12 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
         draft_type: Some(draft_type),
         updated_at,
         summary,
+        richpost_preview_file,
+        richpost_preview_file_url,
+        richpost_preview_updated_at,
+        richpost_preview_page_file,
+        richpost_preview_page_file_url,
+        richpost_preview_page_updated_at,
     }
 }
 
@@ -385,7 +730,78 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         draft_type: Some(draft_type),
         updated_at,
         summary,
+        richpost_preview_file: None,
+        richpost_preview_file_url: None,
+        richpost_preview_updated_at: None,
+        richpost_preview_page_file: None,
+        richpost_preview_page_file_url: None,
+        richpost_preview_page_updated_at: None,
     }
+}
+
+fn path_updated_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+}
+
+fn resolve_richpost_first_page_preview(
+    package_path: &Path,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+) {
+    let page_plan = read_json_value_or(&package_richpost_page_plan_path(package_path), json!({}));
+    let Some(page_id) = page_plan
+        .get("pages")
+        .and_then(Value::as_array)
+        .and_then(|pages| {
+            pages.iter().find_map(|page| {
+                page.get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+    else {
+        return (None, None, None, None, None, None);
+    };
+    let page_path = package_richpost_page_html_path(package_path, &page_id);
+    if !page_path.exists() {
+        return (None, None, None, None, None, None);
+    }
+    let page_updated_at = path_updated_at_ms(&page_path);
+    let preview_path = package_richpost_card_preview_image_path(package_path);
+    let preview_updated_at = path_updated_at_ms(&preview_path);
+    let has_fresh_preview = preview_path.exists()
+        && preview_updated_at.unwrap_or_default() >= page_updated_at.unwrap_or_default();
+    (
+        if has_fresh_preview {
+            Some(preview_path.display().to_string())
+        } else {
+            None
+        },
+        if has_fresh_preview {
+            Some(file_url_for_path(&preview_path))
+        } else {
+            None
+        },
+        if has_fresh_preview {
+            preview_updated_at
+        } else {
+            None
+        },
+        Some(page_path.display().to_string()),
+        Some(file_url_for_path(&page_path)),
+        page_updated_at,
+    )
 }
 
 pub(crate) fn resolve_manuscript_path(
@@ -393,6 +809,13 @@ pub(crate) fn resolve_manuscript_path(
     relative: &str,
 ) -> Result<PathBuf, String> {
     let root = manuscripts_root(state)?;
+    let direct_path = PathBuf::from(relative);
+    if direct_path.is_absolute() {
+        if direct_path.starts_with(&root) {
+            return Ok(direct_path);
+        }
+        return Err("Path is outside manuscripts root".to_string());
+    }
     let cleaned = normalize_relative_path(relative);
     Ok(if cleaned.is_empty() {
         root
@@ -419,6 +842,20 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
     if depth > MANUSCRIPTS_TREE_MAX_DEPTH {
         return Ok(Vec::new());
     }
+    if current != root {
+        if let Ok(relative) = current.strip_prefix(root) {
+            let inside_package = relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .map(is_manuscript_package_name)
+                    .unwrap_or(false)
+            });
+            if inside_package {
+                return Ok(Vec::new());
+            }
+        }
+    }
 
     let Ok(entries_iter) = fs::read_dir(current) else {
         return Ok(Vec::new());
@@ -431,6 +868,9 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
     for entry in entries {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
+        if file_name.starts_with('.') {
+            continue;
+        }
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -460,26 +900,16 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 draft_type: None,
                 updated_at,
                 summary: None,
+                richpost_preview_file: None,
+                richpost_preview_file_url: None,
+                richpost_preview_updated_at: None,
+                richpost_preview_page_file: None,
+                richpost_preview_page_file_url: None,
+                richpost_preview_page_updated_at: None,
             });
         } else if file_type.is_file() {
             if file_name.ends_with(".md") {
                 nodes.push(file_node_from_markdown(&path, &file_name, relative));
-            } else {
-                nodes.push(FileNode {
-                    name: file_name,
-                    path: relative,
-                    is_directory: false,
-                    children: None,
-                    status: None,
-                    title: None,
-                    draft_type: None,
-                    updated_at: fs::metadata(&path)
-                        .ok()
-                        .and_then(|meta| meta.modified().ok())
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| duration.as_millis() as i64),
-                    summary: None,
-                });
             }
         }
     }
@@ -517,5 +947,132 @@ pub(crate) fn escape_html(value: &str) -> String {
 }
 
 pub(crate) fn file_url_for_path(path: &Path) -> String {
-    format!("file://{}", path.display())
+    Url::from_file_path(path)
+        .map(|url| url.into())
+        .unwrap_or_else(|_| format!("file://{}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_resource_roots_for_install_root_covers_tauri_nsis_layout() {
+        let roots = bundled_resource_roots_for_install_root(Path::new("/tmp/RedBox"));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/tmp/RedBox"),
+                PathBuf::from("/tmp/RedBox/resources"),
+                PathBuf::from("/tmp/RedBox/_up_"),
+                PathBuf::from("/tmp/RedBox/_up_/resources"),
+            ]
+        );
+    }
+
+    #[test]
+    fn redbox_builtin_skills_root_points_to_a_skill_directory_in_dev() {
+        let root = redbox_builtin_skills_root();
+        assert!(root.join("writing-style").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn current_host_runtime_context_fields_are_consistent() {
+        let context = current_host_runtime_context();
+        assert!(!context.os_family.is_empty());
+        assert!(!context.path_style.is_empty());
+        assert!(!context.path_separator.is_empty());
+        assert!(!context.shell_hint.is_empty());
+        assert!(!context.line_ending.is_empty());
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(context.os_family, "windows");
+            assert_eq!(context.path_style, "windows");
+            assert_eq!(context.path_separator, "\\");
+            assert_eq!(context.shell_hint, "powershell");
+            assert_eq!(context.exe_suffix, ".exe");
+            assert_eq!(context.line_ending, "crlf");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(context.os_family, "macos");
+            assert_eq!(context.path_style, "posix");
+            assert_eq!(context.path_separator, "/");
+            assert_eq!(context.shell_hint, "zsh");
+            assert_eq!(context.exe_suffix, "");
+            assert_eq!(context.line_ending, "lf");
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            assert_eq!(context.os_family, "linux");
+            assert_eq!(context.path_style, "posix");
+            assert_eq!(context.path_separator, "/");
+            assert_eq!(context.shell_hint, "bash");
+            assert_eq!(context.exe_suffix, "");
+            assert_eq!(context.line_ending, "lf");
+        }
+    }
+
+    #[test]
+    fn render_host_runtime_context_section_contains_key_fields() {
+        let section = render_host_runtime_context_section(&HostRuntimeContext {
+            os_family: "windows",
+            path_style: "windows",
+            path_separator: "\\",
+            shell_hint: "powershell",
+            exe_suffix: ".exe",
+            line_ending: "crlf",
+        });
+        assert!(section.contains("Host OS: windows"));
+        assert!(section.contains("Path style: windows"));
+        assert!(section.contains("Preferred shell syntax hint: powershell"));
+        assert!(section.contains("Default line ending: crlf"));
+    }
+
+    #[test]
+    fn list_tree_treats_package_directory_as_single_manuscript_node() {
+        let root = std::env::temp_dir().join(format!("redbox-list-tree-{}", crate::now_ms()));
+        let package_root = root.join("demo.redpost");
+        fs::create_dir_all(package_root.join("pages")).expect("package pages dir");
+        fs::write(package_root.join("manifest.json"), r#"{"title":"Demo"}"#)
+            .expect("manifest should be written");
+        fs::write(package_root.join("content.md"), "# Demo\n\nBody")
+            .expect("content should be written");
+        fs::write(
+            package_root.join("pages").join("page-001.html"),
+            "<html></html>",
+        )
+        .expect("page should be written");
+
+        let nodes = list_tree(&root, &root).expect("tree should load");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "demo.redpost");
+        assert!(!nodes[0].is_directory);
+        assert!(nodes[0].children.is_none());
+
+        let package_children =
+            list_tree_internal(&root, &package_root, 1).expect("package children");
+        assert!(package_children.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_tree_ignores_hidden_and_non_markdown_files() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-list-tree-filter-{}", crate::now_ms()));
+        fs::create_dir_all(&root).expect("root should exist");
+        fs::write(root.join(".DS_Store"), "ignored").expect("hidden file should be written");
+        fs::write(root.join("notes.txt"), "ignored").expect("txt file should be written");
+        fs::write(root.join("draft.md"), "# Draft").expect("markdown should be written");
+
+        let nodes = list_tree(&root, &root).expect("tree should load");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "draft.md");
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

@@ -3,14 +3,15 @@ import { Link2, Loader2 } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
+import { StartupMigrationModal } from './components/StartupMigrationModal';
+import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
-const CreativeChatPage = lazy(async () => ({ default: (await import('./pages/CreativeChat')).CreativeChat }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
-const AdvisorsPage = lazy(async () => ({ default: (await import('./pages/Advisors')).Advisors }));
+const TeamPage = lazy(async () => ({ default: (await import('./pages/Team')).Team }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
@@ -21,16 +22,17 @@ const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/Cove
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
-export type ViewType = 'chat' | 'creative-chat' | 'skills' | 'knowledge' | 'advisors' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ImmersiveMode = false | 'theme' | 'dark';
+export type TeamSection = 'group-chat' | 'members';
 
 const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'chat',
-  'creative-chat',
+  'team',
   'skills',
   'knowledge',
-  'advisors',
   'settings',
   'manuscripts',
   'archives',
@@ -42,6 +44,11 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'workboard',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
+const OFFICIAL_AUTH_NOTICE_ENABLED = false;
+const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
+const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
+  'redbox-auth:panel-display',
+] as const;
 
 // 待发送的聊天消息（用于跨页面传递）
 export interface PendingChatMessage {
@@ -74,6 +81,23 @@ interface YouTubeClipboardCandidate {
   videoUrl: string;
   rawUrl: string;
 }
+
+type StartupMigrationState = {
+  status?: string;
+  needsDbImport?: boolean;
+  needsProjectUpgrade?: boolean;
+  shouldShowModal?: boolean;
+  legacyDbPath?: string | null;
+  legacyWorkspacePath?: string | null;
+  workspacePath?: string | null;
+  currentStep?: string | null;
+  message?: string | null;
+  error?: string | null;
+  progress?: number;
+  legacyMarkdownCount?: number | null;
+  importedCounts?: Record<string, number> | null;
+  projectUpgradeCounts?: Record<string, number> | null;
+};
 
 function parseYouTubeCandidateFromUrl(rawInput: string): YouTubeClipboardCandidate | null {
   const trimmed = String(rawInput || '').trim();
@@ -159,24 +183,53 @@ function computeMountedViews(history: ViewType[]): Set<ViewType> {
   return next;
 }
 
-function shouldRenderView(mountedViews: Set<ViewType>, currentView: ViewType, view: ViewType): boolean {
+function shouldRenderView(
+  mountedViews: Set<ViewType>,
+  currentView: ViewType,
+  persistentViews: Set<ViewType>,
+  view: ViewType,
+): boolean {
+  if (currentView === view || persistentViews.has(view)) {
+    return true;
+  }
   if (NON_CACHEABLE_VIEWS.has(view)) {
-    return currentView === view;
+    return false;
   }
   return mountedViews.has(view);
 }
 
+function clearStaleOfficialAuthSnapshots(): boolean {
+  let cleared = false;
+  try {
+    for (const key of OFFICIAL_AUTH_SNAPSHOT_KEYS) {
+      if (window.localStorage.getItem(key) == null) continue;
+      window.localStorage.removeItem(key);
+      cleared = true;
+    }
+  } catch {
+    return cleared;
+  }
+  return cleared;
+}
+
 function App() {
+  useOfficialAuthLifecycle();
+
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
-  const [isImmersiveEditor, setIsImmersiveEditor] = useState(false);
+  const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['manuscripts']));
+  const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
   const [clipboardCandidate, setClipboardCandidate] = useState<YouTubeClipboardCandidate | null>(null);
   const [isCapturePromptOpen, setIsCapturePromptOpen] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [captureMessage, setCaptureMessage] = useState('');
+  const [startupMigration, setStartupMigration] = useState<StartupMigrationState | null>(null);
+  const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
+  const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
+  const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -184,6 +237,7 @@ function App() {
   const viewHistoryRef = useRef<ViewType[]>(['manuscripts']);
   const capturePromptOpenRef = useRef(false);
   const captureStatusRef = useRef<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const lastAuthStatusRef = useRef('');
 
   useEffect(() => {
     viewHistoryRef.current = [...viewHistoryRef.current.filter((item) => item !== currentView), currentView];
@@ -193,10 +247,66 @@ function App() {
   }, [currentView]);
 
   useEffect(() => {
-    if (currentView !== 'manuscripts' && isImmersiveEditor) {
-      setIsImmersiveEditor(false);
+    let mounted = true;
+    const handleAuthStateChanged = (event: { payload?: { status?: string } } | { status?: string } | null | undefined) => {
+      const payload = (event && typeof event === 'object' && 'payload' in event)
+        ? (event as { payload?: { status?: string } }).payload
+        : (event as { status?: string } | null | undefined);
+      const nextStatus = String((payload as { status?: string } | null | undefined)?.status || '');
+      const prevStatus = lastAuthStatusRef.current;
+      lastAuthStatusRef.current = nextStatus;
+      if (!mounted) {
+        return;
+      }
+      if (nextStatus === 'reauthRequired') {
+        clearStaleOfficialAuthSnapshots();
+        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+        return;
+      }
+      if (nextStatus === 'anonymous') {
+        const cleared = clearStaleOfficialAuthSnapshots();
+        setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+        return;
+      }
+      if (prevStatus === 'reauthRequired') {
+        setGlobalAuthNotice(null);
+      }
+      if (prevStatus === 'anonymous') {
+        setGlobalAuthNotice(null);
+      }
+    };
+
+    void window.ipcRenderer.auth.getState()
+      .then((snapshot) => {
+        if (!mounted) return;
+        const nextStatus = String((snapshot as { status?: string } | null | undefined)?.status || '');
+        lastAuthStatusRef.current = nextStatus;
+        if (nextStatus === 'reauthRequired') {
+          clearStaleOfficialAuthSnapshots();
+          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          return;
+        }
+        if (nextStatus === 'anonymous') {
+          const cleared = clearStaleOfficialAuthSnapshots();
+          setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          return;
+        }
+        setGlobalAuthNotice(null);
+      })
+      .catch(() => {});
+
+    window.ipcRenderer.auth.onStateChanged(handleAuthStateChanged);
+    return () => {
+      mounted = false;
+      window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentView !== 'manuscripts' && immersiveMode) {
+      setImmersiveMode(false);
     }
-  }, [currentView, isImmersiveEditor]);
+  }, [currentView, immersiveMode]);
 
   useEffect(() => {
     capturePromptOpenRef.current = isCapturePromptOpen;
@@ -239,6 +349,22 @@ function App() {
   const clearPendingManuscriptFile = () => {
     setPendingManuscriptFile(null);
   };
+
+  const setViewPersistent = useCallback((view: ViewType, persistent: boolean) => {
+    setPersistentViews((prev) => {
+      const alreadyPersistent = prev.has(view);
+      if (alreadyPersistent === persistent) {
+        return prev;
+      }
+      const next = new Set(prev);
+      if (persistent) {
+        next.add(view);
+      } else {
+        next.delete(view);
+      }
+      return next;
+    });
+  }, []);
 
   const enqueueYoutubeFromClipboard = useCallback(async (candidate: YouTubeClipboardCandidate) => {
     const payload = {
@@ -342,35 +468,106 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+
+    const applyStatus = (value: unknown) => {
+      if (disposed || !value || typeof value !== 'object') return;
+      const next = value as StartupMigrationState;
+      setStartupMigration(next);
+      if (next.status === 'running') {
+        setStartupMigrationBusy(true);
+        setStartupMigrationDismissed(false);
+      } else {
+        setStartupMigrationBusy(false);
+      }
+    };
+
+    void window.ipcRenderer.startupMigration.getStatus<StartupMigrationState>().then(applyStatus);
+    const handleStatus = (_event: unknown, payload: unknown) => applyStatus(payload);
+    window.ipcRenderer.on('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+
+    return () => {
+      disposed = true;
+      window.ipcRenderer.off('app:startup-migration-status', handleStatus as (...args: unknown[]) => void);
+    };
+  }, []);
+
+  const shouldShowStartupMigration = Boolean(
+    startupMigration
+      && startupMigration.shouldShowModal
+      && !startupMigrationDismissed
+      && (
+        startupMigration.status === 'running'
+        || startupMigration.status === 'completed'
+        || startupMigration.status === 'failed'
+        || startupMigration.status === 'pending'
+      ),
+  );
+
+  const handleStartStartupMigration = useCallback(async () => {
+    setStartupMigrationBusy(true);
+    setStartupMigrationDismissed(false);
+    try {
+      const next = await window.ipcRenderer.startupMigration.start<StartupMigrationState>();
+      if (next && typeof next === 'object') {
+        setStartupMigration(next);
+      }
+    } finally {
+      setStartupMigrationBusy(false);
+    }
+  }, []);
+
+  const handleCloseStartupMigration = useCallback(() => {
+    if (startupMigration?.status === 'running') return;
+    setStartupMigration((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        shouldShowModal: false,
+      };
+    });
+    setStartupMigrationDismissed(true);
+  }, [startupMigration?.status]);
+
   return (
     <>
-      <Layout currentView={currentView} onNavigate={setCurrentView} immersiveMode={isImmersiveEditor}>
-        {shouldRenderView(mountedViews, currentView, 'chat') && (
+      <Layout
+        currentView={currentView}
+        onNavigate={setCurrentView}
+        immersiveMode={immersiveMode}
+        globalNotice={globalAuthNotice}
+      >
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'chat') && (
           <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
               <ChatPage
-                isActive={currentView === 'chat'}
+                isActive={currentView === 'chat' || persistentViews.has('chat')}
+                onExecutionStateChange={(active) => setViewPersistent('chat', active)}
                 pendingMessage={pendingChatMessage}
                 onMessageConsumed={clearPendingMessage}
               />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('creative-chat') && (
-          <div className={currentView === 'creative-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'creative-chat' ? <ViewLoadingFallback /> : null}>
-              <CreativeChatPage isActive={currentView === 'creative-chat'} />
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'team') && (
+          <div className={currentView === 'team' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'team' ? <ViewLoadingFallback /> : null}>
+              <TeamPage
+                isActive={currentView === 'team' || persistentViews.has('team')}
+                onExecutionStateChange={(active) => setViewPersistent('team', active)}
+              />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('skills') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
               <SkillsPage isActive={currentView === 'skills'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('knowledge') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'knowledge') && (
           <div className={currentView === 'knowledge' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'knowledge' ? <ViewLoadingFallback /> : null}>
               <KnowledgePage
@@ -381,21 +578,14 @@ function App() {
             </Suspense>
           </div>
         )}
-        {mountedViews.has('advisors') && (
-          <div className={currentView === 'advisors' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'advisors' ? <ViewLoadingFallback /> : null}>
-              <AdvisorsPage isActive={currentView === 'advisors'} />
-            </Suspense>
-          </div>
-        )}
-        {mountedViews.has('settings') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'settings') && (
           <div className={currentView === 'settings' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
               <SettingsPage isActive={currentView === 'settings'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('manuscripts') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'manuscripts') && (
           <div className={currentView === 'manuscripts' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'manuscripts' ? <ViewLoadingFallback /> : null}>
               <ManuscriptsPage
@@ -403,63 +593,64 @@ function App() {
                 onFileConsumed={clearPendingManuscriptFile}
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'manuscripts'}
-                onImmersiveModeChange={setIsImmersiveEditor}
+                onImmersiveModeChange={setImmersiveMode}
               />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('archives') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'archives') && (
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
               <ArchivesPage isActive={currentView === 'archives'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('wander') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'wander') && (
           <div className={currentView === 'wander' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'wander' ? <ViewLoadingFallback /> : null}>
               <WanderPage
                 onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
+                onExecutionStateChange={(active) => setViewPersistent('wander', active)}
                 isActive={currentView === 'wander'}
               />
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, 'redclaw') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw') && (
           <div className={currentView === 'redclaw' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
-                onNavigateWorkboard={() => setCurrentView('workboard')}
-                isActive={currentView === 'redclaw'}
+                isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
+                onExecutionStateChange={(active) => setViewPersistent('redclaw', active)}
               />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('subjects') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
           <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
               <SubjectsPage isActive={currentView === 'subjects'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('media-library') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'media-library') && (
           <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
               <MediaLibraryPage isActive={currentView === 'media-library'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('cover-studio') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'cover-studio') && (
           <div className={currentView === 'cover-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'cover-studio' ? <ViewLoadingFallback /> : null}>
               <CoverStudioPage isActive={currentView === 'cover-studio'} />
             </Suspense>
           </div>
         )}
-        {mountedViews.has('workboard') && (
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'workboard') && (
           <div className={currentView === 'workboard' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'workboard' ? <ViewLoadingFallback /> : null}>
               <WorkboardPage isActive={currentView === 'workboard'} />
@@ -514,6 +705,13 @@ function App() {
           </div>
         </div>
       )}
+      <StartupMigrationModal
+        open={shouldShowStartupMigration}
+        state={startupMigration}
+        busy={startupMigrationBusy}
+        onStart={() => void handleStartStartupMigration()}
+        onClose={handleCloseStartupMigration}
+      />
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
       <AppDialogsHost />
     </>

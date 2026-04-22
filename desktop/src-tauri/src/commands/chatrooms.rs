@@ -1,18 +1,30 @@
 use crate::persistence::{
-    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    apply_chatrooms_hydration_snapshot, load_chatrooms_hydration_snapshot, with_store,
     with_store_mut,
 };
+use crate::runtime::tool_results_for_session;
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
+use crate::commands::runtime_query::handle_runtime_query;
 use crate::events::emit_creative_chat_checkpoint;
+use crate::session_manager::ensure_context_session;
 use std::fs;
 use std::path::PathBuf;
 
 const SIX_HATS_ROOM_ID: &str = "system_six_thinking_hats";
 const SIX_HATS_ROOM_NAME: &str = "六顶思考帽";
 const SYSTEM_ROOMS_STATE_FILE: &str = ".system_rooms_state.json";
+const CHATROOM_ADVISOR_CONTEXT_TYPE: &str = "chatroom-advisor";
+const CHATROOM_DIRECTOR_ID: &str = "director-system";
+const CHATROOM_DIRECTOR_NAME: &str = "总监";
+const CHATROOM_DIRECTOR_AVATAR: &str = "🎯";
+const CHATROOM_HISTORY_LIMIT: usize = 10;
+const CHATROOM_MESSAGE_MAX_CHARS: usize = 1200;
+const CHATROOM_CONTEXT_MAX_CHARS: usize = 6000;
+const CHATROOM_TOOL_SUMMARY_CHARS: usize = 240;
+const CHATROOM_SOURCE_LIMIT: usize = 8;
 const SIX_THINKING_HAT_IDS: [&str; 6] = [
     "hat_white",
     "hat_red",
@@ -167,6 +179,445 @@ fn ensure_six_hats_room(state: &State<'_, AppState>) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+fn ensure_chatroom_advisor_runtime_session(
+    state: &State<'_, AppState>,
+    room: &ChatRoomRecord,
+    advisor_id: &str,
+    advisor_name: &str,
+    phase: &str,
+    advisor: Option<&AdvisorRecord>,
+    advisors: &[AdvisorRecord],
+) -> Result<ChatSessionRecord, String> {
+    let binding_id = format!("{}:{}", room.id, advisor_id);
+    let title = format!("{} · {}", room.name, advisor_name);
+    let initial_context = build_chatroom_participant_initial_context(
+        room,
+        advisor_id,
+        advisor_name,
+        phase,
+        advisor,
+        advisors,
+    );
+    with_store_mut(state, |store| {
+        let session = ensure_context_session(
+            store,
+            CHATROOM_ADVISOR_CONTEXT_TYPE,
+            &binding_id,
+            title,
+            Some(initial_context.as_str()),
+        );
+        let Some(existing) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session.id)
+        else {
+            return Ok(session);
+        };
+        let mut metadata = existing
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        metadata.insert(
+            "contextType".to_string(),
+            Value::String(CHATROOM_ADVISOR_CONTEXT_TYPE.to_string()),
+        );
+        metadata.insert("contextId".to_string(), Value::String(binding_id));
+        metadata.insert("isContextBound".to_string(), Value::Bool(true));
+        metadata.insert("roomId".to_string(), Value::String(room.id.clone()));
+        metadata.insert("roomName".to_string(), Value::String(room.name.clone()));
+        metadata.insert(
+            "advisorName".to_string(),
+            Value::String(advisor_name.to_string()),
+        );
+        metadata.insert(
+            "chatroomRole".to_string(),
+            Value::String(if advisor_id == CHATROOM_DIRECTOR_ID {
+                "director".to_string()
+            } else {
+                "advisor".to_string()
+            }),
+        );
+        metadata.insert(
+            "chatroomPhase".to_string(),
+            Value::String(phase.to_string()),
+        );
+        metadata.insert(
+            "intent".to_string(),
+            Value::String("discussion".to_string()),
+        );
+        metadata.insert(
+            "preferredRole".to_string(),
+            Value::String(if advisor_id == CHATROOM_DIRECTOR_ID {
+                "ops-coordinator".to_string()
+            } else {
+                "researcher".to_string()
+            }),
+        );
+        metadata.insert("advisorIds".to_string(), json!([advisor_id]));
+        if advisor_id != CHATROOM_DIRECTOR_ID {
+            metadata.insert(
+                "advisorId".to_string(),
+                Value::String(advisor_id.to_string()),
+            );
+        } else {
+            metadata.remove("advisorId");
+        }
+        existing.metadata = Some(Value::Object(metadata));
+        existing.updated_at = now_iso();
+        Ok(existing.clone())
+    })
+}
+
+fn chatroom_participant_names(room: &ChatRoomRecord, advisors: &[AdvisorRecord]) -> String {
+    room.advisor_ids
+        .iter()
+        .filter(|advisor_id| advisor_id.as_str() != CHATROOM_DIRECTOR_ID)
+        .map(|advisor_id| find_advisor_name(advisors, advisor_id))
+        .filter(|name| !name.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+fn build_chatroom_director_initial_context(
+    room: &ChatRoomRecord,
+    phase: &str,
+    advisors: &[AdvisorRecord],
+) -> String {
+    let template = if phase == "summary" {
+        load_redbox_prompt_or_embedded(
+            "runtime/director/summary.txt",
+            include_str!("../../../prompts/library/runtime/director/summary.txt"),
+        )
+    } else {
+        load_redbox_prompt_or_embedded(
+            "runtime/director/introduction.txt",
+            include_str!("../../../prompts/library/runtime/director/introduction.txt"),
+        )
+    };
+    let member_names = chatroom_participant_names(room, advisors);
+    let mut rendered = render_redbox_prompt(
+        &template,
+        &[(
+            "goal",
+            if room.name.trim().is_empty() {
+                "当前群聊目标".to_string()
+            } else {
+                room.name.clone()
+            },
+        )],
+    );
+    if !member_names.trim().is_empty() {
+        rendered.push_str("\n\n当前可点名成员：");
+        rendered.push_str(&member_names);
+        rendered.push_str("\n只能点名以上成员，禁止虚构新角色。");
+    }
+    rendered
+}
+
+fn build_chatroom_advisor_initial_context(
+    room: &ChatRoomRecord,
+    advisor_name: &str,
+    advisor: Option<&AdvisorRecord>,
+) -> String {
+    let personality = advisor
+        .map(|item| item.personality.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("直接给出高信息密度、可执行的观点。");
+    let system_prompt = advisor
+        .map(|item| item.system_prompt.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    let mut lines = vec![
+        format!("你是群聊房间《{}》中的成员“{}”。", room.name, advisor_name),
+        format!("性格与职责：{personality}"),
+        "你只代表该成员发言，不要自称系统、宿主或 RedClaw。".to_string(),
+        "优先结合该成员已有知识、案例、规范和最近群聊上下文回答。".to_string(),
+        "如果证据不足，明确说依据不足，不要假装知道该成员的私有知识。".to_string(),
+    ];
+    if !system_prompt.is_empty() {
+        lines.push(format!("成员系统设定：\n{system_prompt}"));
+    }
+    lines.join("\n")
+}
+
+fn build_chatroom_participant_initial_context(
+    room: &ChatRoomRecord,
+    advisor_id: &str,
+    advisor_name: &str,
+    phase: &str,
+    advisor: Option<&AdvisorRecord>,
+    advisors: &[AdvisorRecord],
+) -> String {
+    if advisor_id == CHATROOM_DIRECTOR_ID {
+        return build_chatroom_director_initial_context(room, phase, advisors);
+    }
+    build_chatroom_advisor_initial_context(room, advisor_name, advisor)
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        return value.to_string();
+    }
+    chars.into_iter().take(max_chars).collect::<String>()
+}
+
+fn chatroom_message_author_label(
+    message: &ChatRoomMessageRecord,
+    advisors: &[AdvisorRecord],
+) -> String {
+    if message.role == "user" {
+        return "用户".to_string();
+    }
+    if let Some(name) = message
+        .advisor_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return name.to_string();
+    }
+    if let Some(advisor_id) = message.advisor_id.as_deref() {
+        if advisor_id == CHATROOM_DIRECTOR_ID {
+            return CHATROOM_DIRECTOR_NAME.to_string();
+        }
+        return find_advisor_name(advisors, advisor_id);
+    }
+    "成员".to_string()
+}
+
+fn build_chatroom_runtime_message(
+    room: &ChatRoomRecord,
+    advisor_id: &str,
+    advisor_name: &str,
+    phase: &str,
+    advisor: Option<&AdvisorRecord>,
+    room_history: &[ChatRoomMessageRecord],
+    user_message: &str,
+    context: Option<&Value>,
+    advisors: &[AdvisorRecord],
+) -> String {
+    let history_block = room_history
+        .iter()
+        .rev()
+        .take(CHATROOM_HISTORY_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|item| {
+            format!(
+                "- [{}] {}",
+                chatroom_message_author_label(&item, advisors),
+                truncate_chars(&item.content, CHATROOM_MESSAGE_MAX_CHARS)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let context_block = context
+        .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+        .map(|value| truncate_chars(&value, CHATROOM_CONTEXT_MAX_CHARS))
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("\n\n附加上下文：\n{value}"))
+        .unwrap_or_default();
+    if advisor_id == CHATROOM_DIRECTOR_ID {
+        return format!(
+            "你正在群聊房间《{}》中担任内容总监，当前阶段是 {}。\n\
+先阅读最近群聊与用户问题，再给出本轮主持发言。\n\
+你的职责是识别关键问题、推动分工、压缩讨论成本、让团队尽快产出结果。\n\
+如果需要点名成员，只能使用系统里已有的成员名单：{}。\n\n\
+最近群聊：\n{}\n\n\
+当前用户消息：\n{}{}",
+            room.name,
+            phase,
+            {
+                let names = chatroom_participant_names(room, advisors);
+                if names.trim().is_empty() {
+                    "暂无其他成员".to_string()
+                } else {
+                    names
+                }
+            },
+            if history_block.trim().is_empty() {
+                "- 暂无历史对话".to_string()
+            } else {
+                history_block
+            },
+            user_message,
+            context_block
+        );
+    }
+    let advisor_hint = advisor
+        .map(|item| item.personality.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n成员风格提示：{value}"))
+        .unwrap_or_default();
+    format!(
+        "你正在群聊房间《{}》中以成员“{}”的身份参与讨论。\n\
+先结合最近群聊内容理解问题，再给出你的发言；如果需要确认该成员自己的资料、规则、案例或笔记，优先使用 redbox_fs(scope=\"knowledge\", action=\"list|search|read\") 在该成员知识库中检索，不要假装已经知道。\n\n\
+最近群聊：\n{}\n\n\
+当前阶段：{}\n\
+当前用户消息：\n{}{}{}",
+        room.name,
+        advisor_name,
+        if history_block.trim().is_empty() {
+            "- 暂无历史对话".to_string()
+        } else {
+            history_block
+        },
+        phase,
+        user_message,
+        context_block,
+        advisor_hint
+    )
+}
+
+fn collect_runtime_tool_results_after(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    previous_count: usize,
+) -> Result<Vec<crate::runtime::SessionToolResultRecord>, String> {
+    with_store(state, |store| {
+        let items = tool_results_for_session(&store, session_id)
+            .into_iter()
+            .skip(previous_count)
+            .collect::<Vec<_>>();
+        Ok(items)
+    })
+}
+
+fn summarize_tool_result(item: &crate::runtime::SessionToolResultRecord) -> String {
+    item.summary_text
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| item.result_text.clone())
+        .map(|value| truncate_chars(&value, CHATROOM_TOOL_SUMMARY_CHARS))
+        .unwrap_or_else(|| {
+            if item.success {
+                format!("{} succeeded", item.tool_name)
+            } else {
+                format!("{} failed", item.tool_name)
+            }
+        })
+}
+
+fn knowledge_sources_from_tool_payload(payload: Option<&Value>, sources: &mut Vec<String>) {
+    let Some(payload) = payload else {
+        return;
+    };
+    if let Some(path) = payload.get("path").and_then(Value::as_str) {
+        if !path.trim().is_empty() {
+            sources.push(path.to_string());
+        }
+    }
+    if let Some(files) = payload.get("files").and_then(Value::as_array) {
+        for file in files.iter().take(CHATROOM_SOURCE_LIMIT) {
+            if let Some(path) = file.get("path").and_then(Value::as_str) {
+                if !path.trim().is_empty() {
+                    sources.push(path.to_string());
+                }
+            }
+        }
+    }
+    if let Some(hits) = payload.get("hits").and_then(Value::as_array) {
+        for hit in hits.iter().take(CHATROOM_SOURCE_LIMIT) {
+            if let Some(path) = hit.get("path").and_then(Value::as_str) {
+                if !path.trim().is_empty() {
+                    sources.push(path.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn emit_chatroom_runtime_tool_summaries(
+    app: &AppHandle,
+    room_id: &str,
+    advisor_id: &str,
+    tool_results: &[crate::runtime::SessionToolResultRecord],
+) {
+    let mut knowledge_sources = Vec::<String>::new();
+    let mut used_knowledge_tools = false;
+    for item in tool_results {
+        emit_creative_chat_checkpoint(
+            app,
+            room_id,
+            "creative_chat.tool",
+            json!({
+                "roomId": room_id,
+                "advisorId": advisor_id,
+                "type": "tool_start",
+                "tool": {
+                    "name": item.tool_name,
+                }
+            }),
+        );
+        emit_creative_chat_checkpoint(
+            app,
+            room_id,
+            "creative_chat.tool",
+            json!({
+                "roomId": room_id,
+                "advisorId": advisor_id,
+                "type": "tool_end",
+                "tool": {
+                    "name": item.tool_name,
+                    "result": {
+                        "success": item.success,
+                        "content": summarize_tool_result(item)
+                    }
+                }
+            }),
+        );
+        if item.tool_name.starts_with("knowledge_") {
+            used_knowledge_tools = true;
+            knowledge_sources_from_tool_payload(item.payload.as_ref(), &mut knowledge_sources);
+        }
+    }
+    if !used_knowledge_tools {
+        return;
+    }
+    knowledge_sources.sort();
+    knowledge_sources.dedup();
+    knowledge_sources.truncate(CHATROOM_SOURCE_LIMIT);
+    emit_creative_chat_checkpoint(
+        app,
+        room_id,
+        "creative_chat.rag",
+        json!({
+            "roomId": room_id,
+            "advisorId": advisor_id,
+            "type": "rag_end",
+            "content": if knowledge_sources.is_empty() {
+                "已检索成员知识库".to_string()
+            } else {
+                format!("已检索成员知识库，命中 {} 个来源", knowledge_sources.len())
+            },
+            "sources": knowledge_sources
+        }),
+    );
+}
+
+fn clear_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
+    if let Ok(mut guard) = state.creative_chat_cancellations.lock() {
+        guard.remove(room_id);
+    }
+}
+
+fn request_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
+    if let Ok(mut guard) = state.creative_chat_cancellations.lock() {
+        guard.insert(room_id.to_string());
+    }
+}
+
+fn is_chatroom_cancelled(state: &State<'_, AppState>, room_id: &str) -> bool {
+    state
+        .creative_chat_cancellations
+        .lock()
+        .map(|guard| guard.contains(room_id))
+        .unwrap_or(false)
+}
+
 pub fn handle_chatrooms_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -181,6 +632,7 @@ pub fn handle_chatrooms_channel(
             | "chatrooms:update"
             | "chatrooms:delete"
             | "chatrooms:clear"
+            | "chatrooms:cancel"
             | "chatrooms:send"
     ) {
         return None;
@@ -197,9 +649,9 @@ pub fn handle_chatrooms_channel(
                         &state.store_path,
                     )?))
                 })? {
-                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let snapshot = load_chatrooms_hydration_snapshot(&root);
                     let _ = with_store_mut(state, |store| {
-                        apply_workspace_hydration_snapshot(store, snapshot);
+                        apply_chatrooms_hydration_snapshot(store, snapshot);
                         Ok(())
                     });
                 }
@@ -223,9 +675,9 @@ pub fn handle_chatrooms_channel(
                         &state.store_path,
                     )?))
                 })? {
-                    let snapshot = load_workspace_hydration_snapshot(&root);
+                    let snapshot = load_chatrooms_hydration_snapshot(&root);
                     let _ = with_store_mut(state, |store| {
-                        apply_workspace_hydration_snapshot(store, snapshot);
+                        apply_chatrooms_hydration_snapshot(store, snapshot);
                         Ok(())
                     });
                 }
@@ -355,20 +807,37 @@ pub fn handle_chatrooms_channel(
                 });
                 Ok(result)
             }
+            "chatrooms:cancel" => {
+                let room_id = payload_string(payload, "roomId")
+                    .or_else(|| payload_value_as_string(payload))
+                    .unwrap_or_default();
+                if room_id.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "缺少 roomId" }));
+                }
+                request_chatroom_cancel(state, &room_id);
+                emit_creative_chat_checkpoint(
+                    app,
+                    &room_id,
+                    "creative_chat.done",
+                    json!({ "roomId": room_id, "cancelled": true }),
+                );
+                Ok(json!({ "success": true }))
+            }
             "chatrooms:send" => {
                 let room_id = payload_string(payload, "roomId").unwrap_or_default();
                 let message = payload_string(payload, "message").unwrap_or_default();
                 let client_message_id = payload_string(payload, "clientMessageId");
                 let context = payload_field(payload, "context").cloned();
+                let model_config = payload_field(payload, "modelConfig").cloned();
                 if room_id.trim().is_empty() || message.trim().is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少 roomId 或 message" }));
                 }
+                clear_chatroom_cancel(state, &room_id);
                 eprintln!(
                     "[creative-chat][send] roomId={} messageChars={}",
                     room_id,
                     message.chars().count()
                 );
-                let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let (room, advisors) = with_store(state, |store| {
                     let room = store
                         .chat_rooms
@@ -403,17 +872,35 @@ pub fn handle_chatrooms_channel(
                     json!({ "roomId": room_id.clone(), "message": user_message }),
                 );
 
-                let target_advisor_ids = if room.advisor_ids.is_empty() {
-                    vec!["director-system".to_string()]
-                } else {
+                let target_advisor_ids = if room.is_system.unwrap_or(false)
+                    && room.system_type.as_deref() == Some("six_thinking_hats")
+                {
                     room.advisor_ids.clone()
+                } else {
+                    let mut ordered = Vec::with_capacity(room.advisor_ids.len() + 1);
+                    ordered.push(CHATROOM_DIRECTOR_ID.to_string());
+                    for advisor_id in room.advisor_ids.iter() {
+                        if advisor_id != CHATROOM_DIRECTOR_ID {
+                            ordered.push(advisor_id.clone());
+                        }
+                    }
+                    ordered
                 };
                 let app_handle = app.clone();
                 let room_id_for_task = room_id.clone();
                 let message_for_task = message.clone();
                 let context_for_task = context.clone();
+                let model_config_for_task = model_config.clone();
                 let advisors_for_task = advisors.clone();
                 let target_advisor_ids_for_task = target_advisor_ids.clone();
+                let room_history_for_task = with_store(state, |store| {
+                    Ok(store
+                        .chatroom_messages
+                        .iter()
+                        .filter(|item| item.room_id == room_id)
+                        .cloned()
+                        .collect::<Vec<_>>())
+                })?;
                 tauri::async_runtime::spawn(async move {
                     let managed_state = app_handle.state::<AppState>();
                     eprintln!(
@@ -421,19 +908,23 @@ pub fn handle_chatrooms_channel(
                         room_id_for_task,
                         target_advisor_ids_for_task.len()
                     );
+                    let mut rolling_history = room_history_for_task;
                     for (index, advisor_id) in target_advisor_ids_for_task.iter().enumerate() {
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
+                        }
                         eprintln!(
                             "[creative-chat][advisor-start] roomId={} advisorId={} index={}",
                             room_id_for_task, advisor_id, index
                         );
                         let advisor = advisors_for_task.iter().find(|item| item.id == *advisor_id);
-                        let advisor_name = if advisor_id == "director-system" {
-                            "总监".to_string()
+                        let advisor_name = if advisor_id == CHATROOM_DIRECTOR_ID {
+                            CHATROOM_DIRECTOR_NAME.to_string()
                         } else {
                             find_advisor_name(&advisors_for_task, advisor_id)
                         };
-                        let advisor_avatar = if advisor_id == "director-system" {
-                            "🎯".to_string()
+                        let advisor_avatar = if advisor_id == CHATROOM_DIRECTOR_ID {
+                            CHATROOM_DIRECTOR_AVATAR.to_string()
                         } else {
                             find_advisor_avatar(&advisors_for_task, advisor_id)
                         };
@@ -459,16 +950,98 @@ pub fn handle_chatrooms_channel(
                                 "roomId": room_id_for_task.clone(),
                                 "advisorId": advisor_id,
                                 "type": "thinking_start",
-                                "content": "正在分析群聊上下文..."
+                                "content": if advisor_id == CHATROOM_DIRECTOR_ID {
+                                    "正在梳理目标、判断关键问题并安排分工..."
+                                } else {
+                                    "正在分析群聊上下文并准备检索成员知识..."
+                                }
                             }),
                         );
-                        let prompt = build_advisor_prompt(
+                        let runtime_message = build_chatroom_runtime_message(
+                            &room,
+                            advisor_id,
+                            &advisor_name,
+                            &phase,
                             advisor,
+                            &rolling_history,
                             &message_for_task,
                             context_for_task.as_ref(),
+                            &advisors_for_task,
                         );
-                        let response =
-                            generate_response_with_settings(&settings_snapshot, None, &prompt);
+                        let session = match ensure_chatroom_advisor_runtime_session(
+                            &managed_state,
+                            &room,
+                            advisor_id,
+                            &advisor_name,
+                            &phase,
+                            advisor,
+                            &advisors_for_task,
+                        ) {
+                            Ok(session) => session,
+                            Err(error) => {
+                                emit_creative_chat_checkpoint(
+                                    &app_handle,
+                                    &room_id_for_task,
+                                    "creative_chat.error",
+                                    json!({
+                                        "roomId": room_id_for_task.clone(),
+                                        "advisorId": advisor_id,
+                                        "message": error
+                                    }),
+                                );
+                                continue;
+                            }
+                        };
+                        let previous_tool_count = with_store(&managed_state, |store| {
+                            Ok(tool_results_for_session(&store, &session.id).len())
+                        })
+                        .unwrap_or_default();
+                        let runtime_payload = json!({
+                            "sessionId": session.id,
+                            "message": runtime_message,
+                            "modelConfig": model_config_for_task.clone()
+                        });
+                        let response = match handle_runtime_query(
+                            &app_handle,
+                            &managed_state,
+                            &runtime_payload,
+                        ) {
+                            Ok(value) => {
+                                let response =
+                                    payload_string(&value, "response").unwrap_or_default();
+                                let tool_results = collect_runtime_tool_results_after(
+                                    &managed_state,
+                                    payload_string(&value, "sessionId")
+                                        .as_deref()
+                                        .unwrap_or(&session.id),
+                                    previous_tool_count,
+                                )
+                                .unwrap_or_default();
+                                emit_chatroom_runtime_tool_summaries(
+                                    &app_handle,
+                                    &room_id_for_task,
+                                    advisor_id,
+                                    &tool_results,
+                                );
+                                response
+                            }
+                            Err(error) => {
+                                emit_creative_chat_checkpoint(
+                                    &app_handle,
+                                    &room_id_for_task,
+                                    "creative_chat.error",
+                                    json!({
+                                        "roomId": room_id_for_task.clone(),
+                                        "advisorId": advisor_id,
+                                        "message": error
+                                    }),
+                                );
+                                continue;
+                            }
+                        };
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
+                        }
                         eprintln!(
                             "[creative-chat][advisor-response] roomId={} advisorId={} chars={}",
                             room_id_for_task,
@@ -487,6 +1060,9 @@ pub fn handle_chatrooms_channel(
                             }),
                         );
                         for chunk in split_stream_chunks(&response, 140) {
+                            if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                                break;
+                            }
                             emit_creative_chat_checkpoint(
                                 &app_handle,
                                 &room_id_for_task,
@@ -494,17 +1070,20 @@ pub fn handle_chatrooms_channel(
                                 json!({
                                     "roomId": room_id_for_task.clone(),
                                     "advisorId": advisor_id,
-                                    "advisorName": if advisor_id == "director-system" { "总监" } else { &advisor_name },
-                                    "advisorAvatar": if advisor_id == "director-system" { "🎯" } else { &advisor_avatar },
+                                    "advisorName": if advisor_id == CHATROOM_DIRECTOR_ID { CHATROOM_DIRECTOR_NAME } else { &advisor_name },
+                                    "advisorAvatar": if advisor_id == CHATROOM_DIRECTOR_ID { CHATROOM_DIRECTOR_AVATAR } else { &advisor_avatar },
                                     "content": chunk,
                                     "done": false
                                 }),
                             );
                         }
+                        if is_chatroom_cancelled(&managed_state, &room_id_for_task) {
+                            break;
+                        }
                         let ai_message = ChatRoomMessageRecord {
                             id: make_id("chatroom-message"),
                             room_id: room_id_for_task.clone(),
-                            role: if advisor_id == "director-system" {
+                            role: if advisor_id == CHATROOM_DIRECTOR_ID {
                                 "director".to_string()
                             } else {
                                 "advisor".to_string()
@@ -518,6 +1097,7 @@ pub fn handle_chatrooms_channel(
                             phase: Some(phase.clone()),
                         };
                         let _ = append_chatroom_message_to_file(&managed_state, &room, &ai_message);
+                        rolling_history.push(ai_message.clone());
                         emit_creative_chat_checkpoint(
                             &app_handle,
                             &room_id_for_task,
@@ -533,6 +1113,7 @@ pub fn handle_chatrooms_channel(
                         );
                     }
 
+                    clear_chatroom_cancel(&managed_state, &room_id_for_task);
                     emit_creative_chat_checkpoint(
                         &app_handle,
                         &room_id_for_task,

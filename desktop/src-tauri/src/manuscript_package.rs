@@ -1,18 +1,35 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use tauri::State;
+use std::process::Stdio;
+use std::thread;
+use std::time::UNIX_EPOCH;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    commands::manuscripts::timeline_clip_duration_ms, get_default_package_entry,
-    get_draft_type_from_file_name, get_package_kind_from_file_name, join_relative,
-    lexbox_project_root, make_id, normalize_relative_path, now_i64, now_iso, now_ms,
-    package_assets_path, package_cover_path, package_editor_project_path, package_entry_path,
-    package_images_path, package_manifest_path, package_remotion_input_props_path,
-    package_remotion_path, package_scene_ui_path, package_timeline_path, package_track_ui_path,
-    parse_json_value_from_text, read_json_value_or, resolve_manuscript_path,
-    title_from_relative_path, write_json_value, write_text_file, AppState,
+    commands::manuscripts::{
+        longform_layout_preset_catalog_value, longform_layout_preset_state_value,
+        richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
+        timeline_clip_duration_ms,
+    },
+    file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
+    get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
+    now_iso, now_ms, package_assets_path, package_content_map_path, package_cover_path,
+    package_editor_project_path, package_entry_path, package_images_path, package_layout_html_path,
+    package_layout_template_path, package_layout_tokens_path, package_manifest_path,
+    package_remotion_input_props_path, package_remotion_path, package_richpost_master_path,
+    package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
+    package_richpost_pages_dir, package_richpost_theme_assets_dir,
+    package_richpost_theme_config_path, package_richpost_theme_master_path,
+    package_richpost_theme_masters_dir, package_richpost_theme_root_dir,
+    package_richpost_theme_store_dir, package_richpost_theme_template_path,
+    package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
+    package_timeline_path, package_track_ui_path, package_wechat_html_path,
+    package_wechat_template_path, parse_json_value_from_text, read_json_value_or,
+    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
+    write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -92,6 +109,14 @@ fn sanitized_remotion_out_name(title: &str) -> String {
     }
 }
 
+fn file_modified_at_ms(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
 pub(crate) fn default_remotion_render_config(title: &str, render_mode: &str) -> Value {
     let motion_layer = render_mode == "motion-layer";
     json!({
@@ -153,9 +178,88 @@ pub(crate) fn persist_remotion_composition_artifacts(
     Ok(())
 }
 
+pub(crate) fn default_video_script_approval(source: &str) -> Value {
+    json!({
+        "status": "pending",
+        "lastScriptUpdateAt": Value::Null,
+        "lastScriptUpdateSource": if source.trim().is_empty() { Value::Null } else { json!(source) },
+        "confirmedAt": Value::Null
+    })
+}
+
+pub(crate) fn ensure_manifest_video_ai_state(
+    manifest: &mut Value,
+) -> Result<&mut serde_json::Map<String, Value>, String> {
+    let manifest_object = manifest
+        .as_object_mut()
+        .ok_or_else(|| "Manifest must be an object".to_string())?;
+    manifest_object
+        .entry("videoEngine".to_string())
+        .or_insert(json!("ai-remotion"));
+    let video_ai = manifest_object
+        .entry("videoAi".to_string())
+        .or_insert_with(|| json!({}));
+    if !video_ai.is_object() {
+        *video_ai = json!({});
+    }
+    let video_ai_object = video_ai
+        .as_object_mut()
+        .ok_or_else(|| "Manifest videoAi must be an object".to_string())?;
+    video_ai_object
+        .entry("brief".to_string())
+        .or_insert(Value::Null);
+    video_ai_object
+        .entry("lastBriefUpdateAt".to_string())
+        .or_insert(Value::Null);
+    video_ai_object
+        .entry("lastBriefUpdateSource".to_string())
+        .or_insert(Value::Null);
+    let approval = video_ai_object
+        .entry("scriptApproval".to_string())
+        .or_insert_with(|| default_video_script_approval("system"));
+    if !approval.is_object() {
+        *approval = default_video_script_approval("system");
+    }
+    let approval_object = approval
+        .as_object_mut()
+        .ok_or_else(|| "Manifest videoAi.scriptApproval must be an object".to_string())?;
+    approval_object
+        .entry("status".to_string())
+        .or_insert(json!("pending"));
+    approval_object
+        .entry("lastScriptUpdateAt".to_string())
+        .or_insert(Value::Null);
+    approval_object
+        .entry("lastScriptUpdateSource".to_string())
+        .or_insert(Value::Null);
+    approval_object
+        .entry("confirmedAt".to_string())
+        .or_insert(Value::Null);
+    Ok(video_ai_object)
+}
+
+pub(crate) fn video_project_brief_from_manifest(manifest: &Value) -> Value {
+    json!({
+        "content": manifest.pointer("/videoAi/brief").cloned().unwrap_or(Value::Null),
+        "updatedAt": manifest.pointer("/videoAi/lastBriefUpdateAt").cloned().unwrap_or(Value::Null),
+        "source": manifest.pointer("/videoAi/lastBriefUpdateSource").cloned().unwrap_or(Value::Null)
+    })
+}
+
+pub(crate) fn video_script_state_from_manifest(manifest: &Value, script_body: &str) -> Value {
+    let approval = manifest
+        .pointer("/videoAi/scriptApproval")
+        .cloned()
+        .unwrap_or_else(|| default_video_script_approval(""));
+    json!({
+        "body": script_body,
+        "approval": approval
+    })
+}
+
 pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Value {
     let fps = 30_i64;
-    let render_mode = "motion-layer";
+    let render_mode = "full";
     let duration_in_frames = clips
         .iter()
         .filter(|clip| {
@@ -167,7 +271,7 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
         .sum::<i64>()
         .max(90);
     json!({
-        "version": 1,
+        "version": 2,
         "title": title,
         "entryCompositionId": "RedBoxVideoMotion",
         "width": 1080,
@@ -177,6 +281,20 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
         "backgroundColor": "#05070b",
         "renderMode": render_mode,
         "transitions": [],
+        "baseMedia": {
+            "sourceAssetIds": [],
+            "outputPath": Value::Null,
+            "durationMs": ((duration_in_frames as f64 / fps as f64) * 1000.0).round() as i64,
+            "width": Value::Null,
+            "height": Value::Null,
+            "status": "missing",
+            "updatedAt": Value::Null
+        },
+        "ffmpegRecipe": {
+            "operations": [],
+            "artifacts": [],
+            "summary": Value::Null
+        },
         "scenes": [{
             "id": "scene-1",
             "clipId": Value::Null,
@@ -187,13 +305,418 @@ pub(crate) fn build_default_remotion_scene(title: &str, clips: &[Value]) -> Valu
             "durationInFrames": duration_in_frames,
             "trimInFrames": 0,
             "motionPreset": "static",
-            "overlayTitle": title,
+            "overlayTitle": Value::Null,
             "overlayBody": Value::Null,
             "overlays": [],
             "entities": []
         }],
         "sceneItemTransforms": {},
         "render": default_remotion_render_config(title, render_mode)
+    })
+}
+
+fn read_existing_editor_project(package_path: &Path) -> Option<Value> {
+    let path = package_editor_project_path(package_path);
+    if !path.exists() {
+        return None;
+    }
+    Some(read_json_value_or(&path, json!({})))
+}
+
+fn asset_items_from_package_assets(assets: &Value) -> Vec<Value> {
+    assets
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn asset_id_from_record(asset: &Value) -> Option<String> {
+    asset
+        .get("assetId")
+        .or_else(|| asset.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn asset_path_from_record(asset: &Value) -> Option<String> {
+    for key in [
+        "absolutePath",
+        "mediaPath",
+        "previewUrl",
+        "relativePath",
+        "src",
+    ] {
+        if let Some(value) = asset.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn asset_kind_from_record(asset: &Value) -> String {
+    asset
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            infer_editor_asset_kind(
+                asset.get("mimeType").and_then(Value::as_str),
+                asset_path_from_record(asset).as_deref(),
+            )
+            .to_string()
+        })
+}
+
+fn legacy_source_asset_ids(
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Vec<String> {
+    let mut ids = Vec::<String>::new();
+    let push_id = |ids: &mut Vec<String>, candidate: Option<&str>| {
+        let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if !ids.iter().any(|value| value == candidate) {
+            ids.push(candidate.to_string());
+        }
+    };
+
+    if let Some(clips) = timeline_summary.get("clips").and_then(Value::as_array) {
+        for clip in clips {
+            push_id(&mut ids, clip.get("assetId").and_then(Value::as_str));
+        }
+    }
+
+    if ids.is_empty() {
+        if let Some(items) = editor_project
+            .and_then(|project| project.get("items"))
+            .and_then(Value::as_array)
+        {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) != Some("media") {
+                    continue;
+                }
+                push_id(&mut ids, item.get("assetId").and_then(Value::as_str));
+            }
+        }
+    }
+
+    ids
+}
+
+fn infer_legacy_base_media(
+    manifest: &Value,
+    assets: &Value,
+    remotion: &Value,
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Value {
+    let source_asset_ids = legacy_source_asset_ids(editor_project, timeline_summary);
+    let asset_items = asset_items_from_package_assets(assets);
+    let preferred_asset = source_asset_ids
+        .iter()
+        .find_map(|asset_id| {
+            asset_items.iter().find(|asset| {
+                asset_id_from_record(asset)
+                    .map(|candidate| candidate == *asset_id)
+                    .unwrap_or(false)
+            })
+        })
+        .or_else(|| {
+            asset_items
+                .iter()
+                .find(|asset| matches!(asset_kind_from_record(asset).as_str(), "video" | "image"))
+        });
+    let output_path = preferred_asset
+        .and_then(asset_path_from_record)
+        .or_else(|| {
+            remotion
+                .pointer("/scenes/0/src")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        });
+    let fps = remotion
+        .get("fps")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(30);
+    let duration_ms_from_remotion = remotion
+        .get("durationInFrames")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .map(|value| ((value as f64 / fps as f64) * 1000.0).round() as i64);
+    let duration_ms_from_clips = timeline_summary
+        .get("clips")
+        .and_then(Value::as_array)
+        .map(|clips| {
+            clips
+                .iter()
+                .map(|clip| clip.get("durationMs").and_then(Value::as_i64).unwrap_or(0))
+                .sum::<i64>()
+        })
+        .filter(|value| *value > 0);
+    let updated_at = manifest
+        .get("updatedAt")
+        .cloned()
+        .unwrap_or_else(|| json!(now_i64()));
+    json!({
+        "sourceAssetIds": source_asset_ids,
+        "outputPath": output_path,
+        "durationMs": duration_ms_from_remotion.or(duration_ms_from_clips).unwrap_or(0),
+        "width": remotion.get("width").cloned().unwrap_or(Value::Null),
+        "height": remotion.get("height").cloned().unwrap_or(Value::Null),
+        "status": if output_path.is_some() { "ready" } else { "missing" },
+        "updatedAt": updated_at
+    })
+}
+
+fn infer_legacy_ffmpeg_recipe(
+    remotion: &Value,
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Value {
+    let clips = timeline_summary
+        .get("clips")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut operations = clips
+        .iter()
+        .filter(|clip| clip.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+        .filter_map(|clip| {
+            let asset_id = clip
+                .get("assetId")
+                .and_then(Value::as_str)?
+                .trim()
+                .to_string();
+            if asset_id.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "type": "trim",
+                "assetId": asset_id,
+                "trimInMs": clip.get("trimInMs").cloned().unwrap_or(json!(0)),
+                "trimOutMs": clip.get("trimOutMs").cloned().unwrap_or(json!(0)),
+                "durationMs": clip.get("durationMs").cloned().unwrap_or(json!(0))
+            }))
+        })
+        .collect::<Vec<_>>();
+    let concat_asset_ids = clips
+        .iter()
+        .filter_map(|clip| clip.get("assetId").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if concat_asset_ids.len() > 1 {
+        operations.push(json!({
+            "type": "concat",
+            "assetIds": concat_asset_ids
+        }));
+    }
+    let summary = if operations.is_empty() {
+        if editor_project.is_some() {
+            "Migrated from legacy editor project without explicit clip operations."
+        } else {
+            "Migrated from legacy package without explicit clip operations."
+        }
+    } else {
+        "Migrated from legacy timeline clip order."
+    };
+    json!({
+        "operations": operations,
+        "artifacts": [],
+        "summary": summary,
+        "migratedFromLegacy": true,
+        "source": if editor_project.is_some() { "editor_or_timeline" } else { "timeline" },
+        "derivedAt": now_i64(),
+        "previousRender": remotion.get("render").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn attach_base_media_to_primary_scene(remotion: &mut Value) {
+    let base_media_path = remotion
+        .pointer("/baseMedia/outputPath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let Some(base_media_path) = base_media_path else {
+        return;
+    };
+    let Some(scene) = remotion
+        .get_mut("scenes")
+        .and_then(Value::as_array_mut)
+        .and_then(|items| items.first_mut())
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let should_replace = scene
+        .get("src")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|value| value.is_empty())
+        .unwrap_or(true);
+    if should_replace {
+        scene.insert("src".to_string(), json!(base_media_path));
+        scene.insert("assetKind".to_string(), json!("video"));
+    }
+}
+
+fn normalize_video_remotion_scene(
+    title: &str,
+    manifest: &Value,
+    assets: &Value,
+    remotion: &Value,
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Value {
+    let mut normalized = if remotion.is_object() {
+        remotion.clone()
+    } else {
+        build_default_remotion_scene(title, &[])
+    };
+    let fallback = build_default_remotion_scene(title, &[]);
+    let render_mode = normalized
+        .get("renderMode")
+        .and_then(Value::as_str)
+        .unwrap_or("full")
+        .to_string();
+    let legacy_base_media = infer_legacy_base_media(
+        manifest,
+        assets,
+        &normalized,
+        editor_project,
+        timeline_summary,
+    );
+    let legacy_ffmpeg_recipe =
+        infer_legacy_ffmpeg_recipe(&normalized, editor_project, timeline_summary);
+    if let Some(object) = normalized.as_object_mut() {
+        object.insert("version".to_string(), json!(2));
+        object
+            .entry("title".to_string())
+            .or_insert_with(|| json!(title));
+        object
+            .entry("entryCompositionId".to_string())
+            .or_insert_with(|| {
+                fallback
+                    .get("entryCompositionId")
+                    .cloned()
+                    .unwrap_or(json!("RedBoxVideoMotion"))
+            });
+        object
+            .entry("width".to_string())
+            .or_insert_with(|| fallback.get("width").cloned().unwrap_or(json!(1080)));
+        object
+            .entry("height".to_string())
+            .or_insert_with(|| fallback.get("height").cloned().unwrap_or(json!(1920)));
+        object
+            .entry("fps".to_string())
+            .or_insert_with(|| fallback.get("fps").cloned().unwrap_or(json!(30)));
+        object
+            .entry("durationInFrames".to_string())
+            .or_insert_with(|| {
+                fallback
+                    .get("durationInFrames")
+                    .cloned()
+                    .unwrap_or(json!(90))
+            });
+        object
+            .entry("backgroundColor".to_string())
+            .or_insert_with(|| {
+                fallback
+                    .get("backgroundColor")
+                    .cloned()
+                    .unwrap_or(json!("#05070b"))
+            });
+        object
+            .entry("renderMode".to_string())
+            .or_insert_with(|| json!("full"));
+        object
+            .entry("scenes".to_string())
+            .or_insert_with(|| fallback.get("scenes").cloned().unwrap_or_else(|| json!([])));
+        object
+            .entry("transitions".to_string())
+            .or_insert_with(|| json!([]));
+        object
+            .entry("sceneItemTransforms".to_string())
+            .or_insert_with(|| json!({}));
+        object
+            .entry("render".to_string())
+            .or_insert_with(|| normalized_remotion_render_config(None, title, &render_mode));
+        if !object.contains_key("baseMedia") {
+            object.insert("baseMedia".to_string(), legacy_base_media);
+        } else {
+            let object_width = object.get("width").cloned().unwrap_or(Value::Null);
+            let object_height = object.get("height").cloned().unwrap_or(Value::Null);
+            if let Some(base_media) = object.get_mut("baseMedia").and_then(Value::as_object_mut) {
+                base_media
+                    .entry("width".to_string())
+                    .or_insert(object_width);
+                base_media
+                    .entry("height".to_string())
+                    .or_insert(object_height);
+            }
+        }
+        if !object.contains_key("ffmpegRecipe") {
+            object.insert("ffmpegRecipe".to_string(), legacy_ffmpeg_recipe);
+        }
+    }
+    attach_base_media_to_primary_scene(&mut normalized);
+    normalized
+}
+
+pub(crate) fn get_video_project_state(
+    package_path: &Path,
+    file_name: &str,
+    manifest: &Value,
+    assets: &Value,
+    remotion: &Value,
+    editor_project: Option<&Value>,
+    timeline_summary: &Value,
+) -> Value {
+    let script_body = read_package_entry_text(package_path, file_name, manifest);
+    let script_approval = manifest
+        .pointer("/videoAi/scriptApproval")
+        .cloned()
+        .or_else(|| {
+            editor_project
+                .and_then(|project| project.pointer("/ai/scriptApproval"))
+                .cloned()
+        })
+        .unwrap_or_else(|| default_video_script_approval(""));
+    json!({
+        "brief": video_project_brief_from_manifest(manifest),
+        "scriptBody": script_body,
+        "scriptApproval": script_approval,
+        "assets": asset_items_from_package_assets(assets),
+        "baseMedia": remotion.get("baseMedia").cloned().unwrap_or_else(|| json!({
+            "sourceAssetIds": [],
+            "outputPath": Value::Null,
+            "durationMs": 0,
+            "width": Value::Null,
+            "height": Value::Null,
+            "status": "missing",
+            "updatedAt": Value::Null
+        })),
+        "ffmpegRecipeSummary": remotion.pointer("/ffmpegRecipe/summary").cloned().unwrap_or(Value::Null),
+        "remotion": remotion,
+        "renderOutput": remotion.pointer("/render/outputPath").cloned().unwrap_or(Value::Null),
+        "legacy": {
+            "hasEditorProject": editor_project.is_some(),
+            "hasTimelineSummary": timeline_summary.get("clipCount").and_then(Value::as_i64).unwrap_or(0) > 0
+        }
     })
 }
 
@@ -1247,14 +1770,75 @@ fn normalize_entity_animation_kind(value: Option<&str>) -> &'static str {
     }
 }
 
-fn normalize_entity_animations(entity: &Value, duration_in_frames: i64) -> Vec<Value> {
-    let entity_y = entity.get("y").and_then(Value::as_f64).or_else(|| {
+fn normalize_entity_position_mode(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "video-space" | "video" | "media-space" | "media" => "video-space",
+        _ => "canvas-space",
+    }
+}
+
+fn entity_axis_value(entity: &Value, axis: &str) -> Option<f64> {
+    entity.get(axis).and_then(Value::as_f64).or_else(|| {
         entity
             .get("style")
             .and_then(Value::as_object)
-            .and_then(|style| style.get("y"))
+            .and_then(|style| style.get(axis))
             .and_then(Value::as_f64)
-    });
+    })
+}
+
+fn nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1.0
+}
+
+fn detect_absolute_fall_bounce_correction(
+    source_entity_y: Option<f64>,
+    animation: &Value,
+) -> Option<(f64, f64, f64)> {
+    if normalize_entity_animation_kind(animation.get("kind").and_then(Value::as_str))
+        != "fall-bounce"
+    {
+        return None;
+    }
+    let source_entity_y = source_entity_y?;
+    let raw_from_y = animation
+        .get("params")
+        .and_then(Value::as_object)
+        .and_then(|params| params.get("fromY"))
+        .and_then(Value::as_f64)
+        .or_else(|| animation.get("fromY").and_then(Value::as_f64))?;
+    let raw_floor_y = animation
+        .get("params")
+        .and_then(Value::as_object)
+        .and_then(|params| params.get("floorY").or_else(|| params.get("toY")))
+        .and_then(Value::as_f64)
+        .or_else(|| animation.get("floorY").and_then(Value::as_f64))
+        .or_else(|| animation.get("toY").and_then(Value::as_f64))?;
+    if !nearly_equal(raw_from_y, source_entity_y)
+        || nearly_equal(raw_floor_y, 0.0)
+        || nearly_equal(raw_floor_y, source_entity_y)
+    {
+        return None;
+    }
+    Some((raw_floor_y, raw_from_y - raw_floor_y, 0.0))
+}
+
+fn normalized_entity_rest_y(entity: &Value) -> Option<f64> {
+    let source_entity_y = entity_axis_value(entity, "y");
+    let animations = entity.get("animations").and_then(Value::as_array)?;
+    animations
+        .iter()
+        .find_map(|animation| detect_absolute_fall_bounce_correction(source_entity_y, animation))
+        .map(|(rest_y, _, _)| rest_y)
+}
+
+fn normalize_entity_animations(
+    entity: &Value,
+    duration_in_frames: i64,
+    normalized_entity_y: Option<f64>,
+) -> Vec<Value> {
+    let source_entity_y = entity_axis_value(entity, "y");
+    let entity_y = normalized_entity_y.or(source_entity_y);
     entity
         .get("animations")
         .and_then(Value::as_array)
@@ -1305,34 +1889,41 @@ fn normalize_entity_animations(entity: &Value, duration_in_frames: i64) -> Vec<V
                     }
                 }
                 if kind == "fall-bounce" {
-                    let absolute_from_y = animation
-                        .get("fromY")
-                        .and_then(Value::as_f64)
-                        .or_else(|| object.get("fromY").and_then(Value::as_f64));
-                    let absolute_to_y = animation
-                        .get("toY")
-                        .and_then(Value::as_f64)
-                        .or_else(|| animation.get("floorY").and_then(Value::as_f64))
-                        .or_else(|| object.get("toY").and_then(Value::as_f64))
-                        .or_else(|| object.get("floorY").and_then(Value::as_f64));
-                    let relative_from_y = match (absolute_from_y, entity_y) {
-                        (Some(from_y), Some(entity_y)) => Some(from_y - entity_y),
-                        (Some(from_y), None) => Some(from_y),
-                        _ => None,
-                    };
-                    let relative_floor_y = match (absolute_to_y, entity_y) {
-                        (Some(to_y), Some(entity_y)) => Some(to_y - entity_y),
-                        (Some(to_y), None) => Some(to_y),
-                        _ => None,
-                    };
-                    if object.get("fromY").is_none() {
-                        if let Some(value) = relative_from_y {
-                            object.insert("fromY".to_string(), json!(value));
+                    if let Some((_, corrected_from_y, corrected_floor_y)) =
+                        detect_absolute_fall_bounce_correction(source_entity_y, &animation)
+                    {
+                        object.insert("fromY".to_string(), json!(corrected_from_y));
+                        object.insert("floorY".to_string(), json!(corrected_floor_y));
+                    } else {
+                        let absolute_from_y = animation
+                            .get("fromY")
+                            .and_then(Value::as_f64)
+                            .or_else(|| object.get("fromY").and_then(Value::as_f64));
+                        let absolute_to_y = animation
+                            .get("toY")
+                            .and_then(Value::as_f64)
+                            .or_else(|| animation.get("floorY").and_then(Value::as_f64))
+                            .or_else(|| object.get("toY").and_then(Value::as_f64))
+                            .or_else(|| object.get("floorY").and_then(Value::as_f64));
+                        let relative_from_y = match (absolute_from_y, entity_y) {
+                            (Some(from_y), Some(entity_y)) => Some(from_y - entity_y),
+                            (Some(from_y), None) => Some(from_y),
+                            _ => None,
+                        };
+                        let relative_floor_y = match (absolute_to_y, entity_y) {
+                            (Some(to_y), Some(entity_y)) => Some(to_y - entity_y),
+                            (Some(to_y), None) => Some(to_y),
+                            _ => None,
+                        };
+                        if object.get("fromY").is_none() {
+                            if let Some(value) = relative_from_y {
+                                object.insert("fromY".to_string(), json!(value));
+                            }
                         }
-                    }
-                    if object.get("floorY").is_none() {
-                        if let Some(value) = relative_floor_y {
-                            object.insert("floorY".to_string(), json!(value));
+                        if object.get("floorY").is_none() {
+                            if let Some(value) = relative_floor_y {
+                                object.insert("floorY".to_string(), json!(value));
+                            }
                         }
                     }
                 }
@@ -1497,6 +2088,36 @@ pub(crate) fn normalize_ai_remotion_scene(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("#05070b");
+    let fallback_base_media = fallback
+        .get("baseMedia")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let candidate_base_media = candidate
+        .get("baseMedia")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let base_media_reference_width = candidate_base_media
+        .get("width")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            fallback_base_media
+                .get("width")
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(width);
+    let base_media_reference_height = candidate_base_media
+        .get("height")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            fallback_base_media
+                .get("height")
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(height);
 
     let mut normalized_scenes = Vec::new();
     let mut current_frame = 0_i64;
@@ -1606,13 +2227,43 @@ pub(crate) fn normalize_ai_remotion_scene(
                     .unwrap_or(duration_in_frames);
                 let (entity_start_frame, entity_duration_in_frames) =
                     clamp_start_and_duration(requested_start, requested_duration, duration_in_frames);
+                let position_mode = normalize_entity_position_mode(
+                    entity
+                        .get("positionMode")
+                        .or_else(|| style.get("positionMode"))
+                        .and_then(Value::as_str),
+                );
+                let normalized_entity_y = normalized_entity_rest_y(&entity);
                 json!({
                     "id": entity.get("id").cloned().unwrap_or_else(|| json!(make_id("entity"))),
                     "type": entity.get("type").cloned().unwrap_or_else(|| json!("text")),
+                    "positionMode": position_mode,
+                    "referenceWidth": entity.get("referenceWidth")
+                        .cloned()
+                        .or_else(|| style.get("referenceWidth").cloned())
+                        .unwrap_or_else(|| {
+                            if position_mode == "video-space" {
+                                json!(base_media_reference_width)
+                            } else {
+                                json!(width)
+                            }
+                        }),
+                    "referenceHeight": entity.get("referenceHeight")
+                        .cloned()
+                        .or_else(|| style.get("referenceHeight").cloned())
+                        .unwrap_or_else(|| {
+                            if position_mode == "video-space" {
+                                json!(base_media_reference_height)
+                            } else {
+                                json!(height)
+                            }
+                        }),
                     "startFrame": entity_start_frame,
                     "durationInFrames": entity_duration_in_frames,
                     "x": entity.get("x").cloned().or_else(|| style.get("x").cloned()).unwrap_or_else(|| json!(0)),
-                    "y": entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0)),
+                    "y": normalized_entity_y
+                        .map(|value| json!(value))
+                        .unwrap_or_else(|| entity.get("y").cloned().or_else(|| style.get("y").cloned()).unwrap_or_else(|| json!(0))),
                     "width": entity.get("width").cloned().or_else(|| style.get("width").cloned()).unwrap_or_else(|| json!(320)),
                     "height": entity.get("height").cloned().or_else(|| style.get("height").cloned()).unwrap_or_else(|| json!(180)),
                     "rotation": entity.get("rotation").cloned().or_else(|| style.get("rotation").cloned()).unwrap_or_else(|| json!(0)),
@@ -1633,15 +2284,20 @@ pub(crate) fn normalize_ai_remotion_scene(
                     "src": entity.get("src").cloned().unwrap_or(Value::Null),
                     "svgMarkup": entity.get("svgMarkup").cloned().or_else(|| entity.get("svg").cloned()).unwrap_or(Value::Null),
                     "borderRadius": entity.get("borderRadius").cloned().or_else(|| style.get("borderRadius").cloned()).unwrap_or(Value::Null),
-                    "animations": normalize_entity_animations(&entity, entity_duration_in_frames),
+                    "animations": normalize_entity_animations(&entity, entity_duration_in_frames, normalized_entity_y),
                     "children": entity.get("children").cloned().unwrap_or_else(|| json!([]))
                 })
             })
             .collect::<Vec<_>>();
-        let normalized_clip_id =
-            normalized_optional_id(raw_scene.get("clipId").or_else(|| fallback_scene.get("clipId")));
+        let normalized_clip_id = normalized_optional_id(
+            raw_scene
+                .get("clipId")
+                .or_else(|| fallback_scene.get("clipId")),
+        );
         let normalized_asset_id = normalized_optional_id(
-            raw_scene.get("assetId").or_else(|| fallback_scene.get("assetId")),
+            raw_scene
+                .get("assetId")
+                .or_else(|| fallback_scene.get("assetId")),
         );
         let has_scene_binding = !normalized_clip_id.is_null() || !normalized_asset_id.is_null();
         normalized_scenes.push(json!({
@@ -1679,8 +2335,46 @@ pub(crate) fn normalize_ai_remotion_scene(
         .unwrap_or("motion-layer")
         .to_string();
 
+    let normalized_base_media = json!({
+        "sourceAssetIds": candidate_base_media
+            .get("sourceAssetIds")
+            .cloned()
+            .or_else(|| fallback_base_media.get("sourceAssetIds").cloned())
+            .unwrap_or_else(|| json!([])),
+        "outputPath": candidate_base_media
+            .get("outputPath")
+            .cloned()
+            .or_else(|| fallback_base_media.get("outputPath").cloned())
+            .unwrap_or(Value::Null),
+        "durationMs": candidate_base_media
+            .get("durationMs")
+            .cloned()
+            .or_else(|| fallback_base_media.get("durationMs").cloned())
+            .unwrap_or_else(|| json!(((current_frame.max(1) as f64 / fps as f64) * 1000.0).round() as i64)),
+        "width": candidate_base_media
+            .get("width")
+            .cloned()
+            .or_else(|| fallback_base_media.get("width").cloned())
+            .unwrap_or_else(|| json!(base_media_reference_width)),
+        "height": candidate_base_media
+            .get("height")
+            .cloned()
+            .or_else(|| fallback_base_media.get("height").cloned())
+            .unwrap_or_else(|| json!(base_media_reference_height)),
+        "status": candidate_base_media
+            .get("status")
+            .cloned()
+            .or_else(|| fallback_base_media.get("status").cloned())
+            .unwrap_or_else(|| json!("ready")),
+        "updatedAt": candidate_base_media
+            .get("updatedAt")
+            .cloned()
+            .or_else(|| fallback_base_media.get("updatedAt").cloned())
+            .unwrap_or(Value::Null)
+    });
+
     json!({
-        "version": 1,
+        "version": 2,
         "title": normalized_title,
         "entryCompositionId": candidate
             .get("entryCompositionId")
@@ -1693,6 +2387,16 @@ pub(crate) fn normalize_ai_remotion_scene(
         "durationInFrames": current_frame.max(1),
         "backgroundColor": background_color,
         "renderMode": normalized_render_mode,
+        "baseMedia": normalized_base_media,
+        "ffmpegRecipe": candidate
+            .get("ffmpegRecipe")
+            .cloned()
+            .or_else(|| fallback.get("ffmpegRecipe").cloned())
+            .unwrap_or_else(|| json!({
+                "operations": [],
+                "artifacts": [],
+                "summary": Value::Null
+            })),
         "scenes": normalized_scenes,
         "transitions": normalize_remotion_transitions(candidate, fallback),
         "sceneItemTransforms": candidate
@@ -1708,8 +2412,38 @@ pub(crate) fn normalize_ai_remotion_scene(
     })
 }
 
-pub(crate) fn render_remotion_video(config: &Value, output_path: &Path) -> Result<Value, String> {
-    let project_root = lexbox_project_root();
+const REMOTION_PROGRESS_PREFIX: &str = "__REMOTION_PROGRESS__";
+
+fn emit_remotion_render_progress(
+    app: &AppHandle,
+    file_path: &str,
+    status: &str,
+    percent: i64,
+    stage: &str,
+    output_path: Option<&Path>,
+    error: Option<&str>,
+) {
+    let _ = app.emit(
+        "manuscripts:render-progress",
+        json!({
+            "filePath": file_path,
+            "status": status,
+            "percent": percent.clamp(0, 100),
+            "stage": stage,
+            "outputPath": output_path.map(|path| path.display().to_string()),
+            "error": error,
+        }),
+    );
+}
+
+pub(crate) fn render_remotion_video(
+    config: &Value,
+    output_path: &Path,
+    scale: Option<f64>,
+    app: Option<&AppHandle>,
+    file_path: Option<&str>,
+) -> Result<Value, String> {
+    let project_root = redbox_project_root();
     let script_path = project_root.join("remotion").join("render.mjs");
     if !script_path.exists() {
         return Err(format!(
@@ -1717,28 +2451,121 @@ pub(crate) fn render_remotion_video(config: &Value, output_path: &Path) -> Resul
             script_path.display()
         ));
     }
-    let temp_config_path = std::env::temp_dir().join(format!("lexbox-remotion-{}.json", now_ms()));
+    let temp_config_path = std::env::temp_dir().join(format!("redbox-remotion-{}.json", now_ms()));
     write_json_value(&temp_config_path, config)?;
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let output = std::process::Command::new("node")
+    if let (Some(app), Some(file_path)) = (app, file_path) {
+        emit_remotion_render_progress(
+            app,
+            file_path,
+            "running",
+            0,
+            "准备导出",
+            Some(output_path),
+            None,
+        );
+    }
+    let mut command = std::process::Command::new("node");
+    command
         .arg(&script_path)
         .arg(&temp_config_path)
-        .arg(output_path)
+        .arg(output_path);
+    if let Some(scale) = scale.filter(|value| value.is_finite() && *value > 0.0) {
+        command.arg(format!("{scale:.6}"));
+    }
+    let mut child = command
         .current_dir(&project_root)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| error.to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Remotion renderer stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Remotion renderer stderr unavailable".to_string())?;
+    let stdout_reader = thread::spawn(move || -> Result<String, String> {
+        let mut content = String::new();
+        BufReader::new(stdout)
+            .read_to_string(&mut content)
+            .map_err(|error| error.to_string())?;
+        Ok(content)
+    });
+    let progress_app = app.cloned();
+    let progress_file_path = file_path.map(ToString::to_string);
+    let output_path_string = output_path.display().to_string();
+    let stderr_reader = thread::spawn(move || -> Result<String, String> {
+        let mut non_progress = Vec::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = line.map_err(|error| error.to_string())?;
+            if let Some(raw_payload) = line.strip_prefix(REMOTION_PROGRESS_PREFIX) {
+                if let (Some(app), Some(file_path)) =
+                    (progress_app.as_ref(), progress_file_path.as_deref())
+                {
+                    if let Ok(payload) = serde_json::from_str::<Value>(raw_payload) {
+                        emit_remotion_render_progress(
+                            app,
+                            file_path,
+                            "running",
+                            payload.get("percent").and_then(Value::as_i64).unwrap_or(0),
+                            payload
+                                .get("stitchStage")
+                                .and_then(Value::as_str)
+                                .unwrap_or("处理中"),
+                            Some(Path::new(&output_path_string)),
+                            None,
+                        );
+                    }
+                }
+            } else if !line.trim().is_empty() {
+                non_progress.push(line);
+            }
+        }
+        Ok(non_progress.join("\n"))
+    });
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "Failed to read Remotion renderer stdout".to_string())??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| "Failed to read Remotion renderer stderr".to_string())??;
     let _ = fs::remove_file(&temp_config_path);
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !status.success() {
+        if let (Some(app), Some(file_path)) = (app, file_path) {
+            emit_remotion_render_progress(
+                app,
+                file_path,
+                "error",
+                0,
+                "导出失败",
+                Some(output_path),
+                Some(&stderr),
+            );
+        }
         return Err(if stderr.is_empty() {
-            format!("Remotion render failed with status {}", output.status)
+            format!("Remotion render failed with status {}", status)
         } else {
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let (Some(app), Some(file_path)) = (app, file_path) {
+        emit_remotion_render_progress(
+            app,
+            file_path,
+            "done",
+            100,
+            "导出完成",
+            Some(output_path),
+            None,
+        );
+    }
+    let stdout = stdout.trim().to_string();
     if stdout.is_empty() {
         return Ok(json!({
             "success": true,
@@ -2008,14 +2835,188 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .and_then(|value| value.as_str())
         .unwrap_or(fallback_title.as_str())
         .to_string();
-    let editor_project = if get_package_kind_from_file_name(file_name) == Some("video") {
+    let package_kind = get_package_kind_from_file_name(file_name);
+    let richpost_theme = if package_kind == Some("post") {
+        Some(richpost_theme_state_value(package_path, &manifest))
+    } else {
+        None
+    };
+    let longform_layout_preset = if package_kind == Some("article") {
+        Some(longform_layout_preset_state_value(&manifest))
+    } else {
+        None
+    };
+    let content_map_path = package_content_map_path(package_path);
+    let content_map_exists = content_map_path.exists();
+    let layout_tokens_path = package_layout_tokens_path(package_path);
+    let layout_tokens_exists = layout_tokens_path.exists();
+    let layout_template_path = package_layout_template_path(package_path);
+    let layout_template_exists = layout_template_path.exists();
+    let wechat_template_path = package_wechat_template_path(package_path);
+    let wechat_template_exists = wechat_template_path.exists();
+    let richpost_page_plan_path = package_richpost_page_plan_path(package_path);
+    let richpost_page_plan_exists = richpost_page_plan_path.exists();
+    let richpost_masters_dir = package_richpost_masters_dir(package_path);
+    let richpost_pages_dir = package_richpost_pages_dir(package_path);
+    let richpost_themes_path = package_richpost_themes_path(package_path);
+    let richpost_theme_template_path = package_richpost_theme_template_path(package_path);
+    let active_richpost_theme_id = richpost_theme
+        .as_ref()
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let active_richpost_theme_root = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_root_dir(package_path, theme_id));
+    let active_richpost_theme_config = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_config_path(package_path, theme_id));
+    let active_richpost_theme_tokens = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_tokens_path(package_path, theme_id));
+    let active_richpost_theme_assets = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_assets_dir(package_path, theme_id));
+    let active_richpost_theme_masters_dir = active_richpost_theme_id
+        .as_ref()
+        .map(|theme_id| package_richpost_theme_masters_dir(package_path, theme_id));
+    let richpost_theme_root_masters = if package_kind == Some("post") {
+        active_richpost_theme_id
+            .as_ref()
+            .map(|theme_id| {
+                ["cover", "body", "ending"]
+                    .iter()
+                    .map(|master_id| {
+                        let path =
+                            package_richpost_theme_master_path(package_path, theme_id, master_id);
+                        json!({
+                            "id": master_id,
+                            "file": if path.exists() {
+                                json!(path.display().to_string())
+                            } else {
+                                Value::Null
+                            },
+                            "fileUrl": if path.exists() {
+                                json!(file_url_for_path(&path))
+                            } else {
+                                Value::Null
+                            },
+                            "updatedAt": file_modified_at_ms(&path)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let richpost_page_plan = if package_kind == Some("post") {
+        Some(read_json_value_or(
+            richpost_page_plan_path.as_path(),
+            json!({ "pages": [] }),
+        ))
+    } else {
+        None
+    };
+    let richpost_masters = if package_kind == Some("post") && richpost_masters_dir.exists() {
+        let mut masters = fs::read_dir(&richpost_masters_dir)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_file() {
+                    return None;
+                }
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if !file_name.ends_with(".master.html") {
+                    return None;
+                }
+                let master_id = file_name.trim_end_matches(".master.html").to_string();
+                let master_path = package_richpost_master_path(package_path, &master_id);
+                Some(json!({
+                    "id": master_id,
+                    "file": master_path.display().to_string(),
+                    "fileUrl": file_url_for_path(&master_path),
+                    "updatedAt": file_modified_at_ms(&master_path)
+                }))
+            })
+            .collect::<Vec<_>>();
+        masters.sort_by(|left, right| {
+            left.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .cmp(right.get("id").and_then(Value::as_str).unwrap_or(""))
+        });
+        masters
+    } else {
+        Vec::new()
+    };
+    let richpost_pages = if package_kind == Some("post") {
+        richpost_page_plan
+            .as_ref()
+            .and_then(|plan| plan.get("pages"))
+            .and_then(Value::as_array)
+            .map(|pages| {
+                pages
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, page)| {
+                        let page_id = page.get("id").and_then(Value::as_str)?.trim().to_string();
+                        if page_id.is_empty() {
+                            return None;
+                        }
+                        let page_path = package_richpost_page_html_path(package_path, &page_id);
+                        let page_exists = page_path.exists();
+                        Some(json!({
+                            "id": page_id,
+                            "label": page.get("label").cloned().unwrap_or_else(|| json!(format!("第 {} 页", index + 1))),
+                            "template": page.get("template").cloned().unwrap_or_else(|| json!("text-stack")),
+                            "title": page.get("title").cloned().unwrap_or(Value::Null),
+                            "summary": page.get("summary").cloned().unwrap_or(Value::Null),
+                            "blockIds": page.get("blockIds").cloned().unwrap_or_else(|| json!([])),
+                            "file": if page_exists {
+                                json!(page_path.display().to_string())
+                            } else {
+                                Value::Null
+                            },
+                            "fileUrl": if page_exists {
+                                json!(file_url_for_path(&page_path))
+                            } else {
+                                Value::Null
+                            },
+                            "exists": page_exists,
+                            "updatedAt": file_modified_at_ms(&page_path)
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let layout_html_path = package_layout_html_path(package_path);
+    let layout_html_exists = layout_html_path.exists();
+    let layout_html_has_content = fs::metadata(&layout_html_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+    let wechat_html_path = package_wechat_html_path(package_path);
+    let wechat_html_exists = wechat_html_path.exists();
+    let wechat_html_has_content = fs::metadata(&wechat_html_path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+    let editor_project = if package_kind == Some("video") {
+        read_existing_editor_project(package_path)
+    } else if package_kind == Some("audio") {
         Some(ensure_editor_project(package_path)?)
     } else {
         None
     };
     let timeline_summary = if let Some(project) = editor_project.as_ref() {
         build_timeline_summary_from_editor_project(project)
-    } else {
+    } else if package_timeline_path(package_path).exists() {
         let timeline = read_json_value_or(
             package_timeline_path(package_path).as_path(),
             create_empty_otio_timeline(file_name),
@@ -2030,6 +3031,15 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             "trackNames": tracks.iter().filter_map(|track| track.get("name").and_then(|value| value.as_str()).map(ToString::to_string)).collect::<Vec<_>>(),
             "trackUi": track_ui
         })
+    } else {
+        json!({
+            "trackCount": 0,
+            "clipCount": 0,
+            "sourceRefs": [],
+            "clips": [],
+            "trackNames": [],
+            "trackUi": {}
+        })
     };
     let remotion_fallback = if let Some(project) = editor_project.as_ref() {
         build_remotion_config_from_editor_project(project)
@@ -2041,10 +3051,22 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             .unwrap_or_default();
         build_default_remotion_scene(&title, &clips)
     };
-    let remotion = read_json_value_or(
+    let raw_remotion = read_json_value_or(
         package_remotion_path(package_path).as_path(),
         remotion_fallback,
     );
+    let remotion = if package_kind == Some("video") {
+        normalize_video_remotion_scene(
+            &title,
+            &manifest,
+            &assets,
+            &raw_remotion,
+            editor_project.as_ref(),
+            &timeline_summary,
+        )
+    } else {
+        raw_remotion
+    };
     let scene_ui = if let Some(project) = editor_project.as_ref() {
         project
             .get("stage")
@@ -2060,13 +3082,37 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             }),
         )
     };
+    let video_project = if package_kind == Some("video") {
+        get_video_project_state(
+            package_path,
+            file_name,
+            &manifest,
+            &assets,
+            &remotion,
+            editor_project.as_ref(),
+            &timeline_summary,
+        )
+    } else {
+        Value::Null
+    };
+    let richpost_typography = manifest
+        .get("richpostTypography")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "fontScale": 1.0,
+                "lineHeightScale": 1.0
+            })
+        });
     Ok(json!({
         "manifest": {
             "packageKind": get_package_kind_from_file_name(file_name),
             "draftType": get_draft_type_from_file_name(file_name),
             "title": manifest.get("title").cloned().unwrap_or(json!(title)),
             "entry": manifest.get("entry").cloned().unwrap_or(json!(get_default_package_entry(file_name))),
-            "updatedAt": manifest.get("updatedAt").cloned().unwrap_or(json!(now_i64()))
+            "updatedAt": manifest.get("updatedAt").cloned().unwrap_or(json!(now_i64())),
+            "videoEngine": manifest.get("videoEngine").cloned().unwrap_or(Value::Null),
+            "videoAi": manifest.get("videoAi").cloned().unwrap_or(Value::Null)
         },
         "assets": assets,
         "cover": cover,
@@ -2074,9 +3120,191 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         "remotion": remotion,
         "timelineSummary": timeline_summary,
         "editorProject": editor_project.unwrap_or(Value::Null),
+        "videoProject": video_project,
         "sceneUi": scene_ui,
-        "hasLayoutHtml": false,
-        "hasWechatHtml": false,
+        "contentMapExists": content_map_exists,
+        "contentMapFile": if content_map_exists {
+            json!(content_map_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "contentMapUpdatedAt": file_modified_at_ms(&content_map_path),
+        "layoutTokensExists": layout_tokens_exists,
+        "layoutTokensFile": if layout_tokens_exists {
+            json!(layout_tokens_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutTokensUpdatedAt": file_modified_at_ms(&layout_tokens_path),
+        "richpostPagePlanExists": richpost_page_plan_exists,
+        "richpostPagePlanFile": if richpost_page_plan_exists {
+            json!(richpost_page_plan_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostPagePlanUpdatedAt": file_modified_at_ms(&richpost_page_plan_path),
+        "richpostTheme": richpost_theme.clone().unwrap_or(Value::Null),
+        "richpostThemeId": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostThemeLabel": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("label"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostThemeDescription": richpost_theme
+            .as_ref()
+            .and_then(|value| value.get("description"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "richpostTypography": if package_kind == Some("post") {
+            richpost_typography.clone()
+        } else {
+            Value::Null
+        },
+        "richpostFontScale": if package_kind == Some("post") {
+            richpost_typography
+                .get("fontScale")
+                .cloned()
+                .unwrap_or(json!(1.0))
+        } else {
+            Value::Null
+        },
+        "richpostLineHeightScale": if package_kind == Some("post") {
+            richpost_typography
+                .get("lineHeightScale")
+                .cloned()
+                .unwrap_or(json!(1.0))
+        } else {
+            Value::Null
+        },
+        "richpostThemeCatalog": if package_kind == Some("post") {
+            richpost_theme_catalog_value_for_manifest(Some(package_path), &manifest)
+        } else {
+            Value::Null
+        },
+        "longformLayoutPreset": longform_layout_preset.clone().unwrap_or(Value::Null),
+        "longformLayoutPresetId": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetLabel": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("label"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetDescription": longform_layout_preset
+            .as_ref()
+            .and_then(|value| value.get("description"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "longformLayoutPresetCatalog": if package_kind == Some("article") {
+            longform_layout_preset_catalog_value()
+        } else {
+            Value::Null
+        },
+        "richpostPagesDir": if richpost_pages_dir.exists() {
+            json!(richpost_pages_dir.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostMastersDir": if richpost_masters_dir.exists() {
+            json!(richpost_masters_dir.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemesFile": if richpost_themes_path.exists() {
+            json!(richpost_themes_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemesDir": if package_kind == Some("post") {
+            json!(package_richpost_theme_store_dir(package_path).display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemeTemplateFile": if richpost_theme_template_path.exists() {
+            json!(richpost_theme_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "richpostThemeRoot": active_richpost_theme_root
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeConfigFile": active_richpost_theme_config
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeTokensFile": active_richpost_theme_tokens
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeAssetsDir": active_richpost_theme_assets
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeMastersDir": active_richpost_theme_masters_dir
+            .as_ref()
+            .filter(|path| path.exists())
+            .map(|path| json!(path.display().to_string()))
+            .unwrap_or(Value::Null),
+        "richpostThemeMasters": if richpost_theme_root_masters.is_empty() {
+            Value::Null
+        } else {
+            json!(richpost_theme_root_masters)
+        },
+        "richpostMasterCount": richpost_masters.len(),
+        "richpostMasters": richpost_masters,
+        "richpostPageCount": richpost_pages.len(),
+        "richpostPages": richpost_pages,
+        "layoutTemplateExists": layout_template_exists,
+        "wechatTemplateExists": wechat_template_exists,
+        "layoutTemplateFile": if layout_template_exists {
+            json!(layout_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "wechatTemplateFile": if wechat_template_exists {
+            json!(wechat_template_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutTemplateUpdatedAt": file_modified_at_ms(&layout_template_path),
+        "wechatTemplateUpdatedAt": file_modified_at_ms(&wechat_template_path),
+        "hasLayoutHtml": layout_html_has_content,
+        "hasWechatHtml": wechat_html_has_content,
+        "layoutHtmlExists": layout_html_exists,
+        "wechatHtmlExists": wechat_html_exists,
+        "layoutHtmlFile": if layout_html_exists {
+            json!(layout_html_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "wechatHtmlFile": if wechat_html_exists {
+            json!(wechat_html_path.display().to_string())
+        } else {
+            Value::Null
+        },
+        "layoutHtmlFileUrl": if layout_html_exists {
+            json!(file_url_for_path(&layout_html_path))
+        } else {
+            Value::Null
+        },
+        "wechatHtmlFileUrl": if wechat_html_exists {
+            json!(file_url_for_path(&wechat_html_path))
+        } else {
+            Value::Null
+        },
+        "layoutHtmlUpdatedAt": file_modified_at_ms(&layout_html_path),
+        "wechatHtmlUpdatedAt": file_modified_at_ms(&wechat_html_path),
         "layoutHtml": "",
         "wechatHtml": ""
     }))
@@ -2092,8 +3320,6 @@ pub(crate) fn create_manuscript_package(
     let draft_type = get_draft_type_from_file_name(file_name);
     let entry = get_default_package_entry(file_name);
     fs::create_dir_all(package_path).map_err(|error| error.to_string())?;
-    fs::create_dir_all(package_path.join("cache")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(package_path.join("exports")).map_err(|error| error.to_string())?;
     write_json_value(
         &package_manifest_path(package_path),
         &json!({
@@ -2107,14 +3333,34 @@ pub(crate) fn create_manuscript_package(
             "createdAt": now_i64(),
             "updatedAt": now_i64(),
             "entry": entry,
-            "timeline": if package_kind == "video" || package_kind == "audio" { json!("timeline.otio.json") } else { Value::Null }
+            "timeline": if package_kind == "audio" { json!("timeline.otio.json") } else { Value::Null },
+            "videoEngine": if package_kind == "video" { json!("ai-remotion") } else { Value::Null },
+            "videoAi": if package_kind == "video" {
+                json!({
+                    "brief": Value::Null,
+                    "lastBriefUpdateAt": Value::Null,
+                    "lastBriefUpdateSource": Value::Null,
+                    "scriptApproval": {
+                        "status": "pending",
+                        "lastScriptUpdateAt": now_i64(),
+                        "lastScriptUpdateSource": "system",
+                        "confirmedAt": Value::Null
+                    }
+                })
+            } else {
+                Value::Null
+            }
         }),
     )?;
     write_text_file(
         &package_entry_path(package_path, file_name, Some(&json!({ "entry": entry }))),
         content,
     )?;
-    if package_kind == "video" || package_kind == "audio" {
+    if package_kind == "video" {
+        let default_remotion = build_default_remotion_scene(title, &[]);
+        write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
+        persist_remotion_composition_artifacts(package_path, &default_remotion)?;
+    } else if package_kind == "audio" {
         let default_remotion = build_default_remotion_scene(title, &[]);
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
         write_json_value(
@@ -2133,18 +3379,17 @@ pub(crate) fn create_manuscript_package(
         )?;
         write_json_value(
             &package_editor_project_path(package_path),
-            &build_default_editor_project(
-                title,
-                content,
-                1080,
-                if package_kind == "audio" { 1080 } else { 1920 },
-                30,
-            ),
+            &build_default_editor_project(title, content, 1080, 1080, 30),
         )?;
     } else if package_kind == "article" {
-        write_text_file(&package_path.join("layout.html"), "")?;
-        write_text_file(&package_path.join("wechat.html"), "")?;
+        write_json_value(
+            &package_cover_path(package_path),
+            &json!({ "assetId": Value::Null }),
+        )?;
+        write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
+        write_text_file(&package_layout_html_path(package_path), "")?;
+        write_text_file(&package_wechat_html_path(package_path), "")?;
     } else if package_kind == "post" {
         write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(
@@ -2154,6 +3399,32 @@ pub(crate) fn create_manuscript_package(
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
     }
     Ok(())
+}
+
+fn choose_generated_manuscript_package_relative(
+    state: &State<'_, AppState>,
+    parent_rel: &str,
+    target_extension: &str,
+) -> Result<String, String> {
+    let normalized_parent = normalize_relative_path(parent_rel);
+    let base_id = make_id("manuscript");
+    let mut attempt = 0usize;
+    loop {
+        let stem = if attempt == 0 {
+            base_id.clone()
+        } else {
+            format!("{base_id}-{}", attempt + 1)
+        };
+        let candidate_relative = normalize_relative_path(&join_relative(
+            &normalized_parent,
+            &format!("{stem}{target_extension}"),
+        ));
+        let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
+        if !candidate_path.exists() {
+            return Ok(candidate_relative);
+        }
+        attempt += 1;
+    }
 }
 
 pub(crate) fn upgrade_markdown_manuscript_to_package(
@@ -2169,22 +3440,12 @@ pub(crate) fn upgrade_markdown_manuscript_to_package(
     if !source.exists() || !source.is_file() {
         return Err("Source manuscript not found".to_string());
     }
-    let file_name = Path::new(&source_relative)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid manuscript source".to_string())?;
-    let stem = Path::new(file_name)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid manuscript source".to_string())?;
     let parent_rel = source_relative
         .rsplit_once('/')
         .map(|(parent, _)| parent)
         .unwrap_or("");
-    let target_relative = normalize_relative_path(&join_relative(
-        parent_rel,
-        &format!("{stem}{target_extension}"),
-    ));
+    let target_relative =
+        choose_generated_manuscript_package_relative(state, parent_rel, target_extension)?;
     let target = resolve_manuscript_path(state, &target_relative)?;
     if target.exists() {
         return Err("Target package already exists".to_string());
@@ -2485,7 +3746,7 @@ mod tests {
 
     #[test]
     fn ensure_editor_project_rehydrates_motion_projection_from_remotion_scene() {
-        let package_path = std::env::temp_dir().join(format!("lexbox-remotion-heal-{}", now_ms()));
+        let package_path = std::env::temp_dir().join(format!("redbox-remotion-heal-{}", now_ms()));
         fs::create_dir_all(&package_path).expect("create package dir");
         write_json_value(
             &package_editor_project_path(&package_path),
@@ -2618,5 +3879,26 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&package_path);
+    }
+
+    #[test]
+    fn video_project_brief_from_manifest_reads_video_ai_brief_fields() {
+        let brief = video_project_brief_from_manifest(&json!({
+            "videoAi": {
+                "brief": "Jamba 手持戴森 V8 跳舞",
+                "lastBriefUpdateAt": 1234567890_i64,
+                "lastBriefUpdateSource": "user"
+            }
+        }));
+
+        assert_eq!(
+            brief.get("content").and_then(Value::as_str),
+            Some("Jamba 手持戴森 V8 跳舞")
+        );
+        assert_eq!(
+            brief.get("updatedAt").and_then(Value::as_i64),
+            Some(1234567890)
+        );
+        assert_eq!(brief.get("source").and_then(Value::as_str), Some("user"));
     }
 }

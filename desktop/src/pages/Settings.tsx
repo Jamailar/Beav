@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Database, Trash2, Eye, EyeOff, FlaskConical, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
 import clsx from 'clsx';
-import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
   AI_SOURCE_PRESETS,
   type AiSourcePreset,
@@ -10,7 +9,7 @@ import {
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
-import { appAlert, appConfirm } from '../utils/appDialogs';
+import { appAlert } from '../utils/appDialogs';
 import {
   type AgentTaskSnapshot,
   type AgentTaskTrace,
@@ -24,6 +23,10 @@ import {
   type McpServerRuntimeItem,
   type McpServerConfig,
   type McpSessionState,
+  type RuntimePerfBenchmarkMode,
+  type RuntimePerfPreset,
+  type RuntimePerfRunResult,
+  type RuntimePerfTimelineItem,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
   AiPresetLogo,
@@ -64,10 +67,9 @@ import {
   REDBOX_OFFICIAL_VIDEO_MODELS,
 } from '../../shared/redboxVideo';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
+import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
-  ExperimentalSettingsSection,
   GeneralSettingsSection,
-  KnowledgeSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
@@ -79,11 +81,34 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
+const RUNTIME_PERF_HISTORY_LIMIT = 12;
+const RUNTIME_PERF_TIMELINE_LIMIT = 40;
+const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
+const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
+  {
+    id: 'latency-smoke',
+    label: '延迟冒烟',
+    description: '验证纯文本响应路径，观察 thinking 到首个 response 的延迟。',
+    message: '请直接回答：用三句话说明当前 runtime mode 的职责、主要风险和最先检查的观测点。不要调用工具。',
+  },
+  {
+    id: 'tooling-probe',
+    label: '工具探测',
+    description: '尽量触发一次真实工具调用，检查 tool-start/tool-end 延迟和成功率。',
+    message: '先调用一个最适合当前运行时的诊断类工具读取状态，再用两条结论总结发现。若当前上下文没有合适工具，再明确说明原因。',
+  },
+  {
+    id: 'long-response',
+    label: '长响应',
+    description: '拉长输出链路，观察持续流式输出和总耗时。',
+    message: '围绕当前 runtime mode 输出一个结构化调试清单，至少包含：入口、关键事件、常见瓶颈、建议日志位、回归检查项，每项 2 到 3 句。',
+  },
+];
 
-type SettingsTab = 'general' | 'ai' | 'knowledge' | 'tools' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
-
+type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type AssistantDaemonDraft = {
   enabled: boolean;
   autoStart: boolean;
@@ -131,7 +156,7 @@ type AssistantDaemonWeixinLoginState = {
 };
 
 const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
-  enabled: false,
+  enabled: true,
   autoStart: true,
   keepAliveWhenNoWindow: true,
   host: '127.0.0.1',
@@ -205,6 +230,12 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
 
 type RuntimeSessionListItem = {
   id: string;
+  runtimeMode?: string;
+  contextBinding?: {
+    contextType?: string;
+    contextId?: string;
+    isContextBound?: boolean;
+  } | null;
   transcriptCount: number;
   checkpointCount: number;
   chatSession?: {
@@ -259,6 +290,56 @@ type RuntimeHookDefinition = {
   enabled?: boolean;
 };
 
+type RuntimePerfCollector = {
+  runId: string;
+  sessionId: string;
+  startedAt: number;
+  thinkingStartedMs?: number;
+  thoughtFirstTokenMs?: number;
+  firstResponseMs?: number;
+  firstToolStartMs?: number;
+  firstCheckpointMs?: number;
+  toolCalls: number;
+  toolSuccessCount: number;
+  toolFailureCount: number;
+  checkpointCount: number;
+  checkpointTypes: string[];
+  responseChars?: number;
+  timeline: RuntimePerfTimelineItem[];
+};
+
+function toRuntimePerfRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  return value as Record<string, unknown>;
+}
+
+function toRuntimePerfText(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function toRuntimePerfNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
+  if (mode === 'chatroom') return 'chatroom';
+  if (mode === 'diagnostics') return 'diagnostics';
+  return mode;
+}
+
+function formatRuntimePerfRunIndex(index: number): string {
+  return `Run ${String(index).padStart(2, '0')}`;
+}
+
 const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < MIN_CHAT_MAX_TOKENS) {
@@ -269,7 +350,6 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
 
 export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const { flags, updateFlag } = useFeatureFlags();
   const [formData, setFormData] = useState({
     api_endpoint: '',
     api_key: '',
@@ -296,9 +376,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     model_name_chatroom: '',
     model_name_knowledge: '',
     model_name_redclaw: '',
-    search_provider: 'duckduckgo',
-    search_endpoint: '',
-    search_api_key: '',
     proxy_enabled: false,
     proxy_url: '',
     proxy_bypass: 'localhost,127.0.0.1,::1',
@@ -338,6 +415,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
   const [runtimeTasks, setRuntimeTasks] = useState<AgentTaskSnapshot[]>([]);
   const [runtimeRoles, setRuntimeRoles] = useState<RoleSpec[]>([]);
+  const [runtimeDiagnosticsSummary, setRuntimeDiagnosticsSummary] = useState<RuntimeDiagnosticsSummary | null>(null);
   const [runtimeSessions, setRuntimeSessions] = useState<RuntimeSessionListItem[]>([]);
   const [selectedRuntimeTaskId, setSelectedRuntimeTaskId] = useState('');
   const [selectedRuntimeSessionId, setSelectedRuntimeSessionId] = useState('');
@@ -350,7 +428,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [backgroundWorkerPool, setBackgroundWorkerPool] = useState<BackgroundWorkerPoolState>({ json: [], runtime: [] });
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
-  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance'>('redclaw');
+  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
   const [isRuntimeTraceLoading, setIsRuntimeTraceLoading] = useState(false);
   const [isRuntimeSessionLoading, setIsRuntimeSessionLoading] = useState(false);
@@ -358,6 +436,14 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isRuntimeCreating, setIsRuntimeCreating] = useState(false);
   const [runtimeTaskActionRunning, setRuntimeTaskActionRunning] = useState<Record<string, 'resume' | 'cancel' | undefined>>({});
   const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | undefined>>({});
+  const [runtimePerfMode, setRuntimePerfMode] = useState<RuntimePerfBenchmarkMode>('diagnostics');
+  const [runtimePerfPresetId, setRuntimePerfPresetId] = useState<string>(RUNTIME_PERF_PRESETS[0].id);
+  const [runtimePerfMessage, setRuntimePerfMessage] = useState<string>(RUNTIME_PERF_PRESETS[0].message);
+  const [runtimePerfIterations, setRuntimePerfIterations] = useState(1);
+  const [isRuntimePerfRunning, setIsRuntimePerfRunning] = useState(false);
+  const [runtimePerfStatusMessage, setRuntimePerfStatusMessage] = useState('');
+  const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
+  const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -368,6 +454,50 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
   const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
+  const hasSelectedRuntimeSession = useMemo(
+    () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
+    [runtimeSessions, selectedRuntimeSessionId],
+  );
+
+  const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
+    setRuntimePerfResults((prev) =>
+      prev.map((run) => (run.id === runId ? updater(run) : run))
+    );
+  }, []);
+
+  const snapshotRuntimePerfCollector = useCallback((collector: RuntimePerfCollector) => ({
+    thinkingStartedMs: collector.thinkingStartedMs,
+    thoughtFirstTokenMs: collector.thoughtFirstTokenMs,
+    firstResponseMs: collector.firstResponseMs,
+    firstToolStartMs: collector.firstToolStartMs,
+    firstCheckpointMs: collector.firstCheckpointMs,
+    responseChars: collector.responseChars,
+    toolCalls: collector.toolCalls,
+    toolSuccessCount: collector.toolSuccessCount,
+    toolFailureCount: collector.toolFailureCount,
+    checkpointCount: collector.checkpointCount,
+    checkpointTypes: [...collector.checkpointTypes],
+    timeline: [...collector.timeline],
+  }), []);
+
+  const appendRuntimePerfTimeline = useCallback((
+    collector: RuntimePerfCollector,
+    event: Omit<RuntimePerfTimelineItem, 'id' | 'offsetMs'> & { offsetMs?: number },
+  ) => {
+    const offsetMs = typeof event.offsetMs === 'number'
+      ? event.offsetMs
+      : Math.max(0, event.at - collector.startedAt);
+    const item: RuntimePerfTimelineItem = {
+      id: `${collector.runId}:${collector.timeline.length}:${event.eventType}:${event.at}`,
+      at: event.at,
+      offsetMs,
+      eventType: event.eventType,
+      label: event.label,
+      detail: event.detail,
+      tone: event.tone,
+    };
+    collector.timeline = [...collector.timeline, item].slice(-RUNTIME_PERF_TIMELINE_LIMIT);
+  }, []);
 
   const buildWeixinQrImageUrl = useCallback(async (rawUrl?: string): Promise<string | undefined> => {
     const text = String(rawUrl || '').trim();
@@ -389,37 +519,33 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
   const runtimeTasksLoadRequestRef = useRef(0);
+  const runtimeSummaryLoadRequestRef = useRef(0);
   const runtimeSessionsLoadRequestRef = useRef(0);
   const runtimeTaskTracesLoadRequestRef = useRef(0);
   const runtimeSessionDetailsLoadRequestRef = useRef(0);
+  const runtimeObservabilityRefreshTimerRef = useRef<number | null>(null);
+  const runtimePerfCollectorRef = useRef<RuntimePerfCollector | null>(null);
+  const runtimePerfRunCounterRef = useRef(0);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
+  const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
-  const officialStartupSyncRef = useRef(false);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
-    knowledge: false,
     tools: false,
-    experimental: false,
+    remote: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
-    knowledge: false,
     tools: false,
-    experimental: false,
+    remote: false,
   });
-
-  const logSettingsPerf = useCallback((stage: string, startedAt: number, extra?: string) => {
-    const elapsed = Math.round(performance.now() - startedAt);
-    const suffix = extra ? ` | ${extra}` : '';
-    console.debug(`[settings][perf] ${stage} elapsed=${elapsed}ms${suffix}`);
-  }, []);
 
   const defaultAiSource = useMemo(() => {
     if (!aiSources.length) return null;
@@ -544,7 +670,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (presetId.includes('dashscope') || presetId.includes('qwen')) {
       return { provider: 'dashscope', template: 'dashscope-wan-native' };
     }
-    if (presetId.includes('ark') || presetId.includes('jimeng')) {
+    if (presetId.includes('jimeng')) {
+      return { provider: 'jimeng', template: 'jimeng-openai-wrapper' };
+    }
+    if (presetId.includes('ark')) {
       return { provider: 'ark-seedream', template: 'ark-seedream-native' };
     }
     if (presetId.includes('gemini')) {
@@ -597,11 +726,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       };
     });
   }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource]);
-
-  const defaultSourceModels = useMemo(() => {
-    if (!defaultAiSource) return [];
-    return filterAiModelsByCapability(getSourceModelList(defaultAiSource), 'chat');
-  }, [defaultAiSource, getSourceModelList]);
 
   const selectedTranscriptionSource = useMemo(() => {
     return getAiSourceById(transcriptionSourceId);
@@ -681,6 +805,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     success: boolean;
     bundled: boolean;
     exportPath: string;
+    pluginPath?: string;
     exported: boolean;
     bundledPath?: string;
     error?: string;
@@ -695,16 +820,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [mcpRuntimeItems, setMcpRuntimeItems] = useState<McpServerRuntimeItem[]>([]);
   const [mcpInspectingId, setMcpInspectingId] = useState('');
 
-  // Knowledge State
-  const [vectorStats, setVectorStats] = useState<{ vectors: number; documents: number } | null>(null);
-  const [isRebuilding, setIsRebuilding] = useState(false);
-
   // Update State
-  const [appVersion, setAppVersion] = useState('');
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;
@@ -738,7 +860,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
     if (activeTab !== 'ai' || aiModelSubTab !== 'login' || OfficialAiPanelComponent) return;
     let canceled = false;
-    const startedAt = performance.now();
     void loadOfficialAiPanelModule().then((module) => {
       if (canceled) return;
       const nextComponent = module?.default || null;
@@ -746,12 +867,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (!nextComponent) {
         setAiModelSubTab('custom');
       }
-      logSettingsPerf('official-panel-load', startedAt, nextComponent ? 'loaded' : 'empty');
     });
     return () => {
       canceled = true;
     };
-  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, logSettingsPerf, officialAiPanelEnabled]);
+  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -810,6 +930,30 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     ];
   }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
 
+  const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
+  const officialAuthKnown = officialAuthBootstrapped;
+  const officialAuthPending = !officialAuthBootstrapped
+    || officialAuthStatus === 'restoring'
+    || officialAuthStatus === 'refreshing';
+  const officialAuthLoggedIn = officialAuthKnown
+    && officialAuthStatus !== 'anonymous'
+    && officialAuthStatus !== 'reauthRequired'
+    && officialAuthStatus !== 'restoring'
+    && Boolean((officialAuthState as { loggedIn?: boolean } | null)?.loggedIn);
+  const officialAuthNeedsLogin = officialAuthKnown && !officialAuthPending && !officialAuthLoggedIn;
+
+  const defaultSourceModels = useMemo(() => {
+    if (!defaultAiSource) return [];
+    if (isOfficialManagedSource(defaultAiSource) && !officialAuthLoggedIn) {
+      return [];
+    }
+    return filterAiModelsByCapability(getSourceModelList(defaultAiSource), 'chat');
+  }, [defaultAiSource, getSourceModelList, isOfficialManagedSource, officialAuthLoggedIn]);
+
+  const defaultOfficialSourceUnavailable = Boolean(
+    defaultAiSource && isOfficialManagedSource(defaultAiSource) && !officialAuthLoggedIn
+  );
+
   const getLocalGuideForSource = useCallback((source?: AiSourceConfig | null): LocalAiGuide | null => {
     if (!source) return null;
     switch (source.presetId) {
@@ -862,7 +1006,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!isActive) {
       return;
     }
-    if (activeTab !== 'general') {
+    if (activeTab !== 'remote') {
       return;
     }
 
@@ -931,13 +1075,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedRuntimeTaskId || !runtimeTasks.some((task) => task.id === selectedRuntimeTaskId)) return;
     void loadRuntimeTaskTraces(selectedRuntimeTaskId);
-  }, [activeTab, formData.developer_mode_enabled, selectedRuntimeTaskId]);
+  }, [activeTab, formData.developer_mode_enabled, runtimeTasks, selectedRuntimeTaskId]);
 
   useEffect(() => {
     if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedRuntimeSessionId || !hasSelectedRuntimeSession) return;
     void loadRuntimeSessionDetails(selectedRuntimeSessionId);
-  }, [activeTab, formData.developer_mode_enabled, selectedRuntimeSessionId]);
+  }, [activeTab, formData.developer_mode_enabled, hasSelectedRuntimeSession, selectedRuntimeSessionId]);
 
   useEffect(() => {
     setTestStatus('idle');
@@ -1513,9 +1659,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const loadAppVersion = useCallback(async () => {
     try {
       const version = await window.ipcRenderer.getAppVersion();
-      setAppVersion(version || '');
+      const normalizedVersion = typeof version === 'string'
+        ? version.trim()
+        : String(version || '').trim();
+      setAppVersion(normalizedVersion || '未读取到版本号');
     } catch (e) {
       console.error('Failed to load app version:', e);
+      setAppVersion('读取失败');
     }
   }, []);
 
@@ -1557,6 +1707,17 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setRuntimeRoles(Array.isArray(result) ? result : []);
     } catch (e) {
       console.error('Failed to load runtime roles', e);
+    }
+  }, []);
+
+  const loadRuntimeSummary = useCallback(async () => {
+    const requestId = ++runtimeSummaryLoadRequestRef.current;
+    try {
+      const result = await window.ipcRenderer.debug.getRuntimeSummary();
+      if (requestId !== runtimeSummaryLoadRequestRef.current) return;
+      setRuntimeDiagnosticsSummary(result || null);
+    } catch (e) {
+      console.error('Failed to load runtime diagnostics summary', e);
     }
   }, []);
 
@@ -1628,7 +1789,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
-  const loadRuntimeSessionDetails = useCallback(async (sessionId: string) => {
+  const loadRuntimeSessionDetails = useCallback(async (sessionId: string, options?: { background?: boolean }) => {
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedSessionId) {
       setRuntimeSessionTranscript([]);
@@ -1637,7 +1798,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     const requestId = ++runtimeSessionDetailsLoadRequestRef.current;
-    setIsRuntimeSessionLoading(true);
+    if (!options?.background) {
+      setIsRuntimeSessionLoading(true);
+    }
     try {
       const [transcript, checkpoints, toolResults] = await Promise.all([
         window.ipcRenderer.sessions.getTranscript(normalizedSessionId, 120),
@@ -1651,11 +1814,185 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     } catch (e) {
       console.error('Failed to load runtime session details', e);
     } finally {
-      if (requestId === runtimeSessionDetailsLoadRequestRef.current) {
+      if (!options?.background && requestId === runtimeSessionDetailsLoadRequestRef.current) {
         setIsRuntimeSessionLoading(false);
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    const scheduleRefresh = () => {
+      if (runtimeObservabilityRefreshTimerRef.current != null) {
+        window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
+      }
+      runtimeObservabilityRefreshTimerRef.current = window.setTimeout(() => {
+        runtimeObservabilityRefreshTimerRef.current = null;
+        void loadRuntimeSessions();
+        if (selectedRuntimeSessionId) {
+          void loadRuntimeSessionDetails(selectedRuntimeSessionId, { background: true });
+        }
+      }, 450);
+    };
+    const onRuntimeEvent = () => scheduleRefresh();
+    const onWanderProgress = () => scheduleRefresh();
+    window.ipcRenderer.on('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
+    window.ipcRenderer.on('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', onRuntimeEvent as (...args: unknown[]) => void);
+      window.ipcRenderer.off('wander:progress', onWanderProgress as (...args: unknown[]) => void);
+      if (runtimeObservabilityRefreshTimerRef.current != null) {
+        window.clearTimeout(runtimeObservabilityRefreshTimerRef.current);
+        runtimeObservabilityRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeTab, formData.developer_mode_enabled, isActive, loadRuntimeSessionDetails, loadRuntimeSessions, selectedRuntimeSessionId]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+
+    const onRuntimePerfEvent = (_event: unknown, envelope?: unknown) => {
+      const collector = runtimePerfCollectorRef.current;
+      if (!collector) return;
+
+      const record = toRuntimePerfRecord(envelope);
+      const eventType = toRuntimePerfText(record.eventType);
+      const sessionId = toRuntimePerfText(record.sessionId);
+      const timestamp = toRuntimePerfNumber(record.timestamp) || Date.now();
+      if (!eventType || sessionId !== collector.sessionId) return;
+
+      const payload = toRuntimePerfRecord(record.payload);
+      let changed = false;
+
+      if (eventType === 'runtime:stream-start') {
+        const phase = toRuntimePerfText(payload.phase) || 'unknown';
+        if (phase === 'thinking' && collector.thinkingStartedMs == null) {
+          collector.thinkingStartedMs = Math.max(0, timestamp - collector.startedAt);
+          changed = true;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `phase · ${phase}`,
+          detail: toRuntimePerfText(payload.runtimeMode) || undefined,
+          tone: 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:text-delta') {
+        const stream = toRuntimePerfText(payload.stream);
+        const content = toRuntimePerfText(payload.content);
+        if (stream === 'thought' && collector.thoughtFirstTokenMs == null) {
+          collector.thoughtFirstTokenMs = Math.max(0, timestamp - collector.startedAt);
+          appendRuntimePerfTimeline(collector, {
+            at: timestamp,
+            eventType,
+            label: 'thought first token',
+            detail: `${content.length} chars`,
+            tone: 'neutral',
+          });
+          changed = true;
+        }
+        if (stream === 'response') {
+          if (collector.firstResponseMs == null) {
+            collector.firstResponseMs = Math.max(0, timestamp - collector.startedAt);
+            appendRuntimePerfTimeline(collector, {
+              at: timestamp,
+              eventType,
+              label: 'response first token',
+              detail: `${content.length} chars`,
+              tone: 'success',
+            });
+            changed = true;
+          }
+          const nextChars = (collector.responseChars || 0) + content.length;
+          if (nextChars !== collector.responseChars) {
+            collector.responseChars = nextChars;
+            changed = true;
+          }
+        }
+      } else if (eventType === 'runtime:tool-start') {
+        collector.toolCalls += 1;
+        if (collector.firstToolStartMs == null) {
+          collector.firstToolStartMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool start · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(payload.description) || undefined,
+          tone: 'warning',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:tool-end') {
+        const output = toRuntimePerfRecord(payload.output);
+        const success = output.success !== false;
+        if (success) {
+          collector.toolSuccessCount += 1;
+        } else {
+          collector.toolFailureCount += 1;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool ${success ? 'done' : 'failed'} · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(output.content) || undefined,
+          tone: success ? 'success' : 'error',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:checkpoint') {
+        const checkpointType = toRuntimePerfText(payload.checkpointType) || 'checkpoint';
+        collector.checkpointCount += 1;
+        if (collector.firstCheckpointMs == null) {
+          collector.firstCheckpointMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        if (checkpointType && !collector.checkpointTypes.includes(checkpointType)) {
+          collector.checkpointTypes = [...collector.checkpointTypes, checkpointType];
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `checkpoint · ${checkpointType}`,
+          detail: toRuntimePerfText(payload.summary) || undefined,
+          tone: checkpointType === 'chat.error' ? 'error' : 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:done') {
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `done · ${toRuntimePerfText(payload.status) || 'completed'}`,
+          detail: toRuntimePerfText(payload.reason) || undefined,
+          tone: toRuntimePerfText(payload.status) === 'error' ? 'error' : 'success',
+        });
+        const content = toRuntimePerfText(payload.content);
+        if (content) {
+          collector.responseChars = Math.max(collector.responseChars || 0, content.length);
+        }
+        changed = true;
+      }
+
+      if (!changed) return;
+
+      updateRuntimePerfRun(collector.runId, (run) => ({
+        ...run,
+        ...snapshotRuntimePerfCollector(collector),
+      }));
+    };
+
+    window.ipcRenderer.on('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    };
+  }, [
+    activeTab,
+    appendRuntimePerfTimeline,
+    formData.developer_mode_enabled,
+    isActive,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
+  ]);
 
   const loadRuntimeHooks = useCallback(async () => {
     try {
@@ -1709,6 +2046,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const loadRuntimeDeveloperData = useCallback(async () => {
     await Promise.all([
       loadRuntimeRoles(),
+      loadRuntimeSummary(),
       loadToolDiagnostics(),
     ]);
     await Promise.all([
@@ -1725,9 +2063,246 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBackgroundWorkerPool,
     loadRuntimeHooks,
     loadRuntimeRoles,
+    loadRuntimeSummary,
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
+  ]);
+
+  const handleApplyRuntimePerfPreset = useCallback((presetId: string) => {
+    const preset = RUNTIME_PERF_PRESETS.find((item) => item.id === presetId) || RUNTIME_PERF_PRESETS[0];
+    setRuntimePerfPresetId(preset.id);
+    setRuntimePerfMessage(preset.message);
+  }, []);
+
+  const ensureRuntimePerfSession = useCallback(async (
+    mode: RuntimePerfBenchmarkMode,
+    index: number,
+  ): Promise<{ id: string }> => {
+    const contextType = runtimePerfContextTypeForMode(mode);
+    const timestamp = Date.now();
+    const contextId = `developer-runtime-perf-${mode}-${timestamp}-${index}`;
+    const title = `Runtime Perf · ${mode} · ${formatRuntimePerfRunIndex(index)}`;
+    if (mode === 'diagnostics') {
+      return await window.ipcRenderer.chat.createDiagnosticsSession({
+        title,
+        contextId,
+        contextType,
+      }) as { id: string };
+    }
+    return await window.ipcRenderer.chat.createContextSession({
+      contextId,
+      contextType,
+      title,
+    }) as { id: string };
+  }, []);
+
+  const handleClearRuntimePerfResults = useCallback(() => {
+    runtimePerfCollectorRef.current = null;
+    setActiveRuntimePerfRunId('');
+    setRuntimePerfResults([]);
+    setRuntimePerfStatusMessage('');
+  }, []);
+
+  const handleRunRuntimePerfBenchmark = useCallback(async () => {
+    const trimmedMessage = runtimePerfMessage.trim();
+    if (!trimmedMessage || isRuntimePerfRunning) return;
+
+    setIsRuntimePerfRunning(true);
+    setRuntimePerfStatusMessage(`准备执行 ${runtimePerfIterations} 轮 runtime benchmark...`);
+
+    try {
+      for (let iterationIndex = 0; iterationIndex < runtimePerfIterations; iterationIndex += 1) {
+        const runNumber = ++runtimePerfRunCounterRef.current;
+        const session = await ensureRuntimePerfSession(runtimePerfMode, runNumber);
+        const sessionId = String(session?.id || '').trim();
+        if (!sessionId) {
+          throw new Error('性能测试未拿到有效 sessionId');
+        }
+
+        const startedAt = Date.now();
+        const runId = `runtime-perf-${startedAt}-${runNumber}`;
+        const collector: RuntimePerfCollector = {
+          runId,
+          sessionId,
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [],
+        };
+        runtimePerfCollectorRef.current = collector;
+        setActiveRuntimePerfRunId(runId);
+        setSelectedRuntimeSessionId(sessionId);
+        appendRuntimePerfTimeline(collector, {
+          at: startedAt,
+          eventType: 'run:start',
+          label: '测试开始',
+          detail: `${runtimePerfMode} · ${formatRuntimePerfRunIndex(runNumber)}`,
+          tone: 'neutral',
+          offsetMs: 0,
+        });
+        const pendingRun: RuntimePerfRunResult = {
+          id: runId,
+          index: runNumber,
+          runtimeMode: runtimePerfMode,
+          sessionId,
+          presetId: runtimePerfPresetId,
+          message: trimmedMessage,
+          status: 'running',
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [...collector.timeline],
+        };
+        setRuntimePerfResults((prev) => [
+          pendingRun,
+          ...prev,
+        ].slice(0, RUNTIME_PERF_HISTORY_LIMIT));
+
+        setRuntimePerfStatusMessage(`执行中：第 ${iterationIndex + 1}/${runtimePerfIterations} 轮`);
+
+        let finalStatus: RuntimePerfRunResult['status'] = 'completed';
+        let finalError = '';
+        let finalResponseChars = 0;
+        let routeValue: unknown = null;
+        let orchestrationValue: unknown = null;
+
+        try {
+          const result = await window.ipcRenderer.runtime.query({
+            sessionId,
+            message: trimmedMessage,
+          }) as {
+            success?: boolean;
+            response?: string;
+            route?: unknown;
+            orchestration?: unknown;
+          };
+          if (result?.success === false) {
+            throw new Error('runtime query returned success=false');
+          }
+          finalResponseChars = String(result?.response || '').length;
+          routeValue = result?.route;
+          orchestrationValue = result?.orchestration;
+        } catch (error) {
+          finalStatus = 'failed';
+          finalError = error instanceof Error ? error.message : String(error);
+        }
+
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(collector, {
+          at: completedAt,
+          eventType: 'run:finish',
+          label: finalStatus === 'completed' ? '测试完成' : '测试失败',
+          detail: finalError || undefined,
+          tone: finalStatus === 'completed' ? 'success' : 'error',
+        });
+
+        const [summary, checkpoints, toolResults] = await Promise.all([
+          window.ipcRenderer.debug.getRuntimeSummary(),
+          window.ipcRenderer.runtime.getCheckpoints({ sessionId, limit: 120 }),
+          window.ipcRenderer.runtime.getToolResults({ sessionId, limit: 120 }),
+        ]);
+        setRuntimeDiagnosticsSummary(summary || null);
+
+        const checkpointRows = (Array.isArray(checkpoints) ? checkpoints : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionCheckpointItem[];
+        const toolRows = (Array.isArray(toolResults) ? toolResults : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionToolResultItem[];
+        const recentRuntimeMetrics = Array.isArray(summary?.phase0?.runtimeQueries?.recent)
+          ? summary.phase0.runtimeQueries.recent as Array<Record<string, unknown>>
+          : [];
+        const matchingMetric = recentRuntimeMetrics.find((item) =>
+          String(item.sessionId || '').trim() === sessionId
+          && (toRuntimePerfNumber(item.createdAt) || 0) >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS)
+        );
+
+        const toolSuccessCount = toolRows.filter((item) => Boolean(item.success)).length;
+        const toolFailureCount = toolRows.length - toolSuccessCount;
+        const checkpointTypes = checkpointRows
+          .map((item) => String(item.checkpointType || '').trim())
+          .filter(Boolean);
+
+        collector.responseChars = collector.responseChars ?? finalResponseChars;
+        collector.toolCalls = Math.max(collector.toolCalls, toolRows.length);
+        collector.toolSuccessCount = Math.max(collector.toolSuccessCount, toolSuccessCount);
+        collector.toolFailureCount = Math.max(collector.toolFailureCount, toolFailureCount);
+        collector.checkpointCount = Math.max(collector.checkpointCount, checkpointRows.length);
+        collector.checkpointTypes = checkpointTypes.length ? checkpointTypes : collector.checkpointTypes;
+
+        updateRuntimePerfRun(runId, (run) => ({
+          ...run,
+          status: finalStatus,
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - startedAt),
+          promptChars: toRuntimePerfNumber(matchingMetric?.promptChars),
+          activeSkillCount: toRuntimePerfNumber(matchingMetric?.activeSkillCount),
+          responseChars: collector.responseChars ?? finalResponseChars,
+          toolCalls: collector.toolCalls,
+          toolSuccessCount: collector.toolSuccessCount,
+          toolFailureCount: collector.toolFailureCount,
+          checkpointCount: collector.checkpointCount,
+          checkpointTypes: [...collector.checkpointTypes],
+          route: routeValue,
+          orchestration: orchestrationValue,
+          error: finalError || undefined,
+          ...snapshotRuntimePerfCollector(collector),
+        }));
+
+        runtimePerfCollectorRef.current = null;
+        setActiveRuntimePerfRunId('');
+        await loadRuntimeSessions();
+        await loadRuntimeSessionDetails(sessionId);
+      }
+      setRuntimePerfStatusMessage(`已完成 ${runtimePerfIterations} 轮 runtime benchmark`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimePerfStatusMessage(`runtime benchmark 失败：${message}`);
+      const activeCollector = runtimePerfCollectorRef.current;
+      if (activeCollector) {
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(activeCollector, {
+          at: completedAt,
+          eventType: 'run:error',
+          label: '执行异常',
+          detail: message,
+          tone: 'error',
+        });
+        updateRuntimePerfRun(activeCollector.runId, (run) => ({
+          ...run,
+          status: 'failed',
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - run.startedAt),
+          error: message,
+          ...snapshotRuntimePerfCollector(activeCollector),
+        }));
+      }
+    } finally {
+      runtimePerfCollectorRef.current = null;
+      setActiveRuntimePerfRunId('');
+      setIsRuntimePerfRunning(false);
+    }
+  }, [
+    appendRuntimePerfTimeline,
+    ensureRuntimePerfSession,
+    isRuntimePerfRunning,
+    loadRuntimeSessionDetails,
+    loadRuntimeSessions,
+    runtimePerfIterations,
+    runtimePerfMessage,
+    runtimePerfMode,
+    runtimePerfPresetId,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
   ]);
 
   const handleCreateRuntimeTask = async () => {
@@ -2040,9 +2615,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           model_name_chatroom: settings.model_name_chatroom || '',
           model_name_knowledge: settings.model_name_knowledge || '',
           model_name_redclaw: settings.model_name_redclaw || '',
-          search_provider: settings.search_provider || 'duckduckgo',
-          search_endpoint: settings.search_endpoint || '',
-          search_api_key: settings.search_api_key || '',
           proxy_enabled: Boolean(settings.proxy_enabled),
           proxy_url: settings.proxy_url || '',
           proxy_bypass: settings.proxy_bypass || 'localhost,127.0.0.1,::1',
@@ -2077,24 +2649,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       console.error("Failed to load settings", e);
     }
   }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
-
-  const syncOfficialAuthForStartup = useCallback(async () => {
-    if (officialStartupSyncRef.current) return;
-    officialStartupSyncRef.current = true;
-    try {
-      const cached = await window.ipcRenderer.invoke('redbox-auth:get-session-cached') as {
-        success?: boolean;
-        session?: { accessToken?: string | null } | null;
-      } | null;
-      const accessToken = String(cached?.session?.accessToken || '').trim();
-      if (!accessToken) {
-        return;
-      }
-      await window.ipcRenderer.invoke('redbox-auth:get-session');
-    } catch (error) {
-      console.error('Failed to sync official auth during startup', error);
-    }
-  }, []);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -2144,6 +2698,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         success: false,
         bundled: false,
         exportPath: '',
+        pluginPath: '',
         exported: false,
         bundledPath: '',
         error: String(error),
@@ -2151,15 +2706,52 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
-  const loadAssistantDaemonStatus = useCallback(async () => {
+  const withTimeout = useCallback(<T,>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        reject(new Error(label));
+      }, timeoutMs);
+      task.then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      }).catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }, []);
+
+  const loadAssistantDaemonStatus = useCallback(async (options?: {
+    timeoutMs?: number;
+    suppressAlert?: boolean;
+  }) => {
     try {
-      const status = await window.ipcRenderer.assistantDaemon.getStatus();
+      const request = window.ipcRenderer.assistantDaemon.getStatus() as Promise<AssistantDaemonStatus>;
+      const status = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
+        ? await withTimeout(request, options.timeoutMs, '远程连接状态加载超时')
+        : await request;
       setAssistantDaemonStatus(status);
       replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
     } catch (error) {
       console.error('Failed to load assistant daemon status', error);
+      if (!options?.suppressAlert) {
+        void appAlert(`加载远程连接状态失败：${String(error)}`);
+      }
     }
-  }, [replaceAssistantDaemonDraft]);
+  }, [replaceAssistantDaemonDraft, withTimeout]);
+
+  const scheduleRemoteTabWarmup = useCallback(() => {
+    if (remoteTabWarmTimerRef.current != null) {
+      window.clearTimeout(remoteTabWarmTimerRef.current);
+    }
+    remoteTabWarmTimerRef.current = window.setTimeout(() => {
+      remoteTabWarmTimerRef.current = null;
+      void loadAssistantDaemonStatus({
+        timeoutMs: 1500,
+        suppressAlert: true,
+      });
+    }, 0);
+  }, [loadAssistantDaemonStatus]);
 
   const buildAssistantDaemonPayload = useCallback(() => ({
     enabled: assistantDaemonDraft.enabled,
@@ -2322,51 +2914,33 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setAssistantDaemonWeixinLogin(null);
   }, []);
 
-  const loadVectorStats = useCallback(async () => {
-    try {
-      const stats = await window.ipcRenderer.invoke('indexing:get-stats') as { totalStats: { vectors: number; documents: number } } | null;
-      if (stats && stats.totalStats) {
-        setVectorStats(stats.totalStats);
-      }
-    } catch (e) {
-      console.error("Failed to load vector stats", e);
-    }
-  }, []);
-
   const ensureBaseSettingsLoaded = useCallback(async (force = false) => {
     if (baseSettingsInFlightRef.current) return;
     if (!force && baseSettingsLoadedRef.current) return;
     baseSettingsInFlightRef.current = true;
-    const startedAt = performance.now();
     try {
-      await syncOfficialAuthForStartup();
       await loadSettings({
         preserveViewState: true,
         preserveRemoteModels: true,
       });
       baseSettingsLoadedRef.current = true;
       tabWarmRef.current.ai = true;
-      logSettingsPerf(force ? 'base-settings-refresh' : 'base-settings-load', startedAt);
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [loadSettings, logSettingsPerf, syncOfficialAuthForStartup]);
+  }, [loadSettings]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
     if (tabInFlightRef.current[tab]) return;
     if (!force && tabWarmRef.current[tab]) return;
     tabInFlightRef.current[tab] = true;
-    const startedAt = performance.now();
     try {
       if (tab === 'general') {
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
-          loadAssistantDaemonStatus(),
         ]);
-      } else if (tab === 'knowledge') {
-        await loadVectorStats();
       } else if (tab === 'tools') {
         await Promise.all([
           checkTools(),
@@ -2374,16 +2948,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
-          await loadToolDiagnostics();
-          await loadRuntimeRoles();
           await Promise.all([
-            loadRuntimeTasks(),
-            loadRuntimeSessions(),
-            loadRuntimeHooks(),
-          ]);
-          await Promise.all([
-            loadBackgroundTasks(),
-            loadBackgroundWorkerPool(),
+            loadToolDiagnostics(),
+            loadRuntimeRoles(),
           ]);
         }
       } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
@@ -2395,7 +2962,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
       }
       tabWarmRef.current[tab] = true;
-      logSettingsPerf(force ? `tab-refresh:${tab}` : `tab-load:${tab}`, startedAt);
     } finally {
       tabInFlightRef.current[tab] = false;
     }
@@ -2406,7 +2972,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     formData.developer_mode_enabled,
     isActive,
     loadAppVersion,
-    loadAssistantDaemonStatus,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
@@ -2417,8 +2982,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
-    loadVectorStats,
-    logSettingsPerf,
     officialAiPanelEnabled,
   ]);
 
@@ -2453,8 +3016,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     if (!isActive) return;
     const handleSettingsUpdated = () => {
-      void ensureBaseSettingsLoaded(true);
-      if (activeTab === 'general' || activeTab === 'knowledge' || activeTab === 'tools') {
+      // Preserve local edits on form-driven tabs; otherwise external auth sync can
+      // reload persisted settings and wipe unsaved AI source/model changes.
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai';
+      if (!preserveLocalFormState) {
+        void ensureBaseSettingsLoaded(true);
+      }
+      if (activeTab === 'remote') {
+        scheduleRemoteTabWarmup();
+      }
+      if (activeTab === 'general' || activeTab === 'tools') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
@@ -2463,7 +3034,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return () => {
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
-  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive]);
+  }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
   useEffect(() => {
     if (!isActive) {
@@ -2474,25 +3045,36 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
-    if (activeTab === 'knowledge') {
-      void ensureTabResourcesLoaded('knowledge');
+    if (activeTab === 'remote') {
+      scheduleRemoteTabWarmup();
+    }
+    if (activeTab === 'general') {
+      void ensureTabResourcesLoaded('general');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
-      runtimePollTimer = window.setInterval(() => {
-        if (!formData.developer_mode_enabled) return;
-        void Promise.all([
-          loadRuntimeTasks(),
-          loadRuntimeSessions(),
-        ]);
-      }, Math.max(8000, SETTINGS_TAB_POLL_DELAY_MS));
-      backgroundTaskPollTimer = window.setInterval(() => {
-        if (!formData.developer_mode_enabled) return;
-        void Promise.all([
-          loadBackgroundTasks(),
-          loadBackgroundWorkerPool(),
-        ]);
-      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+      if (
+        formData.developer_mode_enabled
+        && (runtimeTasks.length > 0 || runtimeSessions.length > 0)
+      ) {
+        runtimePollTimer = window.setInterval(() => {
+          void Promise.all([
+            loadRuntimeTasks(),
+            loadRuntimeSessions(),
+          ]);
+        }, Math.max(8000, SETTINGS_TAB_POLL_DELAY_MS));
+      }
+      if (
+        formData.developer_mode_enabled
+        && backgroundTasks.length > 0
+      ) {
+        backgroundTaskPollTimer = window.setInterval(() => {
+          void Promise.all([
+            loadBackgroundTasks(),
+            loadBackgroundWorkerPool(),
+          ]);
+        }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+      }
     }
 
     return () => {
@@ -2502,23 +3084,25 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (backgroundTaskPollTimer) {
         window.clearInterval(backgroundTaskPollTimer);
       }
+      if (remoteTabWarmTimerRef.current != null) {
+        window.clearTimeout(remoteTabWarmTimerRef.current);
+        remoteTabWarmTimerRef.current = null;
+      }
     };
-  }, [activeTab, ensureTabResourcesLoaded, formData.developer_mode_enabled, isActive, loadBackgroundTasks, loadBackgroundWorkerPool, loadRuntimeSessions, loadRuntimeTasks]);
-
-  const handleRebuildIndex = async () => {
-    if (!(await appConfirm('确定要重建所有索引吗？这可能需要一些时间，且会暂时清空现有向量数据。', { title: '重建索引', confirmLabel: '重建', tone: 'danger' }))) return;
-
-    setIsRebuilding(true);
-    try {
-      await window.ipcRenderer.invoke('indexing:rebuild-all');
-      void appAlert('已触发后台索引重建任务。您可以在侧边栏查看进度。');
-      loadVectorStats();
-    } catch (e) {
-      void appAlert('重建失败: ' + String(e));
-    } finally {
-      setIsRebuilding(false);
-    }
-  };
+  }, [
+    activeTab,
+    backgroundTasks.length,
+    ensureTabResourcesLoaded,
+    formData.developer_mode_enabled,
+    isActive,
+    loadBackgroundTasks,
+    loadBackgroundWorkerPool,
+    loadRuntimeSessions,
+    loadRuntimeTasks,
+    runtimeSessions.length,
+    runtimeTasks.length,
+    scheduleRemoteTabWarmup,
+  ]);
 
   const handleInstallYtdlp = async () => {
     setIsInstallingTool(true);
@@ -2564,7 +3148,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       await loadBrowserPluginStatus();
-      void appAlert(`插件已准备完成。\n\n目录：${result.path}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，选择“加载已解压的扩展程序”，并指向该目录。`);
+      void appAlert(`插件已准备完成。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
     } catch (error) {
       console.error('Failed to prepare browser plugin', error);
       void appAlert(`插件准备失败：${String(error)}`);
@@ -2586,6 +3170,44 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       void appAlert(`打开插件目录失败：${String(error)}`);
     }
   };
+
+  const handleOpenKnowledgeApiGuide = async () => {
+    try {
+      const result = await window.ipcRenderer.openKnowledgeApiGuide();
+      if (!result.success) {
+        void appAlert(`打开知识导入 API 文档失败：${result.error || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('Failed to open knowledge api guide', error);
+      void appAlert(`打开知识导入 API 文档失败：${String(error)}`);
+    }
+  };
+
+  const handlePickWorkspaceDir = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.pickWorkspaceDir();
+      if (!result?.success || !String(result.path || '').trim()) {
+        if (!result?.canceled && result?.error) {
+          void appAlert(`选择工作区目录失败：${String(result.error)}`);
+        }
+        return;
+      }
+      setFormData((prev) => ({
+        ...prev,
+        workspace_dir: String(result.path || '').trim(),
+      }));
+    } catch (error) {
+      console.error('Failed to pick workspace dir', error);
+      void appAlert(`选择工作区目录失败：${String(error)}`);
+    }
+  }, []);
+
+  const handleResetWorkspaceDir = useCallback(() => {
+    setFormData((prev) => ({
+      ...prev,
+      workspace_dir: '',
+    }));
+  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2712,9 +3334,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'knowledge', label: '知识库索引', icon: Database },
     { id: 'tools', label: '工具管理', icon: Wrench },
-    { id: 'experimental', label: '实验性功能', icon: FlaskConical },
   ] as const;
 
   return (
@@ -2726,9 +3346,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           <button
             key={tab.id}
             onClick={() => {
-              const startedAt = performance.now();
               setActiveTab(tab.id);
-              logSettingsPerf(`tab-click:${tab.id}`, startedAt);
             }}
             className={clsx(
               "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
@@ -2752,25 +3370,14 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 appVersion={appVersion}
                 formData={formData}
                 setFormData={setFormData}
+                handlePickWorkspaceDir={handlePickWorkspaceDir}
+                handleResetWorkspaceDir={handleResetWorkspaceDir}
+                handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}
                 handleOpenDebugLogDir={openDebugLogDirectory}
                 handleVersionTap={handleVersionTap}
-                assistantDaemonStatus={assistantDaemonStatus}
-                assistantDaemonDraft={assistantDaemonDraft}
-                setAssistantDaemonDraft={setAssistantDaemonDraft}
-                assistantDaemonLogs={assistantDaemonLogs}
-                assistantDaemonBusy={assistantDaemonBusy}
-                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
-                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
-                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
-                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
-                handleStartAssistantDaemon={handleStartAssistantDaemon}
-                handleStopAssistantDaemon={handleStopAssistantDaemon}
-                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
-                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
-                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
               />
             )}
 
@@ -2882,8 +3489,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         </div>
                       </div>
 
-                      <p className="text-[11px] text-text-tertiary">
-                        当前生效：{defaultAiSource?.name || '未设置'} / {defaultAiSource?.model || '未设置'}
+                      <p className={clsx(
+                        'text-[11px]',
+                        defaultOfficialSourceUnavailable ? 'text-amber-600' : 'text-text-tertiary'
+                      )}>
+                        {defaultOfficialSourceUnavailable
+                          ? '当前官方源未登录，请重新登录或切换到其他默认聊天源。'
+                          : `当前生效：${defaultAiSource?.name || '未设置'} / ${defaultAiSource?.model || '未设置'}`}
                       </p>
                     </div>
 
@@ -2969,6 +3581,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         const isOfficialPlaceholder = isOfficialSource && !hasOfficialManagedSource;
                         const isModelListExpanded = aiSourceModelExpandState[source.id] ?? false;
                         const sourceModels = getAddedSourceModelList(source);
+                        const isOfficialSourcePending = isOfficialSource && officialAuthPending;
+                        const isOfficialSourceLoggedIn = isOfficialSource && officialAuthLoggedIn;
+                        const isOfficialSourceUnavailable = isOfficialSource && !officialAuthLoggedIn;
+                        const sourceModelsForDisplay = isOfficialSourceLoggedIn ? sourceModels : [];
                         const localGuide = getLocalGuideForSource(source);
                         const allowEmptyKey = isLocalAiSource(source);
 
@@ -2987,7 +3603,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                 <div className="flex items-center gap-2 min-w-0">
                                   <AiSourceLogo source={source} />
                                   <span className="text-sm font-medium text-text-primary truncate">{source.name || '未命名模型源'}</span>
-                                  {isDefaultSource && !isOfficialPlaceholder && (
+                                  {isDefaultSource && !isOfficialPlaceholder && !isOfficialSourceUnavailable && (
                                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600">
                                       <Star className="w-2.5 h-2.5" />
                                       默认源
@@ -2995,20 +3611,23 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                   )}
                                 </div>
                                 <p className="text-[11px] text-text-tertiary mt-0.5 truncate">
-                                  {isOfficialPlaceholder
-                                    ? '官方托管模型源 · 当前未登录，登录后自动同步官方模型与凭据'
-                                    : isOfficialSource
-                                    ? `已托管登录态 · 默认模型：${source.model || '(未设置)'} · 已添加 ${sourceModels.length} 个模型`
+                                  {isOfficialSource
+                                    ? isOfficialSourcePending
+                                      ? '官方托管模型源 · 正在检查登录状态'
+                                      : isOfficialSourceUnavailable
+                                      ? '官方托管模型源 · 当前未登录，登录后自动同步官方模型与凭据'
+                                      : `已托管登录态 · 默认模型：${source.model || '(未设置)'} · 已添加 ${sourceModelsForDisplay.length} 个模型`
                                     : `${preset?.label || 'Custom'} · 默认模型：${source.model || '(未设置)'} · 已添加 ${sourceModels.length} 个模型`}
                                 </p>
                               </div>
-                              {isOfficialPlaceholder ? (
+                              {isOfficialSourceUnavailable ? (
                                 <button
                                   type="button"
                                   onClick={() => setAiModelSubTab('login')}
                                   className="px-2 py-1 text-[11px] border rounded transition-colors border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary"
+                                  disabled={isOfficialSourcePending}
                                 >
-                                  去登录
+                                  {isOfficialSourcePending ? '检查中' : '去登录'}
                                 </button>
                               ) : (
                                 <>
@@ -3027,37 +3646,57 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                   >
                                     设为默认
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteAiSource(source.id)}
-                                    className="p-1.5 text-text-tertiary hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
-                                    title="删除模型源"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  {!isOfficialSource && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteAiSource(source.id)}
+                                      className="p-1.5 text-text-tertiary hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
+                                      title="删除模型源"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
 
                             {isExpanded && (
                               <div className="p-3 space-y-3">
-                                {isOfficialPlaceholder ? (
-                                  <div className="rounded border border-border bg-surface-secondary/30 px-3 py-3 text-[11px] text-text-secondary space-y-2">
-                                    <div className="font-medium text-text-primary">RedBox 官方托管模型源</div>
+                                {isOfficialSourceUnavailable ? (
+                                  <div className={clsx(
+                                    'rounded border px-3 py-3 text-[11px] space-y-2',
+                                    isOfficialSourcePending
+                                      ? 'border-border bg-surface-secondary/30 text-text-secondary'
+                                      : 'border-amber-500/25 bg-amber-500/5 text-text-secondary'
+                                  )}>
+                                    <div className={clsx(
+                                      'font-medium',
+                                      isOfficialSourcePending ? 'text-text-primary' : 'text-amber-600'
+                                    )}>
+                                      {isOfficialSourcePending
+                                        ? '正在检查登录状态'
+                                        : officialAuthNeedsLogin
+                                        ? '当前账号登录已失效'
+                                        : '当前账号未登录'}
+                                    </div>
                                     <p>
-                                      即使当前未登录，这个官方源也会固定显示在这里。登录后会自动同步官方聊天模型、图片模型、视频能力与托管凭据。
+                                      {isOfficialSourcePending
+                                        ? '正在和宿主同步官方账号状态，完成后会自动刷新这里的模型与凭据。'
+                                        : '官方源仍会固定显示在这里，但当前不会再使用旧模型和旧凭据。重新登录后会自动恢复同步。'}
                                     </p>
-                                    <button
-                                      type="button"
-                                      onClick={() => setAiModelSubTab('login')}
-                                      className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                                    >
-                                      前往登录
-                                    </button>
+                                    {!isOfficialSourcePending && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setAiModelSubTab('login')}
+                                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                      >
+                                        前往登录
+                                      </button>
+                                    )}
                                   </div>
                                 ) : isOfficialSource ? (
                                   <div className="rounded border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[11px] text-text-secondary">
-                                    <div className="font-medium text-emerald-600">已登陆</div>
+                                    <div className="font-medium text-emerald-600">已登录</div>
                                   </div>
                                 ) : (
                                   <>
@@ -3137,43 +3776,50 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                   </>
                                 )}
 
-                                <div className="rounded border border-border bg-surface-secondary/20 p-2.5 space-y-2">
-                                  <div className="flex items-center justify-between">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleAiSourceModelExpand(source.id)}
-                                      className="flex items-center gap-2 text-xs font-medium text-text-primary"
-                                    >
-                                      <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', !isModelListExpanded && '-rotate-90')} />
-                                      已添加模型
-                                    </button>
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => openAddModelModal(source)}
-                                        className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
-                                      >
-                                        添加模型
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveAiSourceId(source.id);
-                                          void fetchModelsForSource(source, { manual: true });
-                                        }}
-                                        disabled={isTesting}
-                                        className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                                      >
-                                        <RefreshCw className={clsx('w-3 h-3', isTesting && activeAiSourceId === source.id && 'animate-spin')} />
-                                        拉取候选
-                                      </button>
-                                    </div>
+                                {(isOfficialSource && !isOfficialSourceLoggedIn) ? (
+                                  <div className="rounded border border-dashed border-border px-2.5 py-2 text-[11px] text-text-tertiary">
+                                    {isOfficialSourcePending
+                                      ? '正在等待官方账号状态检查完成。'
+                                      : '请先重新登录，登录后会自动同步官方模型列表。'}
                                   </div>
+                                ) : (
+                                  <div className="rounded border border-border bg-surface-secondary/20 p-2.5 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleAiSourceModelExpand(source.id)}
+                                        className="flex items-center gap-2 text-xs font-medium text-text-primary"
+                                      >
+                                        <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', !isModelListExpanded && '-rotate-90')} />
+                                        已添加模型
+                                      </button>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAddModelModal(source)}
+                                          className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
+                                        >
+                                          添加模型
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveAiSourceId(source.id);
+                                            void fetchModelsForSource(source, { manual: true });
+                                          }}
+                                          disabled={isTesting}
+                                          className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                        >
+                                          <RefreshCw className={clsx('w-3 h-3', isTesting && activeAiSourceId === source.id && 'animate-spin')} />
+                                          拉取候选
+                                        </button>
+                                      </div>
+                                    </div>
 
-                                  {isModelListExpanded && (
-                                    sourceModels.length ? (
+                                    {isModelListExpanded && (
+                                      sourceModelsForDisplay.length ? (
                                       <div className="space-y-1">
-                                        {sourceModels.map((model) => {
+                                        {sourceModelsForDisplay.map((model) => {
                                           const isDefaultModel = source.model === model.id;
                                           return (
                                             <div key={model.id} className="flex items-center justify-between gap-2 rounded border border-border bg-surface-primary px-2.5 py-1.5">
@@ -3233,9 +3879,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                       <div className="text-[11px] text-text-tertiary rounded border border-dashed border-border px-2.5 py-2">
                                         暂无已添加模型，请先点击“添加模型”。
                                       </div>
-                                    )
-                                  )}
-                                </div>
+                                      )
+                                    )}
+                                  </div>
+                                )}
 
                                 {activeAiSourceId === source.id && (
                                   <div className="flex items-center justify-between gap-2">
@@ -3499,15 +4146,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         <button
                           type="button"
                           onClick={() => setFormData((d) => ({ ...d, wander_deep_think_enabled: !d.wander_deep_think_enabled }))}
-                          className="ui-switch-track w-11 h-6 shrink-0 mt-0.5"
+                          className="ui-switch-track shrink-0 mt-0.5"
+                          data-size="md"
                           data-state={formData.wander_deep_think_enabled ? 'on' : 'off'}
                         >
-                          <div
-                            className={clsx(
-                              'ui-switch-thumb top-1 w-4 h-4',
-                              formData.wander_deep_think_enabled ? 'translate-x-6' : 'translate-x-1'
-                            )}
-                          />
+                          <div className="ui-switch-thumb" />
                         </button>
                       </div>
                     </div>
@@ -3529,15 +4172,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
                 </section>
               </div>
-            )}
-
-            {/* Knowledge Tab */}
-            {activeTab === 'knowledge' && (
-              <KnowledgeSettingsSection
-                vectorStats={vectorStats}
-                handleRebuildIndex={handleRebuildIndex}
-                isRebuilding={isRebuilding}
-              />
             )}
 
             {/* Tools Tab */}
@@ -3580,8 +4214,25 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleRefreshToolDiagnostics={loadToolDiagnostics}
                 handleRunAllDirectToolDiagnostics={() => runAllToolDiagnostics('direct')}
                 handleRunAllAiToolDiagnostics={() => runAllToolDiagnostics('ai')}
+                runtimePerfPresets={RUNTIME_PERF_PRESETS}
+                runtimePerfMode={runtimePerfMode}
+                setRuntimePerfMode={setRuntimePerfMode}
+                runtimePerfPresetId={runtimePerfPresetId}
+                setRuntimePerfPresetId={setRuntimePerfPresetId}
+                runtimePerfMessage={runtimePerfMessage}
+                setRuntimePerfMessage={setRuntimePerfMessage}
+                runtimePerfIterations={runtimePerfIterations}
+                setRuntimePerfIterations={setRuntimePerfIterations}
+                runtimePerfResults={runtimePerfResults}
+                activeRuntimePerfRunId={activeRuntimePerfRunId}
+                isRuntimePerfRunning={isRuntimePerfRunning}
+                runtimePerfStatusMessage={runtimePerfStatusMessage}
+                handleApplyRuntimePerfPreset={handleApplyRuntimePerfPreset}
+                handleRunRuntimePerfBenchmark={handleRunRuntimePerfBenchmark}
+                handleClearRuntimePerfResults={handleClearRuntimePerfResults}
                 runtimeTasks={runtimeTasks}
                 runtimeRoles={runtimeRoles}
+                runtimeDiagnosticsSummary={runtimeDiagnosticsSummary}
                 runtimeSessions={runtimeSessions}
                 backgroundTasks={backgroundTasks}
                 backgroundWorkerPool={backgroundWorkerPool}
@@ -3612,14 +4263,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
-              />
-            )}
-
-            {/* Experimental Tab */}
-            {activeTab === 'experimental' && (
-              <ExperimentalSettingsSection
-                flags={flags}
-                updateFlag={updateFlag}
               />
             )}
 

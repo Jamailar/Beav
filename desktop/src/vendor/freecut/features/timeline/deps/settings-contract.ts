@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { HOTKEYS, type HotkeyBindingMap } from '@/config/hotkeys';
 
-type LexBoxSettingsState = {
+type RedBoxSettingsState = {
   editorDensity: 'compact' | 'default';
   showWaveforms: boolean;
   showFilmstrips: boolean;
@@ -9,21 +9,21 @@ type LexBoxSettingsState = {
   maxUndoHistory: number;
 };
 
-type LexBoxSettingsActions = {
-  syncLexBoxSettings: (patch: Partial<LexBoxSettingsState>) => void;
+type RedBoxSettingsActions = {
+  syncRedBoxSettings: (patch: Partial<RedBoxSettingsState>) => void;
 };
 
-export const useSettingsStore = create<LexBoxSettingsState & LexBoxSettingsActions>((set) => ({
+export const useSettingsStore = create<RedBoxSettingsState & RedBoxSettingsActions>((set) => ({
   editorDensity: 'compact',
   showWaveforms: true,
   showFilmstrips: true,
   defaultWhisperModel: 'base',
   maxUndoHistory: 80,
-  syncLexBoxSettings: (patch) => set((state) => ({ ...state, ...patch })),
+  syncRedBoxSettings: (patch) => set((state) => ({ ...state, ...patch })),
 }));
 
-export function syncLexBoxTimelineSettings(patch: Partial<LexBoxSettingsState>) {
-  useSettingsStore.getState().syncLexBoxSettings(patch);
+export function syncRedBoxTimelineSettings(patch: Partial<RedBoxSettingsState>) {
+  useSettingsStore.getState().syncRedBoxSettings(patch);
 }
 
 export function useResolvedHotkeys(): HotkeyBindingMap {

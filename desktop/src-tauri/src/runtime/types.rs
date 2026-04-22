@@ -31,7 +31,7 @@ pub struct RuntimeHookRecord {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillRecord {
     pub name: String,
@@ -452,7 +452,6 @@ pub struct InteractiveToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
-    pub raw: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

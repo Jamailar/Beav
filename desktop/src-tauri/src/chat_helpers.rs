@@ -1,12 +1,13 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 use crate::{
-    decode_base64_bytes, generate_chat_response, invoke_structured_chat_by_protocol,
-    load_redbox_prompt_or_embedded, markdown_to_html, now_ms, payload_field, payload_string,
-    render_redbox_prompt, resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json,
-    url_encode_component, AdvisorRecord, WechatOfficialBindingRecord,
+    configure_background_command, decode_base64_bytes, invoke_chat_by_protocol,
+    invoke_structured_chat_by_protocol, markdown_to_html, now_ms, payload_field, payload_string,
+    resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json, url_encode_component,
+    AdvisorRecord, WechatOfficialBindingRecord,
 };
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -129,37 +130,82 @@ pub(crate) fn extract_cover_source(payload: &Value) -> Option<String> {
 }
 
 pub(crate) fn materialize_image_source(source: &str, target_dir: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
-    let trimmed = source.trim();
-    if let Some(data) = trimmed.strip_prefix("data:") {
-        let extension = if data.starts_with("image/png") {
+    fn extension_from_data_url_mime(data: &str) -> &'static str {
+        if data.starts_with("image/png") {
             "png"
         } else if data.starts_with("image/jpeg") || data.starts_with("image/jpg") {
             "jpg"
         } else if data.starts_with("image/gif") {
             "gif"
+        } else if data.starts_with("image/webp") {
+            "webp"
+        } else if data.starts_with("image/bmp") {
+            "bmp"
+        } else if data.starts_with("image/svg+xml") {
+            "svg"
         } else {
             "png"
-        };
+        }
+    }
+
+    fn extension_from_url_path(source: &str) -> Option<String> {
+        let parsed = Url::parse(source).ok()?;
+        let path = parsed.path().trim();
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|value| !value.is_empty())?;
+        Some(if extension == "jpeg" {
+            "jpg".to_string()
+        } else {
+            extension
+        })
+    }
+
+    fn extension_from_image_bytes(bytes: &[u8]) -> &'static str {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "png"
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "jpg"
+        } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            "gif"
+        } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            "webp"
+        } else if bytes.starts_with(b"BM") {
+            "bmp"
+        } else if bytes.starts_with(b"<svg") || bytes.windows(4).any(|chunk| chunk == b"<svg") {
+            "svg"
+        } else {
+            "png"
+        }
+    }
+
+    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
+    let trimmed = source.trim();
+    if let Some(data) = trimmed.strip_prefix("data:") {
+        let extension = extension_from_data_url_mime(data);
         let encoded = data
             .split_once(',')
             .map(|(_, body)| body)
             .ok_or_else(|| "无效 data URL".to_string())?;
         let bytes = decode_base64_bytes(encoded)?;
-        let path = target_dir.join(format!("cover-{}.{}", now_ms(), extension));
+        let path = target_dir.join(format!("image-{}.{}", now_ms(), extension));
         fs::write(&path, bytes).map_err(|error| error.to_string())?;
         return Ok(path);
     }
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         let bytes = run_curl_bytes("GET", trimmed, None, &[], None)?;
-        let path = target_dir.join(format!("cover-{}.jpg", now_ms()));
+        let extension = extension_from_url_path(trimmed)
+            .unwrap_or_else(|| extension_from_image_bytes(&bytes).to_string());
+        let path = target_dir.join(format!("image-{}.{}", now_ms(), extension));
         fs::write(&path, bytes).map_err(|error| error.to_string())?;
         return Ok(path);
     }
     if let Some(path) = resolve_local_path(trimmed).filter(|path| path.exists()) {
         return Ok(path);
     }
-    Err("未找到可用封面图".to_string())
+    Err("未找到可用图片源".to_string())
 }
 
 pub(crate) fn upload_wechat_thumb_media(
@@ -170,7 +216,9 @@ pub(crate) fn upload_wechat_thumb_media(
         "https://api.weixin.qq.com/cgi-bin/material/add_material?access_token={}&type=image",
         url_encode_component(access_token)
     );
-    let output = std::process::Command::new("curl")
+    let mut command = std::process::Command::new("curl");
+    configure_background_command(&mut command);
+    let output = command
         .arg("-sS")
         .arg("-F")
         .arg(format!("media=@{}", image_path.display()))
@@ -203,15 +251,23 @@ pub(crate) fn upload_wechat_thumb_media(
     Err(format!("WeChat media upload error {errcode}: {errmsg}"))
 }
 
-pub(crate) fn generate_response_with_settings(
+pub(crate) fn run_model_text_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     prompt: &str,
-) -> String {
-    generate_chat_response(settings, model_config, prompt)
+) -> Result<String, String> {
+    let config = resolve_chat_config(settings, model_config)
+        .ok_or_else(|| "当前未配置可用模型".to_string())?;
+    invoke_chat_by_protocol(
+        &config.protocol,
+        &config.base_url,
+        config.api_key.as_deref(),
+        &config.model_name,
+        prompt,
+    )
 }
 
-pub(crate) fn generate_structured_response_with_settings(
+pub(crate) fn run_model_structured_task_with_settings(
     settings: &Value,
     model_config: Option<&Value>,
     system_prompt: &str,
@@ -245,37 +301,4 @@ pub(crate) fn find_advisor_avatar(advisors: &[AdvisorRecord], advisor_id: &str) 
         .find(|item| item.id == advisor_id)
         .map(|item| item.avatar.clone())
         .unwrap_or_else(|| "🤖".to_string())
-}
-
-pub(crate) fn build_advisor_prompt(
-    advisor: Option<&AdvisorRecord>,
-    message: &str,
-    context: Option<&Value>,
-) -> String {
-    let template = load_redbox_prompt_or_embedded(
-        "runtime/advisors/reply_wrapper.txt",
-        include_str!("../../prompts/library/runtime/advisors/reply_wrapper.txt"),
-    );
-    let advisor_name = advisor
-        .map(|item| item.name.clone())
-        .unwrap_or_else(|| "智囊团成员".to_string());
-    let advisor_personality = advisor
-        .map(|item| item.personality.clone())
-        .unwrap_or_default();
-    let advisor_system_prompt = advisor
-        .map(|item| item.system_prompt.clone())
-        .unwrap_or_default();
-    let context_block = context
-        .map(|value| format!("补充上下文：\n{}\n\n", value))
-        .unwrap_or_default();
-    render_redbox_prompt(
-        &template,
-        &[
-            ("advisor_name", advisor_name),
-            ("advisor_personality", advisor_personality),
-            ("advisor_system_prompt", advisor_system_prompt),
-            ("context_block", context_block),
-            ("message", message.to_string()),
-        ],
-    )
 }

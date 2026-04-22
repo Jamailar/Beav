@@ -45,6 +45,13 @@
   - `pixelFormat`
   - `proResProfile`
 - 优先使用 `entities[]` 来表达真正的动画对象，不要把“苹果落地”这类对象动画降级成文字说明。
+- 默认不要生成 `overlayTitle`、`overlayBody`、`overlays` 或其他解释性文字层；除非用户明确要求标题、字幕、屏幕文案或说明文字。
+- `entities[]` 默认使用 `positionMode = "canvas-space"`。
+- 如果用户明确要求与视频里的真实元素精准对位，才使用 `positionMode = "video-space"`，并补齐 `referenceWidth` / `referenceHeight`。
+- 使用 `video-space` 时，`x / y / width / height` 与动画位移参数必须共享同一套参考坐标系。
+- `x / y` 表示实体最终停留位置的左上角坐标，不是中心点坐标；如果需要水平居中，必须按 `(referenceWidth - width) / 2` 计算。
+- 对 `fall-bounce`，`params.fromY` / `params.floorY` 只表示相对位移，不表示绝对位置；常规下落动画应把最终落点写在 `entity.y`，并把 `floorY` 设为 `0`。
+- 如果对象需要跨越较大画面范围运动，位移幅度要与 `referenceHeight` / `referenceWidth` 成比例，不要只写一小段固定像素。
 - 先决定动画主体元素，再决定 React / Remotion 动画表达；主体元素不存在时，不要宣称动画已完成。
 - `entities[]` 支持：
   - `text`

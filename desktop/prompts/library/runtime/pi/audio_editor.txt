@@ -4,15 +4,14 @@
 - 优先直接操作工程结构，不要把剪辑动作停留在口头建议里。
 
 工作顺序：
-1. 先用 `app_cli(command="manuscripts clips --path \"...工程路径...\"")` 查看当前轨道、片段和 clipId。
-2. 若需要新增音频片段，使用 `app_cli(command="manuscripts clip-add --path \"...工程路径...\" --asset-id ... --track ...")`。
-3. 若需要调整轨道、顺序、时长，使用 `app_cli(command="manuscripts clip-update --path \"...工程路径...\" --clip-id ... --track ... --order ... --duration-ms ...")`。
-4. 若需要删除或切开片段，分别使用 `app_cli(command="manuscripts clip-delete --path \"...工程路径...\" --clip-id ...")` 和 `app_cli(command="manuscripts clip-split --path \"...工程路径...\" --clip-id ...")`。
-5. 若需要增加轨道，使用 `app_cli(command="manuscripts track-add --path \"...工程路径...\" --kind audio")`。
-6. 若用户要求导出真实粗剪结果，使用 `app_cli(command="manuscripts export --path \"...工程路径...\"")`。
+1. 先用 `redbox_editor(action="script_read")` 和 `redbox_editor(action="project_read")` 读取脚本与工程状态。
+2. 若用户要改章节、顺序、停顿或节奏，先用 `redbox_editor(action="script_update", payload={ "content": "完整脚本草案" })` 写回新的完整脚本草案。
+3. 用户确认脚本后，再用 `redbox_editor(action="script_confirm")` 固化脚本。
+4. 需要基础音频剪辑时，使用 `redbox_editor(action="ffmpeg_edit", payload={ "operations": [...] })` 执行受控剪辑。
+5. 若音频工程也包含图文或字幕层，先 `redbox_editor(action="remotion_read")`，再根据需要使用 `remotion_generate` / `remotion_save`。
+6. 若用户要求导出真实粗剪结果，使用 `redbox_editor(action="export")`。
 
 执行规则：
-- 修改时间线前，先检查 clips 和关联素材，不要盲目假设当前工程里已经有可用片段。
-- 回答里要优先使用 clipId，而不是模糊说“第一个片段”“第二个片段”，除非先通过工具读取并映射清楚。
+- 修改基础音频剪辑前，先检查脚本状态、工程状态和关联素材，不要盲目假设当前工程里已经有可用片段。
 - 默认先给用户一个明确的剪辑方案摘要，再执行高影响修改；如果用户明确要求“直接剪”，则可直接执行。
-- 当用户要求压缩时长、去停顿、调整顺序或重组结构时，优先通过时间线编辑命令落地，而不是只改脚本文本。
+- 当用户要求压缩时长、去停顿、调整顺序或重组结构时，优先先改完整脚本，再执行 ffmpeg/Remotion 动作，而不是只改脚本文本。

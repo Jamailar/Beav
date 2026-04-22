@@ -92,11 +92,15 @@ pub fn runtime_task_trace_value(
     let include_children = payload_field(payload, "includeChildren")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let limit = payload_field(payload, "limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
     with_store(state, |store| {
         Ok(runtime_task_traces_lookup_value(
             &store,
             &task_id,
             include_children,
+            limit,
         ))
     })
 }

@@ -8,8 +8,8 @@ use crate::runtime::{
 };
 use crate::subagents::{real_subagents_enabled, run_real_subagent_orchestration_for_task};
 use crate::{
-    generate_structured_response_with_settings, load_redbox_prompt, parse_json_value_from_text,
-    payload_string, render_redbox_prompt, role_sequence_for_route, slug_from_relative_path,
+    load_redbox_prompt, parse_json_value_from_text, payload_string, render_redbox_prompt,
+    role_sequence_for_route, run_model_structured_task_with_settings, slug_from_relative_path,
     workspace_root, write_text_file, AppState,
 };
 
@@ -67,7 +67,7 @@ fn run_prompt_subagent_orchestration_for_task(
             ],
         );
         let user_prompt = format!("用户请求：{}\n任务目标：{}", user_input, route.goal);
-        let raw = generate_structured_response_with_settings(
+        let raw = run_model_structured_task_with_settings(
             settings,
             None,
             &system_prompt,
@@ -200,7 +200,7 @@ pub fn run_reviewer_repair_for_task(
         route.clone().into_value(),
         issues
     );
-    let raw = generate_structured_response_with_settings(
+    let raw = run_model_structured_task_with_settings(
         settings,
         None,
         "You are a runtime repair planner for RedBox. Output strict JSON only.",

@@ -5,6 +5,8 @@ use crate::agent::{
     emit_session_agent_completion, execute_prepared_session_agent_turn, ChatExchangeRequest,
     PreparedSessionAgentTurn, SessionAgentTurnKind,
 };
+use crate::chat_title::spawn_chat_session_auto_title;
+use crate::commands::chat_state::resolve_runtime_mode_for_session;
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::persistence::with_store;
 use crate::AppState;
@@ -70,23 +72,10 @@ fn spawn_redclaw_chat_postprocess(
 ) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let project_id = with_store(&state, |store| {
-            Ok(store
-                .redclaw_state
-                .projects
-                .first()
-                .map(|item| item.id.clone())
-                .unwrap_or_else(|| "redclaw-chat".to_string()))
-        });
-        let Ok(project_id) = project_id else {
-            eprintln!("[RedClaw chat postprocess] failed to resolve project id");
-            return;
-        };
         let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
         let artifacts = save_redclaw_outputs(
             &state,
             artifact_kind,
-            &project_id,
             &session_id,
             &message,
             &response,
@@ -110,7 +99,17 @@ pub fn run_chat_send_turn(
 ) -> Result<CompletedChatSendTurn, String> {
     let execution = execute_prepared_session_agent_turn(Some(app), state, prepared_turn)?;
     emit_session_agent_completion(app, state, &execution, SessionAgentTurnKind::ChatSend)?;
-    if prepared_turn.is_redclaw_session() {
+    spawn_chat_session_auto_title(
+        app.clone(),
+        execution.session_id().to_string(),
+        prepared_turn.display_content().to_string(),
+        prepared_turn.request().attachment.clone(),
+        prepared_turn.request().model_config.cloned(),
+    );
+    let is_redclaw_session = with_store(state, |store| {
+        Ok(resolve_runtime_mode_for_session(&store, execution.session_id()) == "redclaw")
+    })?;
+    if is_redclaw_session {
         spawn_redclaw_chat_postprocess(
             app.clone(),
             execution.session_id().to_string(),

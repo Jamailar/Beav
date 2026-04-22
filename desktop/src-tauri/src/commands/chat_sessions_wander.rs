@@ -1,16 +1,1195 @@
+use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
+use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, checkpoint_count_for_session, runtime_direct_route_record,
-    session_context_usage_value, session_detail_value, session_list_item_value,
-    session_resume_value, tool_results_for_session, trace_for_session,
-    transcript_count_for_session, transcript_resume_messages, transcript_session_list_value,
-    transcript_session_meta_by_id, update_session_context_record, RuntimeArtifact,
-    RuntimeCheckpointRecord, RuntimeRouteRecord,
+    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
+    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
+    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };
+use crate::session_manager::{
+    create_context_session, create_session, delete_session, ensure_context_session, fork_session,
+    list_context_sessions, list_sessions, resolve_resume_target_session_id, session_detail_value,
+    session_list_item_value, session_resume_value, update_metadata,
+};
+use crate::skills::{merge_requested_skills_into_session, SkillActivationSource};
 use crate::*;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
+
+const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
+
+fn xorshift64(mut seed: u64) -> u64 {
+    if seed == 0 {
+        seed = 0x9E37_79B9_7F4A_7C15;
+    }
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    seed
+}
+
+fn shuffle_wander_items(items: &mut [Value], seed: u64) {
+    if items.len() <= 1 {
+        return;
+    }
+    let mut state = seed;
+    for index in (1..items.len()).rev() {
+        state = xorshift64(state);
+        let swap_index = (state as usize) % (index + 1);
+        items.swap(index, swap_index);
+    }
+}
+
+fn wander_shuffle_seed(items: &[Value]) -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_else(|_| now_ms() as u64);
+    let mut seed = nanos
+        ^ ((std::process::id() as u64) << 17)
+        ^ ((items.len() as u64) << 33)
+        ^ (now_ms() as u64).rotate_left(11);
+    for item in items.iter().take(8) {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            for byte in id.as_bytes() {
+                seed ^= (*byte as u64).wrapping_mul(0x9E37_79B9);
+                seed = xorshift64(seed);
+            }
+        }
+    }
+    xorshift64(seed)
+}
+
+fn collect_wander_candidate_items(store: &AppStore) -> Vec<Value> {
+    let mut items = Vec::new();
+    for note in &store.knowledge_notes {
+        items.push(wander_item_from_note(note));
+    }
+    for video in &store.youtube_videos {
+        items.push(wander_item_from_youtube(video));
+    }
+    for source in &store.document_sources {
+        items.push(wander_item_from_doc(source));
+    }
+    items
+}
+
+fn recent_wander_excluded_ids(store: &AppStore, recent_limit: usize) -> HashSet<String> {
+    let mut history = if store.wander_history.is_empty() {
+        rebuild_wander_history_from_sessions(store)
+    } else {
+        store.wander_history.clone()
+    };
+    history.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    history
+        .into_iter()
+        .take(recent_limit)
+        .filter_map(|record| serde_json::from_str::<Vec<Value>>(&record.items).ok())
+        .flat_map(|items| items.into_iter())
+        .filter_map(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.trim().to_string())
+        })
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+fn pick_random_wander_items(
+    mut items: Vec<Value>,
+    count: usize,
+    excluded_ids: &HashSet<String>,
+) -> Vec<Value> {
+    items.sort_by_key(|item| {
+        item.get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string()
+    });
+
+    let mut eligible = items
+        .into_iter()
+        .filter(|item| {
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            !id.is_empty() && !excluded_ids.contains(&id)
+        })
+        .collect::<Vec<_>>();
+
+    if eligible.is_empty() {
+        return Vec::new();
+    }
+
+    let seed = wander_shuffle_seed(&eligible);
+    shuffle_wander_items(&mut eligible, seed);
+    eligible.truncate(eligible.len().min(count.max(1)));
+    eligible
+}
+
+fn parse_wander_json_payload(payload: &str) -> Option<Value> {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let strip_code_fence = |text: &str| {
+        text.trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string()
+    };
+    let try_parse = |text: &str| serde_json::from_str::<Value>(text).ok();
+    if let Some(value) = try_parse(trimmed) {
+        return Some(value);
+    }
+    let without_fence = strip_code_fence(trimmed);
+    if let Some(value) = try_parse(&without_fence) {
+        return Some(value);
+    }
+    let first_brace = without_fence.find('{')?;
+    let last_brace = without_fence.rfind('}')?;
+    if last_brace <= first_brace {
+        return None;
+    }
+    try_parse(&without_fence[first_brace..=last_brace])
+}
+
+fn normalize_wander_connections(raw: Option<&Value>) -> Vec<Value> {
+    let Some(items) = raw.and_then(Value::as_array) else {
+        return vec![json!(1)];
+    };
+    let mut normalized = Vec::<i64>::new();
+    for item in items {
+        let Some(value) = item
+            .as_i64()
+            .or_else(|| item.as_u64().map(|v| v as i64))
+            .or_else(|| {
+                item.as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
+        else {
+            continue;
+        };
+        let bounded = value.clamp(1, 3);
+        if !normalized.contains(&bounded) {
+            normalized.push(bounded);
+        }
+    }
+    if normalized.is_empty() {
+        normalized.push(1);
+    }
+    normalized.into_iter().map(Value::from).collect()
+}
+
+fn normalize_wander_direction_frame(raw: &Value) -> Value {
+    let payload = raw
+        .get("direction_frame")
+        .or_else(|| raw.get("directionFrame"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let read_field = |snake: &str, camel: &str| {
+        payload
+            .get(snake)
+            .or_else(|| payload.get(camel))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    json!({
+        "target_reader": read_field("target_reader", "targetReader"),
+        "core_tension": read_field("core_tension", "coreTension"),
+        "angle": read_field("angle", "angle"),
+        "material_entry": read_field("material_entry", "materialEntry"),
+    })
+}
+
+fn normalize_wander_option(raw: &Value) -> Value {
+    let topic = raw.get("topic").and_then(Value::as_object);
+    let title = topic
+        .and_then(|value| value.get("title"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            raw.get("title")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let content_direction = raw
+        .get("content_direction")
+        .and_then(Value::as_str)
+        .or_else(|| raw.get("direction").and_then(Value::as_str))
+        .or_else(|| raw.get("contentDirection").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    json!({
+        "content_direction": content_direction,
+        "direction_frame": normalize_wander_direction_frame(raw),
+        "topic": {
+            "title": title,
+            "connections": normalize_wander_connections(
+                topic.and_then(|value| value.get("connections")).or_else(|| raw.get("connections"))
+            )
+        }
+    })
+}
+
+fn repair_embedded_wander_result(raw: Value) -> Value {
+    let Some(content_direction) = raw.get("content_direction").and_then(Value::as_str) else {
+        return raw;
+    };
+    let Some(embedded) = parse_wander_json_payload(content_direction) else {
+        return raw;
+    };
+    if embedded.get("topic").is_none() {
+        return raw;
+    }
+    let merged_thinking = raw
+        .get("thinking_process")
+        .cloned()
+        .filter(|value| {
+            value
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        })
+        .or_else(|| embedded.get("thinking_process").cloned())
+        .unwrap_or_else(|| json!([]));
+    json!({
+        "content_direction": embedded.get("content_direction").cloned().or_else(|| raw.get("content_direction").cloned()).unwrap_or_else(|| json!("")),
+        "thinking_process": merged_thinking,
+        "direction_frame": embedded
+            .get("direction_frame")
+            .cloned()
+            .or_else(|| embedded.get("directionFrame").cloned())
+            .or_else(|| raw.get("direction_frame").cloned())
+            .or_else(|| raw.get("directionFrame").cloned())
+            .unwrap_or_else(|| json!({})),
+        "topic": embedded.get("topic").cloned().or_else(|| raw.get("topic").cloned()).unwrap_or_else(|| json!({
+            "title": "",
+            "connections": [1]
+        })),
+        "options": raw.get("options").cloned().or_else(|| embedded.get("options").cloned()),
+        "selected_index": raw.get("selected_index").cloned().or_else(|| embedded.get("selected_index").cloned()).unwrap_or_else(|| json!(0))
+    })
+}
+
+fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
+    let repaired = repair_embedded_wander_result(raw);
+    let thinking_process = repaired
+        .get("thinking_process")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .take(6)
+                .map(|item| Value::from(item.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if multi_choice {
+        let candidate_options = repaired
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .or_else(|| repaired.get("choices").and_then(Value::as_array).cloned())
+            .unwrap_or_default();
+        let mut normalized_options = candidate_options
+            .iter()
+            .map(normalize_wander_option)
+            .collect::<Vec<_>>();
+        if normalized_options.is_empty() {
+            normalized_options.push(normalize_wander_option(&repaired));
+        }
+        normalized_options.truncate(3);
+        let first = normalized_options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| normalize_wander_option(&repaired));
+        return json!({
+            "thinking_process": thinking_process,
+            "options": normalized_options,
+            "content_direction": first.get("content_direction").cloned().unwrap_or_else(|| json!("")),
+            "direction_frame": first.get("direction_frame").cloned().unwrap_or_else(|| json!({})),
+            "topic": first.get("topic").cloned().unwrap_or_else(|| json!({
+                "title": "",
+                "connections": [1]
+            })),
+            "selected_index": 0
+        });
+    }
+
+    let single = normalize_wander_option(&repaired);
+    json!({
+        "content_direction": single.get("content_direction").cloned().unwrap_or_else(|| json!("")),
+        "thinking_process": thinking_process,
+        "direction_frame": single.get("direction_frame").cloned().unwrap_or_else(|| json!({})),
+        "topic": single.get("topic").cloned().unwrap_or_else(|| json!({
+            "title": "",
+            "connections": [1]
+        }))
+    })
+}
+
+fn build_legacy_wander_prompt(
+    items_text: &str,
+    long_term_context_section: &str,
+    material_bundle: &str,
+    materials_guide: &str,
+    multi_choice: bool,
+) -> String {
+    let output_requirement = if multi_choice {
+        [
+            "硬性输出要求（多选题模式）：",
+            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
+            "2) JSON 顶层必须包含：thinking_process, options；",
+            "3) options 必须是长度为 3 的数组；",
+            "4) 每个 option 必须包含：content_direction, topic, direction_frame；",
+            "5) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
+            "6) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
+            "7) thinking_process 为 3-6 条简洁思考要点。",
+            "8) title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
+            "9) content_direction 必须具体说明面向谁、核心冲突是什么、切入角度是什么，不得使用空泛套话。",
+            "10) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
+            "11) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
+            "12) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+            "13) 如果当前只想到 1-2 个合格方向，继续思考补齐，不要复制弱结果凑满 3 条。",
+        ]
+        .join("\n")
+    } else {
+        [
+            "硬性输出要求（单选题模式）：",
+            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
+            "2) JSON 顶层必须包含：content_direction, thinking_process, topic, direction_frame；",
+            "3) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
+            "4) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
+            "5) thinking_process 为 3-6 条简洁思考要点；",
+            "6) content_direction 必须是可直接创作的内容方向说明。",
+            "7) topic.title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
+            "8) content_direction 必须明确：目标读者、核心矛盾、叙事角度、可用素材切入点；不得使用“围绕这组素材提炼一个方向”之类空话。",
+            "9) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
+            "10) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
+            "11) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+        ]
+        .join("\n")
+    };
+
+    [
+        "你现在处于 RedBox 的「漫步深度思考」Agent 模式。",
+        "你需要自主完成：分析素材 -> 提炼爆款方法与隐藏连接 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。",
+        "宿主已经预读了每条素材的关键内容，你要先基于这份预读 bundle 完成判断，再决定是否需要额外读取文件。",
+        "读取素材的目的不是强行把素材原样塞进选题，而是学习其中值得借鉴的 hook、冲突、情绪、叙事结构、评论点、反差和细节。",
+        "如果某个素材只提供了表达方式、视角或结构启发，而不适合直接进入最终内容，也可以只吸收其方法，不必硬写进去。",
+        "内容质量、传播性、切口强度优先于素材覆盖率；这不是命题作文。",
+        "",
+        "工具调用要求（默认不要触发）：",
+        "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；",
+        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 redbox_fs 补读 1-2 个文件；",
+        "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。",
+        "",
+        &output_requirement,
+        "",
+        "你收到的随机素材如下：",
+        items_text,
+        "",
+        "宿主预读素材包如下：",
+        material_bundle,
+        "",
+        "如确实需要补读，才使用这些真实素材路径：",
+        materials_guide,
+        "",
+        if long_term_context_section.is_empty() {
+            ""
+        } else {
+            long_term_context_section
+        },
+    ]
+    .join("\n")
+}
+
+fn normalize_wander_bundle_text(text: &str, max_chars: usize) -> String {
+    truncate_chars(
+        &text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .split('\n')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        max_chars,
+    )
+}
+
+fn read_wander_text_excerpt(path: &Path, max_chars: usize) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .map(|content| normalize_wander_bundle_text(&content, max_chars))
+        .filter(|content| !content.trim().is_empty())
+}
+
+fn summarize_wander_meta_file(path: &Path, max_chars: usize) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<Value>(&content).ok()?;
+    let mut lines = Vec::new();
+    for key in [
+        "title",
+        "author",
+        "content",
+        "description",
+        "summary",
+        "excerpt",
+        "transcript",
+    ] {
+        let value = parsed
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty());
+        if let Some(value) = value {
+            lines.push(format!(
+                "{key}: {}",
+                normalize_wander_bundle_text(value, 260)
+            ));
+        }
+    }
+    if let Some(stats) = parsed.get("stats").filter(|value| !value.is_null()) {
+        lines.push(format!(
+            "stats: {}",
+            truncate_chars(&stats.to_string(), 120).replace('\n', " ")
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(&lines.join("\n"), max_chars))
+}
+
+fn has_allowed_wander_text_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "txt" | "json" | "html" | "htm" | "srt" | "vtt"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn find_first_matching_wander_file(
+    root: &Path,
+    exact_names: &[&str],
+    tokens: &[&str],
+) -> Option<PathBuf> {
+    for name in exact_names {
+        let candidate = root.join(name);
+        if candidate.is_file() && has_allowed_wander_text_extension(&candidate) {
+            return Some(candidate);
+        }
+    }
+    let mut matches = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && has_allowed_wander_text_extension(path))
+        .filter(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            tokens.iter().any(|token| file_name.contains(token))
+        })
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.into_iter().next()
+}
+
+fn resolve_wander_item_root(item: &Value) -> Option<PathBuf> {
+    let meta = item.get("meta")?.as_object()?;
+    meta.get("materialRef")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("folderPath"))
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("folderPath").and_then(Value::as_str))
+        .or_else(|| meta.get("filePath").and_then(Value::as_str))
+        .map(PathBuf::from)
+}
+
+fn build_wander_material_bundle(items: &[Value]) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled")
+                .trim()
+                .to_string();
+            let item_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("note")
+                .trim()
+                .to_string();
+            let meta = item
+                .get("meta")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let source_type = meta
+                .get("sourceType")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let summary = item
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|value| normalize_wander_bundle_text(value, 260))
+                .unwrap_or_default();
+            let mut sections = vec![
+                format!("素材 {} | 标题: {}", index + 1, title),
+                format!("- 类型: {}", item_type),
+                format!("- sourceType: {}", source_type),
+            ];
+            if !summary.is_empty() {
+                sections.push(format!("- 现有摘要: {}", summary));
+            }
+            let Some(root) = resolve_wander_item_root(item) else {
+                sections.push("- 宿主预读: 未定位到素材根路径。".to_string());
+                return sections.join("\n");
+            };
+            if !root.exists() {
+                sections.push(format!("- 宿主预读: 素材路径不存在 ({})", root.display()));
+                return sections.join("\n");
+            }
+
+            if root.is_file() {
+                if let Some(excerpt) = read_wander_text_excerpt(&root, 700) {
+                    sections.push(format!(
+                        "- 预读正文({}):\n{}",
+                        root.file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("file"),
+                        excerpt
+                    ));
+                }
+                return sections.join("\n");
+            }
+
+            let meta_path = root.join("meta.json");
+            if let Some(meta_excerpt) = summarize_wander_meta_file(&meta_path, 900) {
+                sections.push(format!("- 预读 meta.json:\n{}", meta_excerpt));
+            }
+
+            let is_video =
+                item_type == "video" || matches!(source_type.as_str(), "youtube" | "xhs-video");
+            let primary_text = if source_type == "document" {
+                meta.get("relativePath")
+                    .and_then(Value::as_str)
+                    .map(|value| root.join(normalize_relative_path(value)))
+                    .filter(|path| path.is_file())
+                    .or_else(|| {
+                        find_first_matching_wander_file(
+                            &root,
+                            &["content.md", "README.md", "index.md"],
+                            &["content", "article", "note", "body", "readme"],
+                        )
+                    })
+            } else if is_video {
+                let transcript_from_meta = fs::read_to_string(&meta_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+                    .and_then(|value| {
+                        value
+                            .get("transcriptFile")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string)
+                    })
+                    .map(|relative| root.join(relative));
+                transcript_from_meta
+                    .filter(|path| path.is_file())
+                    .or_else(|| {
+                        find_first_matching_wander_file(
+                            &root,
+                            &["transcript.txt", "subtitle.txt", "content.md"],
+                            &[
+                                "transcript",
+                                "subtitle",
+                                "caption",
+                                "content",
+                                "description",
+                            ],
+                        )
+                    })
+            } else {
+                find_first_matching_wander_file(
+                    &root,
+                    &["content.md", "content.txt", "note.md"],
+                    &["content", "article", "body", "note", "description"],
+                )
+            };
+
+            if let Some(primary_text) = primary_text {
+                if let Some(excerpt) = read_wander_text_excerpt(&primary_text, 1200) {
+                    sections.push(format!(
+                        "- 预读正文({}):\n{}",
+                        primary_text
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("file"),
+                        excerpt
+                    ));
+                }
+            }
+
+            sections.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn build_wander_materials_guide(items: &[Value]) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled");
+            let meta = item
+                .get("meta")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let source_type = meta.get("sourceType").and_then(Value::as_str).unwrap_or("");
+            let material_ref = meta.get("materialRef").and_then(Value::as_object);
+            if source_type == "document" {
+                let root_path = material_ref
+                    .and_then(|value| value.get("folderPath"))
+                    .and_then(Value::as_str)
+                    .or_else(|| meta.get("filePath").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                return format!(
+                    "素材 {} | 标题: {}\n- 仅在 bundle 不足时再补读\n- workspace 路径: {}",
+                    index + 1,
+                    title,
+                    root_path,
+                );
+            }
+
+            let workspace_path = material_ref
+                .and_then(|value| value.get("workspacePath"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            let folder_path = material_ref
+                .and_then(|value| value.get("folderPath"))
+                .and_then(Value::as_str)
+                .or_else(|| meta.get("folderPath").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let preferred_path = workspace_path
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| folder_path.clone());
+            format!(
+                "素材 {} | 标题: {}\n- 仅在 bundle 不足时再补读\n- workspace 路径: {}",
+                index + 1,
+                title,
+                preferred_path,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn is_generic_wander_title(title: &str) -> bool {
+    let generic_title_markers = ["延展出的内容选题", "未命名选题"];
+    let normalized = title.trim();
+    normalized.is_empty()
+        || generic_title_markers
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
+
+fn is_generic_wander_direction(direction: &str) -> bool {
+    let generic_direction_markers = [
+        "围绕这组素材提炼",
+        "围绕素材提炼一个可执行的内容方向",
+        "围绕素材提炼一个更聚焦",
+    ];
+    let normalized = direction.trim();
+    normalized.is_empty()
+        || generic_direction_markers
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
+
+fn wander_validation_issue(path: &str, code: &str, message: impl Into<String>) -> Value {
+    json!({
+        "path": path,
+        "code": code,
+        "message": message.into(),
+    })
+}
+
+fn collect_wander_direction_frame_issues(frame: Option<&Value>, path_prefix: &str) -> Vec<Value> {
+    let read_field = |snake: &str, camel: &str| {
+        frame
+            .and_then(|value| value.get(snake).or_else(|| value.get(camel)))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let checks = [
+        (
+            "target_reader",
+            "targetReader",
+            "missing_target_reader",
+            "目标读者",
+        ),
+        (
+            "core_tension",
+            "coreTension",
+            "missing_core_tension",
+            "核心矛盾",
+        ),
+        ("angle", "angle", "missing_angle", "叙事角度"),
+        (
+            "material_entry",
+            "materialEntry",
+            "missing_material_entry",
+            "素材切入点",
+        ),
+    ];
+    let mut issues = Vec::new();
+    for (snake, camel, code, label) in checks {
+        let value = read_field(snake, camel);
+        if value.is_empty() {
+            issues.push(wander_validation_issue(
+                &format!("{path_prefix}.{snake}"),
+                code,
+                format!("内容方向缺少{label}。"),
+            ));
+        }
+    }
+    issues
+}
+
+fn collect_wander_option_validation_issues(option: &Value, path_prefix: &str) -> Vec<Value> {
+    let title = option
+        .get("topic")
+        .and_then(|value| value.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let direction = option
+        .get("content_direction")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut issues = Vec::new();
+    if is_generic_wander_title(title) {
+        issues.push(wander_validation_issue(
+            &format!("{path_prefix}.topic.title"),
+            "generic_title",
+            "标题缺失，或仍是模板化占位表达。",
+        ));
+    }
+    if is_generic_wander_direction(direction) {
+        issues.push(wander_validation_issue(
+            &format!("{path_prefix}.content_direction"),
+            "generic_direction",
+            "内容方向缺失，或仍是模板化占位表达。",
+        ));
+    }
+    issues.extend(collect_wander_direction_frame_issues(
+        option.get("direction_frame"),
+        &format!("{path_prefix}.direction_frame"),
+    ));
+    issues
+}
+
+fn collect_wander_validation_issues(result: &Value, multi_choice: bool) -> Vec<Value> {
+    if multi_choice {
+        let options = result
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut issues = Vec::new();
+        if options.len() != 3 {
+            issues.push(wander_validation_issue(
+                "options",
+                "invalid_option_count",
+                "多选模式必须返回 3 条真正不同的候选，不要复制弱结果凑数。",
+            ));
+        }
+        for (index, option) in options.iter().enumerate() {
+            issues.extend(collect_wander_option_validation_issues(
+                option,
+                &format!("options[{index}]"),
+            ));
+        }
+        return issues;
+    }
+
+    collect_wander_option_validation_issues(result, "result")
+}
+
+fn summarize_wander_validation_issues(issues: &[Value]) -> String {
+    let summary = issues
+        .iter()
+        .filter_map(|issue| issue.get("message").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("；");
+    if summary.is_empty() {
+        "漫步结果过于空泛，请补齐更具体的标题与内容方向。".to_string()
+    } else {
+        format!("漫步结果需要继续收紧：{summary}")
+    }
+}
+
+fn parse_wander_brainstorm_payload(payload: &Value) -> (Vec<Value>, Value) {
+    if let Some(items) = payload_field(payload, "items").and_then(Value::as_array) {
+        let options = payload_field(payload, "options")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        return (items.clone(), options);
+    }
+
+    if let Some(array_payload) = payload.as_array() {
+        let nested_items = array_payload
+            .first()
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let options = array_payload.get(1).cloned().unwrap_or_else(|| json!({}));
+        if !nested_items.is_empty() || array_payload.len() > 1 {
+            return (nested_items, options);
+        }
+        return (array_payload.clone(), json!({}));
+    }
+
+    (Vec::new(), json!({}))
+}
+
+fn parse_wander_session_timestamp(raw: &str) -> i64 {
+    raw.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn parse_observability_timestamp(raw: &str) -> i64 {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    if let Ok(value) = trimmed.parse::<i64>() {
+        return value;
+    }
+    time::OffsetDateTime::parse(trimmed, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .and_then(|parsed| i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok())
+        .unwrap_or(0)
+}
+
+fn synthetic_chatroom_session_id(room_id: &str) -> String {
+    format!("{CHATROOM_SYNTHETIC_SESSION_PREFIX}{room_id}")
+}
+
+fn room_id_from_synthetic_session_id(session_id: &str) -> Option<&str> {
+    session_id.strip_prefix(CHATROOM_SYNTHETIC_SESSION_PREFIX)
+}
+
+fn take_recent_json_items(mut items: Vec<Value>, limit: Option<usize>) -> Vec<Value> {
+    let Some(limit) = limit.filter(|value| *value > 0) else {
+        return items;
+    };
+    if items.len() <= limit {
+        return items;
+    }
+    let split_at = items.len().saturating_sub(limit);
+    items.drain(..split_at);
+    items
+}
+
+fn synthetic_chatroom_session_items(store: &AppStore) -> Vec<Value> {
+    let mut items = store
+        .chat_rooms
+        .iter()
+        .filter_map(|room| {
+            let session_id = synthetic_chatroom_session_id(&room.id);
+            let transcript_count = store
+                .chatroom_messages
+                .iter()
+                .filter(|item| item.room_id == room.id)
+                .count();
+            let checkpoint_count = store
+                .session_checkpoints
+                .iter()
+                .filter(|item| item.session_id == session_id)
+                .count();
+            if transcript_count == 0 && checkpoint_count == 0 {
+                return None;
+            }
+            let latest_message_at = store
+                .chatroom_messages
+                .iter()
+                .filter(|item| item.room_id == room.id)
+                .max_by_key(|item| parse_observability_timestamp(&item.timestamp))
+                .map(|item| item.timestamp.clone());
+            let latest_checkpoint_at = store
+                .session_checkpoints
+                .iter()
+                .filter(|item| item.session_id == session_id)
+                .max_by_key(|item| item.created_at)
+                .map(|item| item.created_at.to_string());
+            let updated_at = latest_message_at
+                .or(latest_checkpoint_at)
+                .unwrap_or_else(|| room.created_at.clone());
+            Some(json!({
+                "id": session_id,
+                "runtimeMode": "chatroom",
+                "contextBinding": {
+                    "contextType": "chatroom",
+                    "contextId": room.id,
+                    "isContextBound": true,
+                },
+                "transcriptCount": transcript_count,
+                "checkpointCount": checkpoint_count,
+                "chatSession": {
+                    "id": synthetic_chatroom_session_id(&room.id),
+                    "title": if room.name.trim().is_empty() { "Creative Chat" } else { room.name.as_str() },
+                    "updatedAt": updated_at,
+                    "createdAt": room.created_at,
+                }
+            }))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| {
+        let left = a
+            .get("chatSession")
+            .and_then(|item| item.get("updatedAt"))
+            .and_then(Value::as_str)
+            .map(parse_observability_timestamp)
+            .unwrap_or(0);
+        let right = b
+            .get("chatSession")
+            .and_then(|item| item.get("updatedAt"))
+            .and_then(Value::as_str)
+            .map(parse_observability_timestamp)
+            .unwrap_or(0);
+        right.cmp(&left)
+    });
+    items
+}
+
+fn synthetic_chatroom_transcript_value(
+    store: &AppStore,
+    room_id: &str,
+    limit: Option<usize>,
+) -> Value {
+    let mut items = store
+        .chatroom_messages
+        .iter()
+        .filter(|item| item.room_id == room_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        parse_observability_timestamp(&left.timestamp)
+            .cmp(&parse_observability_timestamp(&right.timestamp))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let transcript = items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let created_at = parse_observability_timestamp(&item.timestamp);
+            json!({
+                "id": created_at.saturating_mul(1000).saturating_add(index as i64),
+                "sessionId": synthetic_chatroom_session_id(room_id),
+                "recordType": "message",
+                "role": item.role,
+                "content": item.content,
+                "payload": {
+                    "roomId": item.room_id,
+                    "advisorId": item.advisor_id,
+                    "advisorName": item.advisor_name,
+                    "advisorAvatar": item.advisor_avatar,
+                    "phase": item.phase,
+                    "isStreaming": item.is_streaming,
+                    "timestamp": item.timestamp,
+                },
+                "createdAt": created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!(take_recent_json_items(transcript, limit))
+}
+
+fn parse_legacy_wander_items_from_context_text(context_text: &str) -> Vec<Value> {
+    let normalized = context_text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks = Vec::new();
+    for (index, chunk) in normalized.split("\n\nItem ").enumerate() {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if index == 0 {
+            blocks.push(trimmed.to_string());
+        } else {
+            blocks.push(format!("Item {trimmed}"));
+        }
+    }
+
+    blocks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let mut title = String::new();
+            let mut item_type = String::from("note");
+            let mut content = String::new();
+            for line in block.lines() {
+                if let Some(rest) = line.strip_prefix("Title: ") {
+                    title = rest.trim().to_string();
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("Type: ") {
+                    item_type = rest.trim().to_string();
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("Content Summary: ") {
+                    content = rest.trim().to_string();
+                    continue;
+                }
+                if !content.is_empty() {
+                    content.push('\n');
+                    content.push_str(line);
+                }
+            }
+            if title.trim().is_empty() {
+                return None;
+            }
+            let normalized_content = content.trim().trim_end_matches("...").trim().to_string();
+            Some(json!({
+                "id": format!("legacy-wander-item-{}-{}", index + 1, slug_from_relative_path(&title)),
+                "type": if item_type.trim() == "video" { "video" } else { "note" },
+                "title": title,
+                "content": normalized_content,
+                "meta": {
+                    "sourceType": "legacy-wander-context"
+                }
+            }))
+        })
+        .collect()
+}
+
+fn rebuild_wander_history_from_sessions(store: &AppStore) -> Vec<WanderHistoryRecord> {
+    let mut sessions = store
+        .chat_sessions
+        .iter()
+        .filter(|session| {
+            let metadata = session.metadata.as_ref();
+            let context_type = metadata
+                .and_then(|value| value.get("contextType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            context_type == "wander"
+                || session.id.starts_with("session_wander_")
+                || session.title == "Wander Deep Think"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    sessions.sort_by(|left, right| {
+        parse_wander_session_timestamp(&right.updated_at)
+            .cmp(&parse_wander_session_timestamp(&left.updated_at))
+    });
+
+    let mut rebuilt = Vec::new();
+    for session in sessions {
+        let mut assistant_messages = store
+            .chat_messages
+            .iter()
+            .filter(|message| {
+                message.session_id == session.id && message.role.eq_ignore_ascii_case("assistant")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assistant_messages.sort_by(|left, right| {
+            parse_wander_session_timestamp(&right.created_at)
+                .cmp(&parse_wander_session_timestamp(&left.created_at))
+        });
+        let Some(latest_assistant) = assistant_messages.into_iter().next() else {
+            continue;
+        };
+
+        let Some(parsed_payload) = parse_wander_json_payload(&latest_assistant.content) else {
+            continue;
+        };
+        let multi_choice = parsed_payload
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|items| !items.is_empty())
+            .or_else(|| {
+                parsed_payload
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .map(|items| !items.is_empty())
+            })
+            .unwrap_or(false);
+        let result_value = normalize_wander_result(parsed_payload, multi_choice);
+        let items = session
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("contextContent"))
+            .and_then(Value::as_str)
+            .map(parse_legacy_wander_items_from_context_text)
+            .unwrap_or_default();
+        let created_at = parse_wander_session_timestamp(&session.updated_at)
+            .max(parse_wander_session_timestamp(&latest_assistant.created_at));
+        rebuilt.push(WanderHistoryRecord {
+            id: session.id.clone(),
+            items: serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
+            result: serde_json::to_string(&result_value).unwrap_or_else(|_| "{}".to_string()),
+            created_at,
+        });
+    }
+
+    rebuilt
+}
 
 pub fn handle_chat_sessions_wander_channel(
     app: &AppHandle,
@@ -22,6 +1201,9 @@ pub fn handle_chat_sessions_wander_channel(
         channel,
         "chat:getOrCreateFileSession"
             | "chat:getOrCreateContextSession"
+            | "chat:list-context-sessions"
+            | "chat:create-context-session"
+            | "chat:create-diagnostics-session"
             | "chat:get-sessions"
             | "sessions:list"
             | "sessions:get"
@@ -36,6 +1218,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:compact-context"
             | "chat:get-context-usage"
             | "chat:update-session-metadata"
+            | "chat:bind-editor-session"
             | "chat:pick-attachment"
             | "chat:transcribe-audio"
             | "wander:list-history"
@@ -69,78 +1252,172 @@ pub fn handle_chat_sessions_wander_channel(
                     .unwrap_or_else(|| "context".to_string());
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
-                let session_id = format!(
-                    "context-session:{context_type}:{}",
-                    slug_from_relative_path(&context_id)
-                );
+                let initial_context = payload_string(&payload, "initialContext");
                 let session = with_store_mut(state, |store| {
-                    let (session, _) = ensure_chat_session(
-                        &mut store.chat_sessions,
-                        Some(session_id),
-                        Some(title),
-                    );
-                    session.metadata = Some(json!({
-                        "contextType": context_type,
-                        "contextId": context_id,
-                        "isContextBound": true
-                    }));
-                    session.updated_at = now_iso();
-                    Ok(session.clone())
+                    Ok(ensure_context_session(
+                        store,
+                        &context_type,
+                        &context_id,
+                        title,
+                        initial_context.as_deref(),
+                    ))
                 })?;
                 Ok(json!(session))
             }
-            "chat:get-sessions" => with_store(state, |store| {
-                let mut sessions = store.chat_sessions.clone();
-                sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                Ok(json!(sessions))
-            }),
-            "sessions:list" => with_store(state, |store| {
+            "chat:list-context-sessions" => {
+                let context_id = payload_string(&payload, "contextId").unwrap_or_default();
+                let context_type = payload_string(&payload, "contextType").unwrap_or_default();
+                let items = with_store(state, |store| {
+                    Ok(list_context_sessions(&store, &context_type, &context_id))
+                })?;
+                let transcript_meta_by_session_id: HashMap<String, SessionTranscriptFileMeta> =
+                    items
+                        .iter()
+                        .filter_map(|session| {
+                            transcript_session_meta_by_id(state, &session.id)
+                                .ok()
+                                .flatten()
+                                .map(|meta| (session.id.clone(), meta))
+                        })
+                        .collect();
+                with_store(state, |store| {
+                    Ok(json!(items
+                        .iter()
+                        .map(|session| {
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, session, transcript_meta)
+                        })
+                        .collect::<Vec<_>>()))
+                })
+            }
+            "chat:create-context-session" => {
+                let context_id = payload_string(&payload, "contextId")
+                    .unwrap_or_else(|| make_id("context").to_string());
+                let context_type = payload_string(&payload, "contextType")
+                    .unwrap_or_else(|| "context".to_string());
+                let title =
+                    payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
+                let initial_context = payload_string(&payload, "initialContext");
+                let session = with_store_mut(state, |store| {
+                    Ok(create_context_session(
+                        store,
+                        &context_type,
+                        &context_id,
+                        title,
+                        initial_context.as_deref(),
+                    ))
+                })?;
+                Ok(json!(session))
+            }
+            "chat:create-diagnostics-session" => {
+                let (default_context_type, default_context_id, default_title) =
+                    diagnostics_session_defaults();
+                let context_type =
+                    payload_string(&payload, "contextType").unwrap_or(default_context_type);
+                let context_id =
+                    payload_string(&payload, "contextId").unwrap_or(default_context_id);
+                let title = payload_string(&payload, "title").unwrap_or(default_title);
+                let session = with_store_mut(state, |store| {
+                    Ok(ensure_context_session(
+                        store,
+                        &context_type,
+                        &context_id,
+                        title,
+                        None,
+                    ))
+                })?;
+                Ok(json!(session))
+            }
+            "chat:get-sessions" => with_store(state, |store| Ok(json!(list_sessions(&store)))),
+            "sessions:list" => {
                 let started_at = now_ms();
                 let request_id = format!("sessions:list:{}", started_at);
-                let transcript_items = transcript_session_list_value(state)
-                    .and_then(|value| {
-                        value
-                            .as_array()
-                            .cloned()
-                            .ok_or_else(|| "invalid transcript index".to_string())
-                    })
-                    .unwrap_or_default();
-                let items: Vec<Value> = if transcript_items.is_empty() {
-                    let mut sessions = store.chat_sessions.clone();
-                    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    sessions
-                        .into_iter()
-                        .map(|session| session_list_item_value(&store, &session))
-                        .collect()
-                } else {
-                    let mut merged = transcript_items;
-                    let known_ids = merged
+                let transcript_index = list_transcript_sessions(state).unwrap_or_default();
+                let transcript_meta_by_session_id: HashMap<String, SessionTranscriptFileMeta> =
+                    transcript_index
+                        .iter()
+                        .cloned()
+                        .map(|item| (item.session_id.clone(), item))
+                        .collect();
+                let transcript_items: Vec<Value> = transcript_index
+                    .iter()
+                    .map(crate::runtime::transcript_session_meta_value)
+                    .collect();
+                let items = with_store(state, |store| {
+                    let mut items: Vec<Value> = if transcript_items.is_empty() {
+                        list_sessions(&store)
+                            .into_iter()
+                            .map(|session| {
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, &session, transcript_meta)
+                            })
+                            .collect()
+                    } else {
+                        let mut merged = transcript_items;
+                        let known_ids = merged
+                            .iter()
+                            .filter_map(|item| item.get("id").and_then(Value::as_str))
+                            .map(ToString::to_string)
+                            .collect::<HashSet<_>>();
+                        let mut store_only = store
+                            .chat_sessions
+                            .iter()
+                            .filter(|session| !known_ids.contains(&session.id))
+                            .map(|session| {
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, session, transcript_meta)
+                            })
+                            .collect::<Vec<_>>();
+                        merged.append(&mut store_only);
+                        merged.sort_by(|a, b| {
+                            let left = a
+                                .get("chatSession")
+                                .and_then(|item| item.get("updatedAt"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let right = b
+                                .get("chatSession")
+                                .and_then(|item| item.get("updatedAt"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            right.cmp(left)
+                        });
+                        merged
+                    };
+                    let known_ids = items
                         .iter()
                         .filter_map(|item| item.get("id").and_then(Value::as_str))
                         .map(ToString::to_string)
-                        .collect::<std::collections::HashSet<_>>();
-                    let mut store_only = store
-                        .chat_sessions
-                        .iter()
-                        .filter(|session| !known_ids.contains(&session.id))
-                        .map(|session| session_list_item_value(&store, session))
+                        .collect::<HashSet<_>>();
+                    let mut synthetic_items = synthetic_chatroom_session_items(&store)
+                        .into_iter()
+                        .filter(|item| {
+                            item.get("id")
+                                .and_then(Value::as_str)
+                                .map(|id| !known_ids.contains(id))
+                                .unwrap_or(false)
+                        })
                         .collect::<Vec<_>>();
-                    merged.append(&mut store_only);
-                    merged.sort_by(|a, b| {
+                    items.append(&mut synthetic_items);
+                    items.sort_by(|a, b| {
                         let left = a
                             .get("chatSession")
                             .and_then(|item| item.get("updatedAt"))
                             .and_then(Value::as_str)
-                            .unwrap_or("");
+                            .map(parse_observability_timestamp)
+                            .unwrap_or(0);
                         let right = b
                             .get("chatSession")
                             .and_then(|item| item.get("updatedAt"))
                             .and_then(Value::as_str)
-                            .unwrap_or("");
-                        right.cmp(left)
+                            .map(parse_observability_timestamp)
+                            .unwrap_or(0);
+                        right.cmp(&left)
                     });
-                    merged
-                };
+                    Ok(items)
+                })?;
                 log_timing_event(
                     state,
                     "settings",
@@ -150,94 +1427,83 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("sessions={}", items.len())),
                 );
                 Ok(json!(items))
-            }),
-            "sessions:get" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
-                with_store(state, |store| Ok(session_detail_value(&store, &session_id)))
             }
-            "sessions:resume" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+            "sessions:get" => {
+                let requested_session_id = payload_string(&payload, "sessionId");
+                let session_id = with_store(state, |store| {
+                    Ok(resolve_resume_target_session_id(
+                        &store,
+                        requested_session_id.as_deref(),
+                    ))
+                })?;
+                let Some(session_id) = session_id else {
+                    return Ok(Value::Null);
+                };
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
                     .ok()
                     .flatten();
                 with_store(state, |store| {
-                    let resume_messages = transcript_resume_messages(
-                        state,
+                    Ok(session_detail_value(
                         &store,
                         &session_id,
-                        crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
-                    )
-                    .ok();
-                    let value = session_resume_value(&store, &session_id, resume_messages.clone());
-                    if !value.is_null() {
-                        return Ok(value);
-                    }
-                    Ok(json!({
-                        "chatSession": transcript_meta.as_ref().map(|meta| json!({
-                            "id": meta.session_id,
-                            "title": meta.title,
-                            "updatedAt": meta.updated_at,
-                            "createdAt": meta.created_at,
-                        })).unwrap_or(Value::Null),
-                        "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
-                        "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
-                        "context": Value::Null,
-                        "resumeMessages": resume_messages.unwrap_or_default(),
-                        "lastCheckpoint": Value::Null,
-                    }))
+                        transcript_meta.as_ref(),
+                    ))
                 })
+            }
+            "sessions:resume" => {
+                let requested_session_id = payload_string(&payload, "sessionId");
+                let store_snapshot = with_store(state, |store| Ok(store.clone()))?;
+                let Some(session_id) = resolve_resume_target_session_id(
+                    &store_snapshot,
+                    requested_session_id.as_deref(),
+                ) else {
+                    return Ok(Value::Null);
+                };
+                let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                    .ok()
+                    .flatten();
+                let resume_messages = transcript_resume_messages(
+                    state,
+                    &store_snapshot,
+                    &session_id,
+                    crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES,
+                )
+                .ok();
+                let value = session_resume_value(
+                    &store_snapshot,
+                    &session_id,
+                    transcript_meta.as_ref(),
+                    resume_messages.clone(),
+                );
+                if !value.is_null() {
+                    return Ok(value);
+                }
+                Ok(json!({
+                    "chatSession": transcript_meta.as_ref().map(|meta| json!({
+                        "id": meta.session_id,
+                        "title": meta.title,
+                        "updatedAt": meta.updated_at,
+                        "createdAt": meta.created_at,
+                    })).unwrap_or(Value::Null),
+                    "summary": transcript_meta.as_ref().map(|meta| meta.summary.clone()).unwrap_or_default(),
+                    "messageCount": transcript_meta.as_ref().map(|meta| meta.message_count).unwrap_or(0),
+                    "context": Value::Null,
+                    "resumeMessages": resume_messages.unwrap_or_default(),
+                    "lastCheckpoint": Value::Null,
+                }))
             }
             "sessions:fork" => {
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let forked = with_store_mut(state, |store| {
-                    let Some(source) = store
-                        .chat_sessions
-                        .iter()
-                        .find(|item| item.id == session_id)
-                        .cloned()
-                    else {
+                    let Some(forked) = fork_session(store, &session_id) else {
                         return Ok(json!({ "success": false, "error": "会话不存在" }));
                     };
-                    let new_id = make_id("session");
-                    let timestamp = now_iso();
-                    let new_session = ChatSessionRecord {
-                        id: new_id.clone(),
-                        title: format!("{} (Fork)", source.title),
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp.clone(),
-                        metadata: source.metadata.clone(),
-                    };
-                    store.chat_sessions.push(new_session.clone());
-                    for item in store
-                        .chat_messages
-                        .iter()
-                        .filter(|entry| entry.session_id == source.id)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                    {
-                        let mut copy = item.clone();
-                        copy.id = make_id("message");
-                        copy.session_id = new_id.clone();
-                        copy.created_at = timestamp.clone();
-                        store.chat_messages.push(copy);
-                    }
-                    if let Some(context) = store
-                        .session_context_records
-                        .iter()
-                        .find(|item| item.session_id == source.id)
-                        .cloned()
-                    {
-                        let mut copied = context;
-                        copied.session_id = new_id.clone();
-                        copied.updated_at = timestamp.clone();
-                        store.session_context_records.push(copied);
-                    }
                     Ok(json!({
                         "success": true,
                         "session": {
-                            "id": new_session.id,
-                            "transcriptCount": transcript_count_for_session(store, &source.id),
-                            "checkpointCount": checkpoint_count_for_session(store, &source.id),
+                            "id": forked.session.id,
+                            "transcriptCount": forked.transcript_count,
+                            "checkpointCount": forked.checkpoint_count,
                         }
                     }))
                 })?;
@@ -251,20 +1517,55 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(forked)
             }
             "sessions:get-transcript" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                let requested_session_id = payload_string(&payload, "sessionId");
+                let limit = payload
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
                 with_store(state, |store| {
-                    Ok(json!(trace_for_session(&store, &session_id)))
+                    if let Some(room_id) = requested_session_id
+                        .as_deref()
+                        .and_then(room_id_from_synthetic_session_id)
+                    {
+                        return Ok(synthetic_chatroom_transcript_value(&store, room_id, limit));
+                    }
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
+                    Ok(trace_value_for_session(&store, &session_id, false, limit))
                 })
             }
             "sessions:get-tool-results" => {
-                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                let requested_session_id = payload_string(&payload, "sessionId");
+                let limit = payload
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
                 with_store(state, |store| {
-                    Ok(json!(tool_results_for_session(&store, &session_id)))
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
+                    Ok(tool_results_value_for_session(
+                        &store,
+                        &session_id,
+                        false,
+                        None,
+                        limit,
+                    ))
                 })
             }
             "chat:get-messages" => {
-                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                let requested_session_id = payload_value_as_string(&payload);
                 with_store(state, |store| {
+                    let Some(session_id) =
+                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
+                    else {
+                        return Ok(json!([]));
+                    };
                     let mut messages: Vec<ChatMessageRecord> = store
                         .chat_messages
                         .iter()
@@ -278,30 +1579,14 @@ pub fn handle_chat_sessions_wander_channel(
             "chat:create-session" => {
                 let title =
                     payload_value_as_string(&payload).unwrap_or_else(|| "New Chat".to_string());
-                let session = with_store_mut(state, |store| {
-                    let timestamp = now_iso();
-                    let session = ChatSessionRecord {
-                        id: make_id("session"),
-                        title,
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp,
-                        metadata: None,
-                    };
-                    store.chat_sessions.push(session.clone());
-                    Ok(session)
-                })?;
+                let session =
+                    with_store_mut(state, |store| Ok(create_session(store, title, None)))?;
                 Ok(json!(session))
             }
             "chat:delete-session" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();
                 with_store_mut(state, |store| {
-                    store.chat_sessions.retain(|item| item.id != session_id);
-                    store
-                        .chat_messages
-                        .retain(|item| item.session_id != session_id);
-                    store
-                        .session_context_records
-                        .retain(|item| item.session_id != session_id);
+                    let _ = delete_session(store, &session_id);
                     Ok(json!({ "success": true }))
                 })?;
                 let _ = crate::runtime::remove_session_bundle(state, &session_id);
@@ -350,19 +1635,33 @@ pub fn handle_chat_sessions_wander_channel(
                                 record.tail_message_count
                             ),
                             "context": crate::runtime::session_context_value_for_session(store, &session_id),
+                            "usage": crate::runtime::session_context_usage_value(store, &session_id),
                             "totalMessages": total_messages,
                         }),
                         None => json!({
                             "success": true,
                             "compacted": false,
-                            "message": if total_messages <= crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES as i64 {
+                            "message": if total_messages <= crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES as i64 {
                                 format!(
-                                    "当前仅有 {} 条消息，低于压缩阈值 {}",
+                                    "当前仅有 {} 条消息，至少需要超过 {} 条消息才有可归档内容",
                                     total_messages,
-                                    crate::runtime::SESSION_COMPACT_THRESHOLD_MESSAGES
+                                    crate::runtime::SESSION_CONTEXT_TAIL_MESSAGES
                                 )
                             } else {
-                                "暂无可压缩内容".to_string()
+                                let usage = crate::runtime::session_context_usage_value(store, &session_id);
+                                let threshold = usage
+                                    .get("compactThreshold")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(crate::runtime::DEFAULT_SESSION_COMPACT_TARGET_TOKENS);
+                                let effective = usage
+                                    .get("estimatedEffectiveTokens")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0);
+                                format!(
+                                    "当前有效上下文约 {} tokens，尚未超过自动 compact 阈值 {}，且没有新的可归档历史",
+                                    effective,
+                                    threshold
+                                )
                             }
                         }),
                     })
@@ -393,16 +1692,16 @@ pub fn handle_chat_sessions_wander_channel(
                 let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
                 let metadata = payload_field(&payload, "metadata").cloned();
                 with_store_mut(state, |store| {
-                    if let Some(session) = store
-                        .chat_sessions
-                        .iter_mut()
-                        .find(|item| item.id == session_id)
-                    {
-                        session.metadata = metadata;
-                        session.updated_at = now_iso();
-                    }
+                    let _ = update_metadata(store, &session_id, metadata);
                     Ok(json!({ "success": true }))
                 })
+            }
+            "chat:bind-editor-session" => {
+                let request =
+                    serde_json::from_value::<EditorChatBindingRequest>(payload.clone())
+                        .map_err(|error| format!("invalid editor chat binding payload: {error}"))?;
+                let session = with_store_mut(state, |store| bind_editor_session(store, request))?;
+                Ok(json!(session))
             }
             "chat:pick-attachment" => {
                 let files = pick_files_native("选择要发送给 AI 的文件", false, false)?;
@@ -479,7 +1778,13 @@ pub fn handle_chat_sessions_wander_channel(
                 let _ = fs::remove_file(&audio_path);
                 Ok(json!({ "success": true, "text": text }))
             }
-            "wander:list-history" => with_store(state, |store| {
+            "wander:list-history" => with_store_mut(state, |store| {
+                if store.wander_history.is_empty() {
+                    let rebuilt = rebuild_wander_history_from_sessions(store);
+                    if !rebuilt.is_empty() {
+                        store.wander_history = rebuilt;
+                    }
+                }
                 let mut history = store.wander_history.clone();
                 history.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 Ok(json!(history))
@@ -492,44 +1797,16 @@ pub fn handle_chat_sessions_wander_channel(
                 })
             }
             "wander:get-random" => with_store(state, |store| {
-                let mut items = Vec::new();
-                for note in store.knowledge_notes.iter().take(12) {
-                    items.push(wander_item_from_note(note));
-                }
-                for video in store.youtube_videos.iter().take(12) {
-                    items.push(wander_item_from_youtube(video));
-                }
-                for source in store.document_sources.iter().take(12) {
-                    items.push(wander_item_from_doc(source));
-                }
-                items.sort_by_key(|item| {
-                    item.get("id")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                });
-                let offset = (now_ms() as usize) % items.len().max(1);
-                let mut selected = Vec::new();
-                for index in 0..items.len().min(3) {
-                    selected.push(items[(offset + index) % items.len()].clone());
-                }
-                Ok(json!(selected))
+                let excluded_ids = recent_wander_excluded_ids(&store, 5);
+                Ok(json!(pick_random_wander_items(
+                    collect_wander_candidate_items(&store),
+                    3,
+                    &excluded_ids,
+                )))
             }),
             "wander:brainstorm" => {
                 let request_started_at = now_ms();
-                let mut items = payload
-                    .as_array()
-                    .cloned()
-                    .or_else(|| {
-                        payload_field(&payload, "items").and_then(|value| value.as_array().cloned())
-                    })
-                    .unwrap_or_default();
-                let options = payload
-                    .as_array()
-                    .and_then(|items| items.get(1))
-                    .cloned()
-                    .or_else(|| payload_field(&payload, "options").cloned())
-                    .unwrap_or_else(|| json!({}));
+                let (mut items, options) = parse_wander_brainstorm_payload(&payload);
                 let request_id = payload_string(&options, "requestId")
                     .unwrap_or_else(|| make_id("wander-request"));
                 log_timing_event(
@@ -541,39 +1818,22 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("inputItems={}", items.len())),
                 );
                 if items.is_empty() {
-                    let select_started_at = now_ms();
                     items = with_store(state, |store| {
-                        let mut collected = Vec::new();
-                        for note in store.knowledge_notes.iter().take(12) {
-                            collected.push(wander_item_from_note(note));
-                        }
-                        for video in store.youtube_videos.iter().take(12) {
-                            collected.push(wander_item_from_youtube(video));
-                        }
-                        for source in store.document_sources.iter().take(12) {
-                            collected.push(wander_item_from_doc(source));
-                        }
-                        collected.sort_by_key(|item| {
-                            item.get("id")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or("")
-                                .to_string()
-                        });
-                        let offset = (now_ms() as usize) % collected.len().max(1);
-                        let mut selected = Vec::new();
-                        for index in 0..collected.len().min(3) {
-                            selected.push(collected[(offset + index) % collected.len()].clone());
-                        }
-                        Ok(selected)
+                        let excluded_ids = recent_wander_excluded_ids(&store, 5);
+                        Ok(pick_random_wander_items(
+                            collect_wander_candidate_items(&store),
+                            3,
+                            &excluded_ids,
+                        ))
                     })?;
-                    log_timing_event(
-                        state,
-                        "wander",
-                        &request_id,
-                        "select-random-items",
-                        select_started_at,
-                        Some(format!("selectedItems={}", items.len())),
-                    );
+                }
+                if items.is_empty() {
+                    return Ok(json!({
+                        "error": "暂无足够内容，请先收集一些笔记、视频或文档。",
+                        "result": Value::Null,
+                        "historyId": Value::Null,
+                        "items": []
+                    }));
                 }
                 let settings_started_at = now_ms();
                 let warm_wander = ensure_runtime_warm_entry(state, "wander")?;
@@ -585,175 +1845,39 @@ pub fn handle_chat_sessions_wander_channel(
                     settings_started_at,
                     Some(format!("warmedAt={}", warm_wander.warmed_at)),
                 );
-                let route_started_at = now_ms();
-                let route = runtime_direct_route(
-                    "wander",
-                    "基于随机知识素材生成新选题",
-                    Some(&json!({
-                        "intent": "manuscript_creation",
-                        "contextType": "wander",
-                        "contextId": request_id.clone(),
-                        "preferredRole": "copywriter",
-                        "forceMultiAgent": false,
-                        "forceLongRunningTask": false
-                    })),
-                );
-                log_timing_event(
-                    state,
-                    "wander",
-                    &request_id,
-                    "route-ready",
-                    route_started_at,
-                    Some(format!(
-                        "intent={} role={}",
-                        payload_string(&route, "intent").unwrap_or_default(),
-                        payload_string(&route, "recommendedRole").unwrap_or_default()
-                    )),
-                );
-                let task_started_at = now_ms();
-                let task_id = with_store_mut(state, |store| {
-                    let typed_route = RuntimeRouteRecord::from_value(&route).unwrap_or_else(|| {
-                        runtime_direct_route_record("wander", "漫步生成新选题", None)
-                    });
-                    let task = RuntimeTaskRecord {
-                        id: make_id("task"),
-                        runtime_id: None,
-                        parent_runtime_id: None,
-                        parent_task_id: None,
-                        root_task_id: None,
-                        child_task_ids: Vec::new(),
-                        aggregation_status: None,
-                        task_type: "wander".to_string(),
-                        status: "running".to_string(),
-                        runtime_mode: "wander".to_string(),
-                        owner_session_id: Some(format!(
-                            "context-session:wander:{}",
-                            slug_from_relative_path(&request_id)
-                        )),
-                        intent: Some(typed_route.intent.clone()),
-                        role_id: Some(typed_route.recommended_role.clone()),
-                        goal: Some("漫步生成新选题".to_string()),
-                        current_node: Some("plan".to_string()),
-                        route: Some(typed_route.clone()),
-                        graph: runtime_graph_for_route(&route),
-                        artifacts: Vec::new(),
-                        checkpoints: vec![RuntimeCheckpointRecord::new(
-                            "route",
-                            "plan",
-                            payload_string(&route, "reasoning")
-                                .unwrap_or_else(|| "wander route".to_string()),
-                            Some(route.clone()),
-                        )],
-                        metadata: Some(json!({
-                            "requestId": request_id.clone(),
-                            "contextType": "wander",
-                        })),
-                        last_error: None,
-                        created_at: now_i64(),
-                        updated_at: now_i64(),
-                        started_at: Some(now_i64()),
-                        completed_at: None,
-                    };
-                    store.runtime_tasks.push(task.clone());
-                    append_runtime_task_trace(
-                        store,
-                        &task.id,
-                        "wander.started",
-                        Some(json!({ "requestId": request_id.clone() })),
-                    );
-                    Ok(task.id)
-                })?;
-                log_timing_event(
-                    state,
-                    "wander",
-                    &request_id,
-                    "task-created",
-                    task_started_at,
-                    Some(format!("taskId={}", task_id)),
-                );
-                let _ = app.emit(
-                "wander:progress",
-                json!({
-                    "requestId": request_id,
-                    "taskId": task_id,
-                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
-                    "phase": "collect",
-                    "stepIndex": 1,
-                    "totalSteps": 4,
-                    "title": "选择随机素材",
-                    "status": "completed",
-                    "detail": "已从知识库中选出本轮用于漫步的 3 条随机素材。",
-                }),
-            );
-                emit_runtime_task_node_changed(
-                    app,
-                    &task_id,
-                    Some(&format!(
-                        "session_wander_{}",
-                        slug_from_relative_path(&request_id)
-                    )),
-                    "collect",
-                    "completed",
-                    Some("已从知识库中选出本轮用于漫步的 3 条随机素材。"),
-                    None,
-                );
-                let _ = with_store_mut(state, |store| {
-                    if let Some(task) = store
-                        .runtime_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    {
-                        set_runtime_graph_node(
-                            &mut task.graph,
-                            "plan",
-                            "completed",
-                            Some("漫步素材已读取".to_string()),
-                            None,
-                        );
-                        set_runtime_graph_node(
-                            &mut task.graph,
-                            "retrieve",
-                            "running",
-                            Some("正在整理素材摘要".to_string()),
-                            None,
-                        );
-                        task.current_node = Some("retrieve".to_string());
-                        task.updated_at = now_i64();
-                    }
-                    append_runtime_task_trace(store, &task_id, "wander.collect.completed", None);
-                    Ok(())
-                });
                 let multi_choice = payload_field(&options, "multiChoice")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false);
+                let load_writing_style_skill = payload_field(&options, "loadWritingStyleSkill")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true);
+                let wander_session_id =
+                    format!("session_wander_{}", slug_from_relative_path(&request_id));
                 let _ = app.emit(
-                "wander:progress",
-                json!({
-                    "requestId": request_id,
-                    "taskId": task_id,
-                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
-                    "phase": "analyze",
-                    "stepIndex": 2,
-                    "totalSteps": 4,
-                    "title": "构建上下文",
-                    "status": "running",
-                    "detail": format!("已装载 {} 条随机素材，正在整理素材摘要、长期上下文与已读取文件内容...", items.len()),
-                }),
-            );
-                emit_runtime_task_node_changed(
-                    app,
-                    &task_id,
-                    Some(&format!(
-                        "session_wander_{}",
-                        slug_from_relative_path(&request_id)
-                    )),
-                    "analyze",
-                    "running",
-                    Some(&format!(
-                        "已装载 {} 条随机素材，正在整理素材摘要、长期上下文与已读取文件内容...",
-                        items.len()
-                    )),
-                    None,
+                    "wander:progress",
+                    json!({
+                        "requestId": request_id.clone(),
+                        "sessionId": wander_session_id.clone(),
+                        "phase": "collect",
+                        "stepIndex": 1,
+                        "totalSteps": 3,
+                        "title": "选择随机素材",
+                        "status": "completed",
+                        "detail": format!("已装载 {} 条随机素材。", items.len()),
+                    }),
+                );
+                let _ = app.emit(
+                    "wander:progress",
+                    json!({
+                        "requestId": request_id.clone(),
+                        "sessionId": wander_session_id.clone(),
+                        "phase": "context",
+                        "stepIndex": 2,
+                        "totalSteps": 3,
+                        "title": "构建上下文",
+                        "status": "running",
+                        "detail": "正在加载用户档案与长期记忆...",
+                    }),
                 );
                 let context_started_at = now_ms();
                 let long_term_context = warm_wander
@@ -771,61 +1895,35 @@ pub fn handle_chat_sessions_wander_channel(
                         long_term_context.chars().count(),
                     )),
                 );
-                let wander_session_id =
-                    format!("session_wander_{}", slug_from_relative_path(&request_id));
-                let materials_context_started_at = now_ms();
-                let materials_context =
-                    build_wander_materials_context(app, state, &wander_session_id, &items);
-                log_timing_event(
-                    state,
-                    "wander",
-                    &request_id,
-                    "materials-context-ready",
-                    materials_context_started_at,
-                    Some(format!(
-                        "materialsChars={}",
-                        materials_context.chars().count()
-                    )),
-                );
                 let _ = app.emit(
-                "wander:progress",
-                json!({
-                    "requestId": request_id,
-                    "taskId": task_id,
-                    "sessionId": format!("session_wander_{}", slug_from_relative_path(&request_id)),
-                    "phase": "analyze",
-                    "stepIndex": 2,
-                    "totalSteps": 4,
-                    "title": "构建上下文",
-                    "status": "completed",
-                    "detail": "随机素材摘要与长期上下文已准备完成��Agent 将继续自行读取关键文件。",
-                }),
-            );
-                emit_runtime_task_node_changed(
-                    app,
-                    &task_id,
-                    Some(&format!(
-                        "session_wander_{}",
-                        slug_from_relative_path(&request_id)
-                    )),
-                    "analyze",
-                    "completed",
-                    Some("随机素材摘要与长期上下文已准备完成，Agent 将继续自行读取关键文件。"),
-                    None,
+                    "wander:progress",
+                    json!({
+                        "requestId": request_id.clone(),
+                        "sessionId": wander_session_id.clone(),
+                        "phase": "context",
+                        "stepIndex": 2,
+                        "totalSteps": 3,
+                        "title": "构建上下文",
+                        "status": "completed",
+                        "detail": "长期上下文与宿主预读的关键素材摘录已准备完成。",
+                    }),
                 );
                 let items_text = build_wander_items_text(&items);
+                let material_bundle = build_wander_material_bundle(&items);
                 let long_term_context_section = if long_term_context.trim().is_empty() {
                     String::new()
                 } else {
                     format!(
-                    "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
-                    long_term_context
-                )
+                        "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
+                        long_term_context
+                    )
                 };
-                let prompt = build_wander_deep_agent_prompt(
+                let materials_guide = build_wander_materials_guide(&items);
+                let prompt = build_legacy_wander_prompt(
                     &items_text,
                     &long_term_context_section,
-                    &materials_context,
+                    &material_bundle,
+                    &materials_guide,
                     multi_choice,
                 );
                 log_timing_event(
@@ -837,21 +1935,41 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("promptChars={}", prompt.chars().count())),
                 );
                 let session_started_at = now_ms();
-                let _ = with_store_mut(state, |store| {
+                with_store_mut(state, |store| {
                     let (session, _) = ensure_chat_session(
                         &mut store.chat_sessions,
                         Some(wander_session_id.clone()),
                         Some("Wander Deep Think".to_string()),
                     );
-                    session.metadata = Some(json!({
-                        "contextId": format!("wander:{}", request_id),
-                        "contextType": "wander",
-                        "contextContent": items_text,
-                        "isContextBound": true,
-                    }));
+                    let mut metadata = serde_json::Map::new();
+                    metadata.insert(
+                        "contextId".to_string(),
+                        json!(format!("wander:{}", request_id)),
+                    );
+                    metadata.insert("contextType".to_string(), json!("wander"));
+                    metadata.insert("contextContent".to_string(), json!(items_text));
+                    metadata.insert("isContextBound".to_string(), json!(true));
+                    metadata.insert("allowedTools".to_string(), json!(["redbox_fs"]));
+                    metadata.insert(
+                        "wanderMaterialBundleChars".to_string(),
+                        json!(material_bundle.chars().count()),
+                    );
+                    metadata.insert(
+                        "loadWritingStyleSkill".to_string(),
+                        json!(load_writing_style_skill),
+                    );
+                    session.metadata = Some(Value::Object(metadata));
+                    if load_writing_style_skill {
+                        merge_requested_skills_into_session(
+                            session,
+                            &["writing-style".to_string()],
+                            SkillActivationSource::RoutePolicy,
+                            "wander.bootstrap",
+                        );
+                    }
                     session.updated_at = now_iso();
                     Ok(())
-                });
+                })?;
                 log_timing_event(
                     state,
                     "wander",
@@ -863,9 +1981,8 @@ pub fn handle_chat_sessions_wander_channel(
                 let _ = app.emit(
                     "wander:progress",
                     json!({
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "sessionId": wander_session_id,
+                        "requestId": request_id.clone(),
+                        "sessionId": wander_session_id.clone(),
                         "phase": "generate",
                         "stepIndex": 3,
                         "totalSteps": 3,
@@ -874,24 +1991,9 @@ pub fn handle_chat_sessions_wander_channel(
                         "detail": "正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。",
                     }),
                 );
-                emit_runtime_task_node_changed(
-                    app,
-                    &task_id,
-                    Some(&wander_session_id),
-                    "generate",
-                    "running",
-                    Some("正在启动漫步 Agent，并基于已读取的关键素材生成最终选题。"),
-                    None,
-                );
-                emit_runtime_stream_start(app, &wander_session_id, "responding", Some("wander"));
-                emit_runtime_text_delta(
-                    app,
-                    &wander_session_id,
-                    "thought",
-                    "正在综合随机素材、长期上下文与关键文件内容，收敛最终选题方向。",
-                );
                 let execution_started_at = now_ms();
                 let model_result = generate_wander_response(
+                    app,
                     state,
                     &wander_session_id,
                     warm_wander
@@ -910,30 +2012,16 @@ pub fn handle_chat_sessions_wander_channel(
                     );
                     response
                 })
-                .unwrap_or_else(|error| {
+                .map_err(|error| {
                     append_debug_log_state(
                         state,
                         format!(
-                            "[runtime][wander][{}] fallback-local-json | {}",
+                            "[runtime][wander][{}] wander-runtime-failed | {}",
                             wander_session_id, error
                         ),
                     );
-                    let first_title = items
-                        .first()
-                        .and_then(|item| item.get("title"))
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("随机素材");
-                    json!({
-                        "content_direction": "围绕这组素材提炼一个更聚焦、可直接创作的小红书选题。",
-                        "thinking_process": ["观察随机素材", "提取共同主题", "形成可执行选题"],
-                        "topic": {
-                            "title": format!("从{}延展出的内容选题", first_title),
-                            "connections": [1, 2, 3]
-                        },
-                        "selected_index": 0
-                    })
-                    .to_string()
-                });
+                    error
+                })?;
                 log_timing_event(
                     state,
                     "wander",
@@ -943,23 +2031,9 @@ pub fn handle_chat_sessions_wander_channel(
                     Some(format!("responseChars={}", model_result.chars().count())),
                 );
                 let parse_started_at = now_ms();
-                let result_value =
-                    serde_json::from_str::<Value>(&model_result).unwrap_or_else(|_| {
-                        let first_title = items
-                            .first()
-                            .and_then(|item| item.get("title"))
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("随机素材");
-                        json!({
-                            "content_direction": model_result,
-                            "thinking_process": ["观察随机素材", "提取共同主题", "形成可执行选题"],
-                            "topic": {
-                                "title": format!("从{}延展出的内容选题", first_title),
-                                "connections": [1, 2, 3]
-                            },
-                            "selected_index": 0
-                        })
-                    });
+                let parsed_payload = parse_wander_json_payload(&model_result)
+                    .unwrap_or_else(|| json!({ "content_direction": model_result.clone() }));
+                let result_value = normalize_wander_result(parsed_payload, multi_choice);
                 log_timing_event(
                     state,
                     "wander",
@@ -970,6 +2044,65 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 let result_text =
                     serde_json::to_string(&result_value).map_err(|error| error.to_string())?;
+                let validation_issues =
+                    collect_wander_validation_issues(&result_value, multi_choice);
+                if !validation_issues.is_empty() {
+                    let error_message = summarize_wander_validation_issues(&validation_issues);
+                    with_store_mut(state, |store| {
+                        if let Some(session) = store
+                            .chat_sessions
+                            .iter_mut()
+                            .find(|item| item.id == wander_session_id)
+                        {
+                            let mut metadata = session
+                                .metadata
+                                .clone()
+                                .and_then(|value| value.as_object().cloned())
+                                .unwrap_or_default();
+                            metadata.insert(
+                                "wanderLastValidationFailure".to_string(),
+                                json!({
+                                    "error": error_message,
+                                    "validationIssues": validation_issues.clone(),
+                                    "result": result_value.clone(),
+                                }),
+                            );
+                            session.metadata = Some(Value::Object(metadata));
+                            session.updated_at = now_iso();
+                        }
+                        append_session_checkpoint(
+                            store,
+                            &wander_session_id,
+                            "wander-validation-failed",
+                            "Wander validation failed".to_string(),
+                            Some(json!({
+                                "validationIssues": validation_issues.clone(),
+                                "responsePreview": text_snippet(&result_text, 220),
+                            })),
+                        );
+                        Ok(())
+                    })?;
+                    let _ = app.emit(
+                        "wander:progress",
+                        json!({
+                            "requestId": request_id.clone(),
+                            "sessionId": wander_session_id.clone(),
+                            "phase": "complete",
+                            "stepIndex": 3,
+                            "totalSteps": 3,
+                            "title": "校验候选",
+                            "status": "error",
+                            "detail": error_message.clone(),
+                        }),
+                    );
+                    return Ok(json!({
+                        "error": error_message,
+                        "result": result_text,
+                        "items": items,
+                        "validationIssues": validation_issues,
+                        "historyId": Value::Null,
+                    }));
+                }
                 let history_id = make_id("wander");
                 let history_started_at = now_ms();
                 with_store_mut(state, |store| {
@@ -1012,7 +2145,7 @@ pub fn handle_chat_sessions_wander_channel(
                         &wander_session_id,
                         "wander-brainstorm",
                         "Wander brainstorm completed".to_string(),
-                        Some(json!({ "responsePreview": text_snippet(&model_result, 160) })),
+                        Some(json!({ "responsePreview": text_snippet(&result_text, 160) })),
                     );
                     store.wander_history.push(WanderHistoryRecord {
                         id: history_id.clone(),
@@ -1020,50 +2153,6 @@ pub fn handle_chat_sessions_wander_channel(
                         result: result_text.clone(),
                         created_at: now_i64(),
                     });
-                    if let Some(task) = store
-                        .runtime_tasks
-                        .iter_mut()
-                        .find(|item| item.id == task_id)
-                    {
-                        set_runtime_graph_node(
-                            &mut task.graph,
-                            "retrieve",
-                            "completed",
-                            Some("素材关联分析完成".to_string()),
-                            None,
-                        );
-                        set_runtime_graph_node(
-                            &mut task.graph,
-                            "execute_tools",
-                            "completed",
-                            Some("选题生成完成".to_string()),
-                            None,
-                        );
-                        set_runtime_graph_node(
-                            &mut task.graph,
-                            "save_artifact",
-                            "completed",
-                            Some("漫步结果已保存到历史".to_string()),
-                            None,
-                        );
-                        task.current_node = Some("save_artifact".to_string());
-                        task.status = "completed".to_string();
-                        task.completed_at = Some(now_i64());
-                        task.updated_at = now_i64();
-                        task.artifacts.push(RuntimeArtifact::new(
-                            "wander-result",
-                            "漫步结果",
-                            None,
-                            Some(json!({ "historyId": history_id.clone() })),
-                            Some(result_value.clone()),
-                        ));
-                    }
-                    append_runtime_task_trace(
-                        store,
-                        &task_id,
-                        "wander.completed",
-                        Some(json!({ "historyId": history_id.clone() })),
-                    );
                     Ok(())
                 })?;
                 log_timing_event(
@@ -1077,9 +2166,8 @@ pub fn handle_chat_sessions_wander_channel(
                 let _ = app.emit(
                     "wander:progress",
                     json!({
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "sessionId": wander_session_id,
+                        "requestId": request_id.clone(),
+                        "sessionId": wander_session_id.clone(),
                         "phase": "complete",
                         "stepIndex": 3,
                         "totalSteps": 3,
@@ -1088,25 +2176,13 @@ pub fn handle_chat_sessions_wander_channel(
                         "detail": "漫步完成，结果已写入历史记录。",
                     }),
                 );
-                emit_runtime_task_node_changed(
-                    app,
-                    &task_id,
-                    Some(&wander_session_id),
-                    "complete",
-                    "completed",
-                    Some("漫步完成，结果已写入历史记录。"),
-                    None,
-                );
                 log_timing_event(
                     state,
                     "wander",
                     &request_id,
                     "request-complete",
                     request_started_at,
-                    Some(format!(
-                        "taskId={} sessionId={}",
-                        task_id, wander_session_id
-                    )),
+                    Some(format!("sessionId={}", wander_session_id)),
                 );
                 Ok(json!({ "result": result_text, "historyId": history_id, "items": items }))
             }
@@ -1115,4 +2191,107 @@ pub fn handle_chat_sessions_wander_channel(
             )),
         }
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_wander_result_keeps_partial_multi_choice_without_duplication() {
+        let result = normalize_wander_result(
+            json!({
+                "options": [
+                    {
+                        "content_direction": "给正在做内容的人一个更锋利的选题切口。",
+                        "direction_frame": {
+                            "target_reader": "刚开始做内容的人",
+                            "core_tension": "总想等自己更厉害再开始",
+                            "angle": "用15度角法则拆掉启动门槛",
+                            "material_entry": "借素材里的延迟开工困境做切口"
+                        },
+                        "topic": {
+                            "title": "别等变厉害再开始",
+                            "connections": [1]
+                        }
+                    }
+                ]
+            }),
+            true,
+        );
+
+        let options = result["options"].as_array().expect("options");
+        assert_eq!(options.len(), 1);
+    }
+
+    #[test]
+    fn collect_wander_validation_issues_reports_missing_direction_frame_fields() {
+        let issues = collect_wander_validation_issues(
+            &json!({
+                "content_direction": "这是一个方向。",
+                "direction_frame": {
+                    "target_reader": "",
+                    "core_tension": "",
+                    "angle": "",
+                    "material_entry": ""
+                },
+                "topic": {
+                    "title": "一个标题",
+                    "connections": [1]
+                }
+            }),
+            false,
+        );
+
+        let codes = issues
+            .iter()
+            .filter_map(|item| item.get("code").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"missing_target_reader"));
+        assert!(codes.contains(&"missing_core_tension"));
+        assert!(codes.contains(&"missing_angle"));
+        assert!(codes.contains(&"missing_material_entry"));
+    }
+
+    #[test]
+    fn collect_wander_validation_issues_rejects_template_title_and_direction() {
+        let issues = collect_wander_validation_issues(
+            &json!({
+                "content_direction": "围绕素材提炼一个可执行的内容方向。",
+                "direction_frame": {
+                    "target_reader": "AI 创作者",
+                    "core_tension": "想做内容但没有抓手",
+                    "angle": "从等待变厉害转向先行动",
+                    "material_entry": "借一条素材的开头张力"
+                },
+                "topic": {
+                    "title": "从某素材延展出的内容选题",
+                    "connections": [1]
+                }
+            }),
+            false,
+        );
+
+        let codes = issues
+            .iter()
+            .filter_map(|item| item.get("code").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"generic_title"));
+        assert!(codes.contains(&"generic_direction"));
+    }
+
+    #[test]
+    fn build_legacy_wander_prompt_prefers_preloaded_bundle_before_tools() {
+        let prompt = build_legacy_wander_prompt(
+            "Item 1",
+            "",
+            "素材 1 | 标题: 示例\n- 预读正文:\n这里是宿主预读的内容",
+            "素材 1 | workspace 路径: knowledge/redbook/demo",
+            false,
+        );
+
+        assert!(prompt.contains("宿主已经预读了每条素材的关键内容"));
+        assert!(prompt.contains("先用预读 bundle 判断"));
+        assert!(!prompt.contains("至少发起 1 次工具调用"));
+    }
 }

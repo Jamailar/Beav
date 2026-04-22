@@ -368,7 +368,7 @@ pub fn handle_mcp_tools_channel(
                     "mode": if channel.ends_with("run-ai") { "ai" } else { "direct" },
                     "toolName": tool_name,
                     "request": payload,
-                    "response": { "status": "ok", "source": "lexbox-local-host" },
+                    "response": { "status": "ok", "source": "redbox-local-host" },
                     "executionSucceeded": true
                 }))
             }

@@ -1,11 +1,13 @@
 use crate::persistence::with_store;
 use crate::runtime::{
-    append_session_checkpoint, runtime_task_value, SessionCheckpointRecord,
-    SessionToolResultRecord, SessionTranscriptRecord,
+    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
+    SessionTranscriptRecord,
 };
+#[cfg(test)]
+use crate::ChatSessionRecord;
 use crate::{
     make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
-    ChatSessionContextRecord, ChatSessionRecord,
+    ChatSessionContextRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,7 +16,9 @@ use std::path::PathBuf;
 use tauri::State;
 
 pub const SESSION_CONTEXT_TAIL_MESSAGES: usize = 8;
-pub const SESSION_COMPACT_THRESHOLD_MESSAGES: usize = 12;
+pub const SESSION_AUTO_COMPACT_MIN_MESSAGES: usize = 12;
+pub const DEFAULT_SESSION_COMPACT_TARGET_TOKENS: i64 = 256_000;
+pub const MIN_SESSION_COMPACT_TARGET_TOKENS: i64 = 16_000;
 const SESSION_CONTEXT_SUMMARY_MAX_CHARS: usize = 1200;
 const SESSION_BUNDLE_MAX_SESSIONS: usize = 200;
 
@@ -122,6 +126,18 @@ pub fn trace_for_session(store: &AppStore, session_id: &str) -> Vec<SessionTrans
     items
 }
 
+fn take_recent_items<T>(mut items: Vec<T>, limit: Option<usize>) -> Vec<T> {
+    let Some(limit) = limit.filter(|value| *value > 0) else {
+        return items;
+    };
+    if items.len() <= limit {
+        return items;
+    }
+    let split_at = items.len().saturating_sub(limit);
+    items.drain(..split_at);
+    items
+}
+
 fn session_ids_for_query(
     store: &AppStore,
     session_id: &str,
@@ -150,6 +166,7 @@ pub fn trace_value_for_session(
     store: &AppStore,
     session_id: &str,
     include_child_sessions: bool,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -163,7 +180,7 @@ pub fn trace_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn checkpoints_for_session(store: &AppStore, session_id: &str) -> Vec<SessionCheckpointRecord> {
@@ -182,6 +199,7 @@ pub fn checkpoints_value_for_session(
     session_id: &str,
     include_child_sessions: bool,
     runtime_id: Option<&str>,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -200,7 +218,7 @@ pub fn checkpoints_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn tool_results_for_session(
@@ -222,6 +240,7 @@ pub fn tool_results_value_for_session(
     session_id: &str,
     include_child_sessions: bool,
     runtime_id: Option<&str>,
+    limit: Option<usize>,
 ) -> Value {
     let session_ids = session_ids_for_query(store, session_id, include_child_sessions);
     let mut items = store
@@ -240,7 +259,7 @@ pub fn tool_results_value_for_session(
         .cloned()
         .collect::<Vec<_>>();
     items.sort_by_key(|item| item.created_at);
-    json!(items)
+    json!(take_recent_items(items, limit))
 }
 
 pub fn transcript_count_for_session(store: &AppStore, session_id: &str) -> i64 {
@@ -268,65 +287,23 @@ pub fn last_checkpoint_for_session(
         .max_by_key(|item| item.created_at)
 }
 
-pub fn chat_session_summary_value(session: &ChatSessionRecord) -> Value {
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": session.updated_at,
-    })
-}
-
+#[cfg(test)]
 pub fn session_list_item_value(store: &AppStore, session: &ChatSessionRecord) -> Value {
-    json!({
-        "id": session.id,
-        "messageCount": session_message_count_for_session(store, &session.id),
-        "summary": session_summary_text_for_session(store, &session.id),
-        "transcriptCount": transcript_count_for_session(store, &session.id),
-        "checkpointCount": checkpoint_count_for_session(store, &session.id),
-        "context": session_context_value_for_session(store, &session.id),
-        "chatSession": chat_session_summary_value(session)
-    })
+    crate::session_manager::session_list_item_value(store, session, None)
 }
 
+#[cfg(test)]
 pub fn session_detail_value(store: &AppStore, session_id: &str) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    json!({
-        "chatSession": chat_session_summary_value(session),
-        "context": session_context_value_for_session(store, session_id),
-        "transcript": trace_for_session(store, session_id),
-        "checkpoints": checkpoints_for_session(store, session_id),
-        "toolResults": tool_results_for_session(store, session_id),
-    })
+    crate::session_manager::session_detail_value(store, session_id, None)
 }
 
+#[cfg(test)]
 pub fn session_resume_value(
     store: &AppStore,
     session_id: &str,
     resume_messages: Option<Vec<Value>>,
 ) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    json!({
-        "chatSession": chat_session_summary_value(session),
-        "summary": session_summary_text_for_session(store, session_id),
-        "messageCount": session_message_count_for_session(store, session_id),
-        "context": session_context_value_for_session(store, session_id),
-        "resumeMessages": resume_messages.unwrap_or_else(|| {
-            runtime_context_messages_for_session(None, store, session_id, SESSION_CONTEXT_TAIL_MESSAGES)
-        }),
-        "lastCheckpoint": last_checkpoint_for_session(store, session_id),
-    })
+    crate::session_manager::session_resume_value(store, session_id, None, resume_messages)
 }
 
 pub fn chat_messages_for_session(store: &AppStore, session_id: &str) -> Vec<ChatMessageRecord> {
@@ -402,13 +379,6 @@ pub fn transcript_session_meta_value(meta: &SessionTranscriptFileMeta) -> Value 
             "createdAt": meta.created_at,
         }
     })
-}
-
-pub fn transcript_session_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
-    Ok(json!(list_transcript_sessions(state)?
-        .iter()
-        .map(transcript_session_meta_value)
-        .collect::<Vec<_>>()))
 }
 
 pub fn transcript_session_meta_by_id(
@@ -596,13 +566,12 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
         .iter()
         .map(|item| item.content.chars().count() as i64)
         .sum::<i64>();
+    let estimated_total_tokens = estimate_tokens_from_chars(total_chars);
     let context = store
         .session_context_records
         .iter()
         .find(|item| item.session_id == session_id);
-    let estimated_total_tokens = context
-        .map(|item| item.estimated_total_tokens)
-        .unwrap_or_else(|| estimate_tokens_from_chars(total_chars));
+    let compact_threshold = session_compact_target_tokens(store);
     let compacted_message_count = context
         .map(|item| item.compacted_message_count)
         .unwrap_or(0);
@@ -611,6 +580,17 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
         .map(|item| Value::String(item.updated_at.clone()))
         .unwrap_or(Value::Null);
     let summary_chars = context.map(|item| item.summary_chars).unwrap_or(0);
+    let estimated_effective_tokens = estimate_tokens_from_chars(if compacted_message_count > 0 {
+        summary_chars
+            + messages
+                .iter()
+                .rev()
+                .take(SESSION_CONTEXT_TAIL_MESSAGES)
+                .map(|item| item.content.chars().count() as i64)
+                .sum::<i64>()
+    } else {
+        total_chars
+    });
     let effective_messages = if compacted_message_count > 0 {
         compacted_message_count.min(1) + messages.len().min(SESSION_CONTEXT_TAIL_MESSAGES) as i64
     } else {
@@ -620,28 +600,16 @@ pub fn session_context_usage_value(store: &AppStore, session_id: &str) -> Value 
     json!({
         "success": true,
         "estimatedTotalTokens": estimated_total_tokens,
-        "estimatedEffectiveTokens": estimate_tokens_from_chars(
-            if compacted_message_count > 0 {
-                summary_chars
-                    + messages
-                        .iter()
-                        .rev()
-                        .take(SESSION_CONTEXT_TAIL_MESSAGES)
-                        .map(|item| item.content.chars().count() as i64)
-                        .sum::<i64>()
-            } else {
-                total_chars
-            }
-        ),
+        "estimatedEffectiveTokens": estimated_effective_tokens,
         "totalMessages": messages.len(),
         "effectiveMessages": effective_messages,
         "compactedMessageCount": compacted_message_count,
         "recentMessageCount": messages.len().min(SESSION_CONTEXT_TAIL_MESSAGES),
-        "compactThreshold": SESSION_COMPACT_THRESHOLD_MESSAGES,
-        "compactRatio": if messages.is_empty() {
+        "compactThreshold": compact_threshold,
+        "compactRatio": if compact_threshold <= 0 {
             0.0
         } else {
-            compacted_message_count as f64 / messages.len() as f64
+            estimated_effective_tokens as f64 / compact_threshold as f64
         },
         "compactRounds": compact_rounds,
         "compactUpdatedAt": compact_updated_at,
@@ -656,7 +624,17 @@ pub fn update_session_context_record(
     force: bool,
 ) -> Option<ChatSessionContextRecord> {
     let messages = chat_messages_for_session(store, session_id);
-    if messages.len() < SESSION_COMPACT_THRESHOLD_MESSAGES {
+    let total_chars = messages
+        .iter()
+        .map(|item| item.content.chars().count() as i64)
+        .sum::<i64>();
+    let estimated_total_tokens = estimate_tokens_from_chars(total_chars);
+    let compact_target_tokens = session_compact_target_tokens(store);
+    let meets_auto_threshold = messages.len() >= SESSION_AUTO_COMPACT_MIN_MESSAGES
+        && estimated_total_tokens >= compact_target_tokens;
+    let can_force_compact = messages.len() > SESSION_CONTEXT_TAIL_MESSAGES;
+
+    if (!force && !meets_auto_threshold) || (force && !can_force_compact) {
         store
             .session_context_records
             .retain(|item| item.session_id != session_id);
@@ -687,12 +665,7 @@ pub fn update_session_context_record(
             (Some(item), false) => item.compact_rounds.max(1),
             (None, _) => 1,
         },
-        estimated_total_tokens: estimate_tokens_from_chars(
-            messages
-                .iter()
-                .map(|item| item.content.chars().count() as i64)
-                .sum::<i64>(),
-        ),
+        estimated_total_tokens,
         first_user_message: messages
             .iter()
             .find(|item| item.role == "user")
@@ -768,14 +741,25 @@ pub fn runtime_context_messages_for_session(
     session_id: &str,
     limit: usize,
 ) -> Vec<Value> {
+    let initial_context_prompt = session_initial_context_prompt(store, session_id);
     if let Some(state) = state {
         if let Ok(bundle_messages) = load_session_bundle_messages(state, session_id) {
             if !bundle_messages.is_empty() {
-                return bundle_messages_for_runtime(
+                let mut result = bundle_messages_for_runtime(
                     &bundle_messages,
                     session_resume_summary_prompt(store, session_id),
                     limit,
                 );
+                if let Some(prompt) = initial_context_prompt.as_deref() {
+                    result.insert(
+                        0,
+                        json!({
+                            "role": "user",
+                            "content": prompt
+                        }),
+                    );
+                }
+                return result;
             }
         }
     }
@@ -789,32 +773,26 @@ pub fn runtime_context_messages_for_session(
             })
         })
         .collect::<Vec<_>>();
-    bundle_messages_for_runtime(
+    let mut result = bundle_messages_for_runtime(
         &items,
         session_resume_summary_prompt(store, session_id),
         limit,
-    )
+    );
+    if let Some(prompt) = initial_context_prompt.as_deref() {
+        result.insert(
+            0,
+            json!({
+                "role": "user",
+                "content": prompt
+            }),
+        );
+    }
+    result
 }
 
+#[cfg(test)]
 pub fn session_bridge_summary_value(session: &ChatSessionRecord, store: &AppStore) -> Value {
-    let updated_at = session.updated_at.parse::<i64>().unwrap_or(0);
-    let created_at = session.created_at.parse::<i64>().unwrap_or(0);
-    let owner_task_count = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session.id.as_str()))
-        .count() as i64;
-    json!({
-        "id": session.id,
-        "title": session.title,
-        "updatedAt": updated_at,
-        "createdAt": created_at,
-        "contextType": "chat",
-        "runtimeMode": "default",
-        "isBackgroundSession": false,
-        "ownerTaskCount": owner_task_count,
-        "backgroundTaskCount": 0,
-    })
+    crate::session_manager::session_bridge_summary_value(store, session, None)
 }
 
 fn session_context_record_value(record: &ChatSessionContextRecord) -> Value {
@@ -846,6 +824,19 @@ fn session_resume_summary_prompt(store: &AppStore, session_id: &str) -> Option<S
                 item.summary
             )
         })
+}
+
+fn session_initial_context_prompt(store: &AppStore, session_id: &str) -> Option<String> {
+    store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)
+        .and_then(|session| session.metadata.as_ref())
+        .and_then(|metadata| metadata.get("initialContext"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("[Session initial context]\n{value}"))
 }
 
 pub fn bundle_messages_for_runtime(
@@ -929,6 +920,24 @@ fn snippet(value: &str, limit: usize) -> String {
 
 fn estimate_tokens_from_chars(chars: i64) -> i64 {
     ((chars.max(0) as f64) / 4.0).ceil() as i64
+}
+
+fn session_compact_target_tokens(store: &AppStore) -> i64 {
+    store
+        .settings
+        .get("redclaw_compact_target_tokens")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|item| i64::try_from(item).ok()))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|item| item.trim().parse::<i64>().ok())
+                })
+        })
+        .map(|value| value.max(MIN_SESSION_COMPACT_TARGET_TOKENS))
+        .unwrap_or(DEFAULT_SESSION_COMPACT_TARGET_TOKENS)
 }
 
 fn compare_created_at(left: &str, right: &str) -> std::cmp::Ordering {
@@ -1400,44 +1409,13 @@ fn sync_transcript_from_bundle(
     update_session_transcript_index(state, meta)
 }
 
+#[cfg(test)]
 pub fn session_bridge_detail_value(
     store: &AppStore,
     session_id: &str,
     background_tasks: &[Value],
 ) -> Value {
-    let Some(session) = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-    else {
-        return Value::Null;
-    };
-    let tasks: Vec<Value> = store
-        .runtime_tasks
-        .iter()
-        .filter(|task| task.owner_session_id.as_deref() == Some(session_id))
-        .map(runtime_task_value)
-        .collect();
-    json!({
-        "session": {
-            "id": session.id,
-            "title": session.title,
-            "updatedAt": session.updated_at.parse::<i64>().unwrap_or(0),
-            "createdAt": session.created_at.parse::<i64>().unwrap_or(0),
-            "contextType": "chat",
-            "runtimeMode": "default",
-            "isBackgroundSession": false,
-            "ownerTaskCount": tasks.len(),
-            "backgroundTaskCount": background_tasks.len(),
-            "metadata": session.metadata,
-        },
-        "transcript": trace_for_session(store, session_id),
-        "checkpoints": checkpoints_for_session(store, session_id),
-        "toolResults": tool_results_for_session(store, session_id),
-        "tasks": tasks,
-        "backgroundTasks": background_tasks,
-        "permissionRequests": [],
-    })
+    crate::session_manager::session_bridge_detail_value(store, session_id, background_tasks, None)
 }
 
 pub fn persist_runtime_query_checkpoints(
@@ -1523,6 +1501,10 @@ mod tests {
             attachment: None,
             created_at: created_at.to_string(),
         }
+    }
+
+    fn large_test_message(index: usize) -> String {
+        format!("message {index} {}", "x".repeat(5000))
     }
 
     #[test]
@@ -1652,9 +1634,9 @@ mod tests {
             updated_at: 1,
         });
 
-        assert!(trace_value_for_session(&store, "session-1", false).is_array());
-        assert!(tool_results_value_for_session(&store, "session-1", false, None).is_array());
-        assert!(checkpoints_value_for_session(&store, "session-1", false, None).is_array());
+        assert!(trace_value_for_session(&store, "session-1", false, None).is_array());
+        assert!(tool_results_value_for_session(&store, "session-1", false, None, None).is_array());
+        assert!(checkpoints_value_for_session(&store, "session-1", false, None, None).is_array());
     }
 
     #[test]
@@ -1700,7 +1682,7 @@ mod tests {
                 created_at: 2,
             });
 
-        let traces = trace_value_for_session(&store, "session-parent", true);
+        let traces = trace_value_for_session(&store, "session-parent", true, None);
         assert_eq!(traces.as_array().map(|items| items.len()), Some(2));
     }
 
@@ -1767,17 +1749,24 @@ mod tests {
             usage.get("recentMessageCount").and_then(Value::as_u64),
             Some(8)
         );
+        assert_eq!(
+            usage.get("compactThreshold").and_then(Value::as_i64),
+            Some(DEFAULT_SESSION_COMPACT_TARGET_TOKENS)
+        );
     }
 
     #[test]
     fn runtime_context_messages_prepend_resume_summary_when_snapshot_exists() {
         let mut store = crate::AppStore::default();
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
         for index in 0..14 {
             let role = if index % 2 == 0 { "user" } else { "assistant" };
             store.chat_messages.push(test_chat_message(
                 "session-ctx",
                 role,
-                &format!("message {index}"),
+                &large_test_message(index),
                 &index.to_string(),
             ));
         }
@@ -1794,8 +1783,41 @@ mod tests {
         assert!(summary.contains("Latest archived user intent: message 4"));
         assert!(summary.contains("Latest archived assistant reply: message 5"));
         assert_eq!(
+            messages[1]
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|item| item.starts_with("message 6 ")),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn runtime_context_messages_preserve_initial_context_for_context_bound_sessions() {
+        let mut store = crate::AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "session-redclaw".to_string(),
+            title: "Session".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({
+                "contextType": "redclaw",
+                "contextId": "redclaw-singleton:default",
+                "initialContext": "RedClaw seeded context"
+            })),
+        });
+        store
+            .chat_messages
+            .push(test_chat_message("session-redclaw", "user", "hello", "1"));
+
+        let messages = runtime_context_messages_for_session(None, &store, "session-redclaw", 8);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].get("content").and_then(Value::as_str),
+            Some("[Session initial context]\nRedClaw seeded context")
+        );
+        assert_eq!(
             messages[1].get("content").and_then(Value::as_str),
-            Some("message 6")
+            Some("hello")
         );
     }
 
@@ -1803,12 +1825,15 @@ mod tests {
     fn session_resume_value_includes_context_and_resume_messages() {
         let mut store = crate::AppStore::default();
         store.chat_sessions.push(test_session("session-1"));
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
         for index in 0..14 {
             let role = if index % 2 == 0 { "user" } else { "assistant" };
             store.chat_messages.push(test_chat_message(
                 "session-1",
                 role,
-                &format!("message {index}"),
+                &large_test_message(index),
                 &index.to_string(),
             ));
         }
@@ -1824,6 +1849,76 @@ mod tests {
                 .map(|items| items.len()),
             Some(9)
         );
+    }
+
+    #[test]
+    fn auto_compaction_requires_token_threshold_but_manual_compaction_still_works() {
+        let mut store = crate::AppStore::default();
+        for index in 0..14 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            store.chat_messages.push(test_chat_message(
+                "session-compact-threshold",
+                role,
+                &format!("short message {index}"),
+                &index.to_string(),
+            ));
+        }
+
+        assert!(update_session_context_record(
+            &mut store,
+            "session-compact-threshold",
+            "auto",
+            false,
+        )
+        .is_none());
+
+        let manual =
+            update_session_context_record(&mut store, "session-compact-threshold", "manual", true)
+                .expect(
+                "manual compaction should archive history once there are more than tail messages",
+            );
+        assert_eq!(manual.compacted_message_count, 6);
+    }
+
+    #[test]
+    fn context_usage_uses_effective_tokens_against_configured_threshold() {
+        let mut store = crate::AppStore::default();
+        store.settings = json!({
+            "redclaw_compact_target_tokens": MIN_SESSION_COMPACT_TARGET_TOKENS
+        });
+        for index in 0..14 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            store.chat_messages.push(test_chat_message(
+                "session-usage",
+                role,
+                &large_test_message(index),
+                &index.to_string(),
+            ));
+        }
+
+        let record = update_session_context_record(&mut store, "session-usage", "auto", false)
+            .expect("auto compaction should trigger once tokens exceed threshold");
+        let usage = session_context_usage_value(&store, "session-usage");
+        let effective_tokens = usage
+            .get("estimatedEffectiveTokens")
+            .and_then(Value::as_i64)
+            .expect("effective tokens should be present");
+        let compact_ratio = usage
+            .get("compactRatio")
+            .and_then(Value::as_f64)
+            .expect("compact ratio should be present");
+
+        assert_eq!(
+            usage.get("compactThreshold").and_then(Value::as_i64),
+            Some(MIN_SESSION_COMPACT_TARGET_TOKENS)
+        );
+        assert_eq!(
+            usage.get("estimatedTotalTokens").and_then(Value::as_i64),
+            Some(record.estimated_total_tokens)
+        );
+        assert!(effective_tokens < record.estimated_total_tokens);
+        assert!(compact_ratio > 0.0);
+        assert!(compact_ratio < 1.0);
     }
 
     #[test]

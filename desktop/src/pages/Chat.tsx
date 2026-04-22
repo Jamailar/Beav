@@ -1,15 +1,25 @@
-import React, { startTransition, useEffect, useRef, useState, useCallback } from 'react';
-import { Send, Terminal, Loader2, StopCircle, Trash2, Plus, ChevronDown, Mic, ArrowUp, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit, Users, Paperclip, FileX, Square } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { flushSync } from 'react-dom';
+import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
+import {
+  blobToBase64,
+  buildChatModelOptions,
+  ChatComposer,
+  type ChatComposerHandle,
+  type ChatModelOption,
+  type ChatSettingsSnapshot,
+  type UploadedFileAttachment,
+} from '../components/ChatComposer';
 import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
-import { uiDebug, uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
+import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
+import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
 
 interface Session {
   id: string;
@@ -35,6 +45,7 @@ interface SelectionMenu {
 
 interface ChatProps {
   isActive?: boolean;
+  onExecutionStateChange?: (active: boolean) => void;
   defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
@@ -49,38 +60,26 @@ interface ChatProps {
   welcomeTitle?: string;
   welcomeSubtitle?: string;
   welcomeIconSrc?: string;
+  welcomeAvatarText?: string;
+  welcomeIconVariant?: 'default' | 'avatar';
+  welcomeActions?: Array<{ label: string; text?: string; url?: string; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
-  embeddedTheme?: 'default' | 'dark';
+  embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
-}
-
-interface UploadedFileAttachment {
-  type: 'uploaded-file';
-  name: string;
-  ext?: string;
-  size?: number;
-  absolutePath?: string;
-  originalAbsolutePath?: string;
-  localUrl?: string;
-  kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
-  mimeType?: string;
-  storageMode?: 'staged' | string;
-  directUploadEligible?: boolean;
-  processingStrategy?: string;
-  summary?: string;
-  requiresMultimodal?: boolean;
+  emptyStateVerticalAlign?: 'center' | 'lower';
 }
 
 interface ChatContextUsage {
   success: boolean;
   contextType?: string;
   estimatedTotalTokens?: number;
+  estimatedEffectiveTokens?: number;
   compactThreshold?: number;
   compactRatio?: number;
   compactRounds?: number;
@@ -98,63 +97,70 @@ interface ChatRuntimeState {
 
 interface ChatErrorEventPayload {
   message?: string;
+  title?: string;
   raw?: string;
+  detail?: string;
   hint?: string;
   statusCode?: number;
+  httpStatus?: number;
   errorCode?: string;
   category?: string;
+  layer?: string;
+  retryable?: boolean;
+  transportMode?: string;
+  modelName?: string;
 }
 
-interface ChatModelOption {
-  key: string;
-  modelName: string;
-  sourceName: string;
-  baseURL: string;
-  apiKey: string;
-  isDefault?: boolean;
+interface StructuredChatErrorNotice {
+  title: string;
+  hint?: string;
+  detail?: string;
+  metaParts?: string[];
 }
 
-interface ChatSettingsSnapshot {
-  api_endpoint?: string;
-  api_key?: string;
-  model_name?: string;
-  ai_sources_json?: string;
-  default_ai_source_id?: string;
-}
+type FixedSessionWarmSnapshot = {
+  messages: Message[];
+  contextUsage: ChatContextUsage | null;
+  capturedAt: number;
+};
 
-function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
-  if (typeof model === 'string') {
-    const forced = getForcedModelCapabilities(model);
-    const resolved = forced.length ? forced : inferModelCapabilities(model);
-    return resolved.includes('chat');
+const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
+const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
+const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+
+function readFixedSessionWarmSnapshot(sessionId: string | null | undefined): FixedSessionWarmSnapshot | null {
+  const key = String(sessionId || '').trim();
+  if (!key) return null;
+  const snapshot = fixedSessionWarmSnapshots.get(key);
+  if (!snapshot) return null;
+  if ((Date.now() - snapshot.capturedAt) > FIXED_SESSION_SNAPSHOT_TTL_MS) {
+    fixedSessionWarmSnapshots.delete(key);
+    return null;
   }
-  const id = String(model?.id || '').trim();
-  if (!id) return false;
-  const forced = getForcedModelCapabilities(id);
-  const explicitCapabilities = [
-    ...(
-      Array.isArray((model as { capabilities?: unknown[] }).capabilities)
-        ? ((model as { capabilities?: Array<ModelCapability | string | null | undefined> }).capabilities || [])
-        : []
-    ),
-    (model as { capability?: ModelCapability | string | null | undefined }).capability,
-  ];
-  const capabilities = explicitCapabilities.some((value) => String(value || '').trim())
-    ? normalizeModelCapabilities(explicitCapabilities)
-    : [];
-  const resolved = forced.length ? forced : (capabilities.length ? capabilities : inferModelCapabilities(id));
-  return resolved.includes('chat');
+  return snapshot;
+}
+
+function writeFixedSessionWarmSnapshot(
+  sessionId: string | null | undefined,
+  next: Partial<FixedSessionWarmSnapshot>,
+): void {
+  const key = String(sessionId || '').trim();
+  if (!key) return;
+  const previous = fixedSessionWarmSnapshots.get(key);
+  fixedSessionWarmSnapshots.set(key, {
+    messages: next.messages ?? previous?.messages ?? [],
+    contextUsage: next.contextUsage ?? previous?.contextUsage ?? null,
+    capturedAt: Date.now(),
+  });
 }
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
-const STREAM_UPDATE_INTERVAL_MS = 48;
-
-function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
-  const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
-  const native = event.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
-  return Boolean(native?.isComposing) || Boolean(synthetic.isComposing) || native?.keyCode === 229;
-}
+const STREAM_UPDATE_INTERVAL_MS = 72;
+const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
 
 function consumeBufferedChunk(buffer: string, chunk: string): string {
   if (!buffer || !chunk) return buffer;
@@ -190,191 +196,101 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   return `${current}${incoming}`;
 }
 
-function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
-  const data = typeof payload === 'string' ? { message: payload } : (payload || {});
-  const title = String(data.message || 'AI 请求失败').trim();
-  const detail = String(data.raw || '').trim();
-  const lower = `${title}\n${detail}`.toLowerCase();
-  const detectedInsufficientBalance =
-    lower.includes('insufficient balance') ||
-    lower.includes('insufficient_balance') ||
-    lower.includes('insufficient_quota') ||
-    /\b1008\b/.test(lower);
-  const detectedInvalidKey =
-    lower.includes('invalid api key') ||
-    lower.includes('incorrect api key') ||
-    lower.includes('invalid_api_key') ||
-    lower.includes('authentication_error') ||
-    lower.includes('unauthorized');
-  const detectedRateLimit =
-    Number(data.statusCode) === 429 ||
-    lower.includes('rate limit') ||
-    lower.includes('too many requests');
+function isThinkingMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType === 'thinking');
+}
 
-  const category = detectedInsufficientBalance
-    ? 'quota'
-    : detectedInvalidKey
-      ? 'auth'
-      : detectedRateLimit
-        ? 'rate_limit'
-        : String(data.category || '').trim();
+function isAssistantReplyMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType !== 'thinking');
+}
 
-  const isValidationError = category === 'validation';
-  const isExecutionError = category === 'execution';
+function findLastAssistantReplyIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isAssistantReplyMessage(messages[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
 
-  const hint = detectedInsufficientBalance
-    ? '账号余额/额度不足。请充值、升级套餐或切换到有余额的 AI 源。'
-    : detectedInvalidKey
-      ? '请检查 API Key 是否正确、是否过期，以及该模型是否有调用权限。'
-      : detectedRateLimit
-        ? '请求频率过高。请稍后重试，或降低并发与调用频率。'
-        : isValidationError
-          ? String(data.hint || '').trim() || '当前结果未通过执行校验，请先修复素材读取、证据链或保存回执问题。'
-          : isExecutionError
-            ? String(data.hint || '').trim() || '执行阶段发生错误，请检查素材读取、工具调用、文件路径或权限。'
-        : String(data.hint || '').trim() || '请检查 AI 源配置后重试。';
-  const metaParts = [
-    data.statusCode ? `HTTP ${data.statusCode}` : '',
-    data.errorCode ? String(data.errorCode) : '',
-    category || '',
-  ].filter(Boolean);
+function findLastRunningThinkingIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isThinkingMessage(message) && message.isStreaming) {
+      return index;
+    }
+  }
+  return -1;
+}
 
-  const userFacingTitle = detectedInsufficientBalance
-    ? 'AI 账号余额不足（供应商返回）'
-    : detectedInvalidKey
-      ? 'AI API Key 无效或无权限（供应商返回）'
-      : detectedRateLimit
-        ? 'AI 请求被限流（供应商返回）'
-        : isValidationError
-          ? '执行校验未通过'
-          : isExecutionError
-            ? '任务执行失败'
-        : title;
-
-  const lines: string[] = [`❌ ${userFacingTitle}`];
-  lines.push(
-    isValidationError || isExecutionError
-      ? '说明：这是任务执行阶段返回的错误，不是 AI 源鉴权或 App 崩溃。'
-      : '说明：这是 AI 源接口返回的错误，不是 App 崩溃。'
-  );
-  if (hint) lines.push(`处理建议：${hint}`);
-  if (metaParts.length > 0) lines.push(`标识：${metaParts.join(' · ')}`);
-  if (detail) {
-    lines.push('');
-    lines.push('错误详情（用于反馈）：');
-    lines.push('```text');
-    lines.push(detail.slice(0, 3000));
-    lines.push('```');
+function parseMessageTimestampMs(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1e12 ? value : value * 1000;
   }
 
-  const notice = detectedInsufficientBalance
-    ? 'AI 源余额不足，请充值或切换有余额的 AI 源。'
-    : detectedInvalidKey
-      ? 'AI 源鉴权失败，请检查 API Key。'
-      : detectedRateLimit
-        ? 'AI 请求被限流，请稍后重试。'
-        : isValidationError
-          ? '执行校验未通过，请先修复 reviewer 指出的问题。'
-          : isExecutionError
-            ? '任务执行失败，请检查素材读取、工具调用和文件权限。'
-        : `AI 请求失败：${userFacingTitle}`;
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return undefined;
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseEmbeddedHttpError(rawValue: string): Partial<ChatErrorEventPayload> {
+  const raw = String(rawValue || '').trim();
+  if (!raw) return {};
+
+  const rawMarker = '\nRaw response:';
+  const rawIndex = raw.indexOf(rawMarker);
+  const summary = (rawIndex >= 0 ? raw.slice(0, rawIndex) : raw).trim();
+  const detail = (rawIndex >= 0 ? raw.slice(rawIndex + rawMarker.length) : '').trim();
+  const statusMatch = summary.match(/\bHTTP\s+(\d{3})\b/i);
+  const errorCodeMatch = summary.match(/\[code=([^\]]+)\]/i);
+  const messageMatch = summary.match(/\bHTTP\s+\d{3}(?:\s+\[code=[^\]]+\])?\s+(.+)$/i);
+  const cleanedMessage = String(messageMatch?.[1] || summary)
+    .replace(/^[^:]+failed:\s*/i, '')
+    .trim();
 
   return {
-    formatted: lines.join('\n'),
-    notice,
+    message: cleanedMessage || 'AI 请求失败',
+    raw: detail || raw,
+    statusCode: statusMatch ? Number(statusMatch[1]) : undefined,
+    errorCode: errorCodeMatch?.[1]?.trim() || undefined,
   };
 }
 
-function decodeBase64DataUrl(dataUrl: string): string {
-  const raw = String(dataUrl || '');
-  const parts = raw.split(',');
-  return parts.length > 1 ? parts[1] : raw;
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(decodeBase64DataUrl(String(reader.result || '')));
-    reader.onerror = () => reject(reader.error || new Error('音频读取失败'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): ChatModelOption[] {
-  if (!settings) return [];
-
-  const options: ChatModelOption[] = [];
-  const defaultSourceId = String(settings.default_ai_source_id || '').trim();
-  const prefersOfficialDefault = defaultSourceId.toLowerCase() === 'redbox_official_auto';
-
-  try {
-    const parsed = JSON.parse(String(settings.ai_sources_json || '[]')) as Array<Record<string, unknown>>;
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) {
-        if (!item || typeof item !== 'object') continue;
-        const sourceId = String(item.id || '').trim();
-        const sourceName = String(item.name || sourceId || 'AI 源').trim();
-        const baseURL = String(item.baseURL || item.baseUrl || '').trim();
-        const apiKey = String(item.apiKey || item.key || '').trim();
-        const explicitModelsMeta = Array.isArray(item.modelsMeta)
-          ? item.modelsMeta.filter((value): value is { id?: unknown; capability?: unknown; capabilities?: unknown } => Boolean(value && typeof value === 'object'))
-          : [];
-        const chatModelIdsFromMeta = explicitModelsMeta
-          .filter((value) => modelSupportsChat(value))
-          .map((value) => String(value.id || '').trim())
-          .filter(Boolean);
-        const fallbackCandidates = [
-          ...((Array.isArray(item.models) ? item.models : []).map((value) => String(value || '').trim())),
-          String(item.model || item.modelName || '').trim(),
-        ]
-          .filter(Boolean)
-          .filter((value) => modelSupportsChat(value));
-        const candidates = Array.from(new Set([
-          ...chatModelIdsFromMeta,
-          ...fallbackCandidates,
-        ]));
-        for (const modelName of candidates) {
-          options.push({
-            key: `${sourceId || baseURL || sourceName}::${modelName}`,
-            modelName,
-            sourceName,
-            baseURL,
-            apiKey,
-            isDefault: Boolean(sourceId && sourceId === defaultSourceId && modelName === String(item.model || item.modelName || '').trim()),
-          });
-        }
-      }
-    }
-  } catch {
-    // ignore malformed ai_sources_json
-  }
-
-  const fallbackModel = String(settings.model_name || '').trim();
-  if (!prefersOfficialDefault && fallbackModel && modelSupportsChat(fallbackModel)) {
-    options.push({
-      key: `fallback::${fallbackModel}`,
-      modelName: fallbackModel,
-      sourceName: '当前默认源',
-      baseURL: String(settings.api_endpoint || '').trim(),
-      apiKey: String(settings.api_key || '').trim(),
-      isDefault: true,
-    });
-  }
-
-  const deduped = new Map<string, ChatModelOption>();
-  for (const option of options) {
-    const uniqueKey = `${option.baseURL}::${option.modelName}`;
-    const existing = deduped.get(uniqueKey);
-    if (!existing || option.isDefault) {
-      deduped.set(uniqueKey, option);
-    }
-  }
-
-  return Array.from(deduped.values());
+function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null | undefined): StructuredChatErrorNotice {
+  const embedded = parseEmbeddedHttpError(typeof payload === 'string'
+    ? payload
+    : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
+  const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
+  const title = String(data.title || data.message || '').trim() || '请求失败';
+  const detail = String(data.detail || data.raw || '').trim();
+  const hint = String(data.hint || '').trim();
+  const layer = String(data.layer || data.category || '').trim();
+  const metaParts = [
+    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
+    data.errorCode ? String(data.errorCode) : '',
+    layer || '',
+    data.transportMode ? `transport:${String(data.transportMode)}` : '',
+    data.retryable ? '可重试' : '',
+  ].filter(Boolean);
+  return {
+    title,
+    hint: hint || undefined,
+    detail: detail || undefined,
+    metaParts: metaParts.length > 0 ? metaParts : undefined,
+  };
 }
 
 export function Chat({
   isActive = true,
+  onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
   defaultCollapsed = true,
@@ -389,6 +305,9 @@ export function Chat({
   welcomeTitle = '有什么可以帮您？',
   welcomeSubtitle = '我可以帮您阅读和编辑稿件、分析内容、提供创作建议',
   welcomeIconSrc,
+  welcomeAvatarText,
+  welcomeIconVariant = 'default',
+  welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
   allowFileUpload = true,
@@ -398,13 +317,14 @@ export function Chat({
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
+  emptyStateVerticalAlign = 'center',
 }: ChatProps) {
-  const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
-    uiDebug('chat', event, extra);
-  }, []);
+  const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
+  const [messages, setMessages] = useState<Message[]>(() => (
+    readFixedSessionWarmSnapshot(fixedSessionId)?.messages || []
+  ));
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
@@ -421,19 +341,41 @@ export function Chat({
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [showRoomPicker, setShowRoomPicker] = useState(false);
   const [isRoomPickerLoading, setIsRoomPickerLoading] = useState(false);
-  const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(null);
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
+    readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
+  ));
+  const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const documentThemeMode = useDocumentThemeMode();
+
+  useEffect(() => {
+    onExecutionStateChange?.(isProcessing);
+  }, [isProcessing, onExecutionStateChange]);
+
+  useEffect(() => {
+    debugUi('processing_state', {
+      sessionId: currentSessionIdRef.current,
+      isProcessing,
+      responseCompleted: responseCompletedRef.current,
+    });
+  }, [debugUi, isProcessing]);
+
+  useEffect(() => {
+    return () => {
+      onExecutionStateChange?.(false);
+    };
+  }, [onExecutionStateChange]);
   const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
-  const [showModelPicker, setShowModelPicker] = useState(false);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const currentSessionIdRef = useRef<string | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const chatInstanceIdRef = useRef(
+    `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
+  );
+  const composerRef = useRef<ChatComposerHandle>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -448,14 +390,83 @@ export function Chat({
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
+  const responseCompletedRef = useRef(false);
+  const responseFinalizeSeqRef = useRef(0);
+  const pendingResponseFinalizeRef = useRef<{
+    ticket: number;
+    source: string;
+    contentChars: number;
+  } | null>(null);
   const suppressComposerFocusUntilRef = useRef(0);
   const [composerSuppressed, setComposerSuppressed] = useState(false);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (!fixedSessionId) return;
+    if (currentSessionIdRef.current === fixedSessionId) return;
+    currentSessionIdRef.current = fixedSessionId;
+    setCurrentSessionId(fixedSessionId);
+    debugUi('fixed_session:sync', { sessionId: fixedSessionId });
+  }, [debugUi, fixedSessionId]);
+
+  useEffect(() => {
+    debugUi('instance_mount', {
+      chatInstanceId: chatInstanceIdRef.current,
+      fixedSessionId: fixedSessionId || null,
+      isActive,
+    });
+    return () => {
+      debugUi('instance_unmount', {
+        chatInstanceId: chatInstanceIdRef.current,
+        fixedSessionId: fixedSessionId || null,
+      });
+    };
+  }, [debugUi, fixedSessionId, isActive]);
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    const runningTimelineCount = Array.isArray(lastMessage?.timeline)
+      ? lastMessage.timeline.filter((item) => item.status === 'running').length
+      : 0;
+    if (pendingResponseFinalizeRef.current) {
+      const pending = pendingResponseFinalizeRef.current;
+      debugUi('response_end:commit_observed', {
+        chatInstanceId: chatInstanceIdRef.current,
+        ticket: pending.ticket,
+        source: pending.source,
+        contentChars: pending.contentChars,
+        isProcessing,
+        lastIsStreaming: Boolean(lastMessage?.isStreaming),
+        lastTimelineRunning: runningTimelineCount,
+        messageCount: messages.length,
+      });
+      pendingResponseFinalizeRef.current = null;
+    }
+    debugUi('render_state', {
+      chatInstanceId: chatInstanceIdRef.current,
+      sessionId: currentSessionIdRef.current,
+      isActive: isActiveRef.current,
+      isProcessing,
+      responseCompleted: responseCompletedRef.current,
+      messageCount: messages.length,
+      lastRole: lastMessage?.role || 'none',
+      lastIsStreaming: Boolean(lastMessage?.isStreaming),
+      lastTimelineRunning: runningTimelineCount,
+      lastContentChars: String(lastMessage?.content || '').length,
+      hasConfirmRequest: Boolean(confirmRequest),
+      visibleBusy: Boolean(
+        isProcessing
+          || lastMessage?.isStreaming
+          || runningTimelineCount > 0
+          || confirmRequest
+      ),
+    });
+  }, [confirmRequest, debugUi, isProcessing, messages]);
   const blurComposer = useCallback((reason: string) => {
-    const element = inputRef.current;
+    const element = composerRef.current?.getTextarea();
     if (!element) return;
     if (document.activeElement === element) {
       debugUi('input_blur', { reason });
@@ -472,10 +483,8 @@ export function Chat({
     setComposerSuppressed(false);
     debugUi('resume_composer_focus', { source });
     requestAnimationFrame(() => {
-      if (!inputRef.current) return;
-      inputRef.current.focus();
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
+      composerRef.current?.focus();
+      composerRef.current?.syncHeight();
     });
   }, [debugUi]);
   const handleComposerFocus = useCallback((source: 'empty' | 'composer') => {
@@ -510,7 +519,6 @@ export function Chat({
     pendingUpdateRef.current = null;
     setShowRoomPicker(false);
     setSelectionMenu((prev) => ({ ...prev, visible: false }));
-    setShowModelPicker(false);
     setComposerSuppressed(false);
   }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
   const selectSessionRequestRef = useRef(0);
@@ -555,11 +563,14 @@ export function Chat({
       ), { sessionId });
       if (usage?.success) {
         setContextUsage(usage as ChatContextUsage);
+        if (fixedSessionId && sessionId === fixedSessionId) {
+          writeFixedSessionWarmSnapshot(sessionId, { contextUsage: usage as ChatContextUsage });
+        }
       }
     } catch (error) {
       console.error('Failed to load context usage:', error);
     }
-  }, []);
+  }, [fixedSessionId]);
 
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
@@ -574,14 +585,12 @@ export function Chat({
     },
   ]), []);
 
-  const closeModelPicker = useCallback(() => {
-    setShowModelPicker(false);
-  }, []);
-
-  const syncInputHeight = useCallback(() => {
-    if (!inputRef.current) return;
-    inputRef.current.style.height = 'auto';
-    inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 300)}px`;
+  const clearPendingAttachment = useCallback(() => {
+    setPendingAttachment(null);
+    requestAnimationFrame(() => {
+      composerRef.current?.syncHeight();
+      composerRef.current?.focus();
+    });
   }, []);
 
   const loadChatModelOptions = useCallback(async () => {
@@ -601,6 +610,40 @@ export function Chat({
     }
   }, []);
 
+  const ensureChatModelConfig = useCallback(async () => {
+    if (selectedChatModel) {
+      return {
+        apiKey: selectedChatModel.apiKey,
+        baseURL: selectedChatModel.baseURL,
+        modelName: selectedChatModel.modelName,
+      };
+    }
+    const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
+      window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
+    ));
+    const options = buildChatModelOptions(settings);
+    if (options.length === 0) {
+      return undefined;
+    }
+    setChatModelOptions(options);
+    const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+    if (resolvedKey) {
+      setSelectedChatModelKey((current) => {
+        if (current && options.some((item) => item.key === current)) return current;
+        return resolvedKey;
+      });
+    }
+    const resolved = options.find((item) => item.key === resolvedKey) || options[0];
+    if (!resolved) {
+      return undefined;
+    }
+    return {
+      apiKey: resolved.apiKey,
+      baseURL: resolved.baseURL,
+      modelName: resolved.modelName,
+    };
+  }, [selectedChatModel]);
+
   const cleanupAudioCapture = useCallback(() => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.ondataavailable = null;
@@ -616,6 +659,7 @@ export function Chat({
   }, []);
 
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
+    if (fixedSessionId) return;
     const requestId = ++chatRoomsRequestIdRef.current;
     const silent = Boolean(options?.silent);
     if (!silent) {
@@ -638,7 +682,7 @@ export function Chat({
         setIsRoomPickerLoading(false);
       }
     }
-  }, []);
+  }, [fixedSessionId]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = messages.length === 0;
@@ -657,18 +701,6 @@ export function Chat({
     if (!isActive) return;
     void loadChatModelOptions();
   }, [isActive, loadChatModelOptions]);
-
-  useEffect(() => {
-    if (!isActive || !showModelPicker) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!modelPickerRef.current) return;
-      if (!modelPickerRef.current.contains(event.target as Node)) {
-        setShowModelPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [showModelPicker]);
 
   useEffect(() => {
     return () => {
@@ -701,7 +733,9 @@ export function Chat({
   // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
-    void loadChatRooms({ silent: true });
+    if (!fixedSessionId) {
+      void loadChatRooms({ silent: true });
+    }
 
     // Handle fixed session (File-Bound Mode)
     if (fixedSessionId) {
@@ -734,7 +768,7 @@ export function Chat({
     };
     taskHints?: unknown;
   }) => {
-    uiDebug('chat', 'dispatch_send:queued', {
+    debugUi('dispatch_send:queued', {
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
       hasAttachment: Boolean(payload.attachment),
@@ -744,13 +778,13 @@ export function Chat({
       : (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0);
 
     schedule(() => {
-      uiDebug('chat', 'dispatch_send:flushed', {
+      debugUi('dispatch_send:flushed', {
         sessionId: payload.sessionId || null,
         chars: payload.message.length,
       });
       window.ipcRenderer.chat.send(payload);
     });
-  }, []);
+  }, [debugUi]);
 
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
@@ -793,10 +827,18 @@ export function Chat({
           return;
         }
       }
+      let resolvedModelConfig;
+      try {
+        resolvedModelConfig = await ensureChatModelConfig();
+      } catch (error) {
+        console.error('Failed to resolve pending chat model config:', error);
+        resolvedModelConfig = undefined;
+      }
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
+      const processingStartedAt = Date.now();
       const userMsg: Message = {
-        id: Date.now().toString(),
+        id: processingStartedAt.toString(),
         role: 'user',
         content: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
@@ -806,14 +848,16 @@ export function Chat({
       };
 
       const aiPlaceholder: Message = {
-        id: (Date.now() + 1).toString(),
+        id: (processingStartedAt + 1).toString(),
         role: 'ai',
+        messageType: 'reply',
         content: '',
         tools: [],
         timeline: (
           pendingMessage.taskHints?.forceMultiAgent
         ) ? buildPendingAssistantTimeline('任务已提交') : [],
-        isStreaming: true
+        isStreaming: true,
+        processingStartedAt,
       };
 
       if (shouldAppendToCurrentSession) {
@@ -833,11 +877,7 @@ export function Chat({
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
         attachment: pendingMessage.attachment,
-        modelConfig: selectedChatModel ? {
-          apiKey: selectedChatModel.apiKey,
-          baseURL: selectedChatModel.baseURL,
-          modelName: selectedChatModel.modelName,
-        } : undefined,
+        modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
 
@@ -846,7 +886,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, selectedChatModel, buildPendingAssistantTimeline, dispatchChatSend]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig]);
 
   const loadSessions = async () => {
     if (!isActiveRef.current) return;
@@ -871,20 +911,51 @@ export function Chat({
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
     setCurrentSessionId(sessionId);
+    if (fixedSessionId && sessionId === fixedSessionId) {
+      const warm = readFixedSessionWarmSnapshot(sessionId);
+      if (warm) {
+        setMessages(warm.messages);
+        if (warm.contextUsage) {
+          setContextUsage(warm.contextUsage);
+        }
+        debugUi('fixed_session:warm_restore', {
+          sessionId,
+          messageCount: warm.messages.length,
+        });
+      }
+    }
     const requestId = ++selectSessionRequestRef.current;
     const mutationVersionAtStart = localMessageMutationRef.current;
     try {
       const shouldRecoverRuntime = coldRecoveryPendingRef.current;
       coldRecoveryPendingRef.current = false;
       debugUi('select_session:start', { sessionId, shouldRecoverRuntime });
-      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => (
-        Promise.all([
+      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => {
+        if (fixedSessionId && sessionId === fixedSessionId) {
+          let inflight = fixedSessionInflightLoads.get(sessionId);
+          if (!inflight) {
+            inflight = Promise.all([
+              window.ipcRenderer.chat.getMessages(sessionId),
+              shouldRecoverRuntime
+                ? window.ipcRenderer.chat.getRuntimeState(sessionId)
+                : Promise.resolve(null),
+            ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+            fixedSessionInflightLoads.set(sessionId, inflight);
+            void inflight.finally(() => {
+              if (fixedSessionInflightLoads.get(sessionId) === inflight) {
+                fixedSessionInflightLoads.delete(sessionId);
+              }
+            });
+          }
+          return inflight;
+        }
+        return Promise.all([
           window.ipcRenderer.chat.getMessages(sessionId),
           shouldRecoverRuntime
             ? window.ipcRenderer.chat.getRuntimeState(sessionId)
             : Promise.resolve(null),
-        ])
-      ), { sessionId, shouldRecoverRuntime });
+        ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+      }, { sessionId, shouldRecoverRuntime });
       if (requestId !== selectSessionRequestRef.current) {
         return;
       }
@@ -894,6 +965,7 @@ export function Chat({
       const runtimeState = runtimeStateRaw as ChatRuntimeState;
 
       // Convert DB messages to UI messages
+      let lastUserCreatedAt: number | undefined;
       const uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
@@ -905,15 +977,27 @@ export function Chat({
           }
         }
 
+        const role = msg.role === 'user' ? 'user' : 'ai';
+        const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
+        const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
+        const processingFinishedAt = role === 'ai' ? createdAt : undefined;
+
+        if (role === 'user') {
+          lastUserCreatedAt = createdAt;
+        }
+
         return {
           id: msg.id,
-          role: msg.role === 'user' ? 'user' : 'ai', // Simplified mapping
+          role, // Simplified mapping
+          messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
           tools: [], // History tools not fully reconstructed in this simple view yet
           timeline: [], // History timeline not fully reconstructed
-          isStreaming: false
+          isStreaming: false,
+          processingStartedAt,
+          processingFinishedAt,
         };
       });
 
@@ -934,22 +1018,30 @@ export function Chat({
           uiMessages.push({
             id: `streaming_${Date.now()}`,
             role: 'ai',
+            messageType: 'reply',
             content: restoredContent,
             tools: [],
             timeline: [],
             isStreaming: true,
+            processingStartedAt: lastUserCreatedAt ?? Date.now(),
           });
         } else {
           uiMessages[uiMessages.length - 1] = {
             ...lastMsg,
+            messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
+            processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
+            processingFinishedAt: undefined,
           };
         }
         shouldSetProcessing = true;
       }
 
       setMessages(uiMessages);
+      if (fixedSessionId && sessionId === fixedSessionId) {
+        writeFixedSessionWarmSnapshot(sessionId, { messages: uiMessages });
+      }
       setIsProcessing(shouldSetProcessing);
       debugUi('select_session:done', {
         sessionId,
@@ -1038,17 +1130,21 @@ export function Chat({
         return prev;
       }
 
-      const lastMsg = prev[prev.length - 1];
-      if (!lastMsg || lastMsg.role !== 'ai') {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) {
         return prev;
       }
+      const lastMsg = prev[lastReplyIndex];
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
-      return [...prev.slice(0, -1), {
+      const next = [...prev];
+      next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
-      }];
+        messageType: 'reply',
+      };
+      return next;
     });
   }, []);
 
@@ -1066,7 +1162,7 @@ export function Chat({
   }, [appendAssistantChunk]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || fixedSessionId) return;
     const handleSpaceChanged = () => {
       setShowRoomPicker(false);
       setSelectionMenu(prev => ({ ...prev, visible: false }));
@@ -1076,7 +1172,20 @@ export function Chat({
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [isActive, loadChatRooms]);
+  }, [fixedSessionId, isActive, loadChatRooms]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshChatModels = () => {
+      void loadChatModelOptions();
+    };
+    window.ipcRenderer.on('settings:updated', refreshChatModels);
+    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    return () => {
+      window.ipcRenderer.off('settings:updated', refreshChatModels);
+      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+    };
+  }, [isActive, loadChatModelOptions]);
 
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
@@ -1095,9 +1204,13 @@ export function Chat({
     // 1. Phase Start (e.g. Planning, Executing)
     const handlePhaseStart = (_: unknown, { name }: { name: string }) => {
       if (!isActiveRef.current) return;
+      if (name === 'thinking') {
+        responseCompletedRef.current = false;
+      }
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         const now = Date.now();
         const newTimeline = [...lastMsg.timeline];
@@ -1122,7 +1235,9 @@ export function Chat({
           timestamp: now
         });
 
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, timeline: newTimeline, messageType: 'reply' };
+        return next;
       });
     };
 
@@ -1130,26 +1245,30 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex !== -1) return prev;
 
-        const newTimeline = [...lastMsg.timeline];
-        
-        // Check if we already have a running thought (shouldn't happen with correct agent logic, but safe to check)
-        const lastItem = newTimeline[newTimeline.length - 1];
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            return prev; // Already thinking
-        }
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
 
-        newTimeline.push({
-          id: Math.random().toString(36),
-          type: 'thought',
+        const now = Date.now();
+        const next = [...prev];
+        next[lastReplyIndex] = {
+          ...next[lastReplyIndex],
+          messageType: 'reply',
+          suppressPendingIndicator: true,
+        };
+        next.splice(lastReplyIndex, 0, {
+          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          role: 'ai',
+          messageType: 'thinking',
           content: '',
-          status: 'running',
-          timestamp: Date.now()
+          tools: [],
+          timeline: [],
+          isStreaming: true,
+          processingStartedAt: now,
         });
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        return next;
       });
     };
 
@@ -1159,35 +1278,39 @@ export function Chat({
       const content = data?.content;
       if (!content) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        let next = [...prev];
 
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            // Update existing thought
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                content: mergeThoughtDelta(String(lastItem.content || ''), content)
-            };
-        } else {
-            // No running thought? Create one (fallback)
-            newTimeline.push({
-                id: Math.random().toString(36),
-                type: 'thought',
-                content: content,
-                status: 'running',
-                timestamp: Date.now()
-            });
+        if (runningThinkingIndex === -1) {
+          const lastReplyIndex = findLastAssistantReplyIndex(next);
+          if (lastReplyIndex === -1) return prev;
+          const now = Date.now();
+          next[lastReplyIndex] = {
+            ...next[lastReplyIndex],
+            messageType: 'reply',
+            suppressPendingIndicator: true,
+          };
+          next.splice(lastReplyIndex, 0, {
+            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'ai',
+            messageType: 'thinking',
+            content,
+            tools: [],
+            timeline: [],
+            isStreaming: true,
+            processingStartedAt: now,
+          });
+          return next;
         }
 
-        return [...prev.slice(0, -1), {
-          ...lastMsg,
-          timeline: newTimeline,
-          thinking: mergeThoughtDelta(lastMsg.thinking || '', content),
-        }];
+        const thinkingMessage = next[runningThinkingIndex];
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          content: mergeThoughtDelta(thinkingMessage.content || '', content),
+          isStreaming: true,
+        };
+        return next;
       });
     };
 
@@ -1195,22 +1318,18 @@ export function Chat({
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                status: 'done',
-                duration: Date.now() - lastItem.timestamp
-            };
-        }
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline, thinking: lastMsg.thinking || '' }];
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        const thinkingMessage = next[runningThinkingIndex];
+        const finishedAt = Date.now();
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: finishedAt,
+        };
+        return next;
       });
     };
 
@@ -1222,6 +1341,18 @@ export function Chat({
         return;
       }
       if (!content) return;
+      setMessages(prev => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        next[runningThinkingIndex] = {
+          ...next[runningThinkingIndex],
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: Date.now(),
+        };
+        return next;
+      });
 
       const now = performance.now();
       const lastChunk = lastStreamChunkRef.current;
@@ -1270,8 +1401,19 @@ export function Chat({
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
 
@@ -1299,19 +1441,22 @@ export function Chat({
           status: 'running'
         };
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: [...lastMsg.tools, newTool] 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolEnd = (_: unknown, toolData: { callId: string; name: string; output: { success: boolean; content: string } }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         // Update Timeline
         const newTimeline = [...lastMsg.timeline];
@@ -1354,22 +1499,32 @@ export function Chat({
 
         // Update Legacy Tools
         const updatedTools = lastMsg.tools.map(t =>
-          t.callId === toolData.callId ? { ...t, status: 'done', output: toolData.output } as ToolEvent : t
+          t.callId === toolData.callId
+            ? {
+                ...t,
+                status: toolData.output?.success ? 'done' : 'failed',
+                output: toolData.output,
+              } as ToolEvent
+            : t
         );
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: updatedTools 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolUpdate = (_: unknown, toolData: { callId: string; name: string; partial: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         if (!toolData?.partial) return prev;
 
         const newTimeline = [...lastMsg.timeline];
@@ -1417,18 +1572,22 @@ export function Chat({
           },
         };
 
-        return [...prev.slice(0, -1), {
+        const next = [...prev];
+        next[lastReplyIndex] = {
           ...lastMsg,
+          messageType: 'reply',
           timeline: newTimeline,
-        }];
+        };
+        return next;
       });
     };
 
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         
         // Add to Timeline
         const newTimeline = [...lastMsg.timeline, {
@@ -1440,11 +1599,14 @@ export function Chat({
             skillData: skillData
         }];
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             activatedSkill: skillData 
-        }];
+        };
+        return next;
       });
     };
 
@@ -1453,13 +1615,18 @@ export function Chat({
       setConfirmRequest(request);
     };
 
-    const handleResponseEnd = (_: unknown, payload?: { content?: string }) => {
+    const handleResponseEnd = (
+      _: unknown,
+      payload?: { content?: string },
+      source: 'checkpoint' | 'runtime_done' | 'unknown' = 'unknown',
+    ) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response end');
         }
         return;
       }
+      responseCompletedRef.current = true;
       suppressComposerFocus('response_end', 5000);
       blurComposer('response_end');
       flushPendingAssistantChunk();
@@ -1473,11 +1640,50 @@ export function Chat({
         streamElapsedMs: streamStats ? Math.round(performance.now() - streamStats.startedAt) : 0,
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      const finalizeTicket = ++responseFinalizeSeqRef.current;
+      pendingResponseFinalizeRef.current = {
+        ticket: finalizeTicket,
+        source,
+        contentChars: finalContent.length,
+      };
+      debugUi('response_end:transition_scheduled', {
+        chatInstanceId: chatInstanceIdRef.current,
+        sessionId: currentSessionIdRef.current,
+        ticket: finalizeTicket,
+        source,
+        contentChars: finalContent.length,
+      });
+      flushSync(() => {
+        debugUi('response_end:transition_run', {
+          chatInstanceId: chatInstanceIdRef.current,
+          sessionId: currentSessionIdRef.current,
+          ticket: finalizeTicket,
+          source,
+        });
         setIsProcessing(false);
         setErrorNotice(null);
+        debugUi('response_end:state_calls_issued', {
+          chatInstanceId: chatInstanceIdRef.current,
+          sessionId: currentSessionIdRef.current,
+          ticket: finalizeTicket,
+          source,
+        });
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
+          debugUi('response_end:set_messages', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            prevCount: prev.length,
+            lastRole: lastMsg?.role || 'none',
+            lastIsStreaming: Boolean(lastMsg?.isStreaming),
+            lastTimelineRunning: Array.isArray(lastMsg?.timeline)
+              ? lastMsg.timeline.filter((item) => item.status === 'running').length
+              : 0,
+            finalContentChars: finalContent.length,
+          });
           if (lastMsg && lastMsg.role === 'ai') {
             const mergedContent = mergeAssistantContent(lastMsg.content || '', finalContent);
             const now = Date.now();
@@ -1489,22 +1695,54 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), { ...lastMsg, content: mergedContent, timeline, isStreaming: false }];
+            const next = [...prev];
+            next[lastReplyIndex] = {
+              ...lastMsg,
+              messageType: 'reply',
+              content: mergedContent,
+              timeline,
+              isStreaming: false,
+              suppressPendingIndicator: false,
+              processingFinishedAt: now,
+            };
+            return next;
           }
           if (finalContent) {
+            const now = Date.now();
             return [
               ...prev,
               {
-                id: Date.now().toString(),
+                id: now.toString(),
                 role: 'ai',
+                messageType: 'reply',
                 content: finalContent,
                 tools: [],
                 timeline: [],
                 isStreaming: false,
+                processingStartedAt: now,
+                processingFinishedAt: now,
               }
             ];
           }
           return prev;
+        });
+        queueMicrotask(() => {
+          debugUi('response_end:microtask_after_transition', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            responseCompleted: responseCompletedRef.current,
+          });
+        });
+        requestAnimationFrame(() => {
+          debugUi('response_end:raf_after_transition', {
+            chatInstanceId: chatInstanceIdRef.current,
+            sessionId: currentSessionIdRef.current,
+            ticket: finalizeTicket,
+            source,
+            responseCompleted: responseCompletedRef.current,
+          });
         });
       });
     };
@@ -1521,12 +1759,13 @@ export function Chat({
         streamedChars: streamStatsRef.current?.chars || 0,
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
         setErrorNotice(null);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
           const now = Date.now();
           const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1537,7 +1776,25 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false }];
+          const next = [...prev];
+          next[lastReplyIndex] = {
+            ...lastMsg,
+            messageType: 'reply',
+            timeline,
+            isStreaming: false,
+            suppressPendingIndicator: false,
+            processingFinishedAt: now,
+          };
+          const runningThinkingIndex = findLastRunningThinkingIndex(next);
+          if (runningThinkingIndex !== -1) {
+            next[runningThinkingIndex] = {
+              ...next[runningThinkingIndex],
+              messageType: 'thinking',
+              isStreaming: false,
+              processingFinishedAt: now,
+            };
+          }
+          return next;
         });
       });
     };
@@ -1552,10 +1809,12 @@ export function Chat({
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        return [...prev.slice(0, -1), { ...lastMsg, plan: steps }];
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', plan: steps };
+        return next;
       });
     };
 
@@ -1563,18 +1822,19 @@ export function Chat({
       if (!isActiveRef.current) return;
       suppressComposerFocus('error', 3000);
       blurComposer('error');
-      const { formatted, notice } = deriveChatErrorPresentation(error);
+      const notice = normalizeChatErrorNotice(error);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
       });
       streamStatsRef.current = null;
-      startTransition(() => {
+      flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
         setErrorNotice(notice);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
             const now = Date.now();
             const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1585,19 +1845,27 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), { ...lastMsg, content: formatted, timeline, isStreaming: false }];
-          }
-          return [
-            ...prev,
-            {
-              id: Date.now().toString(),
-              role: 'ai',
-              content: formatted,
-              tools: [],
-              timeline: [],
+            const next = [...prev];
+            next[lastReplyIndex] = {
+              ...lastMsg,
+              messageType: 'reply',
+              timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
+              processingFinishedAt: now,
+            };
+            const runningThinkingIndex = findLastRunningThinkingIndex(next);
+            if (runningThinkingIndex !== -1) {
+              next[runningThinkingIndex] = {
+                ...next[runningThinkingIndex],
+                messageType: 'thinking',
+                isStreaming: false,
+                processingFinishedAt: now,
+              };
             }
-          ];
+            return next;
+          }
+          return prev;
         });
       });
     };
@@ -1615,6 +1883,18 @@ export function Chat({
       },
       onResponseDelta: ({ content }) => {
         handleResponseChunk(null, { content });
+      },
+      onChatDone: ({ status, content, reason }) => {
+        debugUi('runtime_done:received', {
+          sessionId: currentSessionIdRef.current,
+          status,
+          reason,
+          contentChars: content.length,
+          responseCompleted: responseCompletedRef.current,
+        });
+        if (status === 'completed' && !responseCompletedRef.current) {
+          handleResponseEnd(null, { content }, 'runtime_done');
+        }
       },
       onToolRequest: ({ callId, name, input, description }) => {
         handleToolStart(null, { callId, name, input, description });
@@ -1680,7 +1960,12 @@ export function Chat({
         handleThoughtEnd(null);
       },
       onChatResponseEnd: ({ content }) => {
-        handleResponseEnd(null, { content });
+        debugUi('checkpoint_response_end:received', {
+          sessionId: currentSessionIdRef.current,
+          contentChars: content.length,
+          responseCompleted: responseCompletedRef.current,
+        });
+        handleResponseEnd(null, { content }, 'checkpoint');
       },
       onChatCancelled: () => {
         handleCancelled();
@@ -1710,13 +1995,6 @@ export function Chat({
     };
   }, [debugUi, flushPendingAssistantChunk, isActive]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!input.trim() && !pendingAttachment) || isProcessing) return;
-
-    sendMessage(input, pendingAttachment || undefined);
-  };
-
   const pickAttachment = useCallback(async () => {
     if (isProcessing) return;
     try {
@@ -1729,7 +2007,12 @@ export function Chat({
       }
       if (result.canceled) return;
       if (result.attachment) {
+        setErrorNotice(null);
         setPendingAttachment(result.attachment);
+        requestAnimationFrame(() => {
+          composerRef.current?.syncHeight();
+          composerRef.current?.focus();
+        });
       }
     } catch (error) {
       setErrorNotice(String(error || '上传文件失败'));
@@ -1764,15 +2047,15 @@ export function Chat({
         return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
       });
       requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        syncInputHeight();
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
       });
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setIsTranscribingAudio(false);
     }
-  }, [syncInputHeight]);
+  }, []);
 
   const stopAudioRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
@@ -1838,7 +2121,7 @@ export function Chat({
     void startAudioRecording();
   }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
 
-  const sendMessage = (content: string, attachment?: UploadedFileAttachment) => {
+  const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
@@ -1851,8 +2134,9 @@ export function Chat({
     const normalizedContent = String(content || '').trim();
     const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
     if (!displayText) return;
+    const processingStartedAt = Date.now();
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: processingStartedAt.toString(),
       role: 'user',
       content: normalizedContent || displayText,
       displayContent: displayText,
@@ -1862,12 +2146,14 @@ export function Chat({
     };
 
     const aiPlaceholder: Message = {
-      id: (Date.now() + 1).toString(),
+      id: (processingStartedAt + 1).toString(),
       role: 'ai',
+      messageType: 'reply',
       content: '',
       tools: [],
       timeline: [],
-      isStreaming: true
+      isStreaming: true,
+      processingStartedAt,
     };
 
     localMessageMutationRef.current += 1;
@@ -1876,12 +2162,20 @@ export function Chat({
     setPendingAttachment(null);
     setIsProcessing(true);
 
+    let resolvedModelConfig;
+    try {
+      resolvedModelConfig = await ensureChatModelConfig();
+    } catch (error) {
+      console.error('Failed to resolve chat model config:', error);
+      resolvedModelConfig = undefined;
+    }
+
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
       message: normalizedContent || displayText,
       displayContent: displayText,
       attachment,
-      modelConfig: getChatModelConfig(),
+      modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: undefined,
     });
   };
@@ -1903,79 +2197,177 @@ export function Chat({
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
     if (safe >= 1000) {
-      return `${Math.round(safe / 1000)}k`;
+      return COMPACT_TOKEN_FORMATTER.format(safe);
     }
     return `${safe}`;
   };
 
   const compactRatio = Math.max(0, Number(contextUsage?.compactRatio || 0));
   const contextUsedPercentRaw = Math.max(0, Math.min(100, compactRatio * 100));
-  const contextRemainingPercentRaw = Math.max(0, 100 - contextUsedPercentRaw);
   const contextUsedPercentDisplay = contextUsedPercentRaw < 10
     ? contextUsedPercentRaw.toFixed(1)
     : `${Math.round(contextUsedPercentRaw)}`;
-  const contextRemainingRounded = Math.round(contextRemainingPercentRaw);
-  const contextRemainingPercent = compactRatio > 0 && contextRemainingRounded >= 100
-    ? 99
-    : Math.max(0, Math.min(100, contextRemainingRounded));
   const contextBadgeClass = contextUsedPercentRaw >= 90
     ? 'text-red-600 border-red-500/40 bg-red-500/10'
     : contextUsedPercentRaw >= 70
       ? 'text-amber-600 border-amber-500/40 bg-amber-500/10'
       : 'text-text-secondary border-border bg-surface-secondary/90';
   const compactThreshold = Math.max(0, Math.round(contextUsage?.compactThreshold || 0));
+  const estimatedEffectiveTokens = Math.max(
+    0,
+    Math.round(contextUsage?.estimatedEffectiveTokens ?? contextUsage?.estimatedTotalTokens ?? 0),
+  );
   const estimatedTotalTokens = Math.max(0, Math.round(contextUsage?.estimatedTotalTokens || 0));
-  const contextRemainingRatio = Math.max(0, Math.min(1, 1 - compactRatio));
   const contextRingRadius = 17;
   const contextRingCircumference = 2 * Math.PI * contextRingRadius;
-  const contextRingOffset = contextRingCircumference * (1 - contextRemainingRatio);
-  const contextRingColorClass = contextRemainingPercentRaw <= 15
-    ? 'text-red-500'
-    : contextRemainingPercentRaw <= 35
-      ? 'text-amber-500'
-      : 'text-emerald-500';
-  const isCompactWorkflowMode = Boolean(fixedSessionId && fixedSessionContextIndicatorMode === 'corner-ring');
-  const darkEmbedded = embeddedTheme === 'dark';
-  const composerShellClass = darkEmbedded
-    ? 'bg-[#121417] border border-white/10 rounded-[24px] p-1.5'
-    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[24px] p-1.5';
-  const composerShellEmptyClass = darkEmbedded
-    ? 'bg-[#121417] border border-white/10 rounded-[28px] p-2'
-    : 'bg-[#fdfcf9] border border-[#edebe4] rounded-[28px] p-2';
-  const composerTextClass = darkEmbedded
-    ? 'text-white placeholder:text-white/28'
-    : 'text-text-primary placeholder:text-[#b4b2a8]';
-  const composerSubtleButtonClass = darkEmbedded
-    ? 'text-white/48 hover:text-white/82'
-    : 'text-text-tertiary hover:text-text-secondary';
-  const composerModelPickerClass = darkEmbedded
-    ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
-    : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
-  const composerAttachmentClass = darkEmbedded
-    ? 'rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/68 flex items-center justify-between'
-    : 'rounded-lg border border-border bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary flex items-center justify-between';
-  const composerSendButtonClass = input.trim() || pendingAttachment
-    ? 'bg-[#4c82ff] text-white hover:bg-[#5b8eff]'
-    : darkEmbedded
-      ? 'bg-white/10 text-white/45 opacity-80'
-      : 'bg-[#edebe4] text-white opacity-60';
+  const contextUsageRingOffset = contextRingCircumference * (1 - Math.max(0, Math.min(1, compactRatio)));
+  const resolvedEmbeddedTheme = embeddedTheme === 'auto'
+    ? (documentThemeMode === 'dark' ? 'dark' : 'default')
+    : embeddedTheme;
+  const darkEmbedded = resolvedEmbeddedTheme === 'dark';
+  const composerTheme = darkEmbedded ? 'dark' : 'default';
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
     : 'bg-surface-primary pb-4 pt-2 md:pb-5';
   const shortcutChipClass = darkEmbedded
     ? 'flex-shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/62 transition-colors hover:border-white/20 hover:text-white disabled:opacity-50'
     : 'flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50';
+  const composerContextUsageButtonClass = darkEmbedded
+    ? 'peer relative flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-white/70 transition-opacity duration-200 hover:text-white/92 focus:outline-none'
+    : 'peer relative flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-[#65707d] transition-opacity duration-200 hover:text-[#4c5662] focus:outline-none';
+  const composerContextUsageTrackClass = darkEmbedded ? 'text-white/14' : 'text-[#ddd8cf]';
+  const composerContextUsageToneClass = contextUsedPercentRaw >= 90
+    ? 'text-red-500'
+    : contextUsedPercentRaw >= 70
+      ? 'text-amber-500'
+      : darkEmbedded
+        ? 'text-white/78'
+        : 'text-[#556170]';
+  const composerContextUsageTooltipClass = darkEmbedded
+    ? 'rounded-[24px] border border-white/10 bg-[#161a1f]/96 px-5 py-4 text-[13px] font-medium tracking-[0.01em] text-white/86 shadow-[0_18px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl'
+    : 'rounded-[24px] border border-[#ebe7dc] bg-[#fcfbf7]/96 px-5 py-4 text-[13px] font-medium tracking-[0.01em] text-[#2f2b26] shadow-[0_18px_60px_rgba(36,32,24,0.12)] backdrop-blur-xl';
+  const composerContextUsageArrowClass = darkEmbedded
+    ? 'border-b border-r border-white/10 bg-[#161a1f]/96'
+    : 'border-b border-r border-[#ebe7dc] bg-[#fcfbf7]/96';
+  const showComposerContextUsageIndicator = Boolean(
+    fixedSessionId &&
+    currentSessionId &&
+    contextUsage?.success &&
+    fixedSessionContextIndicatorMode !== 'none'
+  );
+  const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const composerContextUsageIndicator = showComposerContextUsageIndicator ? (
+    <div className="relative">
+      <button
+        type="button"
+        className={composerContextUsageButtonClass}
+        aria-label={composerContextUsageLabel}
+      >
+        <svg className="h-7 w-7 -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
+          <circle
+            cx="22"
+            cy="22"
+            r={contextRingRadius}
+            fill="transparent"
+            stroke="currentColor"
+            strokeWidth="3"
+            className={composerContextUsageTrackClass}
+          />
+          <circle
+            cx="22"
+            cy="22"
+            r={contextRingRadius}
+            fill="transparent"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            className={composerContextUsageToneClass}
+            strokeDasharray={contextRingCircumference}
+            strokeDashoffset={contextUsageRingOffset}
+          />
+        </svg>
+      </button>
+      <div className={clsx(
+        'pointer-events-none absolute bottom-full right-0 z-30 mb-3 w-72 max-w-[calc(100vw-2rem)] translate-y-1 opacity-0 transition-all duration-200 ease-out peer-hover:translate-y-0 peer-hover:opacity-100',
+        composerContextUsageTooltipClass
+      )}>
+        {composerContextUsageLabel}
+        <div className={clsx('absolute -bottom-1.5 right-[14px] h-3 w-3 rotate-45', composerContextUsageArrowClass)} />
+      </div>
+    </div>
+  ) : null;
+
+  const renderComposer = (
+    source: 'empty' | 'composer',
+    variant: 'empty' | 'main',
+    placeholder: string,
+    options?: {
+      className?: string;
+      showContextUsage?: boolean;
+      showCancelWhenBusy?: boolean;
+    },
+  ) => (
+    <>
+      <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
+      <ChatComposer
+        ref={composerRef}
+        theme={composerTheme}
+        variant={variant}
+        className={options?.className}
+        value={input}
+        onValueChange={setInput}
+        onSubmit={() => sendMessage(input, pendingAttachment || undefined)}
+        placeholder={placeholder}
+        attachment={pendingAttachment}
+        onPickAttachment={allowFileUpload ? pickAttachment : undefined}
+        onClearAttachment={clearPendingAttachment}
+        modelOptions={chatModelOptions}
+        selectedModelKey={selectedChatModelKey}
+        onSelectedModelKeyChange={setSelectedChatModelKey}
+        isBusy={isProcessing}
+        audioState={isTranscribingAudio ? 'transcribing' : isRecordingAudio ? 'recording' : 'idle'}
+        onAudioAction={handleAudioInput}
+        onCancel={handleCancel}
+        showCancelWhenBusy={options?.showCancelWhenBusy}
+        trailingContent={options?.showContextUsage ? composerContextUsageIndicator : null}
+        onFocus={() => handleComposerFocus(source)}
+        suppressed={composerSuppressed}
+        onResumeFromSuppressed={() => resumeComposerFocus(source)}
+      />
+    </>
+  );
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
       <div className="flex justify-center">
         {welcomeIconSrc ? (
-          <img
-            src={welcomeIconSrc}
-            alt={welcomeTitle}
-            className="w-24 h-24 object-contain"
-          />
+          welcomeIconVariant === 'avatar' ? (
+            <div className={clsx(
+              'flex items-center justify-center overflow-hidden border shadow-lg',
+              darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
+              'h-24 w-24 rounded-[28px]',
+            )}>
+              <img
+                src={welcomeIconSrc}
+                alt={welcomeTitle}
+                className="h-full w-full object-cover"
+              />
+            </div>
+          ) : (
+            <img
+              src={welcomeIconSrc}
+              alt={welcomeTitle}
+              className="w-24 h-24 object-contain"
+            />
+          )
+        ) : welcomeAvatarText ? (
+          <div className={clsx(
+            'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
+            darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
+          )}>
+            {welcomeAvatarText}
+          </div>
         ) : (
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
             <Sparkles className="w-8 h-8 text-white" />
@@ -2008,122 +2400,55 @@ export function Chat({
     </div>
   ) : null;
 
-  const emptyComposerForm = (
-    <form onSubmit={handleSubmit} className="relative w-full">
-      <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-      <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
-        {composerSuppressed ? (
-          <button
-            type="button"
-            onClick={() => resumeComposerFocus('empty')}
-            className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-          >
-            对话已完成，点击后继续输入...
-          </button>
-        ) : (
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              syncInputHeight();
-            }}
-            onFocus={() => handleComposerFocus('empty')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                e.preventDefault();
-                handleSubmit(e as any);
-                if (inputRef.current) inputRef.current.style.height = 'auto';
-              }
-            }}
-            placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-            className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
-            data-ime="chat-composer-empty"
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            readOnly={isProcessing}
-            aria-disabled={isProcessing}
-            rows={1}
-          />
-        )}
-        <div className="flex items-center justify-between px-2 pb-1">
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-              <Plus className="w-[18px] h-[18px]" />
-            </button>
-            <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-              <button
-                type="button"
-                onClick={() => setShowModelPicker((prev) => !prev)}
-                className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-              >
-                <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-              </button>
-              {showModelPicker && (
-                <div className={composerModelPickerClass}>
-                  {chatModelOptions.length ? chatModelOptions.map((option) => {
-                    const active = option.key === selectedChatModelKey;
-                    return (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => {
-                          setSelectedChatModelKey(option.key);
-                          closeModelPicker();
-                        }}
-                        className={clsx(
-                          'w-full px-3 py-2.5 text-left transition-colors',
-                          active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                        )}
-                      >
-                        <div className="text-sm font-medium truncate">{option.modelName}</div>
-                        <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                      </button>
-                    );
-                  }) : (
-                    <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                  )}
-                </div>
-              )}
-            </div>
+  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string }) => {
+    if (action.url) {
+      try {
+        await window.ipcRenderer.invoke('app:open-path', { path: action.url });
+      } catch (error) {
+        console.error('Failed to open welcome action url:', error);
+      }
+      return;
+    }
+    if (action.text) {
+      sendMessage(action.text);
+    }
+  }, [sendMessage]);
+
+  const welcomeActionsBlock = welcomeActions && welcomeActions.length > 0 ? (
+    <div className="flex items-center justify-center gap-6">
+      {welcomeActions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          onClick={() => void handleWelcomeAction(action)}
+          className={clsx(
+            'group inline-flex items-center justify-center h-[36px] min-w-[36px] max-w-[36px] px-0 rounded-full border border-black/[0.04] bg-white/70 cursor-pointer overflow-hidden whitespace-nowrap transition-[max-width,padding,background-color,border-color,box-shadow] duration-500 ease-in-out hover:max-w-[200px] hover:px-4 hover:justify-start hover:gap-2 hover:bg-white hover:border-accent-primary/20 hover:shadow-md active:scale-95',
+            darkEmbedded && 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
+          )}
+          aria-label={action.label}
+        >
+          <div className={clsx(
+            'flex-shrink-0 flex items-center justify-center w-5 h-5 transition-colors duration-300',
+            action.color || (darkEmbedded ? 'text-white/60' : 'text-text-tertiary group-hover:text-accent-primary')
+          )}>
+            {action.icon || <Sparkles className="w-4 h-4" />}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleAudioInput}
-              disabled={isTranscribingAudio}
-              className={clsx(
-                'p-2 transition-colors',
-                isRecordingAudio ? 'text-red-500 hover:text-red-600' : composerSubtleButtonClass,
-                isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-              )}
-              title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-            >
-              {isTranscribingAudio ? (
-                <Loader2 className="w-[18px] h-[18px] animate-spin" />
-              ) : isRecordingAudio ? (
-                <Square className="w-[18px] h-[18px] fill-current" />
-              ) : (
-                <Mic className="w-[18px] h-[18px]" />
-              )}
-            </button>
-            <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-            </button>
-          </div>
-        </div>
-      </div>
-      {pendingAttachment && (
-        <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
-          <span className="truncate">附件: {pendingAttachment.name}</span>
-          <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
-            <FileX className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-    </form>
+          <span className={clsx(
+            'opacity-0 max-w-0 overflow-hidden text-[13px] font-bold group-hover:opacity-100 group-hover:max-w-[150px] transition-all duration-500 ease-in-out',
+            darkEmbedded ? 'text-white/72' : 'text-text-secondary',
+          )}>
+            {action.label}
+          </span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  const emptyComposerForm = renderComposer(
+    'empty',
+    'empty',
+    '问我任何问题，使用 @ 引用文件，/ 执行指令...',
+    { showContextUsage: true, showCancelWhenBusy: false },
   );
 
   return (
@@ -2210,57 +2535,9 @@ export function Chat({
             </div>
             {contextUsage?.success && (
               <div className={clsx('text-[11px] px-2.5 py-1 rounded-full border backdrop-blur', contextBadgeClass)}>
-                上下文 {contextUsedPercentDisplay}% · {contextUsage.estimatedTotalTokens || 0}/{contextUsage.compactThreshold || 0} tokens · compact {contextUsage.compactRounds || 0} 次
+                上下文 {contextUsedPercentDisplay}% · {estimatedEffectiveTokens}/{contextUsage.compactThreshold || 0} tokens · compact {contextUsage.compactRounds || 0} 次
               </div>
             )}
-          </div>
-        )}
-
-        {/* Corner Ring Compact Indicator (for fixed session, e.g. RedClaw) */}
-        {fixedSessionId && currentSessionId && contextUsage?.success && fixedSessionContextIndicatorMode === 'corner-ring' && (
-          <div className="absolute right-6 bottom-28 z-20 pointer-events-none">
-            <div className="relative group pointer-events-auto">
-              <button
-                type="button"
-                className="relative w-14 h-14 rounded-full border border-border bg-surface-primary/95 backdrop-blur shadow-md flex items-center justify-center"
-                title="上下文窗口剩余空间"
-                aria-label="上下文窗口剩余空间"
-              >
-                <svg className="w-11 h-11 -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
-                  <circle
-                    cx="22"
-                    cy="22"
-                    r={contextRingRadius}
-                    fill="transparent"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    className="text-border"
-                  />
-                  <circle
-                    cx="22"
-                    cy="22"
-                    r={contextRingRadius}
-                    fill="transparent"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    className={contextRingColorClass}
-                    strokeDasharray={contextRingCircumference}
-                    strokeDashoffset={contextRingOffset}
-                  />
-                </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-text-primary">
-                  {contextRemainingPercent}%
-                </span>
-              </button>
-
-                <div className="absolute right-0 bottom-[68px] w-64 p-3 rounded-2xl border border-border bg-surface-primary/95 backdrop-blur shadow-xl text-xs text-text-secondary opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100">
-                <div className="font-semibold text-text-primary mb-1">背景信息窗口</div>
-                <div>{contextUsedPercentDisplay}% 已用（剩余 {contextRemainingPercentRaw.toFixed(1)}%）</div>
-                <div>已用 {formatTokenLabel(estimatedTotalTokens)} 标记，共 {formatTokenLabel(compactThreshold)}</div>
-                <div className="mt-1 text-text-tertiary">RedClaw 自动压缩其背景信息</div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -2279,41 +2556,26 @@ export function Chat({
 
         {/* Content Area */}
         {isEmptySession && !dockedEmptyState ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto">
+          <div className={clsx(
+            'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
+            emptyStateVerticalAlign === 'lower' && 'pt-16'
+          )}>
             <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
               {/* Logo/Icon */}
               {showWelcomeHeader ? (
                 <>
-                  <div className="flex justify-center">
-                    {welcomeIconSrc ? (
-                      <img
-                        src={welcomeIconSrc}
-                        alt={welcomeTitle}
-                        className="w-24 h-24 object-contain"
-                      />
-                    ) : (
-                      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-                        <Sparkles className="w-8 h-8 text-white" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
-                    {welcomeSubtitle ? (
-                      <p className={clsx('text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>{welcomeSubtitle}</p>
-                    ) : null}
-                  </div>
+                  {welcomeHeaderBlock}
                 </>
               ) : null}
-
               {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
                 <div className="flex flex-wrap justify-center gap-2 text-xs">
                   {welcomeShortcuts.map((shortcut) => (
                     <button
                       key={shortcut.label}
                       onClick={() => sendMessage(shortcut.text)}
-                      className="px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer"
+                      className={darkEmbedded
+                        ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
+                        : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
                     >
                       {shortcut.label}
                     </button>
@@ -2322,121 +2584,16 @@ export function Chat({
               )}
 
               {/* 居中的输入框 (Codex Style) */}
-              <form onSubmit={handleSubmit} className="relative w-full mt-10">
-                <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellEmptyClass)}>
-                  {composerSuppressed ? (
-                    <button
-                      type="button"
-                      onClick={() => resumeComposerFocus('empty')}
-                      className={clsx('w-full rounded-2xl px-4 py-6 text-left text-[16px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-                    >
-                      对话已完成，点击后继续输入...
-                    </button>
-                  ) : (
-                    <textarea
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => {
-                        setInput(e.target.value);
-                        syncInputHeight();
-                      }}
-                      onFocus={() => handleComposerFocus('empty')}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                          e.preventDefault();
-                          handleSubmit(e as any);
-                          if (inputRef.current) inputRef.current.style.height = 'auto';
-                        }
-                      }}
-                      placeholder="问我任何问题，使用 @ 引用文件，/ 执行指令..."
-                      className={clsx('w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto', composerTextClass)}
-                      data-ime="chat-composer-empty"
-                      spellCheck={false}
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      readOnly={isProcessing}
-                      aria-disabled={isProcessing}
-                      rows={1}
-                    />
-                  )}
-                  <div className="flex items-center justify-between px-2 pb-1">
-                    <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-                        <Plus className="w-[18px] h-[18px]" />
-                      </button>
-                      <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowModelPicker((prev) => !prev)}
-                          className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-                        >
-                          <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                          <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-                        </button>
-                        {showModelPicker && (
-                          <div className={composerModelPickerClass}>
-                            {chatModelOptions.length ? chatModelOptions.map((option) => {
-                              const active = option.key === selectedChatModelKey;
-                              return (
-                                <button
-                                  key={option.key}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedChatModelKey(option.key);
-                                    closeModelPicker();
-                                  }}
-                                  className={clsx(
-                                    'w-full px-3 py-2.5 text-left transition-colors',
-                                    active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                                  )}
-                                >
-                                  <div className="text-sm font-medium truncate">{option.modelName}</div>
-                                  <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                                </button>
-                              );
-                            }) : (
-                              <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleAudioInput}
-                        disabled={isTranscribingAudio}
-                        className={clsx(
-                          'p-2 transition-colors',
-                          isRecordingAudio ? 'text-red-500 hover:text-red-600' : 'text-text-tertiary hover:text-text-secondary',
-                          isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-                        )}
-                        title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-                      >
-                        {isTranscribingAudio ? (
-                          <Loader2 className="w-[18px] h-[18px] animate-spin" />
-                        ) : isRecordingAudio ? (
-                          <Square className="w-[18px] h-[18px] fill-current" />
-                        ) : (
-                          <Mic className="w-[18px] h-[18px]" />
-                        )}
-                      </button>
-                      <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-                        {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                {pendingAttachment && (
-                  <div className={clsx('mt-3 mx-4', composerAttachmentClass)}>
-                    <span className="truncate">附件: {pendingAttachment.name}</span>
-                    <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary">
-                      <FileX className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-              </form>
+              {renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                className: 'mt-10',
+                showCancelWhenBusy: false,
+              })}
+            </div>
+            {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
+            <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
+              <div className="pointer-events-auto">
+                {welcomeActionsBlock}
+              </div>
             </div>
           </div>
         ) : (
@@ -2447,6 +2604,7 @@ export function Chat({
                 {dockedEmptyState ? (
                   <div className="text-center space-y-6 py-10">
                     {welcomeHeaderBlock}
+                    {welcomeActionsBlock}
                     {welcomeShortcutsBlock}
                   </div>
                 ) : (
@@ -2477,7 +2635,31 @@ export function Chat({
                 ) : (
                   <>
                 {errorNotice && (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{errorNotice}</div>
+                  <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
+                    {typeof errorNotice === 'string' ? (
+                      <>
+                        <div className="font-medium">请求失败</div>
+                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium">{errorNotice.title}</div>
+                        {errorNotice.hint && (
+                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
+                        )}
+                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
+                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
+                            {errorNotice.metaParts.join(' · ')}
+                          </div>
+                        )}
+                        {errorNotice.detail && (
+                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                            {errorNotice.detail}
+                          </pre>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
@@ -2489,123 +2671,10 @@ export function Chat({
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="relative w-full">
-                  <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-                  {pendingAttachment && (
-                    <div className={clsx('mb-3', composerAttachmentClass)}>
-                      <span className="truncate">附件: {pendingAttachment.name}</span>
-                      <button type="button" onClick={() => setPendingAttachment(null)} className="ml-2 text-text-tertiary hover:text-text-primary"><FileX className="w-3.5 h-3.5" /></button>
-                    </div>
-                  )}
-                  <div className={clsx('group relative flex flex-col w-full transition-all duration-200 focus-within:shadow-lg focus-within:border-accent-primary/20', composerShellClass)}>
-                    {composerSuppressed ? (
-                      <button
-                        type="button"
-                        onClick={() => resumeComposerFocus('composer')}
-                        className={clsx('w-full rounded-2xl px-3.5 py-6 text-left text-[14px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}
-                      >
-                        对话已完成，点击后继续输入...
-                      </button>
-                    ) : (
-                      <textarea
-                        ref={inputRef}
-                        value={input}
-                        onChange={(e) => {
-                          setInput(e.target.value);
-                          syncInputHeight();
-                        }}
-                        onFocus={() => handleComposerFocus('composer')}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey && !isImeComposingEvent(e)) {
-                            e.preventDefault();
-                            handleSubmit(e as any);
-                            if (inputRef.current) inputRef.current.style.height = 'auto';
-                          }
-                        }}
-                        placeholder="发送消息..."
-                        className={clsx('w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto', composerTextClass)}
-                        data-ime="chat-composer-main"
-                        spellCheck={false}
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        readOnly={isProcessing}
-                        aria-disabled={isProcessing}
-                        rows={1}
-                      />
-                    )}
-                    <div className="flex items-center justify-between px-1.5 pb-0.5">
-                      <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => void pickAttachment()} className={clsx('p-2 transition-colors', composerSubtleButtonClass)} title="添加文件">
-                          <Plus className="w-[18px] h-[18px]" />
-                        </button>
-                        <div ref={modelPickerRef} className="relative flex items-center gap-4 px-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowModelPicker((prev) => !prev)}
-                            className={clsx('flex items-center gap-1.5 transition-colors text-[13px] font-medium', composerSubtleButtonClass)}
-                          >
-                            <span className="max-w-[180px] truncate">{selectedChatModel?.modelName || '默认模型'}</span>
-                            <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', showModelPicker && 'rotate-180')} />
-                          </button>
-                          {showModelPicker && (
-                            <div className={composerModelPickerClass}>
-                              {chatModelOptions.length ? chatModelOptions.map((option) => {
-                                const active = option.key === selectedChatModelKey;
-                                return (
-                                  <button
-                                    key={option.key}
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedChatModelKey(option.key);
-                                      closeModelPicker();
-                                    }}
-                                    className={clsx(
-                                      'w-full px-3 py-2.5 text-left transition-colors',
-                                      active ? 'bg-accent-primary/10 text-text-primary' : darkEmbedded ? 'hover:bg-white/6 text-white/68' : 'hover:bg-surface-secondary/50 text-text-secondary'
-                                    )}
-                                  >
-                                    <div className="text-sm font-medium truncate">{option.modelName}</div>
-                                    <div className="text-[11px] text-text-tertiary truncate">{option.sourceName}</div>
-                                  </button>
-                                );
-                              }) : (
-                                <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isProcessing ? (
-                          <button type="button" onClick={handleCancel} className={clsx('p-2 rounded-lg transition-colors', darkEmbedded ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50')} title="停止生成"><StopCircle className="w-5 h-5" /></button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleAudioInput}
-                            disabled={isTranscribingAudio}
-                            className={clsx(
-                              'p-2 transition-colors',
-                              isRecordingAudio ? 'text-red-500 hover:text-red-600' : 'text-text-tertiary hover:text-text-secondary',
-                              isTranscribingAudio && 'opacity-60 cursor-not-allowed'
-                            )}
-                            title={isTranscribingAudio ? '语音转录中' : isRecordingAudio ? '停止录音并转写' : '语音输入'}
-                          >
-                            {isTranscribingAudio ? (
-                              <Loader2 className="w-[18px] h-[18px] animate-spin" />
-                            ) : isRecordingAudio ? (
-                              <Square className="w-[18px] h-[18px] fill-current" />
-                            ) : (
-                              <Mic className="w-[18px] h-[18px]" />
-                            )}
-                          </button>
-                        )}
-                        <button type="submit" disabled={(!input.trim() && !pendingAttachment) || isProcessing} className={clsx("w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200", composerSendButtonClass)}>
-                          {isProcessing ? <Loader2 className="w-4 h-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="w-5 h-5" />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </form>
+                {renderComposer('composer', 'main', '发送消息...', {
+                  showContextUsage: true,
+                  showCancelWhenBusy: true,
+                })}
                   </>
                 )}
               </div>

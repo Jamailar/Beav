@@ -133,14 +133,6 @@ pub fn runtime_default_role(runtime_mode: &str, intent: &str, metadata: Option<&
     }
 }
 
-pub fn runtime_direct_route(
-    runtime_mode: &str,
-    user_input: &str,
-    metadata: Option<&Value>,
-) -> Value {
-    runtime_direct_route_record(runtime_mode, user_input, metadata).into_value()
-}
-
 pub fn runtime_direct_route_record(
     runtime_mode: &str,
     user_input: &str,

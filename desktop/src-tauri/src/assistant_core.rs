@@ -1,6 +1,7 @@
 use crate::agent::{
     execute_prepared_session_agent_turn, AssistantDaemonTurn, PreparedSessionAgentTurn,
 };
+use crate::knowledge;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -11,6 +12,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
@@ -69,6 +71,21 @@ fn assistant_channel_public_value(channel: &Value, base_url: &str, fallback_path
         );
     }
     value
+}
+
+fn knowledge_api_public_value(channel: &Value, base_url: &str, fallback_path: &str) -> Value {
+    let endpoint_path = normalize_endpoint_path(
+        channel.get("endpointPath").and_then(|item| item.as_str()),
+        fallback_path,
+    );
+    json!({
+        "endpointPath": endpoint_path,
+        "webhookUrl": if base_url.is_empty() {
+            String::new()
+        } else {
+            format!("{base_url}{endpoint_path}")
+        }
+    })
 }
 
 fn normalize_request_path(path: &str) -> String {
@@ -131,6 +148,29 @@ fn assistant_route_kind_for_path(path: &str, state: &AssistantStateRecord) -> &'
         return "relay";
     }
     "generic"
+}
+
+fn knowledge_api_endpoint_path(state: &AssistantStateRecord) -> String {
+    let _ = state;
+    "/api/knowledge".to_string()
+}
+
+fn is_knowledge_api_path(path: &str, state: &AssistantStateRecord) -> bool {
+    let normalized = normalize_request_path(path);
+    let base_path = knowledge_api_endpoint_path(state);
+    normalized == base_path || normalized.starts_with(&format!("{base_path}/"))
+}
+
+fn extract_bearer_or_token(headers: &HashMap<String, String>) -> String {
+    let auth = headers
+        .get("authorization")
+        .or_else(|| headers.get("x-auth-token"))
+        .cloned()
+        .unwrap_or_default();
+    auth.strip_prefix("Bearer ")
+        .unwrap_or(&auth)
+        .trim()
+        .to_string()
 }
 
 fn extract_json_text(raw: &str) -> Option<String> {
@@ -312,6 +352,7 @@ pub(crate) fn assistant_state_value(state: &AssistantStateRecord) -> Value {
         "feishu": assistant_channel_public_value(&state.feishu, &base_url, "/hooks/feishu/events"),
         "relay": assistant_channel_public_value(&state.relay, &base_url, "/hooks/channel/relay"),
         "weixin": assistant_channel_public_value(&state.weixin, &base_url, "/hooks/weixin/relay"),
+        "knowledgeApi": knowledge_api_public_value(&state.knowledge_api, &base_url, "/api/knowledge"),
     })
 }
 
@@ -330,16 +371,27 @@ pub(crate) fn emit_assistant_status(app: &AppHandle, state: &AssistantStateRecor
     let _ = app.emit("assistant:daemon-status", assistant_state_value(state));
 }
 
-pub(crate) fn http_ok_json(stream: &mut TcpStream, body: Value) -> Result<(), String> {
+pub(crate) fn http_json_response(
+    stream: &mut TcpStream,
+    status_code: u16,
+    status_text: &str,
+    body: Value,
+) -> Result<(), String> {
     let payload = serde_json::to_string(&body).map_err(|error| error.to_string())?;
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status_code,
+        status_text,
         payload.len(),
         payload
     );
     stream
         .write_all(response.as_bytes())
         .map_err(|error| error.to_string())
+}
+
+pub(crate) fn http_ok_json(stream: &mut TcpStream, body: Value) -> Result<(), String> {
+    http_json_response(stream, 200, "OK", body)
 }
 
 pub(crate) fn parse_http_request_parts(raw: &str) -> (String, String) {
@@ -365,6 +417,70 @@ pub(crate) fn parse_http_request_meta(
         }
     }
     (method, path, headers)
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            buffer
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })
+}
+
+fn read_http_request(stream: &mut TcpStream, max_body_bytes: usize) -> Result<String, String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let mut header_end = None;
+    let mut content_length = 0_usize;
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                buffer.extend_from_slice(&chunk[..bytes_read]);
+                if header_end.is_none() {
+                    header_end = find_header_end(&buffer);
+                    if let Some(end) = header_end {
+                        let raw_headers = String::from_utf8_lossy(&buffer[..end]).to_string();
+                        let (_, _, headers) = parse_http_request_meta(raw_headers.trim_end());
+                        content_length = headers
+                            .get("content-length")
+                            .and_then(|value| value.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if content_length > max_body_bytes {
+                            return Err(format!(
+                                "HTTP body 超过限制: {} > {}",
+                                content_length, max_body_bytes
+                            ));
+                        }
+                    }
+                }
+                if let Some(end) = header_end {
+                    if buffer.len() >= end + content_length {
+                        break;
+                    }
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if header_end.is_some() {
+                    break;
+                }
+                return Err("HTTP request 读取超时".to_string());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    String::from_utf8(buffer).map_err(|error| error.to_string())
 }
 
 pub(crate) fn assistant_session_id_for_route(route_kind: &str) -> String {
@@ -452,13 +568,7 @@ pub(crate) fn validate_assistant_request(
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.trim().is_empty())
             {
-                let auth = headers
-                    .get("authorization")
-                    .or_else(|| headers.get("x-auth-token"))
-                    .cloned()
-                    .unwrap_or_default();
-                let normalized = auth.strip_prefix("Bearer ").unwrap_or(&auth);
-                if normalized.trim() != expected {
+                if extract_bearer_or_token(headers) != expected {
                     return Err("Relay auth token mismatch".to_string());
                 }
             }
@@ -470,13 +580,7 @@ pub(crate) fn validate_assistant_request(
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.trim().is_empty())
             {
-                let auth = headers
-                    .get("authorization")
-                    .or_else(|| headers.get("x-auth-token"))
-                    .cloned()
-                    .unwrap_or_default();
-                let normalized = auth.strip_prefix("Bearer ").unwrap_or(&auth);
-                if normalized.trim() != expected {
+                if extract_bearer_or_token(headers) != expected {
                     return Err("Weixin auth token mismatch".to_string());
                 }
             }
@@ -484,6 +588,71 @@ pub(crate) fn validate_assistant_request(
         _ => {}
     }
     Ok(None)
+}
+
+fn handle_knowledge_http_request(
+    app: &AppHandle,
+    assistant_state: &AssistantStateRecord,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> Result<(u16, &'static str, Value), String> {
+    let base_path = knowledge_api_endpoint_path(assistant_state);
+    let normalized_path = normalize_request_path(path);
+    let subpath = normalized_path
+        .strip_prefix(&base_path)
+        .unwrap_or("")
+        .trim_start_matches('/');
+    let state = app.state::<AppState>();
+
+    match (method, subpath) {
+        ("GET", "") | ("GET", "health") => Ok((
+            200,
+            "OK",
+            knowledge::knowledge_http_health(
+                &state,
+                knowledge::knowledge_http_body_limit(),
+                knowledge::knowledge_http_batch_limit(),
+            )?,
+        )),
+        ("POST", "entries") => {
+            let request: knowledge::KnowledgeEntryIngestRequest = serde_json::from_str(body)
+                .map_err(|error| format!("knowledge entry request 无法解析: {error}"))?;
+            let response = knowledge::ingest_entry(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
+        ("POST", "document-sources") => {
+            let request: knowledge::KnowledgeDocumentSourceIngestRequest =
+                serde_json::from_str(body).map_err(|error| {
+                    format!("knowledge document source request 无法解析: {error}")
+                })?;
+            let response = knowledge::ingest_document_source(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
+        ("POST", "media-assets") => {
+            let request: knowledge::KnowledgeMediaAssetIngestRequest =
+                serde_json::from_str(body)
+                    .map_err(|error| format!("knowledge media assets request 无法解析: {error}"))?;
+            let response = knowledge::ingest_media_assets(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
+        ("POST", "batch-ingest") => {
+            let request: knowledge::KnowledgeBatchIngestRequest = serde_json::from_str(body)
+                .map_err(|error| format!("knowledge batch request 无法解析: {error}"))?;
+            let response = knowledge::batch_ingest(Some(app), &state, &request)?;
+            Ok((200, "OK", response))
+        }
+        _ => Ok((
+            404,
+            "Not Found",
+            json!({
+                "success": false,
+                "error": "Knowledge API route not found",
+                "path": normalized_path,
+                "basePath": base_path,
+            }),
+        )),
+    }
 }
 
 pub(crate) fn execute_assistant_message(
@@ -557,9 +726,28 @@ pub(crate) fn run_assistant_listener(
         while !stop.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, addr)) => {
-                    let mut buffer = [0_u8; 4096];
-                    let _ = stream.read(&mut buffer);
-                    let request = String::from_utf8_lossy(&buffer);
+                    let request = match read_http_request(
+                        &mut stream,
+                        knowledge::knowledge_http_body_limit(),
+                    ) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            emit_assistant_log(
+                                &app,
+                                &format!(
+                                    "assistant daemon request read failed from {}: {}",
+                                    addr, error
+                                ),
+                            );
+                            let _ = http_json_response(
+                                &mut stream,
+                                400,
+                                "Bad Request",
+                                json!({ "success": false, "error": error }),
+                            );
+                            continue;
+                        }
+                    };
                     let first_line = request.lines().next().unwrap_or_default().to_string();
                     let path = first_line
                         .split_whitespace()
@@ -574,13 +762,46 @@ pub(crate) fn run_assistant_listener(
                         Ok(store.assistant_state.clone())
                     })
                     .unwrap_or_else(|_| AssistantStateRecord::default());
+                    let (raw_headers, body) = parse_http_request_parts(&request);
+                    let (method, _path, headers) = parse_http_request_meta(&raw_headers);
+                    if is_knowledge_api_path(&path, &assistant_snapshot) {
+                        emit_assistant_log(
+                            &app,
+                            "assistant daemon matched route kind: knowledge-api",
+                        );
+                        let response = match handle_knowledge_http_request(
+                            &app,
+                            &assistant_snapshot,
+                            &method,
+                            &path,
+                            &body,
+                        ) {
+                            Ok((status, status_text, body)) => {
+                                http_json_response(&mut stream, status, status_text, body)
+                            }
+                            Err(error) => http_json_response(
+                                &mut stream,
+                                400,
+                                "Bad Request",
+                                json!({ "success": false, "error": error }),
+                            ),
+                        };
+                        if let Err(error) = response {
+                            emit_assistant_log(
+                                &app,
+                                &format!(
+                                    "assistant daemon failed to write knowledge response: {}",
+                                    error
+                                ),
+                            );
+                        }
+                        continue;
+                    }
                     let route_kind = assistant_route_kind_for_path(&path, &assistant_snapshot);
                     emit_assistant_log(
                         &app,
                         &format!("assistant daemon matched route kind: {}", route_kind),
                     );
-                    let (raw_headers, body) = parse_http_request_parts(&request);
-                    let (_method, _path, headers) = parse_http_request_meta(&raw_headers);
                     let result = execute_assistant_message(&app, route_kind, &headers, &body)
                         .unwrap_or_else(|error| {
                             json!({
@@ -600,14 +821,14 @@ pub(crate) fn run_assistant_listener(
                     );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(std::time::Duration::from_millis(200));
+                    thread::sleep(Duration::from_millis(200));
                 }
                 Err(error) => {
                     emit_assistant_log(
                         &app,
                         &format!("assistant daemon listener error: {}", error),
                     );
-                    thread::sleep(std::time::Duration::from_millis(500));
+                    thread::sleep(Duration::from_millis(500));
                 }
             }
         }
@@ -735,6 +956,10 @@ mod tests {
                 "stateDir": "",
                 "availableAccountIds": []
             }),
+            knowledge_api: json!({
+                "endpointPath": "/api/knowledge/custom",
+                "webhookUrl": ""
+            }),
         }
     }
 
@@ -759,6 +984,12 @@ mod tests {
                 .and_then(|item| item.as_str()),
             Some("http://127.0.0.1:31937/hooks/weixin/custom")
         );
+        assert_eq!(
+            value
+                .pointer("/knowledgeApi/webhookUrl")
+                .and_then(|item| item.as_str()),
+            Some("http://127.0.0.1:31937/api/knowledge")
+        );
     }
 
     #[test]
@@ -780,6 +1011,11 @@ mod tests {
             assistant_route_kind_for_path("/hooks/feishu/events", &state),
             "generic"
         );
+        assert!(is_knowledge_api_path("/api/knowledge/entries", &state));
+        assert!(!is_knowledge_api_path(
+            "/api/knowledge/custom/entries",
+            &state
+        ));
     }
 
     #[test]

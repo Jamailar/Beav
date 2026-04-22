@@ -1,6 +1,57 @@
-const API_ROOT = 'http://127.0.0.1:23456/api';
+const KNOWLEDGE_API_CANDIDATES = [
+  {
+    baseUrl: 'http://127.0.0.1:23456',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://localhost:23456',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://127.0.0.1:31937',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://localhost:31937',
+    endpointPath: '/api/knowledge',
+  },
+];
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
+const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+const UPDATE_STATE_KEY = 'pluginUpdateState';
+const UPDATE_ALARM_NAME = 'redbox-plugin-auto-update-check';
+const UPDATE_CHECK_INTERVAL_MINUTES = 360;
+const UPDATE_SOURCE_MANIFEST_URL = 'https://raw.githubusercontent.com/Jamailar/RedBox/main/Plugin/manifest.json';
+const UPDATE_SOURCE_REPO_URL = 'https://github.com/Jamailar/RedBox/tree/main/Plugin';
+const MENU_ROOT_ID = 'redbox-root';
+const MENU_PAGE_ID = 'redbox-save-page-auto';
+const MENU_SELECTION_ID = 'redbox-save-selection';
+const MENU_LINK_ID = 'redbox-save-link';
+const MENU_IMAGE_ID = 'redbox-save-image';
+const MENU_VIDEO_ID = 'redbox-save-video';
+
+let cachedKnowledgeApi = null;
+let cachedKnowledgeApiAt = 0;
+
+function describeError(error) {
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+  return String(error);
+}
+
+function pluginLog(scope, details) {
+  console.log(`[redbox-plugin][${scope}]`, details);
+}
+
+function pluginWarn(scope, details) {
+  console.warn(`[redbox-plugin][${scope}]`, details);
+}
+
+function pluginError(scope, details) {
+  console.error(`[redbox-plugin][${scope}]`, details);
+}
 
 function createLinkFallbackPageInfo(overrides = {}) {
   return {
@@ -15,17 +66,59 @@ function createLinkFallbackPageInfo(overrides = {}) {
   };
 }
 
+function ensureContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: MENU_ROOT_ID,
+      title: '保存到 RedBox',
+      contexts: ['page', 'selection', 'link', 'image', 'video'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_PAGE_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前页面内容到知识库',
+      contexts: ['page'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_SELECTION_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存选中文字到知识库',
+      contexts: ['selection'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_LINK_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前链接到知识库',
+      contexts: ['link'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_IMAGE_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前图片到素材库',
+      contexts: ['image'],
+    });
+    chrome.contextMenus.create({
+      id: MENU_VIDEO_ID,
+      parentId: MENU_ROOT_ID,
+      title: '保存当前视频到知识库',
+      contexts: ['video'],
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'redbox-save-selection',
-    title: '保存选中文字到 RedBox',
-    contexts: ['selection'],
-  });
-  chrome.contextMenus.create({
-    id: 'redbox-save-page-link',
-    title: '保存当前页面链接到 RedBox',
-    contexts: ['page'],
-  });
+  ensureContextMenus();
+  void initializeUpdateChecks(true);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureContextMenus();
+  void initializeUpdateChecks(false);
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== UPDATE_ALARM_NAME) return;
+  void checkForPluginUpdates({ force: true, reason: 'alarm' });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -40,13 +133,34 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
-  if (info.menuItemId === 'redbox-save-selection') {
-    void saveSelectedTextFromTab(tab.id);
-    return;
-  }
-  if (info.menuItemId === 'redbox-save-page-link') {
-    void saveCurrentPageLinkFromTab(tab.id);
-  }
+  const run = async () => {
+    if (info.menuItemId === MENU_PAGE_ID) {
+      await saveCurrentPageFromTab(tab.id);
+      return;
+    }
+    if (info.menuItemId === MENU_SELECTION_ID) {
+      await saveSelectedTextFromTab(tab.id);
+      return;
+    }
+    if (info.menuItemId === MENU_LINK_ID) {
+      await saveLinkFromContext(tab, info);
+      return;
+    }
+    if (info.menuItemId === MENU_IMAGE_ID) {
+      await saveImageFromContext(tab, info);
+      return;
+    }
+    if (info.menuItemId === MENU_VIDEO_ID) {
+      await saveVideoFromContext(tab, info);
+    }
+  };
+  void run().catch((error) => {
+    pluginError('context-menu-action', {
+      menuItemId: String(info?.menuItemId || ''),
+      tabId: Number(tab?.id || 0) || null,
+      error: describeError(error),
+    });
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -55,6 +169,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await handleMessage(message, sender);
       sendResponse(result);
     } catch (error) {
+      pluginError('runtime-message', {
+        type: message?.type || 'unknown',
+        tabId: Number(message?.tabId || sender?.tab?.id || 0) || null,
+        error: describeError(error),
+      });
       sendResponse({
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -66,6 +185,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   const tabId = Number(message?.tabId || sender?.tab?.id || 0);
+  pluginLog('handle-message', {
+    type: message?.type || 'unknown',
+    tabId: tabId || null,
+    senderTabUrl: String(sender?.tab?.url || ''),
+  });
 
   switch (message?.type) {
     case 'page-state:update':
@@ -79,16 +203,29 @@ async function handleMessage(message, sender) {
       return { success: true };
     case 'healthcheck':
       return await checkDesktopServer();
+    case 'plugin-update:get-status':
+      return await getPluginUpdateStatus(message?.refresh === true);
+    case 'plugin-update:check':
+      return await checkForPluginUpdates({ force: true, reason: 'manual' });
+    case 'plugin-update:open-source':
+      await chrome.tabs.create({ url: UPDATE_SOURCE_REPO_URL });
+      return { success: true };
     case 'inspect-page':
       return await inspectPage(tabId);
     case 'save-xhs':
       return await saveXhsNoteFromTab(tabId);
+    case 'save-douyin':
+      return await saveDouyinVideoFromTab(tabId);
     case 'save-youtube':
       return await saveYouTubeFromTab(tabId);
     case 'save-selection':
       return await saveSelectedTextFromTab(tabId);
+    case 'save-page-auto':
+      return await saveCurrentPageFromTab(tabId);
     case 'save-page-link':
       return await saveCurrentPageLinkFromTab(tabId);
+    case 'save-drag-image':
+      return await saveDraggedImagePayload(message?.payload, sender?.tab);
     default:
       return { success: false, error: 'Unsupported action' };
   }
@@ -188,17 +325,253 @@ function detectCaptureTargetFromUrl(rawUrl) {
     });
   }
 
+  if (/(^|\.)douyin\.com$/i.test(hostname)) {
+    return createLinkFallbackPageInfo({
+      kind: 'douyin-pending',
+      description: '当前页面还没有稳定识别到有效的抖音视频内容。',
+    });
+  }
+
   return createLinkFallbackPageInfo();
+}
+
+function getCurrentPluginVersion() {
+  const manifest = chrome.runtime.getManifest();
+  return normalizeText(manifest?.version) || '0.0.0';
+}
+
+function compareVersions(left, right) {
+  const leftParts = String(left || '')
+    .split('.')
+    .map((item) => Number.parseInt(item, 10))
+    .map((item) => (Number.isFinite(item) ? item : 0));
+  const rightParts = String(right || '')
+    .split('.')
+    .map((item) => Number.parseInt(item, 10))
+    .map((item) => (Number.isFinite(item) ? item : 0));
+  const maxLength = Math.max(leftParts.length, rightParts.length, 1);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftValue = leftParts[index] || 0;
+    const rightValue = rightParts[index] || 0;
+    if (leftValue > rightValue) return 1;
+    if (leftValue < rightValue) return -1;
+  }
+  return 0;
+}
+
+function createDefaultUpdateState() {
+  const currentVersion = getCurrentPluginVersion();
+  return {
+    currentVersion,
+    latestVersion: currentVersion,
+    hasUpdate: false,
+    lastCheckedAt: null,
+    sourceUrl: UPDATE_SOURCE_REPO_URL,
+    lastError: '',
+    checkStatus: 'idle',
+  };
+}
+
+function sanitizeUpdateState(input) {
+  const fallback = createDefaultUpdateState();
+  if (!input || typeof input !== 'object') {
+    return fallback;
+  }
+  const currentVersion = normalizeText(input.currentVersion) || fallback.currentVersion;
+  const latestVersion = normalizeText(input.latestVersion) || currentVersion;
+  return {
+    currentVersion,
+    latestVersion,
+    hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+    lastCheckedAt: normalizeText(input.lastCheckedAt) || null,
+    sourceUrl: normalizeText(input.sourceUrl) || UPDATE_SOURCE_REPO_URL,
+    lastError: normalizeText(input.lastError),
+    checkStatus: normalizeText(input.checkStatus) || fallback.checkStatus,
+  };
+}
+
+function getStorageLocal(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, (result) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
+function setStorageLocal(values) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(values, () => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function readPluginUpdateState() {
+  const stored = await getStorageLocal([UPDATE_STATE_KEY]).catch(() => ({}));
+  return sanitizeUpdateState(stored?.[UPDATE_STATE_KEY]);
+}
+
+async function writePluginUpdateState(nextState) {
+  const state = sanitizeUpdateState(nextState);
+  await setStorageLocal({ [UPDATE_STATE_KEY]: state });
+  await applyUpdateBadge(state);
+  return state;
+}
+
+async function applyUpdateBadge(stateInput) {
+  const state = sanitizeUpdateState(stateInput);
+  const badgeText = state.hasUpdate ? 'NEW' : '';
+  await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' }).catch(() => {});
+  if (typeof chrome.action.setBadgeTextColor === 'function') {
+    await chrome.action.setBadgeTextColor({ color: '#fff7ed' }).catch(() => {});
+  }
+  await chrome.action.setBadgeText({ text: badgeText }).catch(() => {});
+  const title = state.hasUpdate
+    ? `RedBox Capture：发现新版本 ${state.latestVersion}`
+    : `RedBox Capture ${state.currentVersion}`;
+  await chrome.action.setTitle({ title }).catch(() => {});
+}
+
+async function initializeUpdateChecks(forceImmediateCheck) {
+  await writePluginUpdateState(await readPluginUpdateState());
+  await chrome.alarms.create(UPDATE_ALARM_NAME, {
+    periodInMinutes: UPDATE_CHECK_INTERVAL_MINUTES,
+    delayInMinutes: 1,
+  });
+  if (forceImmediateCheck) {
+    await checkForPluginUpdates({ force: true, reason: 'install' });
+    return;
+  }
+  const currentState = await readPluginUpdateState();
+  if (!currentState.lastCheckedAt) {
+    await checkForPluginUpdates({ force: false, reason: 'startup-empty-cache' });
+  }
+}
+
+async function fetchRemotePluginManifest() {
+  const response = await fetch(UPDATE_SOURCE_MANIFEST_URL, {
+    cache: 'no-store',
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`更新源请求失败：HTTP ${response.status}`);
+  }
+  const data = await response.json();
+  if (!data || typeof data !== 'object') {
+    throw new Error('更新源返回了无效的 manifest');
+  }
+  return data;
+}
+
+async function getPluginUpdateStatus(refresh = false) {
+  if (refresh) {
+    return await checkForPluginUpdates({ force: true, reason: 'popup-refresh' });
+  }
+  const state = await readPluginUpdateState();
+  return {
+    success: true,
+    update: state,
+  };
+}
+
+async function checkForPluginUpdates(options = {}) {
+  const force = options?.force === true;
+  const reason = normalizeText(options?.reason) || 'unknown';
+  const currentState = await readPluginUpdateState();
+  if (!force && currentState.checkStatus === 'checking') {
+    return {
+      success: true,
+      update: currentState,
+    };
+  }
+
+  const checkingState = await writePluginUpdateState({
+    ...currentState,
+    checkStatus: 'checking',
+    lastError: '',
+  });
+
+  try {
+    pluginLog('plugin-update-check-start', {
+      reason,
+      source: UPDATE_SOURCE_MANIFEST_URL,
+    });
+    const remoteManifest = await fetchRemotePluginManifest();
+    const currentVersion = getCurrentPluginVersion();
+    const latestVersion = normalizeText(remoteManifest?.version) || currentVersion;
+    const nextState = await writePluginUpdateState({
+      ...checkingState,
+      currentVersion,
+      latestVersion,
+      hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+      lastCheckedAt: new Date().toISOString(),
+      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      lastError: '',
+      checkStatus: 'idle',
+    });
+    pluginLog('plugin-update-check-success', {
+      reason,
+      currentVersion,
+      latestVersion,
+      hasUpdate: nextState.hasUpdate,
+    });
+    return {
+      success: true,
+      update: nextState,
+    };
+  } catch (error) {
+    const nextState = await writePluginUpdateState({
+      ...checkingState,
+      currentVersion: getCurrentPluginVersion(),
+      latestVersion: currentState.latestVersion,
+      lastCheckedAt: new Date().toISOString(),
+      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      lastError: error instanceof Error ? error.message : String(error),
+      checkStatus: 'idle',
+    });
+    pluginWarn('plugin-update-check-failed', {
+      reason,
+      error: describeError(error),
+    });
+    return {
+      success: false,
+      error: nextState.lastError || '检查更新失败',
+      update: nextState,
+    };
+  }
 }
 
 async function checkDesktopServer() {
   try {
-    const response = await fetch(`${API_ROOT}/status`, { method: 'GET' });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return { success: true };
+    const endpoint = await resolveKnowledgeApiEndpoint();
+    const response = await fetchKnowledgeJson(endpoint, '/health', {
+      method: 'GET',
+    });
+    pluginLog('healthcheck-success', {
+      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      counts: response?.counts || null,
+    });
+    return {
+      success: true,
+      endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      health: response,
+    };
   } catch (error) {
+    pluginError('healthcheck-failed', {
+      error: describeError(error),
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -206,14 +579,84 @@ async function checkDesktopServer() {
   }
 }
 
-async function postJson(endpoint, payload) {
-  const response = await fetch(`${API_ROOT}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
+  const now = Date.now();
+  if (
+    !forceRefresh &&
+    cachedKnowledgeApi &&
+    (now - cachedKnowledgeApiAt) < KNOWLEDGE_API_CACHE_TTL_MS
+  ) {
+    return cachedKnowledgeApi;
+  }
+
+  let lastError = null;
+  const attemptedUrls = [];
+  for (const candidate of KNOWLEDGE_API_CANDIDATES) {
+    const probeUrl = `${candidate.baseUrl}${candidate.endpointPath}/health`;
+    attemptedUrls.push(probeUrl);
+    try {
+      pluginLog('endpoint-probe', {
+        url: probeUrl,
+      });
+      const response = await fetchKnowledgeJson(candidate, '/health', {
+        method: 'GET',
+      });
+      if (response?.success) {
+        cachedKnowledgeApi = candidate;
+        cachedKnowledgeApiAt = now;
+        pluginLog('endpoint-selected', {
+          url: `${candidate.baseUrl}${candidate.endpointPath}`,
+        });
+        return candidate;
+      }
+      lastError = new Error(response?.error || 'Knowledge API healthcheck failed');
+      pluginWarn('endpoint-probe-non-success', {
+        url: probeUrl,
+        response,
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      pluginWarn('endpoint-probe-failed', {
+        url: probeUrl,
+        error: describeError(lastError),
+      });
+    }
+  }
+
+  throw new Error(
+    `未连接到 RedBox Knowledge API。已尝试: ${attemptedUrls.join(', ')}。` +
+    `最后错误: ${lastError?.message || 'unknown error'}。` +
+    ' 请确认桌面应用已启动，并且 assistant daemon 正在监听 127.0.0.1:31937。'
+  );
+}
+
+async function fetchKnowledgeJson(endpoint, path, init = {}) {
+  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
+  const headers = new Headers(init.headers || {});
+  const method = String(init.method || 'GET').toUpperCase();
+  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  pluginLog('http-request', {
+    method,
+    url,
   });
+
+  let response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    pluginError('http-network-failed', {
+      method,
+      url,
+      error: describeError(error),
+    });
+    throw new Error(`请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   let data = null;
   try {
@@ -223,10 +666,552 @@ async function postJson(endpoint, payload) {
   }
 
   if (!response.ok || data?.success === false) {
+    pluginError('http-response-failed', {
+      method,
+      url,
+      status: response.status,
+      body: data,
+    });
     throw new Error(data?.error || `HTTP ${response.status}`);
   }
 
+  pluginLog('http-response', {
+    method,
+    url,
+    status: response.status,
+    success: data?.success !== false,
+  });
+
   return data || { success: true };
+}
+
+async function postKnowledgeEntry(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('entry-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/entries`,
+    kind: String(payload?.kind || ''),
+    sourceDomain: String(payload?.source?.sourceDomain || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
+    sourceUrl: String(payload?.source?.sourceUrl || ''),
+    externalId: String(payload?.source?.externalId || ''),
+  });
+  const response = await fetchKnowledgeJson(endpoint, '/entries', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  pluginLog('entry-submit-success', {
+    kind: String(payload?.kind || ''),
+    entryId: response?.entryId || '',
+    duplicate: Boolean(response?.duplicate),
+    updated: Boolean(response?.updated),
+  });
+  return response;
+}
+
+async function postKnowledgeMediaAssets(payload) {
+  const endpoint = await resolveKnowledgeApiEndpoint();
+  pluginLog('media-submit', {
+    endpoint: `${endpoint.baseUrl}${endpoint.endpointPath}/media-assets`,
+    sourceDomain: String(payload?.source?.sourceDomain || ''),
+    sourceLink: String(payload?.source?.sourceLink || ''),
+    itemCount: Array.isArray(payload?.items) ? payload.items.length : 0,
+  });
+  const response = await fetchKnowledgeJson(endpoint, '/media-assets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  pluginLog('media-submit-success', {
+    imported: Number(response?.imported || 0),
+  });
+  return response;
+}
+
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function truncateText(value, maxLength) {
+  const normalized = normalizeText(value);
+  if (!normalized || normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function hashString(value) {
+  const input = String(value || '');
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function replaceRichHtmlTokens(html, replacements) {
+  let output = String(html || '');
+  for (const item of Array.isArray(replacements) ? replacements : []) {
+    const token = normalizeText(item?.token);
+    const url = normalizeText(item?.url);
+    if (!token || !url) continue;
+    output = output.split(token).join(url);
+  }
+  return output;
+}
+
+function extractDomainFromUrl(value) {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  try {
+    return String(new URL(raw).hostname || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(normalizeText(value));
+}
+
+function isDirectResourceSource(value) {
+  const raw = normalizeText(value);
+  return isHttpUrl(raw) || raw.startsWith('data:');
+}
+
+function extractPathTitle(value) {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const lastSegment = String(parsed.pathname || '')
+      .split('/')
+      .filter(Boolean)
+      .pop() || '';
+    const clean = decodeURIComponent(lastSegment).replace(/\.[a-z0-9]+$/i, '').trim();
+    return clean;
+  } catch {
+    return '';
+  }
+}
+
+function inferSiteNameFromUrl(value) {
+  return extractDomainFromUrl(value).replace(/^www\./i, '');
+}
+
+function createKnowledgeSourceInput(fields = {}) {
+  const sourceLink = normalizeText(fields.sourceLink || fields.sourceUrl);
+  const sourceDomain = normalizeText(fields.sourceDomain) || extractDomainFromUrl(sourceLink);
+  return {
+    appId: 'redbox-capture',
+    pluginId: 'redbox-browser-extension',
+    sourceDomain: sourceDomain || undefined,
+    sourceLink: sourceLink || undefined,
+    sourceUrl: sourceLink || undefined,
+    externalId: normalizeText(fields.externalId) || undefined,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function buildLinkTargetEntry(payload = {}) {
+  const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
+  const title = normalizeText(payload?.title) || extractPathTitle(sourceUrl) || '网页链接';
+  const description = normalizeText(payload?.description)
+    || normalizeText(payload?.text)
+    || normalizeText(payload?.excerpt)
+    || sourceUrl;
+
+  if (!sourceUrl) {
+    throw new Error('缺少可保存的链接地址');
+  }
+  if (!isHttpUrl(sourceUrl)) {
+    throw new Error('当前链接不是可保存的网页地址');
+  }
+
+  return {
+    kind: 'webpage',
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      sourceDomain,
+      externalId: `link-${hashString(sourceUrl)}`,
+    }),
+    content: {
+      title,
+      text: description,
+      excerpt: truncateText(description, 180),
+      description: truncateText(description, 500),
+      siteName: normalizeText(payload?.siteName) || inferSiteNameFromUrl(sourceUrl) || undefined,
+      tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : ['链接收藏'],
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+    },
+    options: {
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildVideoResourceEntry(payload = {}) {
+  const pageUrl = normalizeText(payload?.pageUrl || payload?.sourceLink || payload?.url);
+  const videoUrl = normalizeText(payload?.videoUrl || payload?.srcUrl);
+  const sourceLink = pageUrl || videoUrl;
+  const sourceDomain = extractDomainFromUrl(sourceLink);
+  const title = normalizeText(payload?.title)
+    || extractPathTitle(videoUrl)
+    || extractPathTitle(sourceLink)
+    || '视频内容';
+
+  if (!sourceLink) {
+    throw new Error('缺少可保存的视频来源');
+  }
+
+  return {
+    kind: 'webpage',
+    source: createKnowledgeSourceInput({
+      sourceLink,
+      sourceDomain,
+      externalId: `video-${hashString(`${sourceLink}\n${videoUrl}`)}`,
+    }),
+    content: {
+      title,
+      text: normalizeText(payload?.description) || videoUrl || sourceLink,
+      excerpt: truncateText(normalizeText(payload?.description) || title, 180),
+      description: truncateText(normalizeText(payload?.description) || videoUrl || sourceLink, 500),
+      siteName: inferSiteNameFromUrl(sourceLink) || undefined,
+      tags: ['视频'],
+    },
+    assets: {
+      videoUrl: videoUrl || undefined,
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+    },
+    options: {
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildImageAssetPayload(payload = {}) {
+  const pageUrl = normalizeText(payload?.pageUrl || payload?.sourceLink || payload?.url);
+  const imageUrl = normalizeText(payload?.imageUrl || payload?.srcUrl);
+  const sourceLink = pageUrl || imageUrl;
+  const sourceDomain = extractDomainFromUrl(sourceLink);
+  const title = normalizeText(payload?.title)
+    || extractPathTitle(imageUrl)
+    || extractPathTitle(sourceLink)
+    || '网页图片';
+
+  if (!imageUrl) {
+    throw new Error('缺少可保存的图片地址');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前图片资源暂不支持直接保存');
+  }
+
+  return {
+    source: createKnowledgeSourceInput({
+      sourceLink,
+      sourceDomain,
+      externalId: `image-${hashString(`${sourceLink}\n${imageUrl}`)}`,
+    }),
+    items: [
+      {
+        title,
+        source: imageUrl,
+      },
+    ],
+  };
+}
+
+function buildSelectionEntry(payload) {
+  const text = normalizeText(payload?.text);
+  const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
+  const title = normalizeText(payload?.title) || '网页摘录';
+
+  if (!text) {
+    throw new Error('当前页面没有选中文字');
+  }
+
+  return {
+    kind: 'text-note',
+    source: createKnowledgeSourceInput({
+      sourceUrl,
+      externalId: `selection-${hashString(`${sourceUrl}\n${text}`)}`,
+    }),
+    content: {
+      title,
+      text,
+      excerpt: truncateText(text, 180),
+      siteName: sourceDomain || sourceUrl,
+      tags: ['网页摘录'],
+    },
+    assets: {},
+    options: {
+      dedupeKey: `selection:${hashString(`${sourceUrl}\n${text}`)}`,
+      allowUpdate: false,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildPageLinkEntry(payload) {
+  const sourceUrl = normalizeText(payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl);
+  const title = normalizeText(payload?.title) || '网页收藏';
+  const richHtmlDocument = replaceRichHtmlTokens(
+    payload?.richHtmlDocument,
+    payload?.richHtmlImageMap,
+  );
+  const kind = normalizeText(payload?.captureKind)
+    || (payload?.type === 'link-article' ? 'link-article' : 'webpage');
+  const text = normalizeText(payload?.text)
+    || normalizeText(payload?.excerpt)
+    || sourceUrl;
+
+  if (!sourceUrl) {
+    throw new Error('当前页面缺少可保存的链接地址');
+  }
+
+  return {
+    kind,
+    source: createKnowledgeSourceInput({
+      sourceUrl,
+      externalId: `page-${hashString(sourceUrl)}`,
+    }),
+    content: {
+      title,
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(payload?.excerpt || text, 180),
+      html: richHtmlDocument || undefined,
+      description: truncateText(text, 500),
+      siteName: normalizeText(payload?.siteName) || sourceDomain || undefined,
+      tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : [],
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || undefined,
+      imageUrls: Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [],
+    },
+    options: {
+      dedupeKey: undefined,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildYouTubeEntry(payload) {
+  const videoId = normalizeText(payload?.videoId);
+  const videoUrl = normalizeText(payload?.videoUrl);
+  const sourceDomain = extractDomainFromUrl(videoUrl);
+  const title = normalizeText(payload?.title);
+
+  if (!videoId || !videoUrl || !title) {
+    throw new Error('当前页面不是可识别的 YouTube 视频页');
+  }
+
+  return {
+    kind: 'youtube-video',
+    source: createKnowledgeSourceInput({
+      sourceUrl: videoUrl,
+      externalId: videoId,
+    }),
+    content: {
+      title,
+      description: normalizeText(payload?.description),
+      text: normalizeText(payload?.description),
+      siteName: sourceDomain || 'youtube.com',
+      tags: ['YouTube'],
+    },
+    assets: {
+      thumbnailUrl: normalizeText(payload?.thumbnailUrl) || undefined,
+    },
+    options: {
+      dedupeKey: videoId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: false,
+    },
+  };
+}
+
+function buildXhsEntry(payload) {
+  function extractTagsFromText(value) {
+    const tags = [];
+    const seen = new Set();
+    for (const token of String(value || '').split('#').slice(1)) {
+      const candidate = String(token)
+        .split(/\r?\n/, 1)[0]
+        .split(/\s+/, 1)[0]
+        .replace(/^[#]+|[，,。.！!？?]+$/g, '')
+        .trim();
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      tags.push(candidate);
+    }
+    return tags;
+  }
+
+  const sourceUrl = normalizeText(payload?.source);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
+  const stableNoteId = normalizeText(payload?.noteId)
+    || `xhs-${hashString(sourceUrl)}`;
+  const noteType = normalizeText(payload?.noteType);
+  const videoAssetUrl = normalizeText(payload?.videoDataUrl)
+    || normalizeText(payload?.videoUrl);
+  const imageUrls = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+  const kind = noteType === 'video'
+    ? 'xhs-video'
+    : noteType === 'image'
+      ? 'xhs-note'
+      : videoAssetUrl
+        ? 'xhs-video'
+        : 'xhs-note';
+  const text = normalizeText(payload?.text) || normalizeText(payload?.content);
+  const tags = Array.from(new Set(['小红书', ...extractTagsFromText(text)]));
+
+  return {
+    kind,
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      externalId: stableNoteId,
+      sourceDomain,
+    }),
+    content: {
+      title: normalizeText(payload?.title) || '小红书内容',
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(text, 180),
+      description: truncateText(text, 500),
+      siteName: sourceDomain,
+      tags,
+      stats: {
+        likes: Number(payload?.stats?.likes || 0),
+        collects: Number(payload?.stats?.collects || 0),
+      },
+    },
+    assets: {
+      coverUrl: normalizeText(payload?.coverUrl) || imageUrls[0] || undefined,
+      imageUrls,
+      videoUrl: videoAssetUrl || undefined,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: kind === 'xhs-video',
+    },
+  };
+}
+
+function buildDouyinEntry(payload) {
+  function extractTagsFromText(value) {
+    const tags = [];
+    const seen = new Set();
+    for (const token of String(value || '').split('#').slice(1)) {
+      const candidate = String(token)
+        .split(/\r?\n/, 1)[0]
+        .split(/\s+/, 1)[0]
+        .replace(/^[#]+|[，,。.！!？?]+$/g, '')
+        .trim();
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      tags.push(candidate);
+    }
+    return tags;
+  }
+
+  const sourceUrl = normalizeText(payload?.source || payload?.url);
+  const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.douyin.com';
+  const stableNoteId = normalizeText(payload?.noteId)
+    || `douyin-${hashString(sourceUrl || normalizeText(payload?.videoUrl) || normalizeText(payload?.title))}`;
+  const videoAssetUrl = normalizeText(payload?.videoDataUrl)
+    || normalizeText(payload?.videoUrl);
+  const coverUrl = normalizeText(payload?.coverDataUrl)
+    || normalizeText(payload?.coverUrl);
+  const text = normalizeText(payload?.text)
+    || normalizeText(payload?.content)
+    || normalizeText(payload?.description)
+    || normalizeText(payload?.title);
+  const commentsSnapshot = Array.isArray(payload?.commentsSnapshot)
+    ? payload.commentsSnapshot
+        .map((item) => ({
+          author: normalizeText(item?.author),
+          text: normalizeText(item?.text),
+          likes: Number(item?.likes || 0),
+          replies: Number(item?.replies || 0),
+          createdAt: normalizeText(item?.createdAt),
+          location: normalizeText(item?.location),
+        }))
+        .filter((item) => item.author || item.text)
+    : [];
+  const publishedAt = normalizeText(payload?.publishedAt);
+  const indexText = normalizeText(payload?.indexText)
+    || [
+      normalizeText(payload?.title),
+      text,
+      publishedAt ? `发布时间：${publishedAt}` : '',
+      commentsSnapshot.length > 0
+        ? `评论快照：\n${commentsSnapshot.map((item, index) => {
+            const meta = [
+              item.author,
+              item.location,
+              item.createdAt,
+              item.likes ? `赞${item.likes}` : '',
+              item.replies ? `回复${item.replies}` : '',
+            ].filter(Boolean).join(' · ');
+            return `${index + 1}. ${meta}\n${item.text}`;
+          }).join('\n\n')}`
+        : '',
+    ].filter(Boolean).join('\n\n');
+  const tags = Array.from(new Set(['抖音', ...extractTagsFromText(text)]));
+
+  if (!sourceUrl || !videoAssetUrl) {
+    throw new Error('当前页面未识别到可保存的抖音视频');
+  }
+
+  return {
+    kind: 'douyin-video',
+    source: createKnowledgeSourceInput({
+      sourceLink: sourceUrl,
+      externalId: stableNoteId,
+      sourceDomain,
+    }),
+    content: {
+      title: normalizeText(payload?.title) || '抖音视频',
+      author: normalizeText(payload?.author),
+      text,
+      excerpt: truncateText(text, 180),
+      description: truncateText(text, 500),
+      siteName: sourceDomain,
+      tags,
+      publishedAt: publishedAt || undefined,
+      authorProfileUrl: normalizeText(payload?.authorProfileUrl) || undefined,
+      commentsSnapshot,
+      indexText: indexText || undefined,
+      stats: {
+        likes: Number(payload?.stats?.likes || 0),
+        collects: Number(payload?.stats?.collects || 0),
+        comments: Number(payload?.stats?.comments || 0),
+        shares: Number(payload?.stats?.shares || 0),
+      },
+    },
+    assets: {
+      coverUrl: coverUrl || undefined,
+      videoUrl: videoAssetUrl || undefined,
+    },
+    options: {
+      dedupeKey: stableNoteId,
+      allowUpdate: true,
+      summarize: false,
+      transcribe: true,
+    },
+  };
 }
 
 async function runExtraction(tabId, func, options = {}) {
@@ -247,15 +1232,28 @@ async function runExtraction(tabId, func, options = {}) {
 
 async function saveSelectedTextFromTab(tabId) {
   const payload = await runExtraction(tabId, extractSelectedTextPayload);
-  if (!payload || typeof payload !== 'object' || !payload?.text) {
-    throw new Error('当前页面没有选中文字');
-  }
-  const response = await postJson('/save-text', payload);
+  const response = await postKnowledgeEntry(buildSelectionEntry(payload));
   return {
     success: true,
     mode: 'selection',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
+}
+
+async function saveCurrentPageFromTab(tabId) {
+  const inspection = await inspectPage(tabId);
+  const action = normalizeText(inspection?.pageInfo?.action) || 'save-page-link';
+  if (action === 'save-xhs') {
+    return await saveXhsNoteFromTab(tabId);
+  }
+  if (action === 'save-douyin') {
+    return await saveDouyinVideoFromTab(tabId);
+  }
+  if (action === 'save-youtube') {
+    return await saveYouTubeFromTab(tabId);
+  }
+  return await saveCurrentPageLinkFromTab(tabId);
 }
 
 async function saveCurrentPageLinkFromTab(tabId) {
@@ -263,27 +1261,22 @@ async function saveCurrentPageLinkFromTab(tabId) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('当前页面内容提取失败，请刷新页面后重试');
   }
-  if (!String(payload.url || '').trim()) {
-    throw new Error('当前页面缺少可保存的链接地址');
-  }
-  const response = await postJson('/save-text', payload);
+  const response = await postKnowledgeEntry(buildPageLinkEntry(payload));
   return {
     success: true,
     mode: 'page-link',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
 }
 
 async function saveYouTubeFromTab(tabId) {
   const payload = await runExtraction(tabId, extractYouTubePayload);
-  if (!payload?.videoId) {
-    throw new Error('当前页面不是可识别的 YouTube 视频页');
-  }
-  const response = await postJson('/youtube-notes', payload);
+  const response = await postKnowledgeEntry(buildYouTubeEntry(payload));
   return {
     success: true,
     mode: 'youtube',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
   };
 }
@@ -300,11 +1293,121 @@ async function saveXhsNoteFromTab(tabId) {
   if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
-  const response = await postJson('/notes', payload);
+  const response = await postKnowledgeEntry(buildXhsEntry(payload));
   return {
     success: true,
     mode: 'xhs',
-    noteId: response.noteId || '',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveDouyinVideoFromTab(tabId) {
+  const payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' });
+  console.log('[redbox-plugin][douyin] payload', {
+    title: payload?.title || '',
+    hasCoverUrl: Boolean(payload?.coverUrl || payload?.coverDataUrl),
+    videoUrl: String(payload?.videoUrl || ''),
+    hasVideoDataUrl: Boolean(payload?.videoDataUrl),
+  });
+  const response = await postKnowledgeEntry(buildDouyinEntry(payload));
+  return {
+    success: true,
+    mode: 'douyin',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveLinkFromContext(tab, info) {
+  const linkUrl = normalizeText(info?.linkUrl);
+  if (!linkUrl) {
+    throw new Error('未检测到可保存的链接');
+  }
+  if (!isHttpUrl(linkUrl)) {
+    throw new Error('当前链接不是可保存的网页地址');
+  }
+  const response = await postKnowledgeEntry(buildLinkTargetEntry({
+    url: linkUrl,
+    title: normalizeText(info?.linkText) || normalizeText(tab?.title),
+    description: linkUrl,
+    siteName: inferSiteNameFromUrl(linkUrl),
+    tags: ['链接收藏'],
+  }));
+  return {
+    success: true,
+    mode: 'link',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
+  };
+}
+
+async function saveImageFromContext(tab, info) {
+  const imageUrl = normalizeText(info?.srcUrl);
+  if (!imageUrl) {
+    throw new Error('未检测到可保存的图片');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前图片资源暂不支持直接保存');
+  }
+  const response = await postKnowledgeMediaAssets(buildImageAssetPayload({
+    imageUrl,
+    pageUrl: normalizeText(info?.pageUrl) || normalizeText(tab?.url),
+    title: normalizeText(tab?.title) || extractPathTitle(imageUrl) || '网页图片',
+  }));
+  return {
+    success: true,
+    mode: 'image',
+    imported: Number(response?.imported || 0),
+  };
+}
+
+async function saveDraggedImagePayload(payload, tab) {
+  const imageUrl = normalizeText(payload?.imageUrl || payload?.srcUrl);
+  if (!imageUrl) {
+    throw new Error('未检测到可保存的拖拽图片');
+  }
+  if (!isDirectResourceSource(imageUrl)) {
+    throw new Error('当前拖拽图片暂不支持直接保存');
+  }
+
+  const response = await postKnowledgeMediaAssets(buildImageAssetPayload({
+    imageUrl,
+    pageUrl: normalizeText(payload?.pageUrl) || normalizeText(tab?.url),
+    title: normalizeText(payload?.title) || normalizeText(tab?.title) || extractPathTitle(imageUrl) || '网页图片',
+  }));
+  return {
+    success: true,
+    mode: 'image-drop',
+    imported: Number(response?.imported || 0),
+  };
+}
+
+async function saveVideoFromContext(tab, info) {
+  const tabUrl = normalizeText(tab?.url);
+  const resourceUrl = normalizeText(info?.srcUrl);
+  if (
+    /(^|\.)youtube\.com$/i.test(extractDomainFromUrl(tabUrl))
+    || extractDomainFromUrl(tabUrl) === 'youtu.be'
+    || /(^|\.)xiaohongshu\.com$/i.test(extractDomainFromUrl(tabUrl))
+    || /(^|\.)douyin\.com$/i.test(extractDomainFromUrl(tabUrl))
+  ) {
+    return await saveCurrentPageFromTab(tab.id);
+  }
+  if (resourceUrl && !isHttpUrl(resourceUrl)) {
+    return await saveCurrentPageFromTab(tab.id);
+  }
+
+  const response = await postKnowledgeEntry(buildVideoResourceEntry({
+    pageUrl: normalizeText(info?.pageUrl) || tabUrl,
+    videoUrl: resourceUrl,
+    title: normalizeText(tab?.title) || '视频内容',
+  }));
+  return {
+    success: true,
+    mode: 'video',
+    noteId: response.entryId || '',
+    duplicate: Boolean(response.duplicate),
   };
 }
 
@@ -709,7 +1812,7 @@ async function extractCurrentPageLinkPayload() {
       if (!/^https?:\/\//i.test(target)) return '';
       try {
         const response = await fetch(target, {
-          credentials: 'include',
+          credentials: 'omit',
           cache: 'force-cache',
         });
         if (!response.ok) return '';
@@ -1128,6 +2231,16 @@ async function extractXhsNotePayload() {
     return String(value || '').replace(/\s+/g, '').trim();
   }
 
+  function toAbsoluteUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
   function isCommentRelatedNode(el) {
     if (!el || !el.closest) return false;
     return Boolean(
@@ -1270,7 +2383,7 @@ async function extractXhsNotePayload() {
 
   function pushUniqueUrl(list, value) {
     if (!value || typeof value !== 'string') return;
-    const url = value.trim();
+    const url = toAbsoluteUrl(value);
     if (!/^https?:\/\//i.test(url)) return;
     if (!list.includes(url)) {
       list.push(url);
@@ -1312,18 +2425,173 @@ async function extractXhsNotePayload() {
   }
 
   function getCurrentNoteImgEls(root) {
-    let els = root
-      ? Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
-      : [];
-    if (els.length === 0) {
-      els = Array.from(document.querySelectorAll('.note-content .img-container img, .img-container img, .swiper-slide img'));
+    const swiperSlides = getCurrentNoteSwiperSlides(root)
+      .filter((slide) => !isDuplicateSwiperSlide(slide))
+      .map((slide, domIndex) => ({
+        slide,
+        domIndex,
+        slideIndex: Number.parseInt(slide.getAttribute('data-swiper-slide-index') || '', 10),
+      }))
+      .sort((a, b) => {
+        const aHasIndex = Number.isFinite(a.slideIndex);
+        const bHasIndex = Number.isFinite(b.slideIndex);
+        if (aHasIndex && bHasIndex && a.slideIndex !== b.slideIndex) {
+          return a.slideIndex - b.slideIndex;
+        }
+        if (aHasIndex !== bHasIndex) {
+          return aHasIndex ? -1 : 1;
+        }
+        return a.domIndex - b.domIndex;
+      });
+    const swiperImgs = swiperSlides
+      .map(({ slide }) => slide.querySelector('img'))
+      .filter((img) => isValidNoteImageElement(img));
+    if (swiperImgs.length > 0) {
+      return swiperImgs;
     }
-    return els.filter((img) => {
-      if (isCommentRelatedNode(img)) return false;
-      if (img.closest('.avatar,[class*="avatar"]')) return false;
-      const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-      return /^https?:\/\//i.test(src);
-    });
+
+    const els = root
+      ? Array.from(root.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img'))
+      : Array.from(document.querySelectorAll('.note-content .img-container img, .img-container img, .swiper-slide img'));
+    return els.filter((img) => isValidNoteImageElement(img));
+  }
+
+  function isDuplicateSwiperSlide(node) {
+    return Boolean(node?.classList?.contains('swiper-slide-duplicate'));
+  }
+
+  function getCurrentNoteSwiperSlides(root) {
+    const slides = root
+      ? Array.from(root.querySelectorAll('.note-slider .swiper-slide, .swiper .swiper-slide'))
+      : Array.from(document.querySelectorAll('#noteContainer .note-slider .swiper-slide, #noteContainer .swiper .swiper-slide, .note-container .note-slider .swiper-slide, .note-container .swiper .swiper-slide'));
+    return slides.filter((slide) => !isCommentRelatedNode(slide));
+  }
+
+  function getNoteImageSrc(img) {
+    return String(img?.getAttribute('src') || img?.getAttribute('data-src') || img?.currentSrc || '').trim();
+  }
+
+  function isValidNoteImageElement(img) {
+    if (!img) return false;
+    if (isCommentRelatedNode(img)) return false;
+    if (img.closest('.avatar,[class*="avatar"]')) return false;
+    if (img.closest('.swiper-slide-duplicate')) return false;
+    return /^https?:\/\//i.test(getNoteImageSrc(img));
+  }
+
+  function getCurrentOriginalCoverImageUrl(root) {
+    const swiperSlides = getCurrentNoteSwiperSlides(root).filter((slide) => !isDuplicateSwiperSlide(slide));
+    const originalSlide = swiperSlides.find((slide) => String(slide.getAttribute('data-swiper-slide-index') || '').trim() === '0');
+    const activeSlide = swiperSlides.find((slide) => slide.classList.contains('swiper-slide-active'));
+    const fallbackSlide = swiperSlides[0] || null;
+    const coverImg = originalSlide?.querySelector('img')
+      || activeSlide?.querySelector('img')
+      || fallbackSlide?.querySelector('img')
+      || null;
+    return isValidNoteImageElement(coverImg) ? getNoteImageSrc(coverImg) : null;
+  }
+
+  function parseCssBackgroundImageUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw || raw === 'none') return '';
+    const match = raw.match(/url\((['"]?)(.*?)\1\)/i);
+    return toAbsoluteUrl(match?.[2] || '');
+  }
+
+  function getElementBackgroundImageUrl(el) {
+    if (!el) return '';
+    const inlineUrl = parseCssBackgroundImageUrl(el.style?.backgroundImage || '');
+    if (inlineUrl) return inlineUrl;
+    try {
+      return parseCssBackgroundImageUrl(window.getComputedStyle(el).backgroundImage);
+    } catch {
+      return '';
+    }
+  }
+
+  function collectStateCoverUrls(stateNote) {
+    const urls = [];
+    const cover = stateNote?.cover || stateNote?.noteCard?.cover || null;
+    const imageList = Array.isArray(stateNote?.imageList)
+      ? stateNote.imageList
+      : Array.isArray(stateNote?.images)
+        ? stateNote.images
+        : [];
+    const coverInfoList = Array.isArray(cover?.infoList) ? cover.infoList : [];
+
+    const pushCoverCandidate = (item) => {
+      if (!item) return;
+      if (typeof item === 'string') {
+        pushUniqueUrl(urls, item);
+        return;
+      }
+      pushUniqueUrl(urls, item?.urlDefault);
+      pushUniqueUrl(urls, item?.urlPre);
+      pushUniqueUrl(urls, item?.url);
+      pushUniqueUrl(urls, item?.urlDefaultWebp);
+      pushUniqueUrl(urls, item?.masterUrl);
+      pushUniqueUrl(urls, item?.src);
+    };
+
+    pushCoverCandidate(cover?.urlDefault);
+    pushCoverCandidate(cover?.urlPre);
+    pushCoverCandidate(cover?.url);
+    pushCoverCandidate(cover?.urlDefaultWebp);
+    coverInfoList.forEach(pushCoverCandidate);
+    imageList.forEach(pushCoverCandidate);
+
+    return urls;
+  }
+
+  function getCurrentFeedCardCoverUrl(noteId) {
+    const stableNoteId = String(noteId || '').trim();
+    if (!stableNoteId) return '';
+
+    const selectors = [
+      `#exploreFeeds .note-item a.cover[href*="/explore/${stableNoteId}"] img`,
+      `#exploreFeeds .note-item a.cover[href*="${stableNoteId}"] img`,
+      `.feeds-container .note-item a.cover[href*="/explore/${stableNoteId}"] img`,
+      `.feeds-container .note-item a.cover[href*="${stableNoteId}"] img`,
+    ];
+
+    for (const selector of selectors) {
+      const img = document.querySelector(selector);
+      const src = getNoteImageSrc(img);
+      if (/^https?:\/\//i.test(src)) {
+        return src;
+      }
+    }
+
+    return '';
+  }
+
+  function getCurrentVideoPosterUrl(root, stateNote) {
+    const mainVideo = getCurrentMainVideoElement(root);
+    const directPoster = toAbsoluteUrl(
+      mainVideo?.getAttribute('poster')
+      || root?.querySelector?.('video')?.getAttribute?.('poster')
+      || '',
+    );
+    if (/^https?:\/\//i.test(directPoster)) return directPoster;
+
+    const posterEls = Array.from(root?.querySelectorAll?.('xg-poster.xgplayer-poster, .xgplayer xg-poster, .xgplayer-poster') || [])
+      .filter((el) => !isCommentRelatedNode(el));
+    const activePoster = posterEls.find((el) => el.classList?.contains?.('active') || isNodeVisible(el)) || posterEls[0] || null;
+    const playerPoster = getElementBackgroundImageUrl(activePoster);
+    if (/^https?:\/\//i.test(playerPoster)) return playerPoster;
+
+    const feedCardPoster = getCurrentFeedCardCoverUrl(
+      stateNote?.noteId
+      || stateNote?.id
+      || stateNote?.note_id
+      || getCurrentOpenedNoteId(),
+    );
+    if (feedCardPoster) return feedCardPoster;
+
+    const stateCoverUrl = collectStateCoverUrls(stateNote)[0] || '';
+    if (stateCoverUrl) return stateCoverUrl;
+
+    return '';
   }
 
   function getImageUrls(root, stateNote) {
@@ -1351,7 +2619,7 @@ async function extractXhsNotePayload() {
 
     const imgEls = getCurrentNoteImgEls(root);
     imgEls.forEach((img) => {
-      pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
+      pushUniqueUrl(urls, getNoteImageSrc(img));
     });
     return urls;
   }
@@ -1370,6 +2638,112 @@ async function extractXhsNotePayload() {
       return Boolean(el.querySelector('source[src^="blob:"], source[src^="http"]'));
     });
     return tagged || null;
+  }
+
+  function getCurrentNoteVideoElements(root) {
+    if (!root) return [];
+    const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+    const seen = new Set();
+    const unique = [];
+    candidates.forEach((el, index) => {
+      if (isCommentRelatedNode(el)) return;
+      const src = String(el.currentSrc || el.getAttribute('src') || '').trim();
+      const poster = String(el.getAttribute('poster') || '').trim();
+      const key = src || poster || `video-index-${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      unique.push(el);
+    });
+    return unique;
+  }
+
+  function parseDurationTextToSeconds(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+
+    const parts = raw
+      .split(':')
+      .map((part) => Number(part.trim()))
+      .filter((part) => Number.isFinite(part) && part >= 0);
+    if (parts.length < 2 || parts.length > 3) return null;
+
+    let seconds = 0;
+    parts.forEach((part) => {
+      seconds = (seconds * 60) + part;
+    });
+    return seconds > 0 ? seconds : null;
+  }
+
+  function getStateVideoDurationSeconds(stateNote) {
+    const candidates = [
+      stateNote?.video?.duration,
+      stateNote?.video?.durationSeconds,
+      stateNote?.video?.media?.duration,
+      stateNote?.video?.media?.durationSeconds,
+      stateNote?.video?.durationMs,
+      stateNote?.video?.duration_ms,
+      stateNote?.video?.media?.durationMs,
+      stateNote?.video?.media?.duration_ms,
+    ];
+
+    for (const candidate of candidates) {
+      const seconds = parseDurationTextToSeconds(candidate);
+      if (!seconds) continue;
+      return seconds > 10000 || (Number.isInteger(seconds) && seconds > 2000 && seconds % 1000 === 0)
+        ? seconds / 1000
+        : seconds;
+    }
+
+    return null;
+  }
+
+  function getNoteVideoDurationSeconds(videoEl, root, stateNote) {
+    const directDuration = Number(videoEl?.duration);
+    if (Number.isFinite(directDuration) && directDuration > 0) {
+      return directDuration;
+    }
+
+    const scopes = [
+      videoEl?.closest?.('.media-container'),
+      videoEl?.closest?.('.player-container'),
+      videoEl?.closest?.('.player-el'),
+      videoEl?.closest?.('.xgplayer'),
+      root,
+      document,
+    ].filter(Boolean);
+    for (const scope of scopes) {
+      const timeEls = Array.from(scope.querySelectorAll('xg-time span, .xgplayer-time span'));
+      const parsed = parseDurationTextToSeconds(timeEls[timeEls.length - 1]?.textContent || '');
+      if (parsed) return parsed;
+    }
+
+    return getStateVideoDurationSeconds(stateNote);
+  }
+
+  function resolveXhsNoteType(root, stateNote) {
+    if (isLivePhotoNote(root)) {
+      return 'image';
+    }
+
+    const videoElements = getCurrentNoteVideoElements(root);
+    const hasStateVideo = Boolean(stateNote?.video);
+    const videoCount = Math.max(videoElements.length, hasStateVideo ? 1 : 0);
+    if (videoCount !== 1) {
+      return 'image';
+    }
+
+    const mainVideo = getCurrentMainVideoElement(root) || videoElements[0] || null;
+    const durationSeconds = getNoteVideoDurationSeconds(mainVideo, root, stateNote);
+    if (durationSeconds == null) {
+      return 'video';
+    }
+
+    return durationSeconds > 2 ? 'video' : 'image';
   }
 
   function collectDeepHttpUrls(input, maxCount = 40) {
@@ -1460,7 +2834,7 @@ async function extractXhsNotePayload() {
 
   function captureVideoCoverDataUrl(root) {
     try {
-      const videoEl = root.querySelector('video');
+      const videoEl = getCurrentMainVideoElement(root);
       if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return '';
       const canvas = document.createElement('canvas');
       canvas.width = videoEl.videoWidth;
@@ -1474,11 +2848,17 @@ async function extractXhsNotePayload() {
     }
   }
 
-  function getCoverUrl(root, images, videoUrl) {
-    const poster = root.querySelector('video')?.getAttribute('poster');
-    if (poster) return poster;
+  function getCoverUrl(root, images, noteType, stateNote) {
+    if (noteType === 'video') {
+      const poster = getCurrentVideoPosterUrl(root, stateNote);
+      if (poster) return poster;
+    }
+    const originalCover = getCurrentOriginalCoverImageUrl(root);
+    if (originalCover) return originalCover;
+    const stateCoverUrl = collectStateCoverUrls(stateNote)[0] || '';
+    if (stateCoverUrl) return stateCoverUrl;
     if (images[0]) return images[0];
-    return document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null;
+    return toAbsoluteUrl(document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '') || null;
   }
 
   function getStats() {
@@ -1504,10 +2884,12 @@ async function extractXhsNotePayload() {
 
   async function fetchBinaryAsDataUrl(url) {
     const target = String(url || '').trim();
-    if (!/^https?:\/\//i.test(target)) return '';
+    if (!target) return '';
+    if (/^data:/i.test(target)) return target;
+    if (!/^https?:\/\//i.test(target) && !/^blob:/i.test(target)) return '';
     try {
       const response = await fetch(target, {
-        credentials: 'include',
+        credentials: /^https?:\/\//i.test(target) ? 'omit' : 'same-origin',
         cache: 'force-cache',
       });
       if (!response.ok) return '';
@@ -1524,10 +2906,10 @@ async function extractXhsNotePayload() {
   const title = String(getNoteTitle(root) || '').trim();
   const content = String(getTextContent(root) || '').trim();
   const images = getImageUrls(root, stateNote).slice(0, 9);
-  const videoCandidates = getCurrentNoteVideoUrls(root, stateNote);
-  const strictVideoNote = !isLivePhotoNote(root) && images.length === 0 && videoCandidates.length === 1;
-  const videoUrl = strictVideoNote ? videoCandidates[0] : null;
-  const coverUrl = getCoverUrl(root, images, videoUrl);
+  const noteType = resolveXhsNoteType(root, stateNote);
+  const videoCandidates = noteType === 'video' ? getCurrentNoteVideoUrls(root, stateNote) : [];
+  const videoUrl = noteType === 'video' ? (videoCandidates[0] || null) : null;
+  const coverUrl = getCoverUrl(root, images, noteType, stateNote);
   const capturedVideoCover = (!coverUrl && videoUrl) ? captureVideoCoverDataUrl(root) : '';
 
   const localizedImages = [];
@@ -1542,9 +2924,23 @@ async function extractXhsNotePayload() {
   const localizedVideoDataUrl = videoUrl && String(videoUrl).startsWith('blob:')
     ? (await fetchBinaryAsDataUrl(videoUrl))
     : '';
+  const stableStateNoteId = String(
+    stateNote?.noteId
+    || stateNote?.id
+    || stateNote?.note_id
+    || getCurrentOpenedNoteId()
+    || '',
+  ).trim();
+  const stablePathNoteId = String(location.pathname || '')
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    || '';
+  const stableNoteId = stableStateNoteId || stablePathNoteId || `xhs-${Date.now()}`;
 
   return {
-    noteId: `xhs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    noteId: stableNoteId,
+    noteType,
     title,
     author: getAuthor(root),
     content,
@@ -1555,6 +2951,429 @@ async function extractXhsNotePayload() {
     videoDataUrl: localizedVideoDataUrl || '',
     stats: getStats(),
     source: location.href,
+  };
+}
+
+async function extractDouyinVideoPayload() {
+  function normalizeText(value) {
+    return String(value || '').trim();
+  }
+
+  function normalizeTitle(value) {
+    return normalizeText(value).replace(/\s*[-|_|]\s*抖音.*$/i, '').trim();
+  }
+
+  function toAbsoluteUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+    try {
+      return new URL(raw, location.href).toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  function pushUniqueUrl(list, value) {
+    const url = toAbsoluteUrl(value);
+    if (!url || list.includes(url)) return;
+    list.push(url);
+  }
+
+  function parseCountText(value) {
+    if (!value) return 0;
+    const text = String(value).trim();
+    const cleaned = text.replace(/[\s,]/g, '').replace(/[^0-9.\u4e00-\u9fa5]/g, '');
+    if (!cleaned) return 0;
+    if (cleaned.includes('亿')) {
+      const num = parseFloat(cleaned.replace('亿', ''));
+      return Number.isNaN(num) ? 0 : Math.round(num * 100000000);
+    }
+    if (cleaned.includes('万')) {
+      const num = parseFloat(cleaned.replace('万', ''));
+      return Number.isNaN(num) ? 0 : Math.round(num * 10000);
+    }
+    const num = parseFloat(cleaned);
+    return Number.isNaN(num) ? 0 : Math.round(num);
+  }
+
+  function isNodeVisible(el) {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 40 && rect.height > 40;
+  }
+
+  function getMainVideoElement() {
+    const candidates = Array.from(document.querySelectorAll('video'));
+    if (candidates.length === 0) return null;
+    const scored = candidates
+      .map((videoEl, index) => {
+        const rect = typeof videoEl.getBoundingClientRect === 'function'
+          ? videoEl.getBoundingClientRect()
+          : { width: 0, height: 0 };
+        let score = Math.max(0, rect.width * rect.height);
+        if (isNodeVisible(videoEl)) score += 1_000_000;
+        if (String(videoEl.currentSrc || videoEl.src || '').trim()) score += 10_000;
+        if (String(videoEl.getAttribute('poster') || '').trim()) score += 5_000;
+        score -= index;
+        return { videoEl, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    return scored[0]?.videoEl || null;
+  }
+
+  function collectDeepUrls(input, maxCount = 60) {
+    const urls = [];
+    const seenObjects = new WeakSet();
+    const seenUrls = new Set();
+
+    function walk(value) {
+      if (!value || urls.length >= maxCount) return;
+      if (typeof value === 'string') {
+        const trimmed = toAbsoluteUrl(value);
+        if (trimmed && !seenUrls.has(trimmed) && (/^https?:\/\//i.test(trimmed) || /^blob:/i.test(trimmed))) {
+          seenUrls.add(trimmed);
+          urls.push(trimmed);
+        }
+        return;
+      }
+      if (typeof value !== 'object') return;
+      if (seenObjects.has(value)) return;
+      seenObjects.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          walk(item);
+          if (urls.length >= maxCount) break;
+        }
+        return;
+      }
+      for (const key of Object.keys(value)) {
+        walk(value[key]);
+        if (urls.length >= maxCount) break;
+      }
+    }
+
+    walk(input);
+    return urls;
+  }
+
+  function scoreVideoCandidate(url) {
+    const normalized = String(url || '').toLowerCase();
+    let score = 0;
+    if (/^https?:\/\//.test(normalized)) score += 300;
+    if (/^blob:/.test(normalized)) score += 80;
+    if (/\.mp4(\?|$)/.test(normalized)) score += 220;
+    if (/\.m3u8(\?|$)/.test(normalized)) score += 160;
+    if (/playwm|play\/|aweme|video|stream|media/.test(normalized)) score += 60;
+    if (/douyin|douyinvod|bytecdn|bytetos|tos-cn/.test(normalized)) score += 30;
+    return score;
+  }
+
+  function getRenderData() {
+    const scripts = [
+      document.getElementById('RENDER_DATA'),
+      ...Array.from(document.querySelectorAll('script[type="application/json"]')),
+    ].filter(Boolean);
+    for (const script of scripts) {
+      const text = normalizeText(script.textContent || '');
+      if (!text) continue;
+      const candidates = [text];
+      try {
+        candidates.push(decodeURIComponent(text));
+      } catch {
+        // ignore decode failures
+      }
+      for (const candidate of candidates) {
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          // ignore parse failures
+        }
+      }
+    }
+    return null;
+  }
+
+  function getScriptVideoUrls() {
+    const urls = [];
+    const pattern = /https?:\/\/[^"'\\\s<>]+/g;
+    for (const script of Array.from(document.scripts)) {
+      const text = String(script.textContent || '');
+      if (!text || !/douyin|aweme|douyinvod|bytetos|bytecdn|playwm|video/i.test(text)) continue;
+      const matches = text.match(pattern) || [];
+      for (const match of matches) {
+        if (/(\.mp4|\.m3u8|playwm|play\/|aweme|video)/i.test(match)) {
+          pushUniqueUrl(urls, match);
+        }
+      }
+      if (urls.length >= 20) break;
+    }
+    return urls;
+  }
+
+  function getPerformanceMediaUrls() {
+    try {
+      return performance.getEntriesByType('resource')
+        .map((entry) => String(entry?.name || '').trim())
+        .filter((url) => /^https?:\/\//i.test(url))
+        .filter((url) => /(\.mp4|\.m3u8|playwm|video|aweme|stream)/i.test(url))
+        .slice(-30);
+    } catch {
+      return [];
+    }
+  }
+
+  function getTitle() {
+    const candidates = [
+      document.querySelector('[data-e2e="detail-video-info"] h1')?.textContent,
+      document.querySelector('[data-e2e="video-desc"]')?.textContent,
+      document.querySelector('[data-e2e="feed-active-video-desc"]')?.textContent,
+      document.querySelector('[data-e2e="note-desc"]')?.textContent,
+      document.querySelector('h1')?.textContent,
+      document.querySelector('[class*="title"]')?.textContent,
+      document.querySelector('[class*="desc"]')?.textContent,
+      document.querySelector('meta[property="og:title"]')?.getAttribute('content'),
+      document.querySelector('meta[name="description"]')?.getAttribute('content'),
+      document.title,
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeTitle(candidate);
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
+  function getAuthor() {
+    const candidates = [
+      document.querySelector('[data-e2e="user-info"] [data-click-from="title"]')?.textContent,
+      document.querySelector('[data-e2e="user-info-name"]')?.textContent,
+      document.querySelector('[data-e2e="video-author-name"]')?.textContent,
+      document.querySelector('[data-e2e="video-author-nickname"]')?.textContent,
+      document.querySelector('[data-e2e="feed-author-name"]')?.textContent,
+      document.querySelector('a[href*="/user/"] span')?.textContent,
+      document.querySelector('meta[name="author"]')?.getAttribute('content'),
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeText(candidate).replace(/^@+/, '');
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
+  function getAuthorProfileUrl() {
+    const candidates = [
+      document.querySelector('[data-e2e="user-info"] a[href*="/user/"]'),
+      document.querySelector('a[href*="/user/"]'),
+    ];
+    for (const candidate of candidates) {
+      const href = toAbsoluteUrl(candidate?.getAttribute?.('href') || '');
+      if (href) return href;
+    }
+    return '';
+  }
+
+  function extractCountFromContainer(container) {
+    if (!container) return 0;
+    const candidates = [
+      ...Array.from(container.querySelectorAll('span, div, p'))
+        .map((node) => normalizeText(node.textContent || ''))
+        .filter(Boolean),
+      normalizeText(container.textContent || ''),
+    ];
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const candidate = candidates[index];
+      if (!/[0-9一二三四五六七八九十百千万亿]/.test(candidate)) continue;
+      const parsed = parseCountText(candidate);
+      if (parsed > 0) return parsed;
+    }
+    return 0;
+  }
+
+  function getPublishedAt() {
+    const candidates = [
+      document.querySelector('[data-e2e="detail-video-publish-time"]')?.textContent,
+      document.querySelector('[class*="publish-time"]')?.textContent,
+      document.querySelector('meta[property="article:published_time"]')?.getAttribute('content'),
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeText(candidate).replace(/^发布时间[:：]\s*/, '');
+      if (normalized) return normalized;
+    }
+    return '';
+  }
+
+  function getStats() {
+    const likeEl = document.querySelector('[data-e2e="video-player-digg"], [data-e2e="like-count"], [data-e2e*="like"]');
+    const commentEl = document.querySelector('[data-e2e="feed-comment-icon"], [data-e2e*="comment"]');
+    const collectEl = document.querySelector('[data-e2e="video-player-collect"], [data-e2e="collect-count"], [data-e2e*="collect"], [data-e2e*="favorite"]');
+    const shareEl = document.querySelector('[data-e2e="video-player-share"], [data-e2e*="share"]');
+    return {
+      likes: extractCountFromContainer(likeEl),
+      comments: extractCountFromContainer(commentEl),
+      collects: extractCountFromContainer(collectEl),
+      shares: extractCountFromContainer(shareEl),
+    };
+  }
+
+  function getCommentsSnapshot(limit = 12) {
+    const items = Array.from(document.querySelectorAll('[data-e2e="comment-item"]')).slice(0, limit);
+    return items.map((item) => {
+      const author = normalizeText(
+        item.querySelector('.BT7MlqJC a, [data-click-from="title"]')?.textContent || '',
+      );
+      const text = normalizeText(
+        item.querySelector('.C7LroK_h, .WFJiGxr7')?.textContent || '',
+      );
+      const meta = normalizeText(
+        item.querySelector('.fJhvAqos')?.textContent || '',
+      );
+      const likes = parseCountText(
+        item.querySelector('.xZhLomAs span:last-child')?.textContent || '',
+      );
+      const replies = parseCountText(
+        item.querySelector('.comment-reply-expand-btn span')?.textContent || '',
+      );
+      const [createdAt = '', location = ''] = meta.split('·').map((value) => normalizeText(value));
+      return {
+        author,
+        text,
+        likes,
+        replies,
+        createdAt,
+        location,
+      };
+    }).filter((item) => item.author || item.text);
+  }
+
+  function captureVideoCoverDataUrl(videoEl) {
+    try {
+      if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return '';
+      const canvas = document.createElement('canvas');
+      canvas.width = videoEl.videoWidth;
+      canvas.height = videoEl.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.92);
+    } catch {
+      return '';
+    }
+  }
+
+  async function blobToDataUrl(blob) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('Failed to read blob as data url'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function fetchBinaryAsDataUrl(url) {
+    const target = String(url || '').trim();
+    if (!target) return '';
+    if (/^data:/i.test(target)) return target;
+    if (!/^https?:\/\//i.test(target) && !/^blob:/i.test(target)) return '';
+    try {
+      const response = await fetch(target, {
+        credentials: /^https?:\/\//i.test(target) ? 'omit' : 'same-origin',
+        cache: 'force-cache',
+      });
+      if (!response.ok) return '';
+      const blob = await response.blob();
+      if (!blob || !blob.size) return '';
+      return await blobToDataUrl(blob);
+    } catch {
+      return '';
+    }
+  }
+
+  const sourceUrl = location.href;
+  const videoEl = getMainVideoElement();
+  const renderData = getRenderData();
+  const videoCandidates = [];
+  pushUniqueUrl(videoCandidates, videoEl?.currentSrc || videoEl?.src || '');
+  Array.from(videoEl?.querySelectorAll?.('source') || []).forEach((source) => {
+    pushUniqueUrl(videoCandidates, source?.src || '');
+  });
+  collectDeepUrls(renderData, 80).forEach((url) => {
+    if (/(\.mp4|\.m3u8|playwm|play\/|aweme|video)/i.test(url)) {
+      pushUniqueUrl(videoCandidates, url);
+    }
+  });
+  getPerformanceMediaUrls().forEach((url) => pushUniqueUrl(videoCandidates, url));
+  getScriptVideoUrls().forEach((url) => pushUniqueUrl(videoCandidates, url));
+  videoCandidates.sort((a, b) => scoreVideoCandidate(b) - scoreVideoCandidate(a));
+
+  const remoteVideoUrl = videoCandidates.find((url) => /^https?:\/\//i.test(url)) || '';
+  const blobVideoUrl = videoCandidates.find((url) => /^blob:/i.test(url)) || '';
+  const videoUrl = remoteVideoUrl || blobVideoUrl || '';
+
+  const rawCoverUrl = toAbsoluteUrl(
+    videoEl?.getAttribute('poster')
+    || document.querySelector('meta[property="og:image"]')?.getAttribute('content')
+    || '',
+  );
+  const coverDataUrl = rawCoverUrl
+    ? (await fetchBinaryAsDataUrl(rawCoverUrl)) || ''
+    : captureVideoCoverDataUrl(videoEl);
+  const videoDataUrl = !remoteVideoUrl && blobVideoUrl
+    ? (await fetchBinaryAsDataUrl(blobVideoUrl))
+    : '';
+
+  const pathnameSegments = String(location.pathname || '').split('/').filter(Boolean);
+  const pathId = pathnameSegments[pathnameSegments.length - 1] || '';
+  const detailId = normalizeText(
+    document.querySelector('[data-e2e="detail-video-info"]')?.getAttribute('data-e2e-aweme-id') || '',
+  );
+  const videoId = detailId || normalizeText(pathId) || `douyin-${Date.now()}`;
+  const title = getTitle();
+  const description = normalizeText(
+    document.querySelector('meta[name="description"]')?.getAttribute('content')
+    || title,
+  );
+  const author = getAuthor();
+  const publishedAt = getPublishedAt();
+  const commentsSnapshot = getCommentsSnapshot();
+  const indexText = [
+    title,
+    description,
+    author ? `作者：${author}` : '',
+    publishedAt ? `发布时间：${publishedAt}` : '',
+    commentsSnapshot.length > 0
+      ? `评论快照：\n${commentsSnapshot.map((item, index) => {
+          const meta = [
+            item.author,
+            item.location,
+            item.createdAt,
+            item.likes ? `赞${item.likes}` : '',
+            item.replies ? `回复${item.replies}` : '',
+          ].filter(Boolean).join(' · ');
+          return `${index + 1}. ${meta}\n${item.text}`;
+        }).join('\n\n')}`
+      : '',
+  ].filter(Boolean).join('\n\n');
+
+  return {
+    noteId: videoId,
+    title,
+    author,
+    authorProfileUrl: getAuthorProfileUrl(),
+    content: description,
+    text: description,
+    description,
+    publishedAt,
+    coverUrl: rawCoverUrl || '',
+    coverDataUrl,
+    videoUrl,
+    videoDataUrl: videoDataUrl || '',
+    stats: getStats(),
+    commentsSnapshot,
+    indexText,
+    source: sourceUrl,
   };
 }
 
@@ -1594,6 +3413,19 @@ function detectCaptureTarget() {
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
+    function isCommentRelatedNode(el) {
+      if (!el || !el.closest) return false;
+      return Boolean(
+        el.closest('.comments-el') ||
+        el.closest('.comment-list') ||
+        el.closest('.comment-item') ||
+        el.closest('.comment-container') ||
+        el.closest('.comments-container') ||
+        el.closest('[class*="comment"]') ||
+        el.closest('[id*="comment"]')
+      );
+    }
+
     function getInitialState() {
       const scripts = document.querySelectorAll('script');
       for (const script of scripts) {
@@ -1654,6 +3486,109 @@ function detectCaptureTarget() {
       }) || null;
     }
 
+    function getCurrentNoteVideoElements(root) {
+      if (!root) return [];
+      const candidates = Array.from(root.querySelectorAll('video, video[mediatype="video"], .xgplayer video'));
+      const seen = new Set();
+      const unique = [];
+      candidates.forEach((el, index) => {
+        if (isCommentRelatedNode(el)) return;
+        const src = (el.currentSrc || el.getAttribute('src') || '').trim();
+        const poster = (el.getAttribute('poster') || '').trim();
+        const key = src || poster || `video-index-${index}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        unique.push(el);
+      });
+      return unique;
+    }
+
+    function parseDurationTextToSeconds(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric;
+      }
+
+      const parts = raw
+        .split(':')
+        .map((part) => Number(part.trim()))
+        .filter((part) => Number.isFinite(part) && part >= 0);
+      if (parts.length < 2 || parts.length > 3) return null;
+
+      let seconds = 0;
+      parts.forEach((part) => {
+        seconds = (seconds * 60) + part;
+      });
+      return seconds > 0 ? seconds : null;
+    }
+
+    function getStateVideoDurationSeconds(note) {
+      const candidates = [
+        note?.video?.duration,
+        note?.video?.durationSeconds,
+        note?.video?.media?.duration,
+        note?.video?.media?.durationSeconds,
+        note?.video?.durationMs,
+        note?.video?.duration_ms,
+        note?.video?.media?.durationMs,
+        note?.video?.media?.duration_ms,
+      ];
+      for (const candidate of candidates) {
+        const seconds = parseDurationTextToSeconds(candidate);
+        if (!seconds) continue;
+        return seconds > 10000 || (Number.isInteger(seconds) && seconds > 2000 && seconds % 1000 === 0)
+          ? seconds / 1000
+          : seconds;
+      }
+      return null;
+    }
+
+    function getNoteVideoDurationSeconds(videoEl, root, note) {
+      const directDuration = Number(videoEl?.duration);
+      if (Number.isFinite(directDuration) && directDuration > 0) {
+        return directDuration;
+      }
+
+      const scopes = [
+        videoEl?.closest?.('.media-container'),
+        videoEl?.closest?.('.player-container'),
+        videoEl?.closest?.('.player-el'),
+        videoEl?.closest?.('.xgplayer'),
+        root,
+        document,
+      ].filter(Boolean);
+      for (const scope of scopes) {
+        const timeEls = Array.from(scope.querySelectorAll('xg-time span, .xgplayer-time span'));
+        const parsed = parseDurationTextToSeconds(timeEls[timeEls.length - 1]?.textContent || '');
+        if (parsed) return parsed;
+      }
+
+      return getStateVideoDurationSeconds(note);
+    }
+
+    function resolveXhsNoteType(root, note) {
+      if (isLivePhotoNote(root)) {
+        return 'image';
+      }
+
+      const videoElements = getCurrentNoteVideoElements(root);
+      const hasStateVideo = Boolean(note?.video);
+      const videoCount = Math.max(videoElements.length, hasStateVideo ? 1 : 0);
+      if (videoCount !== 1) {
+        return 'image';
+      }
+
+      const mainVideo = getCurrentMainVideoElement(root) || videoElements[0] || null;
+      const durationSeconds = getNoteVideoDurationSeconds(mainVideo, root, note);
+      if (durationSeconds == null) {
+        return 'video';
+      }
+
+      return durationSeconds > 2 ? 'video' : 'image';
+    }
+
     function pushUniqueUrl(list, value) {
       if (!value || typeof value !== 'string') return;
       const url = value.trim();
@@ -1681,13 +3616,54 @@ function detectCaptureTarget() {
       return urls;
     }
 
+    function isDuplicateSwiperSlide(node) {
+      return Boolean(node?.classList?.contains('swiper-slide-duplicate'));
+    }
+
+    function getCurrentNoteSwiperSlides(root) {
+      return Array.from(root?.querySelectorAll('.note-slider .swiper-slide, .swiper .swiper-slide') || [])
+        .filter((slide) => !isCommentRelatedNode(slide));
+    }
+
+    function getNoteImageSrc(img) {
+      return String(img?.getAttribute('src') || img?.getAttribute('data-src') || img?.currentSrc || '').trim();
+    }
+
+    function isValidNoteImageElement(img) {
+      if (!img) return false;
+      if (isCommentRelatedNode(img)) return false;
+      if (img.closest('.avatar,[class*="avatar"]')) return false;
+      if (img.closest('.swiper-slide-duplicate')) return false;
+      return /^https?:\/\//i.test(getNoteImageSrc(img));
+    }
+
     function getCurrentNoteImageUrls(root, note) {
       const urls = getImageUrlsFromState(note);
       if (urls.length > 0) return urls;
-      const imgEls = Array.from(root?.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img') || []);
+      const swiperSlides = getCurrentNoteSwiperSlides(root)
+        .filter((slide) => !isDuplicateSwiperSlide(slide))
+        .map((slide, domIndex) => ({
+          slide,
+          domIndex,
+          slideIndex: Number.parseInt(slide.getAttribute('data-swiper-slide-index') || '', 10),
+        }))
+        .sort((a, b) => {
+          const aHasIndex = Number.isFinite(a.slideIndex);
+          const bHasIndex = Number.isFinite(b.slideIndex);
+          if (aHasIndex && bHasIndex && a.slideIndex !== b.slideIndex) {
+            return a.slideIndex - b.slideIndex;
+          }
+          if (aHasIndex !== bHasIndex) {
+            return aHasIndex ? -1 : 1;
+          }
+          return a.domIndex - b.domIndex;
+        });
+      const imgEls = swiperSlides.length > 0
+        ? swiperSlides.map(({ slide }) => slide.querySelector('img')).filter((img) => isValidNoteImageElement(img))
+        : Array.from(root?.querySelectorAll('.img-container img, .note-content .img-container img, .swiper-slide img') || [])
+          .filter((img) => isValidNoteImageElement(img));
       imgEls.forEach((img) => {
-        if (isCommentRelatedNode(img)) return;
-        pushUniqueUrl(urls, img.getAttribute('src') || img.getAttribute('data-src') || '');
+        pushUniqueUrl(urls, getNoteImageSrc(img));
       });
       return urls;
     }
@@ -1729,9 +3705,7 @@ function detectCaptureTarget() {
 
     const noteRoot = document.querySelector('#noteContainer, .note-container, .note-content');
     const stateNote = getCurrentStateNote();
-    const imageUrls = getCurrentNoteImageUrls(noteRoot, stateNote);
-    const videoUrls = getCurrentNoteVideoUrls(noteRoot, stateNote);
-    const isVideoNote = Boolean(noteRoot || stateNote) && !isLivePhotoNote(noteRoot) && imageUrls.length === 0 && videoUrls.length === 1;
+    const isVideoNote = Boolean(noteRoot || stateNote) && resolveXhsNoteType(noteRoot, stateNote) === 'video';
 
     if (noteRoot || stateNote) {
       return {
@@ -1757,6 +3731,47 @@ function detectCaptureTarget() {
     return createLocalLinkFallbackPageInfo({
       kind: 'xhs-pending',
       description: '当前页面还没有稳定识别到有效的小红书笔记内容。',
+    });
+  }
+
+  if (/(^|\.)douyin\.com$/i.test(hostname)) {
+    function isNodeVisible(el) {
+      if (!el || !(el instanceof Element)) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect();
+      return rect.width > 40 && rect.height > 40;
+    }
+
+    const pathname = String(location.pathname || '');
+    const title = String(
+      document.querySelector('[data-e2e="video-desc"]')?.textContent
+      || document.querySelector('h1')?.textContent
+      || document.querySelector('meta[property="og:title"]')?.getAttribute('content')
+      || '',
+    ).trim();
+    const videoEl = Array.from(document.querySelectorAll('video'))
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return (br.width * br.height) - (ar.width * ar.height);
+      })
+      .find((item) => isNodeVisible(item) || String(item.currentSrc || item.src || '').trim());
+    if (pathname.startsWith('/video/') || pathname.startsWith('/note/') || videoEl || title) {
+      return {
+        kind: 'douyin-video',
+        action: 'save-douyin',
+        label: '保存抖音视频到知识库',
+        description: '当前页面已识别为抖音视频页。',
+        detected: true,
+      };
+    }
+
+    return createLocalLinkFallbackPageInfo({
+      kind: 'douyin-pending',
+      description: '当前页面还没有稳定识别到有效的抖音视频内容。',
     });
   }
 

@@ -37,6 +37,7 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "redclaw" => "redclaw",
         "video-editor" | "video_editor" | "video-draft" | "redvideo" => "video-editor",
         "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
+        "diagnostics" | "debug" | "debugger" => "diagnostics",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" => "knowledge",
         "advisor-discussion" => "advisor-discussion",
@@ -58,8 +59,11 @@ pub fn infer_protocol(base_url: &str, preset_id: Option<&str>, explicit: Option<
         }
     }
     let lower = base_url.to_lowercase();
-    if lower.contains("anthropic") {
+    if lower.contains("/anthropic") || lower.contains("anthropic.com") {
         return "anthropic".to_string();
+    }
+    if lower.contains("/openai") || lower.contains("/compatible-mode") {
+        return "openai".to_string();
     }
     if lower.contains("gemini")
         || lower.contains("googleapis.com")
@@ -78,12 +82,16 @@ pub fn resolve_chat_config(
     let base_url = model_config
         .get("baseURL")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "api_endpoint"))
         .unwrap_or_default();
     let model_name = model_config
         .get("modelName")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "model_name"))
         .unwrap_or_default();
@@ -93,11 +101,15 @@ pub fn resolve_chat_config(
     let api_key = model_config
         .get("apiKey")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| payload_string(settings, "api_key"));
     let protocol = model_config
         .get("protocol")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| infer_protocol(&base_url, None, None));
     Some(ResolvedChatConfig {

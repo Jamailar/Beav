@@ -26,8 +26,13 @@ pub fn persist_chat_exchange(
     checkpoint_summary: String,
     session_title_override: Option<String>,
 ) -> Result<ChatExchangePersistenceStage, String> {
-    let title_hint =
-        session_title_override.or_else(|| Some(session_title_from_message(display_content)));
+    let title_hint = session_title_override.or_else(|| {
+        if turn_kind == SessionAgentTurnKind::ChatSend {
+            None
+        } else {
+            Some(session_title_from_message(display_content))
+        }
+    });
     let mut title_update: Option<(String, String)> = None;
     let mut final_session_id = String::new();
     let mut runtime_mode_snapshot = String::new();
@@ -41,7 +46,9 @@ pub fn persist_chat_exchange(
         );
         final_session_id = session.id.clone();
         let next_title = title_hint.clone().unwrap_or_else(|| "New Chat".to_string());
-        if is_new || session.title == "New Chat" || session.title.trim().is_empty() {
+        let should_replace_title =
+            is_new || session.title == "New Chat" || session.title.trim().is_empty();
+        if should_replace_title && session.title != next_title {
             session.title = next_title.clone();
             title_update = Some((session.id.clone(), next_title));
         }

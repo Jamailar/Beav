@@ -5,15 +5,15 @@ use crate::agent::{
     build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{session_bridge_detail_value, session_bridge_summary_value};
+use crate::runtime::transcript_session_meta_by_id;
 use crate::scheduler::{
     archive_job_execution, cancel_job_execution, derived_background_tasks, emit_scheduler_snapshot,
     retry_job_execution, sync_redclaw_job_definitions,
 };
-use crate::{
-    log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field, payload_string, AppState,
-    ChatSessionRecord,
+use crate::session_manager::{
+    create_session, list_sessions, session_bridge_detail_value, session_bridge_summary_value,
 };
+use crate::{log_timing_event, now_i64, now_ms, payload_field, payload_string, AppState};
 
 pub fn handle_bridge_channel(
     app: &AppHandle,
@@ -33,38 +33,48 @@ pub fn handle_bridge_channel(
             "subscriberCount": 0,
             "lastError": Value::Null,
         })),
-        "session-bridge:list-sessions" => with_store(state, |store| {
-            let mut sessions = store.chat_sessions.clone();
-            sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-            Ok(json!(sessions
+        "session-bridge:list-sessions" => (|| {
+            let sessions = with_store(state, |store| Ok(list_sessions(&store)))?;
+            let transcript_meta_by_session_id = sessions
                 .iter()
-                .map(|session| session_bridge_summary_value(session, &store))
-                .collect::<Vec<_>>()))
-        }),
-        "session-bridge:get-session" => {
+                .filter_map(|session| {
+                    transcript_session_meta_by_id(state, &session.id)
+                        .ok()
+                        .flatten()
+                        .map(|meta| (session.id.clone(), meta))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            with_store(state, |store| {
+                Ok(json!(sessions
+                    .iter()
+                    .map(|session| {
+                        let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                        session_bridge_summary_value(&store, session, transcript_meta)
+                    })
+                    .collect::<Vec<_>>()))
+            })
+        })(),
+        "session-bridge:get-session" => (|| {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
+            let transcript_meta = transcript_session_meta_by_id(state, &session_id)
+                .ok()
+                .flatten();
             with_store(state, |store| {
                 let background_tasks = derived_background_tasks(&store);
                 Ok(session_bridge_detail_value(
                     &store,
                     &session_id,
                     &background_tasks,
+                    transcript_meta.as_ref(),
                 ))
             })
-        }
+        })(),
         "session-bridge:list-permissions" => Ok(json!([])),
         "session-bridge:create-session" => with_store_mut(state, |store| {
             let title =
                 payload_string(payload, "title").unwrap_or_else(|| "Session Bridge".to_string());
-            let session = ChatSessionRecord {
-                id: make_id("session"),
-                title,
-                created_at: now_iso(),
-                updated_at: now_iso(),
-                metadata: payload_field(payload, "metadata").cloned(),
-            };
-            store.chat_sessions.push(session.clone());
-            Ok(session_bridge_summary_value(&session, store))
+            let session = create_session(store, title, payload_field(payload, "metadata").cloned());
+            Ok(session_bridge_summary_value(store, &session, None))
         }),
         "session-bridge:send-message" => {
             let session_id = payload_string(payload, "sessionId").unwrap_or_default();
@@ -73,7 +83,7 @@ pub fn handle_bridge_channel(
                 session_id.clone(),
                 message,
             ));
-            execute_prepared_session_agent_turn(None, state, &turn)
+            execute_prepared_session_agent_turn(Some(app), state, &turn)
                 .map(|execution| json!({ "accepted": true, "sessionId": execution.session_id() }))
         }
         "session-bridge:resolve-permission" => Ok(json!({ "success": true })),

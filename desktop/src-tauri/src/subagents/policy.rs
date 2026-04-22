@@ -2,22 +2,26 @@ use serde_json::{json, Value};
 
 use crate::runtime::{role_sequence_for_route, RuntimeRouteRecord};
 use crate::subagents::{ForkOverrides, SubAgentConfig};
+use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::{pack_for_runtime_mode, tool_names_for_pack};
 use crate::{payload_field, payload_string};
 
 fn string_list(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+    let mut values = Vec::new();
+    if let Some(items) = value.and_then(Value::as_array) {
+        for item in items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| canonical_tool_name(item).to_string())
+        {
+            if !values.iter().any(|existing| existing == &item) {
+                values.push(item);
+            }
+        }
+    }
+    values
 }
 
 pub fn real_subagents_enabled(settings: &Value, metadata: Option<&Value>) -> bool {
@@ -161,7 +165,7 @@ mod tests {
             item.fork_overrides
                 .allowed_tools
                 .iter()
-                .all(|tool| tool == "redbox_fs" || tool == "redbox_runtime_control")
+                .all(|tool| tool == "redbox_fs" || tool == "app_cli")
         }));
         assert!(configs.iter().all(|item| item.model_config.is_some()));
     }

@@ -254,6 +254,61 @@ export interface RuntimeToolResultItem {
   updatedAt: number;
 }
 
+export type RuntimePerfBenchmarkMode =
+  | 'redclaw'
+  | 'knowledge'
+  | 'chatroom'
+  | 'advisor-discussion'
+  | 'background-maintenance'
+  | 'diagnostics';
+
+export interface RuntimePerfPreset {
+  id: string;
+  label: string;
+  description: string;
+  message: string;
+}
+
+export interface RuntimePerfTimelineItem {
+  id: string;
+  at: number;
+  offsetMs: number;
+  eventType: string;
+  label: string;
+  detail?: string;
+  tone?: 'neutral' | 'success' | 'warning' | 'error';
+}
+
+export interface RuntimePerfRunResult {
+  id: string;
+  index: number;
+  runtimeMode: RuntimePerfBenchmarkMode;
+  sessionId: string;
+  presetId: string;
+  message: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  totalElapsedMs?: number;
+  thinkingStartedMs?: number;
+  thoughtFirstTokenMs?: number;
+  firstResponseMs?: number;
+  firstToolStartMs?: number;
+  firstCheckpointMs?: number;
+  promptChars?: number;
+  activeSkillCount?: number;
+  responseChars?: number;
+  toolCalls: number;
+  toolSuccessCount: number;
+  toolFailureCount: number;
+  checkpointCount: number;
+  checkpointTypes: string[];
+  route?: unknown;
+  orchestration?: unknown;
+  error?: string;
+  timeline: RuntimePerfTimelineItem[];
+}
+
 export interface OfficialModelInfo {
   id: string;
   capability?: string;

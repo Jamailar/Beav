@@ -10,9 +10,9 @@ import { useTimelineViewportStore } from '@/features/timeline/stores/timeline-vi
 import { useZoomStore } from '@/features/timeline/stores/zoom-store';
 import { useSelectionStore } from '@/shared/state/selection/store';
 import { usePlaybackStore } from '@/shared/state/playback/store';
-import { syncLexBoxMediaLibrary } from '@/features/timeline/deps/media-library-contract';
-import { syncLexBoxTimelineProject } from '@/features/timeline/deps/projects-contract';
-import { syncLexBoxTimelineSettings } from '@/features/timeline/deps/settings-contract';
+import { syncRedBoxMediaLibrary } from '@/features/timeline/deps/media-library-contract';
+import { syncRedBoxTimelineProject } from '@/features/timeline/deps/projects-contract';
+import { syncRedBoxTimelineSettings } from '@/features/timeline/deps/settings-contract';
 import type { VideoEditorTrackUiState, VideoEditorViewportMetrics } from '../../features/video-editor/store/useVideoEditorStore';
 import type { EditorProjectFile } from './editorProject';
 import {
@@ -22,7 +22,7 @@ import {
     mediaItemsFromEditorProject,
     msToFrame,
     projectToFreecutTimeline,
-    type LexBoxPackageStateLike,
+    type RedBoxPackageStateLike,
 } from './freecutTimelineBridge';
 import './vendored-freecut-timeline.css';
 
@@ -69,9 +69,9 @@ function trackUiEqual(
 
 type VendoredFreecutTimelineProps = {
     filePath: string;
-    packageState?: LexBoxPackageStateLike | null;
+    packageState?: RedBoxPackageStateLike | null;
     fallbackTracks: string[];
-    onPackageStateChange?: (state: LexBoxPackageStateLike) => void;
+    onPackageStateChange?: (state: RedBoxPackageStateLike) => void;
     onHistoryAvailabilityChange?: (history: { canUndo: boolean; canRedo: boolean }) => void;
     controlledCursorTime?: number | null;
     controlledSelectedClipId?: string | null;
@@ -94,7 +94,7 @@ type VendoredFreecutTimelineProps = {
 };
 
 function normalizeProject(
-    packageState: LexBoxPackageStateLike | null | undefined,
+    packageState: RedBoxPackageStateLike | null | undefined,
     fallbackTracks: string[],
     fps = 30,
 ): EditorProjectFile | null {
@@ -110,8 +110,8 @@ function normalizeProject(
     return {
         version: 1,
         project: {
-            id: 'lexbox-vendored-timeline',
-            title: 'LexBox Timeline',
+            id: 'redbox-vendored-timeline',
+            title: 'RedBox Timeline',
             width: 1080,
             height: 1920,
             fps,
@@ -187,7 +187,7 @@ export function VendoredFreecutTimeline({
 }: VendoredFreecutTimelineProps) {
     const rootRef = useRef<HTMLDivElement | null>(null);
     const localProjectRef = useRef<EditorProjectFile | null>(null);
-    const packageStateRef = useRef<LexBoxPackageStateLike | null | undefined>(packageState);
+    const packageStateRef = useRef<RedBoxPackageStateLike | null | undefined>(packageState);
     const hydratedSignatureRef = useRef('');
     const isHydratingRef = useRef(false);
     const pendingProjectSyncRef = useRef<number | null>(null);
@@ -233,7 +233,7 @@ export function VendoredFreecutTimeline({
                 project,
             }).then((result) => {
                 if (result?.success && result.state) {
-                    onPackageStateChange?.(result.state as LexBoxPackageStateLike);
+                    onPackageStateChange?.(result.state as RedBoxPackageStateLike);
                 }
                 return window.ipcRenderer.invoke('manuscripts:get-editor-runtime-state', { filePath });
             }).then((runtimeResult) => {
@@ -258,8 +258,8 @@ export function VendoredFreecutTimeline({
         const nextProjection = projectToFreecutTimeline(project, controlledTrackUi);
         isHydratingRef.current = true;
         hydratedSignatureRef.current = JSON.stringify(nextProjection);
-        syncLexBoxMediaLibrary(mediaItemsFromEditorProject(project));
-        syncLexBoxTimelineProject({
+        syncRedBoxMediaLibrary(mediaItemsFromEditorProject(project));
+        syncRedBoxTimelineProject({
             id: project.project.id,
             metadata: {
                 width: project.project.width,
@@ -267,7 +267,7 @@ export function VendoredFreecutTimeline({
                 fps: project.project.fps,
             },
         });
-        syncLexBoxTimelineSettings({
+        syncRedBoxTimelineSettings({
             editorDensity: 'compact',
             showWaveforms: true,
             showFilmstrips: true,

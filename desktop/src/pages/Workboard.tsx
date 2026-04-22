@@ -27,7 +27,7 @@ function labelForType(type: string): string {
         case 'redclaw-note':
             return '笔记';
         case 'redclaw-project':
-            return '项目';
+            return '内容任务';
         case 'automation':
             return '自动化';
         case 'research':

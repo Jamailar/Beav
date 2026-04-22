@@ -46,7 +46,7 @@ SOFTWARE.
 
 ## Active MIT Dependencies On The Vendored Timeline/Editor Path
 
-These packages are direct runtime dependencies used by the current LexBox
+These packages are direct runtime dependencies used by the current RedBox
 timeline/editor integration and report `MIT` in their installed package
 metadata:
 

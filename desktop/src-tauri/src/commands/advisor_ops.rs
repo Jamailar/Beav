@@ -1,8 +1,67 @@
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdvisorTemplateRecord {
+    #[serde(default)]
+    id: String,
+    name: String,
+    #[serde(default)]
+    avatar: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    personality: String,
+    #[serde(default)]
+    system_prompt: String,
+    #[serde(default)]
+    knowledge_language: Option<String>,
+}
+
+fn advisor_templates_root() -> Result<std::path::PathBuf, String> {
+    let root = redbox_prompt_library_root()
+        .join("runtime")
+        .join("advisors")
+        .join("templates");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn normalize_advisor_template(
+    template: AdvisorTemplateRecord,
+    fallback_id: &str,
+) -> AdvisorTemplateRecord {
+    let normalized_id =
+        normalize_optional_string(Some(template.id)).unwrap_or_else(|| fallback_id.to_string());
+    let normalized_name =
+        normalize_optional_string(Some(template.name)).unwrap_or_else(|| normalized_id.clone());
+
+    AdvisorTemplateRecord {
+        id: normalized_id,
+        name: normalized_name,
+        avatar: normalize_optional_string(Some(template.avatar))
+            .unwrap_or_else(|| "🧠".to_string()),
+        description: normalize_optional_string(Some(template.description)).unwrap_or_default(),
+        category: normalize_optional_string(Some(template.category)).unwrap_or_default(),
+        tags: template
+            .tags
+            .into_iter()
+            .filter_map(|item| normalize_optional_string(Some(item)))
+            .collect(),
+        personality: normalize_optional_string(Some(template.personality)).unwrap_or_default(),
+        system_prompt: normalize_optional_string(Some(template.system_prompt)).unwrap_or_default(),
+        knowledge_language: normalize_optional_string(template.knowledge_language),
+    }
+}
 
 fn refresh_advisor_videos(
     state: &State<'_, AppState>,
@@ -95,6 +154,83 @@ fn refresh_advisor_videos(
     })
 }
 
+fn import_advisor_knowledge_files(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    selected: &[std::path::PathBuf],
+) -> Result<Value, String> {
+    if selected.is_empty() {
+        return Ok(json!({ "success": false, "error": "未选择文件" }));
+    }
+
+    let target_dir = advisor_knowledge_dir(state, advisor_id)?;
+    with_store_mut(state, |store| {
+        let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) else {
+            return Ok(json!({ "success": false, "error": "成员不存在" }));
+        };
+
+        let mut imported_files = Vec::new();
+        for file in selected {
+            let (relative_name, _) = copy_file_into_dir(file, &target_dir)?;
+            if !advisor.knowledge_files.contains(&relative_name) {
+                advisor.knowledge_files.push(relative_name.clone());
+            }
+            imported_files.push(relative_name);
+        }
+        advisor.updated_at = now_iso();
+        Ok(json!({ "success": true, "files": imported_files }))
+    })
+}
+
+pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = ensure_store_hydrated_for_advisors(state);
+    with_store(state, |store| {
+        let mut advisors = store.advisors.clone();
+        advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(json!(advisors))
+    })
+}
+
+pub(crate) fn advisors_list_templates_value() -> Result<Value, String> {
+    let root = advisor_templates_root()?;
+    let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
+    let mut templates = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("读取模板失败 {}: {error}", path.display()))?;
+        let parsed: AdvisorTemplateRecord = serde_json::from_str(&content)
+            .map_err(|error| format!("模板格式无效 {}: {error}", path.display()))?;
+        let fallback_id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("advisor-template");
+        templates.push(normalize_advisor_template(parsed, fallback_id));
+    }
+
+    templates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(json!(templates))
+}
+
+#[tauri::command]
+pub async fn advisors_list(state: State<'_, AppState>) -> Result<Value, String> {
+    advisors_list_value(&state)
+}
+
+#[tauri::command]
+pub async fn advisors_list_templates() -> Result<Value, String> {
+    advisors_list_templates_value()
+}
+
 pub fn handle_advisor_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -104,9 +240,11 @@ pub fn handle_advisor_channel(
     if !matches!(
         channel,
         "advisors:list"
+            | "advisors:list-templates"
             | "advisors:create"
             | "advisors:update"
             | "advisors:delete"
+            | "advisors:pick-knowledge-files"
             | "advisors:upload-knowledge"
             | "advisors:delete-knowledge"
             | "advisors:optimize-prompt"
@@ -131,14 +269,8 @@ pub fn handle_advisor_channel(
 
     Some((|| -> Result<Value, String> {
         match channel {
-            "advisors:list" => {
-                let _ = ensure_store_hydrated_for_advisors(state);
-                with_store(state, |store| {
-                    let mut advisors = store.advisors.clone();
-                    advisors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                    Ok(json!(advisors))
-                })
-            }
+            "advisors:list" => advisors_list_value(state),
+            "advisors:list-templates" => advisors_list_templates_value(),
             "advisors:create" => {
                 let advisor = with_store_mut(state, |store| {
                     let timestamp = now_iso();
@@ -216,30 +348,72 @@ pub fn handle_advisor_channel(
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
-            "advisors:upload-knowledge" => {
-                let advisor_id = payload_value_as_string(payload).unwrap_or_default();
+            "advisors:pick-knowledge-files" => {
                 let selected = pick_files_native("选择要导入该成员知识库的文件", false, true)?;
-                if selected.is_empty() {
-                    return Ok(json!({ "success": false, "error": "未选择文件" }));
-                }
-                let target_dir = advisor_knowledge_dir(state, &advisor_id)?;
-                let imported = with_store_mut(state, |store| {
-                    let Some(advisor) =
-                        store.advisors.iter_mut().find(|item| item.id == advisor_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "成员不存在" }));
-                    };
-                    let mut imported_files = Vec::new();
-                    for file in &selected {
-                        let (relative_name, _) = copy_file_into_dir(file, &target_dir)?;
-                        if !advisor.knowledge_files.contains(&relative_name) {
-                            advisor.knowledge_files.push(relative_name.clone());
-                        }
-                        imported_files.push(relative_name);
-                    }
-                    advisor.updated_at = now_iso();
-                    Ok(json!({ "success": true, "files": imported_files }))
+                let files = selected
+                    .into_iter()
+                    .map(|path| {
+                        json!({
+                            "path": path,
+                            "name": path.file_name().and_then(|value| value.to_str()).unwrap_or_default()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({ "success": true, "files": files }))
+            }
+            "advisors:upload-knowledge" => {
+                let started_at = now_ms();
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_value_as_string(payload))
+                    .unwrap_or_default();
+                let selected = payload_field(payload, "filePaths")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .map(std::path::PathBuf::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        pick_files_native("选择要导入该成员知识库的文件", false, true)
+                    })?;
+                let imported = import_advisor_knowledge_files(state, &advisor_id, &selected)?;
+                let imported_file_count = imported
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len() as i64)
+                    .unwrap_or_default();
+                let total_knowledge_file_count = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.knowledge_files.len() as i64)
+                        .unwrap_or_default())
                 })?;
+                let _ = record_advisor_knowledge_ingest_metric(
+                    state,
+                    AdvisorKnowledgeIngestMetric {
+                        advisor_id: advisor_id.clone(),
+                        imported_file_count,
+                        total_knowledge_file_count,
+                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+                        created_at: now_i64(),
+                    },
+                );
+                log_timing_event(
+                    state,
+                    "advisor",
+                    &format!("advisors:upload-knowledge:{advisor_id}"),
+                    "advisors:upload-knowledge",
+                    started_at,
+                    Some(format!(
+                        "importedFiles={} totalKnowledgeFiles={}",
+                        imported_file_count, total_knowledge_file_count
+                    )),
+                );
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(imported)
             }
@@ -268,16 +442,14 @@ pub fn handle_advisor_channel(
                     "runtime/advisors/optimize_system.txt",
                     include_str!("../../../prompts/library/runtime/advisors/optimize_system.txt"),
                 );
-                let optimized = generate_structured_response_with_settings(
+                let optimized = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &system_prompt,
                     &info,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &info)
-                });
+                .or_else(|_| run_model_text_task_with_settings(&settings_snapshot, None, &info))?;
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:optimize-prompt-deep" => {
@@ -307,19 +479,20 @@ pub fn handle_advisor_channel(
                         ("knowledge_summary", "".to_string()),
                     ],
                 );
-                let optimized = generate_structured_response_with_settings(
+                let optimized = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &system_prompt,
                     &user_prompt,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &user_prompt)
-                });
+                .or_else(|_| {
+                    run_model_text_task_with_settings(&settings_snapshot, None, &user_prompt)
+                })?;
                 Ok(json!({ "success": true, "prompt": optimized }))
             }
             "advisors:generate-persona" => {
+                let started_at = now_ms();
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                 let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
                 let channel_name = payload_string(payload, "channelName")
@@ -345,12 +518,14 @@ pub fn handle_advisor_channel(
                 let advisor_knowledge = collect_advisor_knowledge_evidence(state, &advisor_id)?;
                 let manuscript_evidence =
                     collect_related_manuscript_evidence(state, &subject_names)?;
+                let search_started_at = now_ms();
                 let search_results = search_web_with_settings(
                     &settings_snapshot,
                     &format!("{channel_name} YouTube 博主 创作者 频道定位 内容风格"),
                     6,
                 )
                 .unwrap_or_default();
+                let search_elapsed_ms = now_ms().saturating_sub(search_started_at) as i64;
                 let (skill_name, skill_body, skill_references, skill_scripts) =
                     load_skill_bundle_sections(state, "agent-persona-creator");
                 let search_summary = if search_results.is_empty() {
@@ -443,15 +618,15 @@ pub fn handle_advisor_channel(
                         ),
                     ],
                 );
-                let research_raw = generate_structured_response_with_settings(
+                let research_raw = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &research_system_prompt,
                     &research_user_prompt,
                     true,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(
+                .or_else(|_| {
+                    run_model_text_task_with_settings(
                         &settings_snapshot,
                         None,
                         &format!(
@@ -459,7 +634,7 @@ pub fn handle_advisor_channel(
                             channel_name, channel_description, video_titles
                         ),
                     )
-                });
+                })?;
                 let research =
                     parse_json_value_from_text(&research_raw).unwrap_or_else(|| json!({}));
                 let final_system_prompt =
@@ -511,16 +686,16 @@ pub fn handle_advisor_channel(
                         ),
                     ],
                 );
-                let final_markdown = generate_structured_response_with_settings(
+                let final_markdown = run_model_structured_task_with_settings(
                     &settings_snapshot,
                     None,
                     &final_system_prompt,
                     &final_user_prompt,
                     false,
                 )
-                .unwrap_or_else(|_| {
-                    generate_response_with_settings(&settings_snapshot, None, &final_user_prompt)
-                });
+                .or_else(|_| {
+                    run_model_text_task_with_settings(&settings_snapshot, None, &final_user_prompt)
+                })?;
                 let prompt = research
                     .get("prompt")
                     .and_then(|value| value.as_str())
@@ -545,6 +720,53 @@ pub fn handle_advisor_channel(
                             .map(ToString::to_string)
                     })
                     .unwrap_or_else(|| format!("模仿 {} 的内容风格与表达方式", channel_name));
+                let knowledge_file_count = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.knowledge_files.len() as i64)
+                        .unwrap_or_default())
+                })?;
+                let advisor_name = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .map(|item| item.name.clone()))
+                })?;
+                let _ = record_advisor_persona_metric(
+                    state,
+                    AdvisorPersonaMetric {
+                        advisor_id: advisor_id.clone(),
+                        session_advisor_name: advisor_name,
+                        knowledge_language: normalize_optional_string(Some(
+                            payload_string(payload, "knowledgeLanguage")
+                                .unwrap_or_else(|| "中文".to_string()),
+                        )),
+                        elapsed_ms: now_ms().saturating_sub(started_at) as i64,
+                        search_elapsed_ms: Some(search_elapsed_ms),
+                        search_hit_count: search_results.len() as i64,
+                        advisor_knowledge_hit_count: advisor_knowledge.len() as i64,
+                        manuscript_hit_count: manuscript_evidence.len() as i64,
+                        knowledge_file_count,
+                        created_at: now_i64(),
+                    },
+                );
+                log_timing_event(
+                    state,
+                    "advisor",
+                    &format!("advisors:generate-persona:{advisor_id}"),
+                    "advisors:generate-persona",
+                    started_at,
+                    Some(format!(
+                        "searchHits={} advisorKnowledgeHits={} manuscriptHits={} searchElapsedMs={}",
+                        search_results.len(),
+                        advisor_knowledge.len(),
+                        manuscript_evidence.len(),
+                        search_elapsed_ms
+                    )),
+                );
                 Ok(json!({
                     "success": true,
                     "prompt": final_markdown,
@@ -843,6 +1065,7 @@ pub fn handle_advisor_channel(
                                 thumbnail_url: "".to_string(),
                                 has_subtitle: true,
                                 subtitle_content: Some(subtitle_content.clone()),
+                                subtitle_error: None,
                                 status: Some("completed".to_string()),
                                 created_at: now_iso(),
                                 folder_path: Some(knowledge_dir.display().to_string()),
@@ -854,6 +1077,7 @@ pub fn handle_advisor_channel(
                         {
                             existing.subtitle_content = Some(subtitle_content.clone());
                             existing.has_subtitle = true;
+                            existing.subtitle_error = None;
                             existing.status = Some("completed".to_string());
                         }
                         Ok(())
@@ -966,6 +1190,7 @@ pub fn handle_advisor_channel(
                     {
                         existing.subtitle_content = Some(subtitle_content);
                         existing.has_subtitle = true;
+                        existing.subtitle_error = None;
                         existing.status = Some("completed".to_string());
                     }
                     Ok(json!({ "success": true, "subtitleFile": subtitle_name }))
@@ -1100,6 +1325,9 @@ pub fn handle_advisor_channel(
                     );
                     Ok(json!({ "installed": true, "version": version, "path": path }))
                 } else {
+                    for line in crate::desktop_io::inspect_ytdlp_candidates() {
+                        append_debug_log_state(state, format!("yt-dlp candidate probe: {line}"));
+                    }
                     log_timing_event(
                         state,
                         "settings",

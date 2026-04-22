@@ -2,9 +2,9 @@ use serde_json::{json, Value};
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    apply_skill_tool_permissions, build_skill_hook_output,
-    build_skill_watcher_snapshot_with_discovery, load_skill_catalog, skill_allows_runtime_mode,
-    LoadedSkillRecord, SkillWatcherSnapshot,
+    build_skill_catalog_snapshot, build_skill_prompt_bundle,
+    build_skill_watcher_snapshot_with_discovery, find_skill_catalog_entry_by_name,
+    resolve_skill_set, LoadedSkillRecord, SkillWatcherSnapshot,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -14,58 +14,19 @@ pub struct SkillRuntimeState {
     pub catalog: Vec<LoadedSkillRecord>,
     pub active_skills: Vec<LoadedSkillRecord>,
     pub allowed_tools: Vec<String>,
+    #[allow(dead_code)]
     pub prompt_prefix: String,
+    #[allow(dead_code)]
     pub prompt_suffix: String,
+    #[allow(dead_code)]
     pub context_note: String,
+    #[allow(dead_code)]
     pub skills_section: String,
 }
 
-fn requested_skill_names(metadata: Option<&Value>) -> Vec<String> {
-    let mut items = Vec::new();
-    for field in ["activeSkills", "skillNames", "skills"] {
-        if let Some(array) = metadata
-            .and_then(|value| value.get(field))
-            .and_then(Value::as_array)
-        {
-            for value in array.iter().filter_map(Value::as_str) {
-                let normalized = value.trim();
-                if !normalized.is_empty() {
-                    items.push(normalized.to_string());
-                }
-            }
-        }
-        if let Some(single) = metadata
-            .and_then(|value| value.get(field))
-            .and_then(Value::as_str)
-        {
-            let normalized = single.trim();
-            if !normalized.is_empty() {
-                items.push(normalized.to_string());
-            }
-        }
-    }
-    items.sort();
-    items.dedup();
-    items
-}
-
-fn resolve_active_skills(
-    catalog: &[LoadedSkillRecord],
-    runtime_mode: &str,
-    metadata: Option<&Value>,
-) -> Vec<LoadedSkillRecord> {
-    let requested = requested_skill_names(metadata);
-    let mut active = Vec::new();
-    for skill in catalog {
-        if !skill_allows_runtime_mode(skill, runtime_mode) {
-            continue;
-        }
-        let requested_match = requested.iter().any(|item| item == &skill.name);
-        if requested_match || skill.metadata.auto_activate {
-            active.push(skill.clone());
-        }
-    }
-    active
+pub fn find_catalog_skill_by_name(skills: &[SkillRecord], name: &str) -> Option<LoadedSkillRecord> {
+    let snapshot = build_skill_catalog_snapshot(skills);
+    find_skill_catalog_entry_by_name(&snapshot, name)
 }
 
 pub fn build_skill_runtime_state(
@@ -74,18 +35,16 @@ pub fn build_skill_runtime_state(
     metadata: Option<&Value>,
     base_tools: &[String],
 ) -> SkillRuntimeState {
-    let catalog = load_skill_catalog(skills);
-    let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
-    let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
-    let hooks = build_skill_hook_output(&active_skills);
+    let resolved = resolve_skill_set(skills, runtime_mode, metadata, base_tools);
+    let prompt_bundle = build_skill_prompt_bundle(&resolved);
     SkillRuntimeState {
-        catalog,
-        active_skills,
-        allowed_tools,
-        prompt_prefix: hooks.prompt_prefix,
-        prompt_suffix: hooks.prompt_suffix,
-        context_note: hooks.context_note,
-        skills_section: hooks.skills_section,
+        catalog: resolved.catalog,
+        active_skills: resolved.active_skills,
+        allowed_tools: resolved.allowed_tools,
+        prompt_prefix: prompt_bundle.prompt_prefix,
+        prompt_suffix: prompt_bundle.prompt_suffix,
+        context_note: prompt_bundle.context_note,
+        skills_section: prompt_bundle.skills_section,
     }
 }
 
@@ -108,6 +67,7 @@ pub fn active_skill_activation_items(
 pub fn skills_catalog_list_value(
     skills: &[SkillRecord],
     discovery_fingerprint: Option<&str>,
+    include_body: bool,
 ) -> (Value, SkillWatcherSnapshot) {
     let state = build_skill_runtime_state(skills, "default", None, &[]);
     let watcher = build_skill_watcher_snapshot_with_discovery(
@@ -119,11 +79,10 @@ pub fn skills_catalog_list_value(
             .iter()
             .zip(state.catalog.iter())
             .map(|(record, skill)| {
-                json!({
+                let mut item = json!({
                     "name": skill.name,
                     "description": skill.description,
                     "location": skill.location,
-                    "body": record.body,
                     "sourceScope": skill.source_scope,
                     "isBuiltin": skill.is_builtin,
                     "disabled": skill.disabled,
@@ -131,7 +90,11 @@ pub fn skills_catalog_list_value(
                     "watchFingerprint": skill.fingerprint,
                     "catalogFingerprint": watcher.fingerprint,
                     "discoveryFingerprint": watcher.discovery_fingerprint,
-                })
+                });
+                if include_body {
+                    item["body"] = json!(record.body);
+                }
+                item
             })
             .collect::<Vec<_>>()),
         watcher,
@@ -144,7 +107,7 @@ pub fn build_user_skill_record(name: &str) -> SkillRecord {
         description: format!("{name} skill"),
         location: format!("redbox://skills/{}", slug_from_relative_path(name)),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\nactivationScope: session\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),
@@ -158,7 +121,7 @@ pub fn build_market_skill_record(slug: &str) -> SkillRecord {
         description: format!("Installed from market: {slug}"),
         location: format!("redbox://skills/market/{slug}"),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\ncontextNote: Installed from market.\n---\n# {slug}\n\nThis skill was registered from the RedBox market installer.\n\nReplace this body with the upstream skill contract or add runtime modifiers here."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: session\ncontextNote: Installed from market.\n---\n# {slug}\n\nThis skill was registered from the RedBox market installer.\n\nReplace this body with the upstream skill contract or add runtime modifiers here."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),
@@ -173,10 +136,10 @@ mod tests {
     fn skills() -> Vec<SkillRecord> {
         vec![
             SkillRecord {
-                name: "redclaw-project".to_string(),
+                name: "redclaw-guide".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/redclaw-project".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_app_query, redbox_fs]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                location: "redbox://skills/redclaw-guide".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, app_cli]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -185,7 +148,7 @@ mod tests {
                 name: "cover-builder".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [redbox_mcp]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [app_cli]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -194,7 +157,7 @@ mod tests {
                 name: "remotion-best-practices".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [redbox_editor, redbox_fs, redbox_skill]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, app_cli, redbox_editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -208,16 +171,12 @@ mod tests {
             &skills(),
             "redclaw",
             None,
-            &[
-                "redbox_app_query".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_mcp".to_string(),
-            ],
+            &["bash".to_string(), "app_cli".to_string()],
         );
         assert_eq!(state.active_skills.len(), 1);
         assert_eq!(
             state.allowed_tools,
-            vec!["redbox_app_query".to_string(), "redbox_fs".to_string()]
+            vec!["bash".to_string(), "app_cli".to_string()]
         );
     }
 
@@ -231,10 +190,14 @@ mod tests {
                 "redbox_app_query".to_string(),
                 "redbox_fs".to_string(),
                 "redbox_mcp".to_string(),
+                "redbox_skill".to_string(),
             ],
         );
         assert_eq!(state.active_skills.len(), 2);
-        assert_eq!(state.allowed_tools, Vec::<String>::new());
+        assert_eq!(state.allowed_tools, vec!["app_cli".to_string()]);
+        assert!(state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
 
@@ -267,5 +230,124 @@ mod tests {
             ],
         );
         assert!(default_state.active_skills.is_empty());
+    }
+
+    #[test]
+    fn skills_catalog_list_value_can_omit_large_bodies() {
+        let (list, _) = skills_catalog_list_value(&skills(), None, false);
+        let items = list.as_array().expect("skills list should be an array");
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|item| item.get("body").is_none()));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_includes_catalog_for_matching_runtime_mode() {
+        let state = build_skill_runtime_state(
+            &skills(),
+            "redclaw",
+            None,
+            &[
+                "redbox_app_query".to_string(),
+                "redbox_fs".to_string(),
+                "redbox_mcp".to_string(),
+            ],
+        );
+        assert!(state.skills_section.contains("redclaw-guide: desc"));
+        assert!(state.skills_section.contains("cover-builder: desc"));
+        assert!(!state
+            .skills_section
+            .contains("remotion-best-practices: desc"));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_avoids_manual_invoke_copy_when_skill_tool_is_unavailable() {
+        let state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [wander]\nautoActivate: true\nhookMode: inline\n---\n# Writing Style\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "wander",
+            None,
+            &["redbox_fs".to_string()],
+        );
+        assert!(!state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
+        assert!(state.skills_section.contains("writing-style [inline]"));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_ignores_turn_scoped_session_skill_persistence() {
+        let state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "writing-style".to_string(),
+                description: "desc".to_string(),
+                location: "redbox://skills/writing-style".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nautoActivate: false\nactivationScope: turn\nhookMode: forked\n---\n# Writing Style\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            Some(&json!({ "activeSkills": ["writing-style"] })),
+            &["redbox_fs".to_string()],
+        );
+        assert!(state.active_skills.is_empty());
+        assert!(!state.skills_section.contains("writing-style [forked]"));
+    }
+
+    #[test]
+    fn build_skill_runtime_state_lists_turn_scoped_image_skill_in_chatroom_and_redclaw_catalog() {
+        let state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "image-prompt-optimizer".to_string(),
+                description: "image desc".to_string(),
+                location: "redbox://skills/image-prompt-optimizer".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "chatroom",
+            None,
+            &["app_cli".to_string()],
+        );
+        assert!(state.active_skills.is_empty());
+        assert!(state
+            .skills_section
+            .contains("image-prompt-optimizer: image desc"));
+        assert!(state
+            .skills_section
+            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
+        assert!(state.skills_section.contains(
+            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+        ));
+
+        let redclaw_state = build_skill_runtime_state(
+            &[SkillRecord {
+                name: "image-prompt-optimizer".to_string(),
+                description: "image desc".to_string(),
+                location: "redbox://skills/image-prompt-optimizer".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            None,
+            &["app_cli".to_string()],
+        );
+        assert!(redclaw_state.active_skills.is_empty());
+        assert!(redclaw_state
+            .skills_section
+            .contains("image-prompt-optimizer: image desc"));
+        assert!(redclaw_state
+            .skills_section
+            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
     }
 }

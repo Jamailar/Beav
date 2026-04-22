@@ -129,12 +129,7 @@ fn build_child_prompt(
         .unwrap_or_default();
     format!(
         "You are a RedBox child runtime.\nRole: {}\nGoal: {}\nUser input: {}\nAllowed tools: {}\nPrior outputs: {}\n{}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.",
-        config.role_id,
-        route.goal,
-        user_input,
-        allowed_tools,
-        prior_summary,
-        system_patch,
+        config.role_id, route.goal, user_input, allowed_tools, prior_summary, system_patch,
     )
 }
 
@@ -548,7 +543,11 @@ fn execute_subagent_config(
             spawn.child_task_id,
             output.approved,
             snippet(&output.summary, 280),
-            output.artifact.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            output
+                .artifact
+                .as_ref()
+                .map(|value| value.chars().count())
+                .unwrap_or(0),
             output
                 .artifact
                 .as_ref()

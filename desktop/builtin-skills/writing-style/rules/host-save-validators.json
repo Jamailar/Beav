@@ -1,0 +1,21 @@
+{
+  "appliesTo": ["redpost", "redarticle"],
+  "rules": [
+    {
+      "ruleType": "contains_any",
+      "values": ["page-break", "\f"],
+      "caseInsensitive": true,
+      "message": "正文包含分页符或 page-break 标记"
+    },
+    {
+      "ruleType": "line_equals_any",
+      "values": ["---", "***", "___", "<page-break>", "[page-break]"],
+      "message": "正文包含孤立分隔线 `---` / `***` / `___` 或分页标记"
+    },
+    {
+      "ruleType": "blank_line_run_at_least",
+      "count": 3,
+      "message": "正文包含连续三个空行"
+    }
+  ]
+}

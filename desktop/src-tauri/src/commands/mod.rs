@@ -17,6 +17,7 @@ pub mod redclaw;
 pub mod redclaw_runtime;
 pub mod runtime;
 pub mod runtime_orchestration;
+pub mod runtime_query;
 pub mod runtime_routing;
 pub mod skills_ai;
 pub mod spaces;

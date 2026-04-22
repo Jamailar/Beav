@@ -37,50 +37,18 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["redbox_fs"],
-        ToolPack::Chatroom => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Knowledge => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Redclaw => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-        ],
-        ToolPack::BackgroundMaintenance => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_mcp",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Editor => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_editor",
-            "redbox_runtime_control",
-        ],
-        ToolPack::Diagnostics => &[
-            "redbox_app_query",
-            "redbox_fs",
-            "redbox_profile_doc",
-            "redbox_mcp",
-            "redbox_skill",
-            "redbox_runtime_control",
-            "redbox_editor",
-        ],
+        ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::Redclaw => {
+            if cfg!(target_os = "windows") {
+                &["redbox_fs", "app_cli"]
+            } else {
+                &["bash", "redbox_fs", "app_cli"]
+            }
+        }
+        ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
+        ToolPack::Editor => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
+        ToolPack::Diagnostics => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
     }
 }
 
@@ -102,5 +70,24 @@ mod tests {
     fn audio_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("audio-editor");
         assert!(tools.contains(&"redbox_editor"));
+    }
+
+    #[test]
+    fn wander_runtime_includes_structured_file_tool() {
+        let tools = tool_names_for_runtime_mode("wander");
+        assert!(tools.contains(&"redbox_fs"));
+        assert!(!tools.contains(&"bash"));
+    }
+
+    #[test]
+    fn redclaw_runtime_includes_structured_file_tool() {
+        let tools = tool_names_for_runtime_mode("redclaw");
+        assert!(tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"app_cli"));
+        if cfg!(target_os = "windows") {
+            assert!(!tools.contains(&"bash"));
+        } else {
+            assert!(tools.contains(&"bash"));
+        }
     }
 }

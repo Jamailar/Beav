@@ -1,10 +1,15 @@
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::persistence::with_store_mut;
 use crate::{
-    make_id, now_iso, now_ms, AppState, AppStore, ChatMessageRecord, ChatRuntimeStateRecord,
-    ChatSessionRecord,
+    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path, AppState,
+    AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
 };
+
+pub const DIAGNOSTICS_CONTEXT_TYPE: &str = "diagnostics";
+pub const DIAGNOSTICS_CONTEXT_ID: &str = "developer-diagnostics";
+pub const DIAGNOSTICS_SESSION_TITLE: &str = "Developer Diagnostics";
 
 pub fn update_chat_runtime_state(
     state: &State<'_, AppState>,
@@ -17,6 +22,18 @@ pub fn update_chat_runtime_state(
         .chat_runtime_states
         .lock()
         .map_err(|_| "chat runtime state lock 已损坏".to_string())?;
+    let previous = guard.get(session_id).cloned();
+    let should_log_transition = previous
+        .as_ref()
+        .map(|entry| {
+            entry.is_processing != is_processing
+                || entry.error != error
+                || (entry.partial_response.is_empty() && !partial_response.is_empty())
+        })
+        .unwrap_or(true);
+    let error_for_log = error.clone();
+    let partial_chars_for_log = partial_response.chars().count();
+    let had_partial_for_log = !partial_response.is_empty();
     guard.insert(
         session_id.to_string(),
         ChatRuntimeStateRecord {
@@ -28,6 +45,19 @@ pub fn update_chat_runtime_state(
             cancel_requested: false,
         },
     );
+    if should_log_transition {
+        append_debug_trace_state(
+            state,
+            format!(
+                "[runtime][state][chat] session={} processing={} partial_chars={} had_partial={} error={}",
+                session_id,
+                is_processing,
+                partial_chars_for_log,
+                had_partial_for_log,
+                error_for_log.as_deref().unwrap_or("none"),
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -53,6 +83,13 @@ pub fn request_chat_runtime_cancel(
     entry.cancel_requested = true;
     entry.error = Some("cancelled".to_string());
     entry.updated_at = now_ms();
+    append_debug_trace_state(
+        state,
+        format!(
+            "[runtime][state][chat] session={} processing=false cancel_requested=true error=cancelled",
+            session_id
+        ),
+    );
     Ok(())
 }
 
@@ -88,6 +125,18 @@ pub fn ensure_chat_session<'a>(
     });
     let last_index = sessions.len() - 1;
     (&mut sessions[last_index], true)
+}
+
+pub fn ensure_chat_session_record(
+    state: &State<'_, AppState>,
+    session_id: Option<String>,
+    title_hint: Option<String>,
+) -> Result<String, String> {
+    with_store_mut(state, |store| {
+        let (session, _) = ensure_chat_session(&mut store.chat_sessions, session_id, title_hint);
+        session.updated_at = now_iso();
+        Ok(session.id.clone())
+    })
 }
 
 pub fn latest_session_id(store: &AppStore) -> String {
@@ -132,11 +181,92 @@ pub fn infer_context_id_from_session_id(session_id: &str) -> Option<String> {
 pub fn build_session_metadata_from_session_id(session_id: &str) -> Option<Value> {
     let context_type = infer_context_type_from_session_id(session_id)?;
     let context_id = infer_context_id_from_session_id(session_id);
-    Some(json!({
+    Some(build_context_bound_metadata(
+        &context_type,
+        context_id.as_deref(),
+    ))
+}
+
+pub fn build_context_bound_metadata(context_type: &str, context_id: Option<&str>) -> Value {
+    json!({
         "contextType": context_type,
         "contextId": context_id,
         "isContextBound": true
-    }))
+    })
+}
+
+pub fn apply_context_binding_metadata(
+    session: &mut ChatSessionRecord,
+    context_type: &str,
+    context_id: &str,
+    initial_context: Option<&str>,
+) {
+    let mut metadata = session
+        .metadata
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "contextType".to_string(),
+        Value::String(context_type.to_string()),
+    );
+    metadata.insert(
+        "contextId".to_string(),
+        Value::String(context_id.to_string()),
+    );
+    if context_type.trim() == "advisor-discussion" {
+        metadata.insert(
+            "advisorId".to_string(),
+            Value::String(context_id.to_string()),
+        );
+    }
+    metadata.insert("isContextBound".to_string(), Value::Bool(true));
+    if let Some(initial_context_value) = initial_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert(
+            "initialContext".to_string(),
+            Value::String(initial_context_value.to_string()),
+        );
+    }
+    session.metadata = Some(Value::Object(metadata));
+}
+
+pub fn session_matches_context_binding(
+    session: &ChatSessionRecord,
+    context_type: &str,
+    context_id: &str,
+) -> bool {
+    let metadata = match session.metadata.as_ref().and_then(Value::as_object) {
+        Some(metadata) => metadata,
+        None => return false,
+    };
+    metadata
+        .get("contextType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some(context_type.trim())
+        && metadata
+            .get("contextId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            == Some(context_id.trim())
+}
+
+pub fn build_context_session_id(context_type: &str, context_id: &str) -> String {
+    format!(
+        "context-session:{context_type}:{}",
+        slug_from_relative_path(context_id)
+    )
+}
+
+pub fn diagnostics_session_defaults() -> (String, String, String) {
+    (
+        DIAGNOSTICS_CONTEXT_TYPE.to_string(),
+        DIAGNOSTICS_CONTEXT_ID.to_string(),
+        DIAGNOSTICS_SESSION_TITLE.to_string(),
+    )
 }
 
 pub fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> String {
@@ -217,4 +347,90 @@ pub fn should_handle_redclaw_onboarding_for_session(store: &AppStore, session_id
     }
     let id = context_id.unwrap_or_default();
     id.starts_with("redclaw-singleton:") || id.trim() == "redclaw-singleton"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_context_session_id_slugs_context_id() {
+        assert_eq!(
+            build_context_session_id("diagnostics", "Developer Diagnostics"),
+            "context-session:diagnostics:Developer-Diagnostics"
+        );
+    }
+
+    #[test]
+    fn diagnostics_defaults_match_expected_context() {
+        let (context_type, context_id, title) = diagnostics_session_defaults();
+        assert_eq!(context_type, "diagnostics");
+        assert_eq!(context_id, "developer-diagnostics");
+        assert_eq!(title, "Developer Diagnostics");
+    }
+
+    #[test]
+    fn apply_context_binding_metadata_preserves_existing_fields() {
+        let mut session = ChatSessionRecord {
+            id: "session-1".to_string(),
+            title: "Test".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "allowedTools": ["redbox_fs"]
+            })),
+        };
+
+        apply_context_binding_metadata(
+            &mut session,
+            "redclaw",
+            "redclaw-singleton:default",
+            Some("seed context"),
+        );
+
+        let metadata = session.metadata.expect("metadata");
+        assert_eq!(
+            metadata.get("contextType").and_then(Value::as_str),
+            Some("redclaw")
+        );
+        assert_eq!(
+            metadata.get("contextId").and_then(Value::as_str),
+            Some("redclaw-singleton:default")
+        );
+        assert_eq!(
+            metadata.get("initialContext").and_then(Value::as_str),
+            Some("seed context")
+        );
+        assert_eq!(
+            metadata
+                .get("allowedTools")
+                .and_then(Value::as_array)
+                .map(|items| items.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn session_matches_context_binding_reads_metadata_only() {
+        let session = ChatSessionRecord {
+            id: "context-session:redclaw:legacy".to_string(),
+            title: "Test".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "contextType": "knowledge",
+                "contextId": "note-1",
+                "isContextBound": true
+            })),
+        };
+
+        assert!(session_matches_context_binding(
+            &session,
+            "knowledge",
+            "note-1"
+        ));
+        assert!(!session_matches_context_binding(
+            &session, "redclaw", "legacy"
+        ));
+    }
 }

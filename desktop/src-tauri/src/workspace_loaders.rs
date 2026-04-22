@@ -1,13 +1,14 @@
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use url::Url;
 
 use crate::{
-    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path, now_iso,
-    optional_asset_url_from_note_path, read_text_file_or_empty, slug_from_relative_path,
-    AdvisorRecord, ChatRoomMessageRecord, ChatRoomRecord, CoverAssetRecord,
-    DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord,
-    MemoryHistoryRecord, RedclawLongCycleTaskRecord, RedclawProjectRecord,
+    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path,
+    normalize_timestamp_string, now_iso, optional_asset_url_from_note_path,
+    read_text_file_or_empty, slug_from_relative_path, AdvisorRecord, ChatRoomMessageRecord,
+    ChatRoomRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
+    KnowledgeNoteStatsRecord, MediaAssetRecord, MemoryHistoryRecord, RedclawLongCycleTaskRecord,
     RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
     SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord,
     YoutubeVideoRecord,
@@ -17,6 +18,115 @@ pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
     fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+}
+
+fn normalized_timestamp_value(raw: Option<&Value>) -> String {
+    match raw {
+        Some(Value::String(value)) => normalize_timestamp_string(value),
+        Some(Value::Number(value)) => normalize_timestamp_string(&value.to_string()),
+        _ => String::new(),
+    }
+}
+
+fn meta_string(meta: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| meta.get(*key).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn merge_text_tags(base_tags: Vec<String>, content_text: &str) -> Vec<String> {
+    let mut tags = base_tags;
+    for extracted in extract_tags_from_text(content_text) {
+        if !tags.iter().any(|item| item == &extracted) {
+            tags.push(extracted);
+        }
+    }
+    tags
+}
+
+fn source_domain_from_link(link: Option<&str>) -> Option<String> {
+    let raw = link?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Url::parse(raw)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|value| value.to_ascii_lowercase()))
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_note_asset_url(base_dir: &Path, raw: Option<&Value>) -> Option<String> {
+    optional_asset_url_from_note_path(base_dir, raw).or_else(|| {
+        raw.and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| {
+                if value.starts_with("http://")
+                    || value.starts_with("https://")
+                    || value.starts_with("data:")
+                    || value.starts_with("blob:")
+                    || value.starts_with("file:")
+                {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+    })
+}
+
+fn note_video_asset_url(note_dir: &Path, meta: &Value) -> Option<String> {
+    for key in [
+        "video",
+        "videoFile",
+        "video_file",
+        "videoPath",
+        "video_path",
+        "videoLocalPath",
+        "video_local_path",
+    ] {
+        if let Some(url) = optional_note_asset_url(note_dir, meta.get(key)) {
+            return Some(url);
+        }
+    }
+    for name in [
+        "video.mp4",
+        "video.mov",
+        "video.m4v",
+        "video.webm",
+        "video.mkv",
+        "video.avi",
+    ] {
+        let candidate = normalize_legacy_workspace_path(&note_dir.join(name));
+        if candidate.exists() {
+            return Some(file_url_for_path(&candidate));
+        }
+    }
+    None
+}
+
+fn read_note_transcript(note_dir: &Path, meta: &Value) -> Option<String> {
+    meta_string(meta, &["transcript"]).or_else(|| {
+        meta_string(meta, &["transcriptFile", "transcript_file"]).and_then(|relative_path| {
+            let transcript_path = normalize_legacy_workspace_path(&note_dir.join(relative_path));
+            let transcript = read_text_file_or_empty(&transcript_path);
+            if transcript.trim().is_empty() {
+                None
+            } else {
+                Some(transcript)
+            }
+        })
+    })
+}
+
+fn extract_note_stat(meta: &Value, key: &str) -> Option<i64> {
+    meta.get(key).and_then(|value| value.as_i64()).or_else(|| {
+        meta.get("stats")
+            .and_then(|stats| stats.get(key))
+            .and_then(|value| value.as_i64())
+    })
 }
 
 pub(crate) fn list_files_relative(root: &Path, limit: usize) -> Vec<String> {
@@ -476,6 +586,24 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                     .and_then(|v| v.as_str())
                     .unwrap_or("imported")
                     .to_string(),
+                source_domain: item
+                    .get("sourceDomain")
+                    .or_else(|| item.get("source_domain"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        item.get("sourceLink")
+                            .or_else(|| item.get("source_link"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|value| source_domain_from_link(Some(value)))
+                    }),
+                source_link: item
+                    .get("sourceLink")
+                    .or_else(|| item.get("source_link"))
+                    .or_else(|| item.get("sourceUrl"))
+                    .or_else(|| item.get("source_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 project_id: item
                     .get("projectId")
                     .or_else(|| item.get("project_id"))
@@ -526,18 +654,12 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                     .or_else(|| item.get("bound_manuscript_path"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
-                created_at: item
-                    .get("createdAt")
-                    .or_else(|| item.get("created_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
-                updated_at: item
-                    .get("updatedAt")
-                    .or_else(|| item.get("updated_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
+                created_at: normalized_timestamp_value(
+                    item.get("createdAt").or_else(|| item.get("created_at")),
+                ),
+                updated_at: normalized_timestamp_value(
+                    item.get("updatedAt").or_else(|| item.get("updated_at")),
+                ),
                 absolute_path: absolute_path.clone(),
                 preview_url: absolute_path
                     .as_ref()
@@ -655,16 +777,27 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string)
                 .unwrap_or_else(|| read_text_file_or_empty(&content_path));
+            let video_url = meta_string(
+                &meta,
+                &[
+                    "videoUrl",
+                    "video_url",
+                    "sourceVideoUrl",
+                    "source_video_url",
+                ],
+            );
+            let video_asset_url = note_video_asset_url(&path, &meta).or_else(|| video_url.clone());
+            let transcript = read_note_transcript(&path, &meta);
             let image_urls = meta
                 .get("images")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|item| optional_asset_url_from_note_path(&path, Some(item)))
+                        .filter_map(|item| optional_note_asset_url(&path, Some(item)))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let cover_url = optional_asset_url_from_note_path(&path, meta.get("cover"))
+            let cover_url = optional_note_asset_url(&path, meta.get("cover"))
                 .or_else(|| {
                     let candidate = path.join("images").join("cover.jpg");
                     if candidate.exists() {
@@ -682,15 +815,16 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                         .filter_map(|x| x.as_str().map(ToString::to_string))
                         .collect::<Vec<_>>()
                 })
-                .filter(|arr| !arr.is_empty())
+                .map(|arr| merge_text_tags(arr, &content_text))
                 .or_else(|| {
-                    let extracted = extract_tags_from_text(&content_text);
+                    let extracted = merge_text_tags(Vec::new(), &content_text);
                     if extracted.is_empty() {
                         None
                     } else {
                         Some(extracted)
                     }
-                });
+                })
+                .filter(|arr| !arr.is_empty());
             let note_type = meta
                 .get("type")
                 .and_then(|v| v.as_str())
@@ -703,6 +837,8 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 .or_else(|| {
                     if note_type.as_deref() == Some("link-article") {
                         Some("link-article".to_string())
+                    } else if video_asset_url.is_some() || video_url.is_some() {
+                        Some("xhs-video".to_string())
                     } else if !image_urls.is_empty() {
                         Some("xhs-image".to_string())
                     } else {
@@ -712,9 +848,37 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
             notes.push(KnowledgeNoteRecord {
                 id: note_id.clone(),
                 r#type: note_type,
+                source_domain: meta
+                    .get("sourceDomain")
+                    .or_else(|| meta.get("source_domain"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        meta.get("sourceLink")
+                            .or_else(|| meta.get("source_link"))
+                            .or_else(|| meta.get("sourceUrl"))
+                            .or_else(|| meta.get("source_url"))
+                            .or_else(|| meta.get("source"))
+                            .or_else(|| meta.get("url"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|value| source_domain_from_link(Some(value)))
+                    }),
+                source_link: meta
+                    .get("sourceLink")
+                    .or_else(|| meta.get("source_link"))
+                    .or_else(|| meta.get("sourceUrl"))
+                    .or_else(|| meta.get("source_url"))
+                    .or_else(|| meta.get("source"))
+                    .or_else(|| meta.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 source_url: meta
                     .get("sourceUrl")
                     .or_else(|| meta.get("source_url"))
+                    .or_else(|| meta.get("sourceLink"))
+                    .or_else(|| meta.get("source_link"))
+                    .or_else(|| meta.get("source"))
+                    .or_else(|| meta.get("url"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
                 title: meta
@@ -751,20 +915,18 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                 images: image_urls,
                 tags,
                 cover: cover_url,
-                video: None,
-                video_url: None,
-                transcript: meta
-                    .get("transcript")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
+                video: video_asset_url,
+                video_url: video_url.clone(),
+                transcript: transcript.clone(),
                 transcription_status: meta
                     .get("transcriptionStatus")
                     .or_else(|| meta.get("transcription_status"))
                     .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
+                    .map(ToString::to_string)
+                    .or_else(|| transcript.as_ref().map(|_| "completed".to_string())),
                 stats: KnowledgeNoteStatsRecord {
-                    likes: meta.get("likes").and_then(|v| v.as_i64()).unwrap_or(0),
-                    collects: meta.get("collects").and_then(|v| v.as_i64()),
+                    likes: extract_note_stat(&meta, "likes").unwrap_or(0),
+                    collects: extract_note_stat(&meta, "collects"),
                 },
                 created_at: meta
                     .get("createdAt")
@@ -859,6 +1021,11 @@ pub(crate) fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeV
                     .and_then(|v| v.as_bool())
                     .unwrap_or(subtitle_content.is_some()),
                 subtitle_content,
+                subtitle_error: meta
+                    .get("subtitleError")
+                    .or_else(|| meta.get("subtitle_error"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 status: meta
                     .get("status")
                     .and_then(|v| v.as_str())
@@ -1205,56 +1372,7 @@ pub(crate) fn load_redclaw_state_from_fs(redclaw_root: &Path) -> RedclawStateRec
             })
             .unwrap_or_default();
     }
-    let projects_root = redclaw_root.join("projects");
-    let mut projects = Vec::new();
-    if let Ok(entries) = fs::read_dir(&projects_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(project) = read_json_file(&path.join("project.json")) else {
-                continue;
-            };
-            projects.push(RedclawProjectRecord {
-                id: {
-                    let entry_name = entry.file_name().to_string_lossy().to_string();
-                    project
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&entry_name)
-                        .to_string()
-                },
-                goal: project
-                    .get("goal")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未命名项目")
-                    .to_string(),
-                platform: project
-                    .get("platform")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
-                task_type: project
-                    .get("taskType")
-                    .or_else(|| project.get("task_type"))
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string),
-                status: project
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("planning")
-                    .to_string(),
-                updated_at: project
-                    .get("updatedAt")
-                    .or_else(|| project.get("updated_at"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0")
-                    .to_string(),
-            });
-        }
-    }
-    projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    state.projects = projects;
+    state.projects = Vec::new();
     state
 }
 

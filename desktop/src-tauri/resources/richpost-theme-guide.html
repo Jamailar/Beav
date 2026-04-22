@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>主题编辑指南</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f1e8;
+        --surface: rgba(255, 255, 255, 0.92);
+        --surface-strong: rgba(255, 251, 246, 0.98);
+        --surface-soft: rgba(255, 255, 255, 0.68);
+        --border: rgba(112, 83, 50, 0.14);
+        --border-strong: rgba(112, 83, 50, 0.24);
+        --text: #1e1914;
+        --text-secondary: #635648;
+        --text-tertiary: #8d7f72;
+        --accent: #9b6432;
+        --accent-strong: #7b4d25;
+        --accent-soft: #f3e4d4;
+        --success: #1c8f53;
+        --success-soft: rgba(28, 143, 83, 0.12);
+        --shadow: 0 20px 48px rgba(53, 34, 15, 0.08);
+        --shadow-soft: 0 10px 24px rgba(53, 34, 15, 0.05);
+        --radius-xl: 24px;
+        --radius-lg: 18px;
+        --radius-md: 14px;
+        --radius-sm: 10px;
+        --font-sans: "SF Pro Text", "PingFang SC", "Noto Sans SC", "Segoe UI", Inter, system-ui, sans-serif;
+        --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #171210;
+          --surface: rgba(34, 28, 23, 0.92);
+          --surface-strong: rgba(43, 35, 29, 0.98);
+          --surface-soft: rgba(38, 31, 26, 0.72);
+          --border: rgba(232, 204, 175, 0.12);
+          --border-strong: rgba(232, 204, 175, 0.2);
+          --text: #f5ede5;
+          --text-secondary: #cdbca9;
+          --text-tertiary: #9f907f;
+          --accent: #e0ab73;
+          --accent-strong: #f3c28f;
+          --accent-soft: rgba(224, 171, 115, 0.14);
+          --success: #7addaa;
+          --success-soft: rgba(122, 221, 170, 0.14);
+          --shadow: 0 30px 80px rgba(0, 0, 0, 0.32);
+          --shadow-soft: 0 16px 36px rgba(0, 0, 0, 0.24);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--font-sans);
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(224, 171, 115, 0.14), transparent 26%),
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.3), transparent 24%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent 18%),
+          var(--bg);
+        line-height: 1.58;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      code,
+      pre,
+      textarea {
+        font-family: var(--font-mono);
+      }
+
+      .shell {
+        max-width: 1360px;
+        margin: 0 auto;
+        padding: 28px 18px 48px;
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xl);
+        background:
+          linear-gradient(140deg, rgba(255, 255, 255, 0.9), rgba(246, 236, 224, 0.82)),
+          var(--surface);
+        box-shadow: var(--shadow);
+        padding: 24px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .hero {
+          background:
+            linear-gradient(140deg, rgba(59, 46, 36, 0.95), rgba(25, 21, 18, 0.96)),
+            var(--surface);
+        }
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        right: -64px;
+        bottom: -96px;
+        width: 260px;
+        height: 260px;
+        border-radius: 999px;
+        background: radial-gradient(circle, rgba(224, 171, 115, 0.24), transparent 70%);
+        pointer-events: none;
+      }
+
+      .hero-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      h1 {
+        margin: 12px 0 8px;
+        font-size: clamp(28px, 4vw, 42px);
+        line-height: 1.06;
+        letter-spacing: -0.04em;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button,
+      .ghost-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 42px;
+        padding: 0 15px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+        transition: 160ms ease;
+      }
+
+      .button {
+        background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+        color: white;
+        box-shadow: 0 12px 28px rgba(155, 100, 50, 0.22);
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.03);
+      }
+
+      .ghost-button {
+        border-color: var(--border);
+        background: var(--surface-soft);
+        color: var(--text);
+      }
+
+      .ghost-button:hover {
+        border-color: var(--border-strong);
+        background: var(--surface-strong);
+      }
+
+      .panel,
+      .copy-panel {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        background: var(--surface);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .layout {
+        display: grid;
+        gap: 18px;
+        margin-top: 20px;
+      }
+
+      @media (min-width: 1080px) {
+        .layout {
+          grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+          align-items: start;
+        }
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+      }
+
+      .panel p,
+      .panel li {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .panel ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .panel li + li {
+        margin-top: 8px;
+      }
+
+      .panel code,
+      .copy-panel code {
+        padding: 0.08rem 0.32rem;
+        border-radius: 6px;
+        background: rgba(155, 100, 50, 0.08);
+        color: var(--accent-strong);
+        font-size: 0.95em;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .panel code,
+        .copy-panel code {
+          background: rgba(224, 171, 115, 0.12);
+          color: var(--accent-strong);
+        }
+      }
+
+      .tree {
+        padding: 14px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+
+      .mini-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      @media (min-width: 760px) {
+        .mini-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      .sub-card {
+        padding: 14px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+      }
+
+      .sub-card h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      .sub-card p {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .copy-panel {
+        position: sticky;
+        top: 20px;
+        padding: 18px;
+      }
+
+      .copy-panel h2 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+      }
+
+      .copy-panel p {
+        margin: 10px 0 0;
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      .copy-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .copy-status {
+        margin-top: 10px;
+        min-height: 20px;
+        color: var(--text-tertiary);
+        font-size: 12px;
+      }
+
+      .copy-status.success {
+        color: var(--success);
+      }
+
+      .markdown-box {
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: #101010;
+        color: #f3f3f3;
+        overflow: hidden;
+      }
+
+      .markdown-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .markdown-toolbar strong {
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      pre.markdown-preview {
+        margin: 0;
+        max-height: min(72vh, 920px);
+        overflow: auto;
+        padding: 16px;
+        font-size: 12px;
+        line-height: 1.62;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .steps {
+        display: grid;
+        gap: 10px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        padding: 14px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--surface-strong);
+      }
+
+      .step-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .step strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+
+      .footer {
+        margin-top: 16px;
+        color: var(--text-tertiary);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <div class="hero-top">
+          <div>
+            <h1>主题编辑指南</h1>
+          </div>
+          <div class="hero-actions">
+            <button class="button" type="button" id="copy-markdown-btn">复制完整 Markdown</button>
+            <a class="ghost-button" href="#markdown-section">查看 Markdown</a>
+          </div>
+        </div>
+      </section>
+
+      <div class="layout">
+        <main class="stack">
+          <section class="panel">
+            <h2>主题目录的真实结构</h2>
+            <p><code>themes/&lt;theme-id&gt;/</code> 是当前 richpost 主题的主编辑目标。</p>
+            <div class="tree">themes/
+  index.json                         # 当前主题目录索引
+  richpost-theme-template.md         # 主题规则说明，给 AI 和开发者读
+  richpost-themes.json               # 兼容/工作区级快照，可能存在
+  &lt;theme-id&gt;/
+    &lt;theme-id&gt;.json                 # 当前主题主配置
+    layout.tokens.json               # 主题 token 真相层
+    page-plan.json                   # 当前主题分页方案
+    masters/
+      cover.master.html             # 首页母版
+      body.master.html              # 内容页母版
+      ending.master.html            # 尾页母版
+    assets/                         # 背景图和本地素材</div>
+          </section>
+
+          <section class="panel">
+            <h2>每个文件负责什么</h2>
+            <div class="mini-grid">
+              <div class="sub-card">
+                <h3><code>&lt;theme-id&gt;.json</code></h3>
+                <p>保存主题记录本身，包括 <code>coverFrame</code>、<code>bodyFrame</code>、<code>endingFrame</code>，以及三种背景图路径和基础视觉字段。</p>
+              </div>
+              <div class="sub-card">
+                <h3><code>layout.tokens.json</code></h3>
+                <p>保存 CSS 变量层，是颜色、字号、行高、阴影、圆角、页面留白、字体等基础视觉的真相层。</p>
+              </div>
+              <div class="sub-card">
+                <h3><code>masters/*.master.html</code></h3>
+                <p>定义 cover、body、ending 三种母版的结构层，可以改背景层、卡片层、图片区、标题区、正文容器和装饰层。</p>
+              </div>
+              <div class="sub-card">
+                <h3><code>page-plan.json</code></h3>
+                <p>只有当 tokens 和母版不足以达成目标时才改。它控制页面使用哪张母版、zones 如何绑定、局部 styleOverrides 如何生效。</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>必须遵守的编辑顺序</h2>
+            <div class="steps">
+              <div class="step">
+                <div class="step-index">1</div>
+                <div>
+                  <strong>先看规则文件</strong>
+                  <span>先阅读 <code>themes/richpost-theme-template.md</code>，再决定是改主题主配置、tokens、母版还是 page plan。</span>
+                </div>
+              </div>
+              <div class="step">
+                <div class="step-index">2</div>
+                <div>
+                  <strong>先改主题主配置和 tokens</strong>
+                  <span>颜色、字体、圆角、阴影、整体气质优先落在 <code>&lt;theme-id&gt;.json</code> 与 <code>layout.tokens.json</code>。</span>
+                </div>
+              </div>
+              <div class="step">
+                <div class="step-index">3</div>
+                <div>
+                  <strong>结构改动再动母版</strong>
+                  <span>涉及首页、内容页、尾页结构，去改 <code>masters/cover.master.html</code>、<code>masters/body.master.html</code>、<code>masters/ending.master.html</code>。</span>
+                </div>
+              </div>
+              <div class="step">
+                <div class="step-index">4</div>
+                <div>
+                  <strong>最后才改 page plan</strong>
+                  <span>只有在母版和 tokens 已经做不到的时候，才去改 <code>page-plan.json</code> 的 master、zones 或 styleOverrides。</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>关键实现细节</h2>
+            <ul>
+              <li><code>coverFrame</code>、<code>bodyFrame</code>、<code>endingFrame</code> 是真实文字区域，字段为 <code>x / y / w / h</code>，使用 0 到 1 的相对坐标。</li>
+              <li>文字区域还会同步映射为 <code>layout.tokens.json</code> 里的角色 CSS 变量，例如 <code>--rb-frame-left</code>、<code>--rb-frame-top</code>、<code>--rb-frame-width</code>、<code>--rb-frame-height</code>。</li>
+              <li>背景图必须是本地资产，放进当前主题根目录下的 <code>assets/</code>，然后由 <code>coverBackgroundPath</code>、<code>bodyBackgroundPath</code>、<code>endingBackgroundPath</code> 引用。</li>
+              <li>首页、内容页、尾页允许完全不同的构图，不要求三页统一模板。</li>
+              <li>如果只是想让预览更像真实主题，不要只换颜色，要优先改模板文件本身。</li>
+            </ul>
+          </section>
+
+          <section class="panel">
+            <h2>绝对不要做的事</h2>
+            <ul>
+              <li>不要改 <code>content.md</code>、<code>content-map.json</code> 等正文层文件。</li>
+              <li>不要把正文文字直接硬编码进 <code>masters/*.master.html</code>。</li>
+              <li>不要手改最终渲染结果文件，例如 <code>pages/page-xxx.html</code>。</li>
+              <li>不要引入远程字体 URL、远程 CSS 或远程 JS。</li>
+              <li>不要跨主题根目录乱改其他 <code>themes/&lt;other-theme-id&gt;/</code> 文件。</li>
+              <li>不要为了达成视觉效果就重写 page plan；先把主题主配置、tokens 和母版用满。</li>
+            </ul>
+          </section>
+        </main>
+
+        <aside class="copy-panel" id="markdown-section">
+          <h2>Markdown</h2>
+          <div class="copy-actions">
+            <button class="button" type="button" id="copy-markdown-btn-side">复制 Markdown</button>
+            <a class="ghost-button" href="#top" onclick="window.scrollTo({ top: 0, behavior: 'smooth' }); return false;">回到顶部</a>
+          </div>
+          <div class="copy-status" id="copy-status">准备就绪</div>
+          <div class="markdown-box">
+            <div class="markdown-toolbar">
+              <strong>Markdown</strong>
+            </div>
+            <pre class="markdown-preview" id="markdown-preview"></pre>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <script id="markdown-source" type="text/plain"># RedBox Richpost Theme Authoring Guide
+
+你现在要为 RedBox 的 richpost 图文系统创建或修改主题。你的任务是只改主题模板层，不改正文层。
+
+## 任务目标
+
+- 输出可以直接落盘到 `themes/<theme-id>/` 的主题目录内容。
+- 主题必须支持三类页面：`cover`（首页）、`body`（内容页）、`ending`（尾页）。
+- 主题改动必须通过 `theme json + layout tokens + masters + page plan` 生效，而不是靠手写最终渲染产物。
+- 如果只是修改已有主题，只改必要文件，不要顺手重写整个主题目录。
+
+## 当前主题的真实文件结构
+
+```text
+themes/
+  index.json
+  richpost-theme-template.md
+  richpost-themes.json
+  <theme-id>/
+    <theme-id>.json
+    layout.tokens.json
+    page-plan.json
+    masters/
+      cover.master.html
+      body.master.html
+      ending.master.html
+    assets/
+```
+
+说明：
+
+- `themes/<theme-id>/` 是当前 richpost 主题的真实编辑目标。
+- `themes/index.json` 是主题目录索引，通常只存摘要。
+- `themes/richpost-themes.json` 可能作为兼容或工作区级快照存在，但如果 `themes/<theme-id>/` 已存在，优先以 theme root 为准。
+- `themes/richpost-theme-template.md` 是主题规则说明，开始修改前先读它。
+
+## 每个文件的职责
+
+- `themes/<theme-id>/<theme-id>.json`
+  - 当前主题主配置文件。
+  - 重点字段包括：
+    - `coverFrame`
+    - `bodyFrame`
+    - `endingFrame`
+    - `coverBackgroundPath`
+    - `bodyBackgroundPath`
+    - `endingBackgroundPath`
+    - `headingColor`
+    - `bodyColor`
+    - `accentColor`
+    - `mutedColor`
+    - `headingFont`
+    - `bodyFont`
+- `themes/<theme-id>/layout.tokens.json`
+  - 主题 token 真相层。
+  - 负责颜色、字号、行高、边距、圆角、阴影、页面留白、字体、角色 CSS 变量。
+  - 一般会有 `cssVars` 和 `roleCssVars` 两层。
+- `themes/<theme-id>/masters/cover.master.html`
+  - 首页母版。
+- `themes/<theme-id>/masters/body.master.html`
+  - 内容页母版。
+- `themes/<theme-id>/masters/ending.master.html`
+  - 尾页母版。
+- `themes/<theme-id>/page-plan.json`
+  - 分页方案真相层。
+  - 控制某一页用哪张母版、zones 如何绑定、是否需要 styleOverrides。
+- `themes/<theme-id>/assets/`
+  - 当前主题自己的背景图和本地素材目录。
+
+## 编辑优先级
+
+按下面顺序处理，不要反过来：
+
+1. 先阅读 `themes/richpost-theme-template.md`
+2. 先改 `themes/<theme-id>/<theme-id>.json`
+3. 再改 `themes/<theme-id>/layout.tokens.json`
+4. 再改 `themes/<theme-id>/masters/*.master.html`
+5. 只有在前面几层做不到时，才改 `themes/<theme-id>/page-plan.json`
+
+## 如何判断应该改哪一层
+
+- 想改真实文字区域、安全区、正文框位置和大小：
+  - 改 `coverFrame` / `bodyFrame` / `endingFrame`
+- 想改颜色、字体、字号、行高、圆角、阴影、整体视觉基调：
+  - 改 `layout.tokens.json`
+- 想改背景层、图片层、标题容器、正文容器、遮罩、装饰线、卡片结构：
+  - 改 `masters/*.master.html`
+- 想改哪页使用哪张母版，或哪段内容落到哪个 zone：
+  - 再改 `page-plan.json`
+
+## 必须遵守的结构规则
+
+- 把页面明确分成三类：
+  - `cover`
+  - `body`
+  - `ending`
+- 三类页面可以有完全不同的布局，不要求共用同一套容器结构。
+- 真实文字区域由以下字段控制：
+  - `coverFrame`
+  - `bodyFrame`
+  - `endingFrame`
+- 每个 frame 都是相对坐标，字段固定为：
+
+```json
+{ "x": 0.12, "y": 0.18, "w": 0.76, "h": 0.58 }
+```
+
+- `x / y / w / h` 都按 0 到 1 的比例处理。
+- frame 同时会映射到角色 CSS 变量，至少要保持这些变量语义成立：
+  - `--rb-frame-left`
+  - `--rb-frame-top`
+  - `--rb-frame-width`
+  - `--rb-frame-height`
+
+## 背景图和素材规则
+
+- 背景图必须放在当前主题目录下的 `assets/`。
+- 三种页面背景分别由下面字段引用：
+  - `coverBackgroundPath`
+  - `bodyBackgroundPath`
+  - `endingBackgroundPath`
+- 不要引用远程图片 URL。
+- 不要把背景图路径写到主题根目录之外。
+
+## layout.tokens.json 的建议做法
+
+- 保持 `version`、`themeId`、`cssVars`、`roleCssVars` 结构。
+- 基础视觉变量优先放在 `cssVars`。
+- 页面角色专属变量放在 `roleCssVars.cover`、`roleCssVars.body`、`roleCssVars.ending`。
+- 如果只是改主题气质，优先改 tokens，不要先动 page plan。
+
+## masters 的建议做法
+
+- `cover.master.html` 负责首页版式。
+- `body.master.html` 负责正文页版式。
+- `ending.master.html` 负责尾页版式。
+- 可以新增或调整这些结构层：
+  - 背景层
+  - 图片层
+  - 遮罩层
+  - 标题容器
+  - 正文容器
+  - 标签条
+  - 装饰线
+  - 卡片容器
+  - 引文框
+- 可以调整文字区域与图片区的相对位置和层级关系。
+
+## page-plan.json 的使用原则
+
+- 只有当 `theme json + tokens + masters` 还不够时，才改 `page-plan.json`。
+- 不要把 page plan 当成默认调样式的入口。
+- 如果只需要做视觉微调，不要动 page plan。
+- 如果只是为了让预览更像真实模板，不要只改 page plan，要先改模板真相层。
+
+## 绝对禁止
+
+- 不要改 `content.md`
+- 不要改 `content-map.json`
+- 不要在 `pages/page-xxx.html` 里手写正文
+- 不要把正文内容硬编码进 `masters/*.master.html`
+- 不要引入远程字体 URL
+- 不要引入远程 CSS
+- 不要引入远程 JS
+- 不要跨目录修改其他 `themes/<other-theme-id>/`
+- 不要为了省事直接重写整个工作区无关文件
+
+## 交付要求
+
+- 如果是创建新主题，请创建完整的 `themes/<theme-id>/` 目录结构。
+- 如果是修改已有主题，请只修改必要文件。
+- 最终输出时列出：
+  - 修改了哪些文件
+  - 每个文件为什么改
+  - 哪些视觉变化是通过 `theme json`
+  - 哪些视觉变化是通过 `layout.tokens.json`
+  - 哪些结构变化是通过 `masters`
+  - 是否改动了 `page-plan.json`
+
+## 执行原则
+
+- 优先保持主题系统的真实分层，不要把所有变化堆进一个文件。
+- 优先让结果可持续复用，不要做只对当前预览生效的一次性 hack。
+- 如果能通过 `theme json + tokens + masters` 达成目标，就不要碰 `page-plan.json`。
+- 如果需要完成修改，请直接落盘到对应文件，不要只给零散建议。
+</script>
+
+    <script>
+      (function () {
+        const source = document.getElementById('markdown-source');
+        const preview = document.getElementById('markdown-preview');
+        const status = document.getElementById('copy-status');
+        const buttons = [
+          document.getElementById('copy-markdown-btn'),
+          document.getElementById('copy-markdown-btn-side'),
+        ].filter(Boolean);
+
+        const markdown = (source && source.textContent ? source.textContent : '').replace(/^\n+|\n+$/g, '');
+        if (preview) {
+          preview.textContent = markdown;
+        }
+
+        async function copyMarkdown() {
+          if (!markdown) return;
+          try {
+            await navigator.clipboard.writeText(markdown);
+            if (status) {
+              status.textContent = '已复制完整 Markdown，可以直接发给其他 AI。';
+              status.classList.add('success');
+            }
+          } catch (error) {
+            if (status) {
+              status.textContent = '复制失败，请手动选中下方 Markdown。';
+              status.classList.remove('success');
+            }
+            console.error('Failed to copy markdown', error);
+          }
+        }
+
+        buttons.forEach((button) => {
+          button.addEventListener('click', copyMarkdown);
+        });
+      })();
+    </script>
+  </body>
+</html>
