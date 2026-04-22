@@ -11501,4 +11501,54 @@ mod tests {
             Some("apple")
         );
     }
+
+    #[test]
+    fn mark_editor_project_script_pending_sets_body_and_approval_fields() {
+        let mut project = json!({});
+
+        mark_editor_project_script_pending(&mut project, "新脚本内容", "ai").unwrap();
+
+        assert_eq!(
+            project.pointer("/script/body").and_then(Value::as_str),
+            Some("新脚本内容")
+        );
+        assert_eq!(
+            project
+                .pointer("/ai/scriptApproval/status")
+                .and_then(Value::as_str),
+            Some("pending")
+        );
+        assert_eq!(
+            project
+                .pointer("/ai/scriptApproval/lastScriptUpdateSource")
+                .and_then(Value::as_str),
+            Some("ai")
+        );
+        assert!(project
+            .pointer("/ai/scriptApproval/confirmedAt")
+            .map(Value::is_null)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn confirm_editor_project_script_sets_confirmed_without_losing_script_body() {
+        let mut project = json!({});
+        mark_editor_project_script_pending(&mut project, "可执行脚本", "user").unwrap();
+
+        let approval = confirm_editor_project_script(&mut project).unwrap();
+
+        assert_eq!(
+            approval.get("status").and_then(Value::as_str),
+            Some("confirmed")
+        );
+        assert_eq!(
+            project.pointer("/script/body").and_then(Value::as_str),
+            Some("可执行脚本")
+        );
+        assert!(approval
+            .get("confirmedAt")
+            .and_then(Value::as_i64)
+            .map(|value| value > 0)
+            .unwrap_or(false));
+    }
 }
