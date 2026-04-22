@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
 };
-use crate::{run_memory_maintenance_with_reason, AppState, AppStore};
+use crate::{AppState, AppStore};
 
 pub use job_runtime::{
     archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,
@@ -348,7 +348,7 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
             }
 
             if should_run_maintenance {
-                let _ = run_memory_maintenance_with_reason(&state, "periodic");
+                let _ = crate::memory::run_memory_maintenance_with_reason(&state, "periodic");
                 if let Ok(store) = state.store.lock() {
                     let _ = app.emit(
                         "redclaw:runner-status",
