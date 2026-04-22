@@ -2572,15 +2572,18 @@ fn execute_interactive_tool_call(
         let prepared = tool_executor.prepare_tool_call(name, arguments)?;
         let name = prepared.name;
         let arguments = &prepared.arguments;
+        let action = tool_action_name(arguments);
         if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
-            return result;
+            return result
+                .map(|value| ensure_structured_tool_success(name, action.as_deref(), value))
+                .map_err(|error| ensure_structured_tool_error(name, action.as_deref(), &error));
         }
         let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
             commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
                 .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
         };
 
-        match name {
+        let raw_result = match name {
             "redbox_editor" => {
                 let action = payload_string(arguments, "action").unwrap_or_default();
                 let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
@@ -3358,28 +3361,39 @@ fn execute_interactive_tool_call(
             }
             "redbox_fs" => {
                 let action = payload_string(arguments, "action").unwrap_or_default();
-                let scope = payload_string(arguments, "scope")
-                    .unwrap_or_else(|| "workspace".to_string())
-                    .to_ascii_lowercase();
                 let raw_path = payload_string(arguments, "path").unwrap_or_default();
                 match action.as_str() {
-                    "search" if scope == "knowledge" => {
+                    "knowledge.search" | "search"
+                        if payload_string(arguments, "scope")
+                            .unwrap_or_default()
+                            .eq_ignore_ascii_case("knowledge")
+                            || action == "knowledge.search" =>
+                    {
                         crate::tools::knowledge_search::execute_grep(state, session_id, arguments)
                     }
-                    "list" if scope == "knowledge" => {
+                    "knowledge.list" | "list"
+                        if payload_string(arguments, "scope")
+                            .unwrap_or_default()
+                            .eq_ignore_ascii_case("knowledge")
+                            || action == "knowledge.list" =>
+                    {
                         crate::tools::knowledge_search::execute_glob(state, session_id, arguments)
                     }
-                    "read" if scope == "knowledge" => {
+                    "knowledge.read" | "read"
+                        if payload_string(arguments, "scope")
+                            .unwrap_or_default()
+                            .eq_ignore_ascii_case("knowledge")
+                            || action == "knowledge.read" =>
+                    {
                         crate::tools::knowledge_search::execute_read(state, session_id, arguments)
                     }
-                    "search" => {
+                    "workspace.search" | "search" => {
                         crate::tools::workspace_search::execute_search(state, session_id, arguments)
                     }
-                    "list" => {
+                    "workspace.list" | "list" => {
                         if raw_path.trim().is_empty() {
                             return Err(
-                                "path is required for redbox_fs(action=list, scope=workspace)"
-                                    .to_string(),
+                                "path is required for redbox_fs(action=workspace.list)".to_string()
                             );
                         }
                         let limit = parse_usize_arg(arguments, "limit", 20, 50);
@@ -3395,11 +3409,10 @@ fn execute_interactive_tool_call(
                             "entries": list_directory_entries(&resolved, limit)?
                         }))
                     }
-                    "read" => {
+                    "workspace.read" | "read" => {
                         if raw_path.trim().is_empty() {
                             return Err(
-                                "path is required for redbox_fs(action=read, scope=workspace)"
-                                    .to_string(),
+                                "path is required for redbox_fs(action=workspace.read)".to_string()
                             );
                         }
                         let max_chars = parse_usize_arg(arguments, "maxChars", 4000, 20000);
@@ -3421,7 +3434,11 @@ fn execute_interactive_tool_call(
                 }
             }
             other => Err(format!("unsupported interactive tool: {other}")),
-        }
+        };
+
+        raw_result
+            .map(|value| ensure_structured_tool_success(name, action.as_deref(), value))
+            .map_err(|error| ensure_structured_tool_error(name, action.as_deref(), &error))
     }));
     match execution {
         Ok(result) => result,
@@ -4053,16 +4070,78 @@ fn build_interactive_tool_outcome_digest(
     )
 }
 
-fn interactive_tool_call_description(tool_name: &str, arguments: &Value) -> String {
-    let action = payload_string(arguments, "action")
+fn tool_action_name(arguments: &Value) -> Option<String> {
+    payload_string(arguments, "action")
         .or_else(|| {
             payload_field(arguments, "__compat")
                 .and_then(|value| value.get("translatedAction"))
                 .and_then(Value::as_str)
                 .map(ToString::to_string)
         })
-        .filter(|value| !value.trim().is_empty());
-    match action {
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn ensure_structured_tool_success(tool_name: &str, action: Option<&str>, result: Value) -> Value {
+    let Some(mut object) = result.as_object().cloned() else {
+        return structured_tool_success_payload(tool_name, action, result);
+    };
+    if object.get("ok").and_then(Value::as_bool) == Some(true) {
+        object
+            .entry("tool".to_string())
+            .or_insert_with(|| json!(tool_name));
+        if let Some(action) = action.filter(|value| !value.trim().is_empty()) {
+            object
+                .entry("action".to_string())
+                .or_insert_with(|| json!(action));
+        }
+        return Value::Object(object);
+    }
+    structured_tool_success_payload(tool_name, action, Value::Object(object))
+}
+
+fn structured_tool_success_payload(tool_name: &str, action: Option<&str>, data: Value) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert("ok".to_string(), json!(true));
+    object.insert("tool".to_string(), json!(tool_name));
+    if let Some(action) = action.filter(|value| !value.trim().is_empty()) {
+        object.insert("action".to_string(), json!(action));
+    }
+    object.insert("data".to_string(), data);
+    Value::Object(object)
+}
+
+fn ensure_structured_tool_error(tool_name: &str, action: Option<&str>, error: &str) -> String {
+    if let Some(Value::Object(mut object)) = structured_tool_payload_from_text(error) {
+        object
+            .entry("tool".to_string())
+            .or_insert_with(|| json!(tool_name));
+        if let Some(action) = action.filter(|value| !value.trim().is_empty()) {
+            object
+                .entry("action".to_string())
+                .or_insert_with(|| json!(action));
+        }
+        return serde_json::to_string_pretty(&Value::Object(object))
+            .unwrap_or_else(|_| error.to_string());
+    }
+    let mut object = serde_json::Map::new();
+    object.insert("ok".to_string(), json!(false));
+    object.insert("tool".to_string(), json!(tool_name));
+    if let Some(action) = action.filter(|value| !value.trim().is_empty()) {
+        object.insert("action".to_string(), json!(action));
+    }
+    object.insert(
+        "error".to_string(),
+        json!({
+            "code": "ACTION_FAILED",
+            "message": error,
+            "retryable": false
+        }),
+    );
+    serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_else(|_| error.to_string())
+}
+
+fn interactive_tool_call_description(tool_name: &str, arguments: &Value) -> String {
+    match tool_action_name(arguments) {
         Some(action) => format!("Interactive tool call: {tool_name} · {action}"),
         None => format!("Interactive tool call: {tool_name}"),
     }
@@ -4165,13 +4244,10 @@ struct InteractiveExecutionProgress {
 }
 
 fn redbox_fs_profile_read_completed(arguments: &Value) -> bool {
-    let action = payload_string(arguments, "action")
+    let action = tool_action_name(arguments)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let scope = payload_string(arguments, "scope")
-        .unwrap_or_else(|| "workspace".to_string())
-        .to_ascii_lowercase();
-    if action != "read" || scope != "workspace" {
+    if action != "workspace.read" && action != "read" {
         return false;
     }
     let path = payload_string(arguments, "path")
@@ -4303,13 +4379,11 @@ fn interactive_execution_progress_observe_success(
 ) {
     match tool_name {
         "redbox_fs" => {
-            let action = payload_string(arguments, "action")
+            let action = tool_action_name(arguments)
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            let scope = payload_string(arguments, "scope")
-                .unwrap_or_else(|| "workspace".to_string())
-                .to_ascii_lowercase();
-            if contract.require_source_read && scope == "workspace" && action == "read" {
+            if contract.require_source_read && matches!(action.as_str(), "workspace.read" | "read")
+            {
                 progress.source_read_completed = true;
             }
             if contract.require_profile_read && redbox_fs_profile_read_completed(arguments) {

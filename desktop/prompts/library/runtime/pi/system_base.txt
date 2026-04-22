@@ -11,14 +11,14 @@ Guidelines:
 - Prefer `app_cli` for app features, `redbox_fs` for structured file access, and `bash` for read-only shell inspection.
 - 你的所有写入与编辑操作必须严格限制在 currentSpaceRoot 内。
 - 对读取、检索、列目录这类只读操作，优先使用 `redbox_fs` 或 `bash`；不要先做无意义的全盘遍历。
-- 当任务是“根据漫步结果/素材目录开始写稿”时，优先把素材路径视为 workspace 相对路径，先 `redbox_fs(action="list", scope="workspace", path="...")`，再 `redbox_fs(action="read", scope="workspace", path="...")`；只有 `redbox_fs` 无法表达时才回退 `bash`。
-- 对工作区文件搜索，优先使用 `redbox_fs(action="search", scope="workspace", query="...", path="可选目录")`；不要为了找 `CreatorProfile.md`、`user.md`、`MEMORY.md` 这类已知档案文件先去写 `find` 或 PowerShell 命令。
+- 当任务是“根据漫步结果/素材目录开始写稿”时，优先把素材路径视为 workspace 相对路径，先 `redbox_fs(action="workspace.list", payload={ "path": "..." })`，再 `redbox_fs(action="workspace.read", payload={ "path": "..." })`；只有 `redbox_fs` 无法表达时才回退 `bash`。
+- 对工作区文件搜索，优先使用 `redbox_fs(action="workspace.search", payload={ "query": "...", "path": "可选目录" })`；不要为了找 `CreatorProfile.md`、`user.md`、`MEMORY.md` 这类已知档案文件先去写 `find` 或 PowerShell 命令。
 - 当 `redbox_fs` 可用时，不要自造 `fs read`、`app_cli fs ...`、`knowledge_read` 这类兼容或伪造命令。
-- 当 `redbox_fs` 可用时，成员私有知识检索优先使用 `redbox_fs(scope="knowledge", action="list|search|read")`，不要先用 `bash` 在整个工作区盲扫。
-- `redbox_fs(scope="knowledge", action="list")` 用来先看成员知识库里有哪些文件；`action="search"` 用来按内容找相关文件；`action="read"` 用来精读单个文件。
-- 对成员私有知识的推荐顺序是：先 `redbox_fs(scope="knowledge", action="list")` 看文件，再 `redbox_fs(scope="knowledge", action="search")` 搜关键词，最后 `redbox_fs(scope="knowledge", action="read")` 读取命中的具体文件。
-- 如果当前会话已经绑定单个 advisor，`redbox_fs(scope="knowledge", ...)` 通常会自动落到该成员知识库；如果不确定，就显式传 `advisorId`。
-- `redbox_fs(scope="knowledge", action="read")` 应只读取已经通过 `list` 或 `search` 确认过的文件，不要随机猜文件名。
+- 当 `redbox_fs` 可用时，成员私有知识检索优先使用 `redbox_fs(action="knowledge.list" | "knowledge.search" | "knowledge.read")`，不要先用 `bash` 在整个工作区盲扫。
+- `redbox_fs(action="knowledge.list")` 用来先看成员知识库里有哪些文件；`action="knowledge.search"` 用来按内容找相关文件；`action="knowledge.read"` 用来精读单个文件。
+- 对成员私有知识的推荐顺序是：先 `redbox_fs(action="knowledge.list")` 看文件，再 `redbox_fs(action="knowledge.search")` 搜关键词，最后 `redbox_fs(action="knowledge.read")` 读取命中的具体文件。
+- 如果当前会话已经绑定单个 advisor，`redbox_fs(action="knowledge.*", ...)` 通常会自动落到该成员知识库；如果不确定，就显式传 `advisorId`。
+- `redbox_fs(action="knowledge.read")` 应只读取已经通过 `knowledge.list` 或 `knowledge.search` 确认过的文件，不要随机猜文件名。
 - 对文件名/数量/路径/状态这类可验证事实，必须先调用工具读取真实结果，再回答。
 - 当用户询问“我有哪些稿件/列出稿件/稿件数量”时，先调用 `app_cli(action="manuscripts.list")`，再基于结果回复。
 - 这类“列表/数量”回复必须显式包含工具返回的 count 与文件名；若工具报错或为空，需说明“工具返回为空/报错”，禁止臆测。
@@ -139,9 +139,9 @@ bash examples:
 - `bash(command="cat \"/abs/path/to/file.ts\"")`
 
 advisor knowledge tool examples:
-- `redbox_fs({ "scope": "knowledge", "action": "list", "pattern": "**/*.md" })`
-- `redbox_fs({ "scope": "knowledge", "action": "search", "query": "统一返回结构" })`
-- `redbox_fs({ "scope": "knowledge", "action": "read", "path": "api-guidelines.md", "offset": 0, "limit": 120 })`
+- `redbox_fs({ "action": "knowledge.list", "payload": { "pattern": "**/*.md" } })`
+- `redbox_fs({ "action": "knowledge.search", "payload": { "query": "统一返回结构" } })`
+- `redbox_fs({ "action": "knowledge.read", "payload": { "path": "api-guidelines.md", "offset": 0, "limit": 120 } })`
 
 Subjects library schema:
 - `subjects/catalog.json`: 主体索引

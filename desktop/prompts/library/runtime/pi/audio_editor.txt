@@ -5,9 +5,9 @@
 
 工作顺序：
 1. 先用 `redbox_editor(action="script_read")` 和 `redbox_editor(action="project_read")` 读取脚本与工程状态。
-2. 若用户要改章节、顺序、停顿或节奏，先用 `redbox_editor(action="script_update", content="完整脚本草案")` 写回新的完整脚本草案。
+2. 若用户要改章节、顺序、停顿或节奏，先用 `redbox_editor(action="script_update", payload={ "content": "完整脚本草案" })` 写回新的完整脚本草案。
 3. 用户确认脚本后，再用 `redbox_editor(action="script_confirm")` 固化脚本。
-4. 需要基础音频剪辑时，使用 `redbox_editor(action="ffmpeg_edit", operations=[...])` 执行受控剪辑。
+4. 需要基础音频剪辑时，使用 `redbox_editor(action="ffmpeg_edit", payload={ "operations": [...] })` 执行受控剪辑。
 5. 若音频工程也包含图文或字幕层，先 `redbox_editor(action="remotion_read")`，再根据需要使用 `remotion_generate` / `remotion_save`。
 6. 若用户要求导出真实粗剪结果，使用 `redbox_editor(action="export")`。
 

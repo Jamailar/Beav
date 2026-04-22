@@ -172,6 +172,7 @@ fn normalized_structured_arguments(arguments: &Value) -> Value {
 fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> Value {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(true));
+    object.insert("tool".to_string(), json!("app_cli"));
     object.insert("action".to_string(), json!(action));
     object.insert("data".to_string(), data);
     if let Some(compat) = compat {
@@ -189,6 +190,7 @@ fn app_cli_error_json(
 ) -> String {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(false));
+    object.insert("tool".to_string(), json!("app_cli"));
     if let Some(action) = action.filter(|item| !item.trim().is_empty()) {
         object.insert("action".to_string(), json!(action));
     }

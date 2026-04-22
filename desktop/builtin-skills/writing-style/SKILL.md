@@ -4,7 +4,7 @@ allowedRuntimeModes: [wander, redclaw, chatroom]
 hookMode: inline
 autoActivate: false
 activationScope: session
-activationHint: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写、润色、内容表达方式调整，或用户明确要求沿用既定写作风格时，先调用 `app_cli(command="skills invoke --name writing-style")`；非写作任务不要启用它。
+activationHint: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写、润色、内容表达方式调整，或用户明确要求沿用既定写作风格时，先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`；非写作任务不要启用它。
 contextNote: 这是当前空间统一的写作风格底盘。若任务已经进入选题 framing、标题拟定、完整写稿、改写、扩写、润色，或用户明确提到 writing-style，应优先加载它；非写作任务不要让它干扰其他决策。
 promptPrefix: 你当前已加载 writing-style。凡是涉及选题 framing、完整写稿、改写、扩写、润色或内容表达方式调整，都先按这份技能执行，避免模板化 AI 文案。
 promptSuffix: 如果当前任务不是写作，就不要让 writing-style 主导其他决策；如果当前任务是写作，标题、内容方向、正文和文案细节都必须体现这份技能的约束。写稿时禁止输出分页符、分页标记或会触发宿主分页解析的分隔线。

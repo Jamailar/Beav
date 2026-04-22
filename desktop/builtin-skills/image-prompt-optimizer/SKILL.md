@@ -12,7 +12,7 @@ maxPromptChars: 2200
 
 用于 RedBox 生图链路的内置提示词优化技能。
 
-在聊天里准备调用 `app_cli(command="image generate ...")` 时，也应先使用它整理最终提示词。
+在聊天里准备调用 `app_cli(action="image.generate", payload={ ... })` 时，也应先使用它整理最终提示词。
 
 ## 目标
 

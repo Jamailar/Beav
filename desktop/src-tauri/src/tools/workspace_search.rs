@@ -25,7 +25,7 @@ pub fn execute_search(
 ) -> Result<Value, String> {
     let query = payload_string(arguments, "query")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "redbox_fs(action=search, scope=workspace) requires query".to_string())?;
+        .ok_or_else(|| "redbox_fs(action=workspace.search) requires query".to_string())?;
     let root = resolve_workspace_tool_path_for_session(state, session_id, ".")?;
     let pattern_text = search_pattern_for_workspace(state, session_id, &root, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;

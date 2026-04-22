@@ -58,7 +58,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "redbox_skill" => skill_to_app_cli(arguments),
         "redbox_runtime_control" => runtime_to_app_cli(arguments),
         "redbox_app_query" => app_query_direct(arguments),
-        "redbox_fs" => passthrough("redbox_fs", arguments),
+        "redbox_fs" => normalize_redbox_fs_call(arguments),
         "redbox_profile_doc" => profile_doc_to_app_cli(arguments),
         "redbox_editor" => normalize_redbox_editor_call(arguments),
         _ => NormalizedToolCall {
@@ -147,16 +147,23 @@ fn normalize_redbox_editor_call(arguments: &Value) -> NormalizedToolCall {
     let Some(object) = arguments.as_object() else {
         return passthrough("redbox_editor", arguments);
     };
-    let Some(action) = object.get("action").and_then(Value::as_str) else {
-        return passthrough("redbox_editor", arguments);
+    let mut normalized = flatten_payload_fields(object);
+    let Some(action) = normalized
+        .get("action")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    else {
+        return NormalizedToolCall {
+            name: "redbox_editor",
+            arguments: Value::Object(normalized),
+        };
     };
-    let normalized_action = normalize_action_token(action);
-    let mut normalized = object.clone();
+    let normalized_action = normalize_action_token(&action);
     normalized.insert("action".to_string(), json!(normalized_action.clone()));
     if normalized_action != action.trim() {
         if let Some(metadata) = compat_metadata_value(
             Some("redbox_editor"),
-            Some(action),
+            Some(&action),
             Some(&normalized_action),
         ) {
             normalized.insert("__compat".to_string(), metadata);
@@ -164,6 +171,52 @@ fn normalize_redbox_editor_call(arguments: &Value) -> NormalizedToolCall {
     }
     NormalizedToolCall {
         name: "redbox_editor",
+        arguments: Value::Object(normalized),
+    }
+}
+
+fn normalize_redbox_fs_call(arguments: &Value) -> NormalizedToolCall {
+    let Some(object) = arguments.as_object() else {
+        return passthrough("redbox_fs", arguments);
+    };
+    let mut normalized = flatten_payload_fields(object);
+    let action = normalized
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let scope = normalized
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let canonical_action = normalize_redbox_fs_action(&action, &scope);
+    if !canonical_action.is_empty() {
+        normalized.insert("action".to_string(), json!(canonical_action.clone()));
+    }
+    match scope.to_ascii_lowercase().as_str() {
+        "" => {}
+        "knowledge" if canonical_action.starts_with("knowledge.") => {}
+        _ if canonical_action.starts_with("workspace.") => {
+            normalized.remove("scope");
+        }
+        _ => {
+            if canonical_action.starts_with("knowledge.") {
+                normalized.insert("scope".to_string(), json!("knowledge"));
+            }
+        }
+    }
+    if canonical_action != action && !action.is_empty() {
+        if let Some(metadata) =
+            compat_metadata_value(Some("redbox_fs"), Some(&action), Some(&canonical_action))
+        {
+            normalized.insert("__compat".to_string(), metadata);
+        }
+    }
+    NormalizedToolCall {
+        name: "redbox_fs",
         arguments: Value::Object(normalized),
     }
 }
@@ -206,6 +259,29 @@ fn normalize_action_token(value: &str) -> String {
         "marker-update" => "marker_update".to_string(),
         "marker-delete" => "marker_delete".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
+    let normalized_action = action.trim().replace('_', ".").replace('-', ".");
+    let normalized_scope = scope.trim().replace('_', ".").replace('-', ".");
+    let combined = match normalized_action.as_str() {
+        "list" | "read" | "search" => {
+            let scope_prefix = if normalized_scope.eq_ignore_ascii_case("knowledge") {
+                "knowledge"
+            } else {
+                "workspace"
+            };
+            format!("{scope_prefix}.{normalized_action}")
+        }
+        "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
+        | "knowledge.read" | "knowledge.search" => normalized_action,
+        other => other.to_string(),
+    };
+    match combined.as_str() {
+        "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
+        | "knowledge.read" | "knowledge.search" => combined,
+        _ => combined,
     }
 }
 
@@ -628,6 +704,19 @@ fn copy_if_present(target: &mut Map<String, Value>, source: &Value, key: &str) {
     }
 }
 
+fn flatten_payload_fields(source: &Map<String, Value>) -> Map<String, Value> {
+    let mut flattened = source.clone();
+    if let Some(payload) = source.get("payload").and_then(Value::as_object) {
+        for (key, value) in payload {
+            if flattened.contains_key(key) {
+                continue;
+            }
+            flattened.insert(key.to_string(), value.clone());
+        }
+    }
+    flattened
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,5 +804,50 @@ mod tests {
             Some(&json!("project_read"))
         );
         assert!(normalized.arguments.get("__compat").is_some());
+    }
+
+    #[test]
+    fn flattens_editor_payload_fields_for_structured_schema_calls() {
+        let normalized = normalize_tool_call(
+            "redbox_editor",
+            &json!({
+                "action": "script_update",
+                "payload": { "content": "updated script" }
+            }),
+        );
+        assert_eq!(
+            normalized.arguments.get("content"),
+            Some(&json!("updated script"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_fs_legacy_scope_action_pairs() {
+        let normalized = normalize_tool_call(
+            "redbox_fs",
+            &json!({ "scope": "knowledge", "action": "read", "path": "notes/demo.md" }),
+        );
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("knowledge.read"))
+        );
+        assert_eq!(
+            normalized.arguments.get("path"),
+            Some(&json!("notes/demo.md"))
+        );
+        assert!(normalized.arguments.get("__compat").is_some());
+    }
+
+    #[test]
+    fn flattens_redbox_fs_payload_fields_for_structured_schema_calls() {
+        let normalized = normalize_tool_call(
+            "redbox_fs",
+            &json!({
+                "action": "workspace.search",
+                "payload": { "query": "creator", "path": "docs" }
+            }),
+        );
+        assert_eq!(normalized.arguments.get("query"), Some(&json!("creator")));
+        assert_eq!(normalized.arguments.get("path"), Some(&json!("docs")));
     }
 }

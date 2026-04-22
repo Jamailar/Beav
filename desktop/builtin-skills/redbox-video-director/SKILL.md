@@ -7,7 +7,7 @@ allowed-tools: app_cli
 
 # RedBox Video Director
 
-Use this skill before calling `app_cli(command="video generate ...")` for RedBox video work.
+Use this skill before calling `app_cli(action="video.generate", payload={ ... })` for RedBox video work.
 
 ## Default Workflow
 
@@ -22,7 +22,7 @@ Before any video tool call, follow this order:
 7. If storyboard stills are needed, design a stable keyframe-generation plan first.
 8. Show the script to the user together with explicit video specs.
 9. Ask for confirmation or revision.
-10. Only after confirmation, call `app_cli(command="video generate ...")`.
+10. Only after confirmation, call `app_cli(action="video.generate", payload={ ... })`.
 
 If the user has not yet confirmed the script, do not generate the video.
 
@@ -243,7 +243,7 @@ If the script contains multiple shots, a named character, an important environme
 
 ## Tool Usage
 
-- Always use `app_cli(command="video generate ...")`.
+- Always use `app_cli(action="video.generate", payload={ ... })`.
 - Pass no reference images for `text-to-video`.
 - Pass 1 to 5 reference images for `reference-guided`.
 - Pass exactly two reference images in `首帧,尾帧` order for `first-last-frame`.

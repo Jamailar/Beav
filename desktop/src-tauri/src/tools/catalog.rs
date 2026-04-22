@@ -64,6 +64,15 @@ const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "diagnostics",
 ];
 const ALL_EDITOR_RUNTIME_MODES: &[&str] = &["video-editor", "audio-editor", "diagnostics"];
+const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
+    "wander",
+    "chatroom",
+    "knowledge",
+    "redclaw",
+    "video-editor",
+    "audio-editor",
+    "diagnostics",
+];
 const REDCLAW_RUNTIME_MODES: &[&str] = &["chatroom", "default", "knowledge", "redclaw"];
 const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "redclaw", "diagnostics"];
 
@@ -480,6 +489,145 @@ fn media_output_schema() -> Value {
         "type": "object",
         "additionalProperties": true
     }))
+}
+
+fn file_system_output_schema() -> Value {
+    ok_output_schema(json!({
+        "type": "object",
+        "additionalProperties": true
+    }))
+}
+
+fn fs_workspace_list_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Workspace-relative directory path to inspect."),
+            ),
+            ("limit", integer_schema("Maximum entries to list.", 1, 200)),
+        ],
+        &["path"],
+        None,
+    )
+}
+
+fn fs_workspace_read_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Workspace-relative file path to read."),
+            ),
+            (
+                "maxChars",
+                integer_schema("Maximum response characters.", 200, 20_000),
+            ),
+        ],
+        &["path"],
+        None,
+    )
+}
+
+fn fs_workspace_search_input_schema() -> Value {
+    object_schema(
+        &[
+            ("query", string_schema("Free-text query to search for.")),
+            (
+                "path",
+                string_schema("Optional workspace-relative directory or file to scope the search."),
+            ),
+            (
+                "pattern",
+                string_schema("Optional workspace-relative glob pattern."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum matches to return.", 1, 400),
+            ),
+            (
+                "snippetChars",
+                integer_schema("Maximum snippet characters per hit.", 80, 800),
+            ),
+        ],
+        &["query"],
+        None,
+    )
+}
+
+fn fs_knowledge_list_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "advisorId",
+                string_schema("Optional advisor id when not bound by session."),
+            ),
+            (
+                "path",
+                string_schema("Optional advisor-relative path to list."),
+            ),
+            (
+                "pattern",
+                string_schema("Optional advisor-relative glob pattern."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum matches to return.", 1, 200),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
+fn fs_knowledge_search_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "advisorId",
+                string_schema("Optional advisor id when not bound by session."),
+            ),
+            (
+                "path",
+                string_schema("Optional advisor-relative path to scope the search."),
+            ),
+            (
+                "pattern",
+                string_schema("Optional advisor-relative glob pattern."),
+            ),
+            ("query", string_schema("Free-text query to search for.")),
+            (
+                "limit",
+                integer_schema("Maximum matches to return.", 1, 100),
+            ),
+            (
+                "snippetChars",
+                integer_schema("Maximum snippet characters per hit.", 80, 800),
+            ),
+        ],
+        &["query"],
+        None,
+    )
+}
+
+fn fs_knowledge_read_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "advisorId",
+                string_schema("Optional advisor id when not bound by session."),
+            ),
+            ("path", string_schema("Advisor-relative file path to read.")),
+            ("offset", integer_schema("0-based line offset.", 0, 100_000)),
+            ("limit", integer_schema("Maximum lines to read.", 1, 400)),
+            (
+                "maxChars",
+                integer_schema("Maximum response characters.", 200, 20_000),
+            ),
+        ],
+        &["path"],
+        None,
+    )
 }
 
 fn editor_file_locator_schema() -> Value {
@@ -926,6 +1074,75 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     },
 ];
 
+const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
+    ActionDescriptor {
+        action: "workspace.list",
+        namespace: "workspace",
+        description: "List entries inside one workspace-relative directory.",
+        input_schema: fs_workspace_list_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.read",
+        namespace: "workspace",
+        description: "Read one workspace-relative file.",
+        input_schema: fs_workspace_read_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.search",
+        namespace: "workspace",
+        description: "Search workspace files by text query.",
+        input_schema: fs_workspace_search_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "knowledge.list",
+        namespace: "knowledge",
+        description: "List entries inside advisor or shared knowledge storage.",
+        input_schema: fs_knowledge_list_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "knowledge.read",
+        namespace: "knowledge",
+        description: "Read one advisor or shared knowledge file.",
+        input_schema: fs_knowledge_read_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "knowledge.search",
+        namespace: "knowledge",
+        description: "Search advisor or shared knowledge files by text query.",
+        input_schema: fs_knowledge_search_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+];
+
 const REDBOX_EDITOR_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "script_read",
@@ -1164,6 +1381,7 @@ pub fn action_descriptors_for_tool(
 ) -> Vec<ActionDescriptor> {
     let source = match tool_name {
         "app_cli" => APP_CLI_ACTIONS,
+        "redbox_fs" => REDBOX_FS_ACTIONS,
         "redbox_editor" => REDBOX_EDITOR_ACTIONS,
         _ => &[],
     };
@@ -1199,6 +1417,7 @@ pub fn action_descriptor_by_name(
 ) -> Option<ActionDescriptor> {
     let source = match tool_name {
         "app_cli" => APP_CLI_ACTIONS,
+        "redbox_fs" => REDBOX_FS_ACTIONS,
         "redbox_editor" => REDBOX_EDITOR_ACTIONS,
         _ => return None,
     };
@@ -1238,7 +1457,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "redbox_fs" => Some(ToolDescriptor {
             name: "redbox_fs",
-            description: "Unified structured file access for currentSpaceRoot and advisor/member knowledge. Use scope=workspace or scope=knowledge with action=list/read/search.",
+            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -1367,30 +1586,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_fs" => Some(json!({
-            "type": "function",
-            "function": {
-                "name": "redbox_fs",
-                "description": "Unified structured file access for currentSpaceRoot and advisor/member knowledge. Use scope=workspace or scope=knowledge with action=list/read/search.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "scope": { "type": "string", "enum": ["workspace", "knowledge"] },
-                        "action": { "type": "string", "enum": ["list", "read", "search"] },
-                        "advisorId": { "type": "string" },
-                        "path": { "type": "string" },
-                        "pattern": { "type": "string" },
-                        "query": { "type": "string" },
-                        "offset": { "type": "integer", "minimum": 0 },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 400 },
-                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000 },
-                        "snippetChars": { "type": "integer", "minimum": 80, "maximum": 800 }
-                    },
-                    "required": ["action"],
-                    "additionalProperties": false
-                }
-            }
-        })),
+        "redbox_fs" => Some(build_action_tool_schema(
+            "redbox_fs",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            &action_descriptors_for_tool("redbox_fs", runtime_mode, ActionVisibility::Model),
+        )),
         "knowledge_glob" => Some(json!({
             "type": "function",
             "function": {
@@ -1593,6 +1793,11 @@ pub fn schema_for_tool_from_action_descriptors(
             APP_CLI_DESCRIPTION,
             descriptors,
         )),
+        "redbox_fs" => Some(build_action_tool_schema(
+            "redbox_fs",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            descriptors,
+        )),
         "redbox_editor" => Some(build_action_tool_schema(
             "redbox_editor",
             REDBOX_EDITOR_DESCRIPTION,
@@ -1656,11 +1861,33 @@ mod tests {
     }
 
     #[test]
+    fn redbox_fs_schema_uses_explicit_action_variants() {
+        let schema = schema_for_tool_for_runtime_mode("redbox_fs", Some("chatroom"))
+            .expect("redbox_fs schema should exist");
+        let actions = schema["function"]["parameters"]["oneOf"]
+            .as_array()
+            .expect("oneOf variants")
+            .iter()
+            .filter_map(|item| item["properties"]["action"]["const"].as_str())
+            .collect::<Vec<_>>();
+        assert!(actions.contains(&"workspace.list"));
+        assert!(actions.contains(&"workspace.read"));
+        assert!(actions.contains(&"workspace.search"));
+        assert!(actions.contains(&"knowledge.list"));
+        assert!(actions.contains(&"knowledge.read"));
+        assert!(actions.contains(&"knowledge.search"));
+    }
+
+    #[test]
     fn tool_action_family_summary_lists_namespaces() {
         let summary =
             tool_action_family_summary("app_cli", Some("redclaw")).expect("summary should exist");
         assert!(summary.contains("memory"));
         assert!(summary.contains("manuscripts"));
+        let fs_summary = tool_action_family_summary("redbox_fs", Some("chatroom"))
+            .expect("summary should exist");
+        assert!(fs_summary.contains("workspace"));
+        assert!(fs_summary.contains("knowledge"));
     }
 
     #[test]

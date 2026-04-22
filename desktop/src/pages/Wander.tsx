@@ -465,7 +465,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
       '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '优先使用 `redbox_fs(action="list" | "read", scope="workspace")` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
+      '优先使用 `redbox_fs(action="workspace.list" | "workspace.read", payload={ ... })` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
       '',
       '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       '',

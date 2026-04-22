@@ -72,7 +72,7 @@ pub fn execute_grep(
     let scope = resolve_scope(state, session_id, arguments)?;
     let query = payload_string(arguments, "query")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "knowledge_grep requires query".to_string())?;
+        .ok_or_else(|| "redbox_fs(action=knowledge.search) requires query".to_string())?;
     let pattern_text = search_pattern_for_scope(&scope, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
@@ -128,7 +128,7 @@ pub fn execute_read(
     let scope = resolve_scope(state, session_id, arguments)?;
     let relative_path = payload_string(arguments, "path")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "knowledge_read requires path".to_string())
+        .ok_or_else(|| "redbox_fs(action=knowledge.read) requires path".to_string())
         .and_then(|value| normalize_scope_relative_path(&scope, &value))?;
     let offset = parse_usize(arguments, "offset", 0, usize::MAX);
     let limit = parse_usize(arguments, "limit", DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
