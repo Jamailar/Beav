@@ -262,6 +262,25 @@ pub struct CliCreateEnvironmentRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
+pub struct CliEnvironmentResolveRequest {
+    pub requested_environment_id: Option<String>,
+    pub preferred_scope: Option<CliEnvironmentScope>,
+    pub workspace_root: Option<String>,
+    pub task_id: Option<String>,
+    pub tool_id: Option<String>,
+    pub isolated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CliEnvironmentResolution {
+    pub environment: CliEnvironmentRecord,
+    pub reason: String,
+    pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CliExecuteRequest {
     pub session_id: Option<String>,
     pub task_id: Option<String>,
