@@ -16,6 +16,7 @@ use crate::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
@@ -352,6 +353,7 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
 fn build_legacy_wander_prompt(
     items_text: &str,
     long_term_context_section: &str,
+    material_bundle: &str,
     materials_guide: &str,
     multi_choice: bool,
 ) -> String {
@@ -394,22 +396,25 @@ fn build_legacy_wander_prompt(
     [
         "你现在处于 RedBox 的「漫步深度思考」Agent 模式。",
         "你需要自主完成：分析素材 -> 提炼爆款方法与隐藏连接 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。",
-        "你必须先调用工具补充上下文，再给结论。",
+        "宿主已经预读了每条素材的关键内容，你要先基于这份预读 bundle 完成判断，再决定是否需要额外读取文件。",
         "读取素材的目的不是强行把素材原样塞进选题，而是学习其中值得借鉴的 hook、冲突、情绪、叙事结构、评论点、反差和细节。",
         "如果某个素材只提供了表达方式、视角或结构启发，而不适合直接进入最终内容，也可以只吸收其方法，不必硬写进去。",
         "内容质量、传播性、切口强度优先于素材覆盖率；这不是命题作文。",
         "",
-        "工具调用要求（必须满足）：",
-        "1) 至少发起 1 次工具调用；",
-        "2) 优先读取素材目录、meta.json、正文或转录文件，识别哪些内容值得借、哪些应舍弃；",
-        "3) 未发生工具调用时，不允许直接输出最终结论。",
+        "工具调用要求（默认不要触发）：",
+        "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；",
+        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 redbox_fs 补读 1-2 个文件；",
+        "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。",
         "",
         &output_requirement,
         "",
         "你收到的随机素材如下：",
         items_text,
         "",
-        "你可读取的真实素材路径如下：",
+        "宿主预读素材包如下：",
+        material_bundle,
+        "",
+        "如确实需要补读，才使用这些真实素材路径：",
         materials_guide,
         "",
         if long_term_context_section.is_empty() {
@@ -421,6 +426,254 @@ fn build_legacy_wander_prompt(
     .join("\n")
 }
 
+fn normalize_wander_bundle_text(text: &str, max_chars: usize) -> String {
+    truncate_chars(
+        &text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .split('\n')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        max_chars,
+    )
+}
+
+fn read_wander_text_excerpt(path: &Path, max_chars: usize) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .map(|content| normalize_wander_bundle_text(&content, max_chars))
+        .filter(|content| !content.trim().is_empty())
+}
+
+fn summarize_wander_meta_file(path: &Path, max_chars: usize) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<Value>(&content).ok()?;
+    let mut lines = Vec::new();
+    for key in [
+        "title",
+        "author",
+        "content",
+        "description",
+        "summary",
+        "excerpt",
+        "transcript",
+    ] {
+        let value = parsed
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty());
+        if let Some(value) = value {
+            lines.push(format!(
+                "{key}: {}",
+                normalize_wander_bundle_text(value, 260)
+            ));
+        }
+    }
+    if let Some(stats) = parsed.get("stats").filter(|value| !value.is_null()) {
+        lines.push(format!(
+            "stats: {}",
+            truncate_chars(&stats.to_string(), 120).replace('\n', " ")
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(&lines.join("\n"), max_chars))
+}
+
+fn has_allowed_wander_text_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "txt" | "json" | "html" | "htm" | "srt" | "vtt"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn find_first_matching_wander_file(
+    root: &Path,
+    exact_names: &[&str],
+    tokens: &[&str],
+) -> Option<PathBuf> {
+    for name in exact_names {
+        let candidate = root.join(name);
+        if candidate.is_file() && has_allowed_wander_text_extension(&candidate) {
+            return Some(candidate);
+        }
+    }
+    let mut matches = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && has_allowed_wander_text_extension(path))
+        .filter(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            tokens.iter().any(|token| file_name.contains(token))
+        })
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.into_iter().next()
+}
+
+fn resolve_wander_item_root(item: &Value) -> Option<PathBuf> {
+    let meta = item.get("meta")?.as_object()?;
+    meta.get("materialRef")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("folderPath"))
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("folderPath").and_then(Value::as_str))
+        .or_else(|| meta.get("filePath").and_then(Value::as_str))
+        .map(PathBuf::from)
+}
+
+fn build_wander_material_bundle(items: &[Value]) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled")
+                .trim()
+                .to_string();
+            let item_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("note")
+                .trim()
+                .to_string();
+            let meta = item
+                .get("meta")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let source_type = meta
+                .get("sourceType")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let summary = item
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|value| normalize_wander_bundle_text(value, 260))
+                .unwrap_or_default();
+            let mut sections = vec![
+                format!("素材 {} | 标题: {}", index + 1, title),
+                format!("- 类型: {}", item_type),
+                format!("- sourceType: {}", source_type),
+            ];
+            if !summary.is_empty() {
+                sections.push(format!("- 现有摘要: {}", summary));
+            }
+            let Some(root) = resolve_wander_item_root(item) else {
+                sections.push("- 宿主预读: 未定位到素材根路径。".to_string());
+                return sections.join("\n");
+            };
+            if !root.exists() {
+                sections.push(format!("- 宿主预读: 素材路径不存在 ({})", root.display()));
+                return sections.join("\n");
+            }
+
+            if root.is_file() {
+                if let Some(excerpt) = read_wander_text_excerpt(&root, 700) {
+                    sections.push(format!(
+                        "- 预读正文({}):\n{}",
+                        root.file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("file"),
+                        excerpt
+                    ));
+                }
+                return sections.join("\n");
+            }
+
+            let meta_path = root.join("meta.json");
+            if let Some(meta_excerpt) = summarize_wander_meta_file(&meta_path, 900) {
+                sections.push(format!("- 预读 meta.json:\n{}", meta_excerpt));
+            }
+
+            let is_video =
+                item_type == "video" || matches!(source_type.as_str(), "youtube" | "xhs-video");
+            let primary_text = if source_type == "document" {
+                meta.get("relativePath")
+                    .and_then(Value::as_str)
+                    .map(|value| root.join(normalize_relative_path(value)))
+                    .filter(|path| path.is_file())
+                    .or_else(|| {
+                        find_first_matching_wander_file(
+                            &root,
+                            &["content.md", "README.md", "index.md"],
+                            &["content", "article", "note", "body", "readme"],
+                        )
+                    })
+            } else if is_video {
+                let transcript_from_meta = fs::read_to_string(&meta_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+                    .and_then(|value| {
+                        value
+                            .get("transcriptFile")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string)
+                    })
+                    .map(|relative| root.join(relative));
+                transcript_from_meta
+                    .filter(|path| path.is_file())
+                    .or_else(|| {
+                        find_first_matching_wander_file(
+                            &root,
+                            &["transcript.txt", "subtitle.txt", "content.md"],
+                            &[
+                                "transcript",
+                                "subtitle",
+                                "caption",
+                                "content",
+                                "description",
+                            ],
+                        )
+                    })
+            } else {
+                find_first_matching_wander_file(
+                    &root,
+                    &["content.md", "content.txt", "note.md"],
+                    &["content", "article", "body", "note", "description"],
+                )
+            };
+
+            if let Some(primary_text) = primary_text {
+                if let Some(excerpt) = read_wander_text_excerpt(&primary_text, 1200) {
+                    sections.push(format!(
+                        "- 预读正文({}):\n{}",
+                        primary_text
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("file"),
+                        excerpt
+                    ));
+                }
+            }
+
+            sections.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn build_wander_materials_guide(items: &[Value]) -> String {
     items
         .iter()
@@ -430,16 +683,12 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or("Untitled");
-            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("note");
             let meta = item
                 .get("meta")
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            let source_type = meta
-                .get("sourceType")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let source_type = meta.get("sourceType").and_then(Value::as_str).unwrap_or("");
             let material_ref = meta.get("materialRef").and_then(Value::as_object);
             if source_type == "document" {
                 let root_path = material_ref
@@ -449,36 +698,11 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let naming_rules = material_ref
-                    .and_then(|value| value.get("namingRules"))
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .collect::<Vec<_>>()
-                            .join("；")
-                    })
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| {
-                        let sample = meta
-                            .get("relativePath")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())?;
-                        Some(format!("样例文件：{sample}"))
-                    })
-                    .unwrap_or_else(|| "先从目录中最像正文的文件开始探索。".to_string());
                 return format!(
-                    "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"workspace.list\"|\"workspace.read\"|\"workspace.search\") 读取。\n- 如果需要更多上下文，优先读取该文档本身，不要泛泛总结。",
+                    "素材 {} | 标题: {}\n- 仅在 bundle 不足时再补读\n- workspace 路径: {}",
                     index + 1,
                     title,
-                    item_type,
-                    source_type,
                     root_path,
-                    naming_rules
                 );
             }
 
@@ -499,38 +723,11 @@ fn build_wander_materials_guide(items: &[Value]) -> String {
                 .clone()
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| folder_path.clone());
-            let exploration_hint = material_ref
-                .and_then(|value| value.get("explorationHint"))
-                .and_then(Value::as_str)
-                .unwrap_or(if source_type == "youtube" || item_type == "video" {
-                    "先 list 目录，再优先读取 meta.json，然后根据 transcript / subtitle / content / description 等命名线索自行选择要读的文件。"
-                } else {
-                    "先 list 目录，再优先读取 meta.json，然后根据 content / body / article / note 等命名线索自行选择要读的正文文件。"
-                });
-            let naming_rules = material_ref
-                .and_then(|value| value.get("namingRules"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("；")
-                })
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "优先 meta.json，再按命名线索继续探索。".to_string());
             format!(
-                "素材 {} | 标题: {}\n- 类型: {}\n- sourceType: {}\n- 优先探索路径(workspace): {}\n- 原始记录路径: {}\n- 探索顺序: {}\n- 识别规则: {}\n- 优先用 redbox_fs(action=\"workspace.list\"|\"workspace.read\"|\"workspace.search\") 读取这些路径。",
+                "素材 {} | 标题: {}\n- 仅在 bundle 不足时再补读\n- workspace 路径: {}",
                 index + 1,
                 title,
-                item_type,
-                source_type,
                 preferred_path,
-                folder_path,
-                exploration_hint,
-                naming_rules
             )
         })
         .collect::<Vec<_>>()
@@ -1708,10 +1905,11 @@ pub fn handle_chat_sessions_wander_channel(
                         "totalSteps": 3,
                         "title": "构建上下文",
                         "status": "completed",
-                        "detail": "长期上下文已准备完成，Agent 将自行读取关键素材文件。",
+                        "detail": "长期上下文与宿主预读的关键素材摘录已准备完成。",
                     }),
                 );
                 let items_text = build_wander_items_text(&items);
+                let material_bundle = build_wander_material_bundle(&items);
                 let long_term_context_section = if long_term_context.trim().is_empty() {
                     String::new()
                 } else {
@@ -1724,6 +1922,7 @@ pub fn handle_chat_sessions_wander_channel(
                 let prompt = build_legacy_wander_prompt(
                     &items_text,
                     &long_term_context_section,
+                    &material_bundle,
                     &materials_guide,
                     multi_choice,
                 );
@@ -1751,6 +1950,10 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("contextContent".to_string(), json!(items_text));
                     metadata.insert("isContextBound".to_string(), json!(true));
                     metadata.insert("allowedTools".to_string(), json!(["redbox_fs"]));
+                    metadata.insert(
+                        "wanderMaterialBundleChars".to_string(),
+                        json!(material_bundle.chars().count()),
+                    );
                     metadata.insert(
                         "loadWritingStyleSkill".to_string(),
                         json!(load_writing_style_skill),
@@ -2075,5 +2278,20 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(codes.contains(&"generic_title"));
         assert!(codes.contains(&"generic_direction"));
+    }
+
+    #[test]
+    fn build_legacy_wander_prompt_prefers_preloaded_bundle_before_tools() {
+        let prompt = build_legacy_wander_prompt(
+            "Item 1",
+            "",
+            "素材 1 | 标题: 示例\n- 预读正文:\n这里是宿主预读的内容",
+            "素材 1 | workspace 路径: knowledge/redbook/demo",
+            false,
+        );
+
+        assert!(prompt.contains("宿主已经预读了每条素材的关键内容"));
+        assert!(prompt.contains("先用预读 bundle 判断"));
+        assert!(!prompt.contains("至少发起 1 次工具调用"));
     }
 }
