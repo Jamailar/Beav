@@ -2,6 +2,11 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
+import {
+  CliEscalationDialog,
+  type CliEscalationRequestModel,
+  type CliEscalationScope,
+} from '../components/CliEscalationDialog';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import {
   blobToBase64,
@@ -157,6 +162,7 @@ function writeFixedSessionWarmSnapshot(
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
 const STREAM_UPDATE_INTERVAL_MS = 72;
+const CLI_LOG_PREVIEW_LIMIT = 4000;
 const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -194,6 +200,50 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   if (current.endsWith(incoming)) return current;
   if (incoming.startsWith(current)) return incoming;
   return `${current}${incoming}`;
+}
+
+function appendCliLogPreview(currentPreview: string, incomingChunk: string): string {
+  const current = String(currentPreview || '');
+  const incoming = String(incomingChunk || '');
+  if (!incoming) return current;
+  if (!current) {
+    return incoming.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  if (incoming.startsWith(current)) {
+    return incoming.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  if (current.endsWith(incoming)) {
+    return current.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  return `${current}${current.endsWith('\n') ? '' : '\n'}${incoming}`.slice(-CLI_LOG_PREVIEW_LIMIT);
+}
+
+function findLatestTimelineItemIndex(
+  timeline: ProcessItem[],
+  predicate: (item: ProcessItem) => boolean,
+): number {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    if (predicate(timeline[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function normalizeCliProcessStatus(status: string): ProcessItem['status'] {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized || normalized === 'pending' || normalized === 'running' || normalized === 'waiting-approval') {
+    return 'running';
+  }
+  if (
+    normalized === 'completed'
+    || normalized === 'success'
+    || normalized === 'resolved'
+    || normalized === 'approved'
+  ) {
+    return 'done';
+  }
+  return 'failed';
 }
 
 function isThinkingMessage(message: Message | null | undefined): boolean {
@@ -328,6 +378,7 @@ export function Chat({
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
+  const [cliEscalationRequest, setCliEscalationRequest] = useState<CliEscalationRequestModel | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem("chat:sidebarCollapsed");
     return saved ? JSON.parse(saved) : defaultCollapsed;
@@ -457,14 +508,16 @@ export function Chat({
       lastTimelineRunning: runningTimelineCount,
       lastContentChars: String(lastMessage?.content || '').length,
       hasConfirmRequest: Boolean(confirmRequest),
+      hasCliEscalationRequest: Boolean(cliEscalationRequest),
       visibleBusy: Boolean(
         isProcessing
           || lastMessage?.isStreaming
           || runningTimelineCount > 0
           || confirmRequest
+          || cliEscalationRequest
       ),
     });
-  }, [confirmRequest, debugUi, isProcessing, messages]);
+  }, [cliEscalationRequest, confirmRequest, debugUi, isProcessing, messages]);
   const blurComposer = useCallback((reason: string) => {
     const element = composerRef.current?.getTextarea();
     if (!element) return;
@@ -1075,6 +1128,7 @@ export function Chat({
       flushPendingAssistantChunk();
       setIsProcessing(false);
       setConfirmRequest(null);
+      setCliEscalationRequest(null);
       setErrorNotice(null);
       setMessages([]);
     } catch (error) {
@@ -1113,6 +1167,31 @@ export function Chat({
   const handleCancelTool = useCallback((callId: string) => {
     window.ipcRenderer.chat.confirmTool(callId, false);
     setConfirmRequest(null);
+  }, []);
+
+  const handleApproveCliEscalation = useCallback(async (
+    escalationId: string,
+    scope: CliEscalationScope,
+  ) => {
+    try {
+      await window.ipcRenderer.cliRuntime.approveEscalation({ escalationId, scope });
+      setCliEscalationRequest((current) => (
+        current?.escalationId === escalationId ? null : current
+      ));
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const handleDenyCliEscalation = useCallback(async (escalationId: string) => {
+    try {
+      await window.ipcRenderer.cliRuntime.denyEscalation({ escalationId });
+      setCliEscalationRequest((current) => (
+        current?.escalationId === escalationId ? null : current
+      ));
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error));
+    }
   }, []);
 
   // 复制消息内容
@@ -1194,6 +1273,7 @@ export function Chat({
       window.ipcRenderer.chat.cancel();
     }
     setIsProcessing(false);
+    setCliEscalationRequest(null);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -1582,6 +1662,331 @@ export function Chat({
       });
     };
 
+    const handleCliInstallStarted = (_: unknown, cliData: {
+      installId?: string;
+      toolId?: string;
+      toolName: string;
+      environmentId?: string;
+      installMethod?: string;
+      spec?: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      const installId = cliData.installId || cliData.toolId || cliData.toolName || `install_${Date.now()}`;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-install' && item.cliData?.installId === installId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-install_${installId}`,
+          type: 'cli-install',
+          title: cliData.toolName || 'CLI 安装',
+          content: cliData.spec || cliData.installMethod || '安装外部工具',
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            installId,
+            toolName: cliData.toolName,
+            environmentId: cliData.environmentId,
+            installMethod: cliData.installMethod,
+            spec: cliData.spec,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliInstallFinished = (_: unknown, cliData: {
+      installId?: string;
+      toolId?: string;
+      toolName: string;
+      environmentId?: string;
+      status: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      const installId = cliData.installId || cliData.toolId || cliData.toolName || '';
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-install' && (
+            item.cliData?.installId === installId
+            || item.cliData?.toolName === cliData.toolName
+          ),
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            environmentId: cliData.environmentId || target.cliData?.environmentId,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.summary || ''),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionStarted = (_: unknown, cliData: {
+      executionId: string;
+      environmentId?: string;
+      toolId?: string;
+      toolName: string;
+      argv: string[];
+      cwd?: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-exec_${cliData.executionId}`,
+          type: 'cli-exec',
+          title: cliData.toolName || 'CLI 执行',
+          content: cliData.argv.join(' '),
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            executionId: cliData.executionId,
+            toolName: cliData.toolName,
+            environmentId: cliData.environmentId,
+            argv: cliData.argv,
+            cwd: cliData.cwd,
+            commandPreview: cliData.argv.join(' '),
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionLog = (_: unknown, cliData: {
+      executionId: string;
+      chunk: string;
+    }) => {
+      if (!isActiveRef.current || !cliData.chunk) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.chunk),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionStatus = (_: unknown, cliData: {
+      executionId: string;
+      status: string;
+      summary: string;
+      exitCode?: number;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        const summaryText = cliData.exitCode == null
+          ? cliData.summary
+          : `${cliData.summary || ''}${cliData.summary ? '\n' : ''}exitCode=${cliData.exitCode}`;
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', summaryText),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliEscalationRequested = (_: unknown, cliData: CliEscalationRequestModel) => {
+      if (!isActiveRef.current) return;
+      setCliEscalationRequest(cliData);
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-escalation' && item.cliData?.escalationId === cliData.escalationId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-escalation_${cliData.escalationId}`,
+          type: 'cli-escalation',
+          title: cliData.title || '权限确认',
+          content: cliData.reason || cliData.description || 'CLI 请求额外权限',
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            escalationId: cliData.escalationId,
+            executionId: cliData.executionId,
+            commandPreview: cliData.commandPreview,
+            permissions: cliData.permissionSummary,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliEscalationResolved = (_: unknown, cliData: {
+      escalationId: string;
+      executionId?: string;
+      status: string;
+      scope?: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setCliEscalationRequest((current) => (
+        current?.escalationId === cliData.escalationId ? null : current
+      ));
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-escalation' && item.cliData?.escalationId === cliData.escalationId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            executionId: cliData.executionId || target.cliData?.executionId,
+            resolutionScope: cliData.scope,
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliVerificationFinished = (_: unknown, cliData: {
+      executionId: string;
+      status: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-verify' && item.cliData?.executionId === cliData.executionId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-verify_${cliData.executionId}`,
+          type: 'cli-verify',
+          title: '结果校验',
+          content: cliData.summary || 'CLI 执行完成，等待校验',
+          status: normalizeCliProcessStatus(cliData.status),
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          duration: existingIndex >= 0 ? Date.now() - timeline[existingIndex].timestamp : undefined,
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            executionId: cliData.executionId,
+            verificationSummary: cliData.summary,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
@@ -1661,6 +2066,7 @@ export function Chat({
           source,
         });
         setIsProcessing(false);
+        setCliEscalationRequest(null);
         setErrorNotice(null);
         debugUi('response_end:state_calls_issued', {
           chatInstanceId: chatInstanceIdRef.current,
@@ -1762,6 +2168,7 @@ export function Chat({
       flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
+        setCliEscalationRequest(null);
         setErrorNotice(null);
         setMessages(prev => {
           const lastReplyIndex = findLastAssistantReplyIndex(prev);
@@ -1831,6 +2238,7 @@ export function Chat({
       flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
+        setCliEscalationRequest(null);
         setErrorNotice(notice);
         setMessages(prev => {
           const lastReplyIndex = findLastAssistantReplyIndex(prev);
@@ -1841,7 +2249,13 @@ export function Chat({
               if (item.status !== 'running') return item;
               return {
                 ...item,
-                status: item.type === 'tool-call' ? 'failed' : 'done',
+                status: (
+                  item.type === 'tool-call'
+                  || item.type === 'cli-install'
+                  || item.type === 'cli-exec'
+                  || item.type === 'cli-escalation'
+                  || item.type === 'cli-verify'
+                ) ? 'failed' : 'done',
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
@@ -1981,6 +2395,48 @@ export function Chat({
       },
       onChatToolConfirmRequest: ({ request }) => {
         handleConfirmRequest(null, request as ToolConfirmRequestPayload);
+      },
+      onCliInstallStarted: ({ installId, toolId, toolName, environmentId, installMethod, spec }) => {
+        handleCliInstallStarted(null, { installId, toolId, toolName, environmentId, installMethod, spec });
+      },
+      onCliInstallFinished: ({ installId, toolId, toolName, environmentId, status, summary }) => {
+        handleCliInstallFinished(null, { installId, toolId, toolName, environmentId, status, summary });
+      },
+      onCliExecutionStarted: ({ executionId, environmentId, toolId, toolName, argv, cwd }) => {
+        handleCliExecutionStarted(null, { executionId, environmentId, toolId, toolName, argv, cwd });
+      },
+      onCliExecutionLog: ({ executionId, chunk }) => {
+        handleCliExecutionLog(null, { executionId, chunk });
+      },
+      onCliExecutionStatus: ({ executionId, status, summary, exitCode }) => {
+        handleCliExecutionStatus(null, { executionId, status, summary, exitCode });
+      },
+      onCliEscalationRequested: ({
+        escalationId,
+        executionId,
+        title,
+        description,
+        reason,
+        commandPreview,
+        permissionSummary,
+        scopeOptions,
+      }) => {
+        handleCliEscalationRequested(null, {
+          escalationId,
+          executionId,
+          title,
+          description,
+          reason,
+          commandPreview,
+          permissionSummary,
+          scopeOptions,
+        });
+      },
+      onCliEscalationResolved: ({ escalationId, executionId, status, scope, summary }) => {
+        handleCliEscalationResolved(null, { escalationId, executionId, status, scope, summary });
+      },
+      onCliVerificationFinished: ({ executionId, status, summary }) => {
+        handleCliVerificationFinished(null, { executionId, status, summary });
       },
     });
 
@@ -2309,6 +2765,11 @@ export function Chat({
     },
   ) => (
     <>
+      <CliEscalationDialog
+        request={cliEscalationRequest}
+        onApprove={handleApproveCliEscalation}
+        onDeny={handleDenyCliEscalation}
+      />
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
       <ChatComposer
         ref={composerRef}
