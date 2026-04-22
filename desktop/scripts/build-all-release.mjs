@@ -42,21 +42,51 @@ async function runStep({ name, command, args, summaryPath }) {
   }
 }
 
+function collectInstallerLines(summary) {
+  const lines = [];
+  const artifacts = Array.isArray(summary?.artifacts) ? summary.artifacts : [];
+  if (artifacts.length > 0) {
+    for (const artifact of artifacts) {
+      const target = artifact?.target ? ` (${artifact.target})` : '';
+      for (const key of ['installerPath', 'appImageArtifactPath', 'debArtifactPath']) {
+        const value = String(artifact?.[key] || '').trim();
+        if (value) {
+          lines.push(`${key}${target}: ${value}`);
+        }
+      }
+    }
+    return lines;
+  }
+
+  for (const key of ['installerPath', 'appImageArtifactPath', 'debArtifactPath']) {
+    const value = String(summary?.[key] || '').trim();
+    if (value) {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+  return lines;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help === true) {
     console.log(
-      'Usage: pnpm release:all [-- --skip-win] [-- --skip-mac] [-- --mac-notary-retries 3] [-- --mac-notary-retry-delay-ms 5000]',
+      'Usage: pnpm release:all [-- --skip-win] [-- --skip-mac] [-- --skip-linux] [-- --mac-notary-retries 3] [-- --mac-notary-retry-delay-ms 5000] [-- --mac-targets aarch64-apple-darwin,x86_64-apple-darwin] [-- --windows-targets x86_64-pc-windows-msvc,aarch64-pc-windows-msvc,i686-pc-windows-msvc] [-- --linux-targets x86_64-unknown-linux-gnu]',
     );
     return;
   }
 
   const skipWin = args['skip-win'] === true;
   const skipMac = args['skip-mac'] === true;
+  const skipLinux = args['skip-linux'] === true;
   const macNotaryRetries = String(args['mac-notary-retries'] || '').trim();
   const macNotaryRetryDelayMs = String(args['mac-notary-retry-delay-ms'] || '').trim();
+  const macTargets = String(args['mac-targets'] || '').trim();
+  const windowsTargets = String(args['windows-targets'] || '').trim();
+  const linuxTargets = String(args['linux-targets'] || '').trim();
   const windowsSummaryPath = path.join(artifactsRoot, 'release', 'windows-build-summary.json');
   const macSummaryPath = path.join(artifactsRoot, 'release', 'mac-build-summary.json');
+  const linuxSummaryPath = path.join(artifactsRoot, 'release', 'linux-build-summary.json');
   const results = [];
 
   if (!skipWin) {
@@ -70,6 +100,7 @@ async function main() {
           'remote',
           '--host',
           'jamdebian',
+          ...(windowsTargets ? ['--targets', windowsTargets] : []),
         ],
         summaryPath: windowsSummaryPath,
       }),
@@ -84,6 +115,9 @@ async function main() {
     if (macNotaryRetryDelayMs) {
       macArgs.push('--notary-retry-delay-ms', macNotaryRetryDelayMs);
     }
+    if (macTargets) {
+      macArgs.push('--targets', macTargets);
+    }
 
     results.push(
       await runStep({
@@ -95,12 +129,34 @@ async function main() {
     );
   }
 
+  if (!skipLinux) {
+    const linuxArgs = [
+      './scripts/build-linux-release.mjs',
+      '--mode',
+      'remote',
+      '--host',
+      'jamdebian',
+    ];
+    if (linuxTargets) {
+      linuxArgs.push('--targets', linuxTargets);
+    }
+
+    results.push(
+      await runStep({
+        name: 'Linux',
+        command: 'node',
+        args: linuxArgs,
+        summaryPath: linuxSummaryPath,
+      }),
+    );
+  }
+
   console.log('');
   console.log('Release summary');
   for (const result of results) {
     console.log(`- ${result.name}: ${formatStatus(result.ok)}`);
-    if (result.summary?.installerPath) {
-      console.log(`  installer: ${result.summary.installerPath}`);
+    for (const line of collectInstallerLines(result.summary)) {
+      console.log(`  ${line}`);
     }
     if (!result.ok && result.error) {
       console.log(`  error: ${result.error}`);

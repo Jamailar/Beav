@@ -8,11 +8,13 @@ import {
   bundleRootForTarget,
   captureCommand,
   copyArtifactToDir,
+  ensureRustTargets,
   ensureCommandExists,
   envFlag,
   findNewestFile,
   installerArtifactsDir,
   logStep,
+  parseTargetList,
   parseArgs,
   readPackageJson,
   readTauriConfig,
@@ -22,6 +24,7 @@ import {
 
 const DEFAULT_NOTARY_RETRIES = 3;
 const DEFAULT_NOTARY_RETRY_DELAY_MS = 5000;
+const DEFAULT_MAC_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
 
 function dedupe(values) {
   return [...new Set(values.filter(Boolean))];
@@ -198,10 +201,77 @@ async function resolveArtifacts({ productName, version, target }) {
   return { bundleRoot, appPath, dmgPath };
 }
 
+async function buildTarget({
+  productName,
+  version,
+  target,
+  buildEnv,
+  skipNotarize,
+  notaryAuth,
+  notaryRetries,
+  notaryRetryDelayMs,
+}) {
+  const buildArgs = ['tauri', 'build', '--ci', '--target', target];
+
+  logStep(`Building signed macOS app and dmg for ${target}`);
+  await runCommand('pnpm', buildArgs, { cwd: repoRoot, env: buildEnv });
+
+  const { appPath, dmgPath } = await resolveArtifacts({ productName, version, target });
+  const installerPath = await copyArtifactToDir(dmgPath, installerArtifactsDir('macos'));
+
+  logStep(`Generated app (${target}): ${path.relative(repoRoot, appPath)}`);
+  logStep(`Generated dmg (${target}): ${path.relative(repoRoot, dmgPath)}`);
+  logStep(`Copied macOS installer (${target}): ${path.relative(repoRoot, installerPath)}`);
+
+  logStep(`Verifying code signature for ${target}`);
+  await runCommand('codesign', ['--verify', '--deep', '--verbose=2', appPath], { cwd: repoRoot });
+  const signatureDetails = await captureCommand('codesign', ['-dv', '--verbose=4', appPath], {
+    cwd: repoRoot,
+    allowFailure: true,
+  });
+  if (signatureDetails.stderr.includes('Signature=adhoc')) {
+    throw new Error(`macOS bundle for ${target} is still ad-hoc signed. A Developer ID signature is required.`);
+  }
+
+  if (!skipNotarize) {
+    await submitForNotarization({
+      dmgPath,
+      cliArgs: notaryAuth.cliArgs,
+      retries:
+        Number.isFinite(notaryRetries) && notaryRetries > 0
+          ? Math.floor(notaryRetries)
+          : DEFAULT_NOTARY_RETRIES,
+      retryDelayMs:
+        Number.isFinite(notaryRetryDelayMs) && notaryRetryDelayMs >= 0
+          ? Math.floor(notaryRetryDelayMs)
+          : DEFAULT_NOTARY_RETRY_DELAY_MS,
+    });
+
+    logStep(`Stapling notarization ticket to dmg for ${target}`);
+    await runCommand('xcrun', ['stapler', 'staple', dmgPath], { cwd: repoRoot });
+
+    logStep(`Validating stapled dmg for ${target}`);
+    await runCommand('xcrun', ['stapler', 'validate', dmgPath], { cwd: repoRoot });
+
+    logStep(`Running Gatekeeper assessment for dmg (${target})`);
+    await runCommand('spctl', ['--assess', '-vv', dmgPath], {
+      cwd: repoRoot,
+      allowFailure: true,
+    });
+  }
+
+  return {
+    target,
+    appPath,
+    dmgPath,
+    installerPath,
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help === true) {
-    console.log('Usage: pnpm release:mac [-- --target universal-apple-darwin] [-- --identity "Developer ID Application: ..."] [-- --notary-profile redbox-notary] [-- --skip-notarize] [-- --notary-retries 3] [-- --notary-retry-delay-ms 5000]');
+    console.log('Usage: pnpm release:mac [-- --targets aarch64-apple-darwin,x86_64-apple-darwin] [-- --target universal-apple-darwin] [-- --identity "Developer ID Application: ..."] [-- --notary-profile redbox-notary] [-- --skip-notarize] [-- --notary-retries 3] [-- --notary-retry-delay-ms 5000]');
     return;
   }
   const packageJson = await readPackageJson();
@@ -209,7 +279,10 @@ async function main() {
   assertBundledGuideResources(tauriConfig);
   const productName = String(packageJson.productName || 'RedBox');
   const version = String(packageJson.version);
-  const target = String(args.target || process.env.REDBOX_MAC_TARGET || '').trim();
+  const targets = parseTargetList(
+    args.targets || process.env.REDBOX_MAC_TARGETS || args.target || process.env.REDBOX_MAC_TARGET,
+    DEFAULT_MAC_TARGETS,
+  );
   const skipNotarize = args['skip-notarize'] === true || envFlag('REDBOX_SKIP_NOTARIZE', false);
   const notaryRetries = Number(
     args['notary-retries'] || process.env.REDBOX_NOTARY_RETRIES || DEFAULT_NOTARY_RETRIES,
@@ -225,9 +298,11 @@ async function main() {
   }
 
   await ensureCommandExists('pnpm');
+  await ensureCommandExists('rustup');
   await ensureCommandExists('security');
   await ensureCommandExists('codesign');
   await ensureCommandExists('xcrun', 'Install Xcode command line tools first.');
+  await ensureRustTargets(targets, { cwd: repoRoot });
 
   const identities = await detectSigningIdentities();
   const signingIdentity = stripQuotes(
@@ -253,57 +328,20 @@ async function main() {
 
   const buildEnv = buildSigningOnlyEnv(signingIdentity);
   await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
-
-  const buildArgs = ['tauri', 'build', '--ci'];
-  if (target) {
-    buildArgs.push('--target', target);
-  }
-
-  logStep('Building signed macOS app and dmg');
-  await runCommand('pnpm', buildArgs, { cwd: repoRoot, env: buildEnv });
-
-  const { appPath, dmgPath } = await resolveArtifacts({ productName, version, target });
-  const installerPath = await copyArtifactToDir(dmgPath, installerArtifactsDir('macos'));
-
-  logStep(`Generated app: ${path.relative(repoRoot, appPath)}`);
-  logStep(`Generated dmg: ${path.relative(repoRoot, dmgPath)}`);
-  logStep(`Copied macOS installer: ${path.relative(repoRoot, installerPath)}`);
-
-  logStep('Verifying code signature');
-  await runCommand('codesign', ['--verify', '--deep', '--verbose=2', appPath], { cwd: repoRoot });
-  const signatureDetails = await captureCommand('codesign', ['-dv', '--verbose=4', appPath], {
-    cwd: repoRoot,
-    allowFailure: true,
-  });
-  if (signatureDetails.stderr.includes('Signature=adhoc')) {
-    throw new Error('macOS bundle is still ad-hoc signed. A Developer ID signature is required.');
-  }
-
-  if (!skipNotarize) {
-    await submitForNotarization({
-      dmgPath,
-      cliArgs: notaryAuth.cliArgs,
-      retries:
-        Number.isFinite(notaryRetries) && notaryRetries > 0
-          ? Math.floor(notaryRetries)
-          : DEFAULT_NOTARY_RETRIES,
-      retryDelayMs:
-        Number.isFinite(notaryRetryDelayMs) && notaryRetryDelayMs >= 0
-          ? Math.floor(notaryRetryDelayMs)
-          : DEFAULT_NOTARY_RETRY_DELAY_MS,
-    });
-
-    logStep('Stapling notarization ticket to dmg');
-    await runCommand('xcrun', ['stapler', 'staple', dmgPath], { cwd: repoRoot });
-
-    logStep('Validating stapled dmg');
-    await runCommand('xcrun', ['stapler', 'validate', dmgPath], { cwd: repoRoot });
-
-    logStep('Running Gatekeeper assessment for dmg');
-    await runCommand('spctl', ['--assess', '-vv', dmgPath], {
-      cwd: repoRoot,
-      allowFailure: true,
-    });
+  const artifacts = [];
+  for (const target of targets) {
+    artifacts.push(
+      await buildTarget({
+        productName,
+        version,
+        target,
+        buildEnv,
+        skipNotarize,
+        notaryAuth,
+        notaryRetries,
+        notaryRetryDelayMs,
+      }),
+    );
   }
 
   const summary = {
@@ -312,9 +350,12 @@ async function main() {
     signingIdentity,
     teamId: inferredTeamId,
     notarized: !skipNotarize,
-    appPath,
-    dmgPath,
-    installerPath,
+    requestedTargets: targets,
+    target: artifacts[0]?.target || null,
+    appPath: artifacts[0]?.appPath || null,
+    dmgPath: artifacts[0]?.dmgPath || null,
+    installerPath: artifacts[0]?.installerPath || null,
+    artifacts,
   };
 
   const summaryPath = path.join(artifactsRoot, 'release', 'mac-build-summary.json');
@@ -323,9 +364,12 @@ async function main() {
 
   console.log('');
   console.log('macOS release completed');
-  console.log(`- app: ${appPath}`);
-  console.log(`- dmg: ${dmgPath}`);
-  console.log(`- installer copy: ${installerPath}`);
+  for (const artifact of artifacts) {
+    console.log(`- ${artifact.target}`);
+    console.log(`  app: ${artifact.appPath}`);
+    console.log(`  dmg: ${artifact.dmgPath}`);
+    console.log(`  installer copy: ${artifact.installerPath}`);
+  }
   console.log(`- summary: ${summaryPath}`);
 }
 

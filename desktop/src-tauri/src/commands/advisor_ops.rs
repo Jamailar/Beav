@@ -2,6 +2,7 @@ use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_st
 use crate::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use tauri::{AppHandle, Emitter, State};
 
@@ -27,13 +28,12 @@ struct AdvisorTemplateRecord {
     knowledge_language: Option<String>,
 }
 
-fn advisor_templates_root() -> Result<std::path::PathBuf, String> {
-    let root = redbox_prompt_library_root()
-        .join("runtime")
-        .join("advisors")
-        .join("templates");
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    Ok(root)
+fn advisor_template_roots() -> Vec<std::path::PathBuf> {
+    redbox_prompt_library_roots()
+        .into_iter()
+        .map(|root| root.join("runtime").join("advisors").join("templates"))
+        .filter(|path| path.exists() && path.is_dir())
+        .collect()
 }
 
 fn normalize_advisor_template(
@@ -192,31 +192,34 @@ pub(crate) fn advisors_list_value(state: &State<'_, AppState>) -> Result<Value, 
 }
 
 pub(crate) fn advisors_list_templates_value() -> Result<Value, String> {
-    let root = advisor_templates_root()?;
-    let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
-    let mut templates = Vec::new();
+    let mut templates_by_id = BTreeMap::new();
 
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
+    for root in advisor_template_roots() {
+        let entries = fs::read_dir(&root).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
 
-        let content = fs::read_to_string(&path)
-            .map_err(|error| format!("读取模板失败 {}: {error}", path.display()))?;
-        let parsed: AdvisorTemplateRecord = serde_json::from_str(&content)
-            .map_err(|error| format!("模板格式无效 {}: {error}", path.display()))?;
-        let fallback_id = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("advisor-template");
-        templates.push(normalize_advisor_template(parsed, fallback_id));
+            let content = fs::read_to_string(&path)
+                .map_err(|error| format!("读取模板失败 {}: {error}", path.display()))?;
+            let parsed: AdvisorTemplateRecord = serde_json::from_str(&content)
+                .map_err(|error| format!("模板格式无效 {}: {error}", path.display()))?;
+            let fallback_id = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("advisor-template");
+            let normalized = normalize_advisor_template(parsed, fallback_id);
+            templates_by_id.insert(normalized.id.clone(), normalized);
+        }
     }
 
+    let mut templates: Vec<_> = templates_by_id.into_values().collect();
     templates.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(json!(templates))
 }

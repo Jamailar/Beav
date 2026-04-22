@@ -16,6 +16,7 @@ import {
 const DEFAULT_REMOTE = 'export-sanitized';
 const MAC_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'mac-build-summary.json');
 const WINDOWS_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'windows-build-summary.json');
+const LINUX_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'linux-build-summary.json');
 
 async function readJsonFile(filePath) {
   const raw = await fs.readFile(filePath, 'utf8');
@@ -136,27 +137,47 @@ async function collectReleaseAssets() {
   const assets = [];
   const summaries = [];
 
-  for (const summaryPath of [MAC_SUMMARY_PATH, WINDOWS_SUMMARY_PATH]) {
+  const registerAsset = async (filePath) => {
+    const value = String(filePath || '').trim();
+    if (!value) {
+      return;
+    }
+    if (!(await pathExists(value))) {
+      throw new Error(`Release asset declared in summary is missing: ${value}`);
+    }
+    if (!assets.includes(value)) {
+      assets.push(value);
+    }
+  };
+
+  for (const summaryPath of [MAC_SUMMARY_PATH, WINDOWS_SUMMARY_PATH, LINUX_SUMMARY_PATH]) {
     if (!(await pathExists(summaryPath))) {
       continue;
     }
     const summary = await readJsonFile(summaryPath);
     summaries.push(summary);
+
+    const artifactEntries = Array.isArray(summary?.artifacts) ? summary.artifacts : [];
+    for (const artifact of artifactEntries) {
+      for (const key of [
+        'installerPath',
+        'portableExeArtifactPath',
+        'portableZipArtifactPath',
+        'appImageArtifactPath',
+        'debArtifactPath',
+      ]) {
+        await registerAsset(artifact?.[key]);
+      }
+    }
+
     for (const key of [
       'installerPath',
       'portableExeArtifactPath',
       'portableZipArtifactPath',
+      'appImageArtifactPath',
+      'debArtifactPath',
     ]) {
-      const filePath = String(summary?.[key] || '').trim();
-      if (!filePath) {
-        continue;
-      }
-      if (!(await pathExists(filePath))) {
-        throw new Error(`Release asset declared in summary is missing: ${filePath}`);
-      }
-      if (!assets.includes(filePath)) {
-        assets.push(filePath);
-      }
+      await registerAsset(summary?.[key]);
     }
   }
 
@@ -211,7 +232,16 @@ async function buildReleaseNotes({ productName, tag, previousTag, assets }) {
 
 function forwardBuildArgs(args) {
   const forwarded = [];
-  for (const name of ['skip-win', 'skip-mac', 'mac-notary-retries', 'mac-notary-retry-delay-ms']) {
+  for (const name of [
+    'skip-win',
+    'skip-mac',
+    'skip-linux',
+    'mac-notary-retries',
+    'mac-notary-retry-delay-ms',
+    'mac-targets',
+    'windows-targets',
+    'linux-targets',
+  ]) {
     const value = args[name];
     if (value === undefined || value === false) {
       continue;
@@ -228,7 +258,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help === true) {
     console.log(
-      'Usage: pnpm release:oss [-- --repo owner/name] [-- --remote export-sanitized] [-- --tag v1.9.3] [-- --title "RedBox v1.9.3"] [-- --draft] [-- --prerelease] [-- --skip-build] [-- --skip-win] [-- --skip-mac]',
+      'Usage: pnpm release:oss [-- --repo owner/name] [-- --remote export-sanitized] [-- --tag v1.9.3] [-- --title "RedBox v1.9.3"] [-- --draft] [-- --prerelease] [-- --skip-build] [-- --skip-win] [-- --skip-mac] [-- --skip-linux]',
     );
     return;
   }

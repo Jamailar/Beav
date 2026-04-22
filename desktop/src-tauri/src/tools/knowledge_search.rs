@@ -167,7 +167,9 @@ pub fn execute_read(
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
     if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
-        if let Some(block_id) = payload_string(arguments, "blockId").filter(|value| !value.trim().is_empty()) {
+        if let Some(block_id) =
+            payload_string(arguments, "blockId").filter(|value| !value.trim().is_empty())
+        {
             if let Some(block) = document_blocks::read_block(state, &block_id)? {
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
@@ -294,10 +296,10 @@ fn resolve_document_source_scope(
     state: &State<'_, AppState>,
     arguments: &Value,
 ) -> Result<Option<KnowledgeScope>, String> {
-    let requested_source_id = payload_string(arguments, "sourceId")
-        .filter(|value| !value.trim().is_empty());
-    let requested_root_path = payload_string(arguments, "rootPath")
-        .filter(|value| !value.trim().is_empty());
+    let requested_source_id =
+        payload_string(arguments, "sourceId").filter(|value| !value.trim().is_empty());
+    let requested_root_path =
+        payload_string(arguments, "rootPath").filter(|value| !value.trim().is_empty());
     if requested_source_id.is_none() && requested_root_path.is_none() {
         return Ok(None);
     }
@@ -319,7 +321,10 @@ fn resolve_document_source_scope(
     };
     let root = PathBuf::from(root_path);
     if !root.exists() {
-        return Err(format!("document source root does not exist: {}", root.display()));
+        return Err(format!(
+            "document source root does not exist: {}",
+            root.display()
+        ));
     }
     Ok(Some(KnowledgeScope {
         kind: KnowledgeScopeKind::DocumentSource,
@@ -436,7 +441,14 @@ fn execute_source_search(
     let snippet_chars = parse_usize(arguments, "snippetChars", DEFAULT_SNIPPET_CHARS, 800);
     let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
     if indexed_count > 0 {
-        let hits = document_blocks::search_blocks(state, source_id, query, &pattern, limit, snippet_chars)?;
+        let hits = document_blocks::search_blocks(
+            state,
+            source_id,
+            query,
+            &pattern,
+            limit,
+            snippet_chars,
+        )?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -468,11 +480,7 @@ fn execute_source_search(
             if !line.to_lowercase().contains(&query_lower) {
                 continue;
             }
-            let document_id = format!(
-                "{}:{}",
-                source_id,
-                file.relative_path
-            );
+            let document_id = format!("{}:{}", source_id, file.relative_path);
             hits.push(json!({
                 "documentId": document_id,
                 "sourceId": source_id,
