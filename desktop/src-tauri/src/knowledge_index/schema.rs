@@ -5,6 +5,35 @@ use tauri::State;
 
 use crate::{knowledge_index::catalog_db_path, AppState};
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| error.to_string())?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(columns.iter().any(|item| item == column))
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    if has_column(conn, table, column)? {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), String> {
     let db_path = catalog_db_path(state)?;
     if let Some(parent) = db_path.parent() {
@@ -67,7 +96,6 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             file_extension TEXT,
             title TEXT,
             language TEXT,
-            page INTEGER,
             block_index INTEGER NOT NULL,
             line_start INTEGER NOT NULL,
             line_end INTEGER NOT NULL,
@@ -79,6 +107,25 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             ON knowledge_document_blocks(source_id, relative_path, block_index);
         CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_document
             ON knowledge_document_blocks(document_id, block_index);
+        CREATE TABLE IF NOT EXISTS knowledge_canonical_documents (
+            document_id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            absolute_path TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            file_extension TEXT,
+            source_type TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            parser_name TEXT NOT NULL,
+            parser_version TEXT NOT NULL,
+            language TEXT,
+            title TEXT,
+            canonical_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_canonical_documents_source_path
+            ON knowledge_canonical_documents(source_id, relative_path);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_canonical_documents_path_hash
+            ON knowledge_canonical_documents(absolute_path, content_hash);
         CREATE TABLE IF NOT EXISTS knowledge_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -91,5 +138,18 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         "#,
     )
     .map_err(|error| error.to_string())?;
+    ensure_column(&conn, "knowledge_document_blocks", "page", "INTEGER")?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "block_type",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "section_path_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
     Ok(())
 }

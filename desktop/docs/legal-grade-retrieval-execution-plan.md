@@ -2,7 +2,7 @@
 doc_type: plan
 execution_status: in_progress
 last_updated: 2026-04-22
-execution_stage: stage1_completed
+execution_stage: stage2_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -211,6 +211,13 @@ Status: Current
 - 通用格式支持矩阵建立
 - canonical schema 固定
 - parser fallback 可用
+
+### Progress Notes
+
+- 已引入统一 `CanonicalDocument` 结构和 parser info
+- 已支持 `pptx / xlsx / csv / eml / zip` 的 canonical 解析
+- block 索引已建立在 canonical 层之上，不再直接依赖原始文件扫描
+- 已增加 canonical cache，文件内容哈希未变化时优先复用解析结果
 
 ## Stage 3: 引用锚点与证据包
 
