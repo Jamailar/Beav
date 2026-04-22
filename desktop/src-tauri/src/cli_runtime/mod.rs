@@ -11,6 +11,8 @@ mod events;
 mod executor;
 #[path = "path_env.rs"]
 mod path_env;
+#[path = "policy.rs"]
+mod policy;
 #[path = "process_store.rs"]
 mod process_store;
 #[path = "runtime_resolver.rs"]
@@ -23,6 +25,7 @@ pub use environment_store::*;
 pub use events::*;
 pub use executor::*;
 pub use path_env::*;
+pub use policy::*;
 pub use process_store::*;
 pub use runtime_resolver::*;
 pub use types::*;

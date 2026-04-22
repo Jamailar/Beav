@@ -6,11 +6,13 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    create_task_ephemeral_environment, default_detect_commands, detect_many, detect_tool,
-    ensure_app_global_environment, ensure_workspace_environment,
+    approve_cli_escalation, create_task_ephemeral_environment, default_detect_commands,
+    deny_cli_escalation, detect_many, detect_tool, emit_cli_escalation_resolved,
+    emit_cli_execution_status, ensure_app_global_environment, ensure_workspace_environment,
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_execution_by_id,
     list_cli_environments, load_cli_execution_snapshot, load_host_shell_env,
-    CliCreateEnvironmentRequest, CliEnvironmentScope, CliExecuteRequest,
+    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
+    CliEnvironmentScope, CliExecuteRequest,
 };
 use crate::{payload_string, AppState};
 
@@ -223,15 +225,47 @@ fn unsupported_execution_action(
     }))
 }
 
-fn unsupported_escalation_action(payload: &Value, action: &str) -> Result<Value, String> {
-    let escalation_id = payload_string(payload, "escalationId")
-        .ok_or_else(|| "escalationId is required".to_string())?;
+fn approve_escalation_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: CliApproveEscalationRequest = parse_cli_runtime_payload(payload)?;
+    let resolution = approve_cli_escalation(state, &request)?;
+    if resolution.changed {
+        if let Some(execution) = resolution.execution.as_ref() {
+            emit_cli_execution_status(
+                app,
+                execution,
+                Some("cli escalation approved; rerun execute to continue"),
+            );
+        }
+        emit_cli_escalation_resolved(app, resolution.execution.as_ref(), &resolution.escalation);
+    }
     Ok(json!({
-        "success": false,
-        "supported": false,
-        "action": action,
-        "escalationId": escalation_id,
-        "error": "cli runtime escalation approval is not available until policy flow lands",
+        "success": true,
+        "escalation": resolution.escalation,
+        "execution": resolution.execution,
+    }))
+}
+
+fn deny_escalation_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let request: CliDenyEscalationRequest = parse_cli_runtime_payload(payload)?;
+    let resolution = deny_cli_escalation(state, &request)?;
+    if resolution.changed {
+        if let Some(execution) = resolution.execution.as_ref() {
+            emit_cli_execution_status(app, execution, Some("cli escalation denied by user"));
+        }
+        emit_cli_escalation_resolved(app, resolution.execution.as_ref(), &resolution.escalation);
+    }
+    Ok(json!({
+        "success": true,
+        "escalation": resolution.escalation,
+        "execution": resolution.execution,
     }))
 }
 
@@ -274,8 +308,8 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:execute" => execute_value(app, state, payload),
         "cli-runtime:poll-execution" => poll_execution_value(state, payload),
         "cli-runtime:cancel-execution" => unsupported_execution_action(state, payload),
-        "cli-runtime:approve-escalation" => unsupported_escalation_action(payload, "approve"),
-        "cli-runtime:deny-escalation" => unsupported_escalation_action(payload, "deny"),
+        "cli-runtime:approve-escalation" => approve_escalation_value(app, state, payload),
+        "cli-runtime:deny-escalation" => deny_escalation_value(app, state, payload),
         _ => return None,
     };
 

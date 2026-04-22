@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use tauri::State;
 
-use crate::cli_runtime::{CliExecutionRecord, CliExecutionSnapshot};
+use crate::cli_runtime::{
+    find_cli_escalation_by_execution_id, CliExecutionRecord, CliExecutionSnapshot,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{store_root, AppState, AppStore};
 
@@ -159,7 +161,7 @@ pub fn load_cli_execution_snapshot(
         stdout_tail,
         stderr_tail,
         verifications: Vec::new(),
-        escalation: None,
+        escalation: find_cli_escalation_by_execution_id(state, execution_id)?,
     }))
 }
 

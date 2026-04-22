@@ -2,12 +2,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    emit_cli_execution_log, emit_cli_execution_started, emit_cli_execution_status,
-    execution_log_metadata, execution_log_paths, load_host_shell_env, merge_execution_env,
-    resolve_cli_environment, upsert_cli_execution_record, CliEnvironmentResolveRequest,
+    authorize_cli_execution, emit_cli_escalation_requested, emit_cli_execution_log,
+    emit_cli_execution_started, emit_cli_execution_status, execution_log_metadata,
+    execution_log_paths, load_host_shell_env, merge_execution_env, resolve_cli_environment,
+    upsert_cli_execution_record, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
     CliExecuteRequest, CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
 };
 use crate::process_utils::configure_background_command;
@@ -44,6 +46,34 @@ fn split_log_chunks(content: &str, max_chars: usize) -> Vec<String> {
         chunks.push(current);
     }
     chunks
+}
+
+fn execution_record_metadata(
+    stdout_path: &Path,
+    stderr_path: &Path,
+    escalation: Option<&CliEscalationRequestRecord>,
+    approved_by_existing_grant: bool,
+) -> Value {
+    let mut metadata = execution_log_metadata(stdout_path, stderr_path);
+    if let Some(object) = metadata.as_object_mut() {
+        if let Some(escalation) = escalation {
+            object.insert("escalationId".to_string(), json!(escalation.id));
+            object.insert("escalationStatus".to_string(), json!(escalation.status));
+            if approved_by_existing_grant {
+                object.insert("approvedByEscalationId".to_string(), json!(escalation.id));
+                object.insert(
+                    "approvedScope".to_string(),
+                    escalation
+                        .metadata
+                        .as_ref()
+                        .and_then(|value| value.get("approvedScope"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+            }
+        }
+    }
+    metadata
 }
 
 struct LocalCliCommandOutput {
@@ -110,21 +140,33 @@ pub fn execute_cli_command(
         .unwrap_or_else(|_| std::env::vars().collect::<BTreeMap<String, String>>());
     let merged_env = merge_execution_env(&host_env, &resolution.environment, Some(&request.env));
     let cwd = normalize_cwd(&request, &resolution.environment.root_path);
+    let session_id = request
+        .session_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "cli-runtime".to_string());
+    let policy = authorize_cli_execution(
+        state,
+        &execution_id,
+        &request,
+        &resolution.environment,
+        Path::new(&cwd),
+    )?;
 
     let mut record = CliExecutionRecord {
         id: execution_id,
-        session_id: request
-            .session_id
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "cli-runtime".to_string()),
+        session_id,
         task_id: request.task_id.clone(),
         runtime_id: request.runtime_id.clone(),
         environment_id: resolution.environment.id.clone(),
         tool_id: request.tool_id.clone(),
         command: request.argv.clone(),
         cwd: cwd.clone(),
-        status: CliExecutionStatus::Running,
+        status: if policy.allowed {
+            CliExecutionStatus::Running
+        } else {
+            CliExecutionStatus::AwaitingEscalation
+        },
         exit_code: None,
         stdout_path: Some(stdout_path.to_string_lossy().to_string()),
         stderr_path: Some(stderr_path.to_string_lossy().to_string()),
@@ -132,10 +174,26 @@ pub fn execute_cli_command(
         verification_status: CliVerificationStatus::Unknown,
         started_at: Some(now_i64()),
         finished_at: None,
-        metadata: Some(execution_log_metadata(&stdout_path, &stderr_path)),
+        metadata: Some(execution_record_metadata(
+            &stdout_path,
+            &stderr_path,
+            policy.escalation.as_ref(),
+            policy.approved_by_existing_grant,
+        )),
     };
     record = upsert_cli_execution_record(state, record)?;
     emit_cli_execution_started(app, &record);
+    if !policy.allowed {
+        emit_cli_execution_status(
+            app,
+            &record,
+            Some("cli escalation required before command can continue"),
+        );
+        if let Some(escalation) = policy.escalation.as_ref() {
+            emit_cli_escalation_requested(app, &record, escalation);
+        }
+        return Ok(record);
+    }
 
     let local_output = run_local_command_capture(&request.argv, Path::new(&cwd), &merged_env)?;
     crate::cli_runtime::write_execution_logs(

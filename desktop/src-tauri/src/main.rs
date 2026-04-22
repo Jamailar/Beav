@@ -350,6 +350,7 @@ struct AppStore {
     runtime_task_traces: Vec<RuntimeTaskTraceRecord>,
     cli_environments: Vec<cli_runtime::CliEnvironmentRecord>,
     cli_executions: Vec<cli_runtime::CliExecutionRecord>,
+    cli_escalations: Vec<cli_runtime::CliEscalationRequestRecord>,
     debug_logs: Vec<String>,
     archive_profiles: Vec<ArchiveProfileRecord>,
     archive_samples: Vec<ArchiveSampleRecord>,
