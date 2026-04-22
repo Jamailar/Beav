@@ -7153,6 +7153,11 @@ fn handle_channel(
     if let Some(result) = commands::redclaw::handle_redclaw_channel(app, state, channel, &payload) {
         return result;
     }
+    if let Some(result) =
+        commands::cli_runtime::handle_cli_runtime_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
     if let Some(result) = commands::runtime::handle_runtime_channel(app, state, channel, &payload) {
         return result;
     }

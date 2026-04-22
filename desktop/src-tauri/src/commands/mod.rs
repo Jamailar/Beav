@@ -5,6 +5,7 @@ pub mod chat;
 pub mod chat_sessions_wander;
 pub mod chat_state;
 pub mod chatrooms;
+pub mod cli_runtime;
 pub mod embeddings;
 pub mod file_ops;
 pub mod generation;
