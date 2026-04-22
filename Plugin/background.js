@@ -1,18 +1,18 @@
 const KNOWLEDGE_API_CANDIDATES = [
   {
-    baseUrl: 'http://127.0.0.1:23456',
-    endpointPath: '/api/knowledge',
-  },
-  {
-    baseUrl: 'http://localhost:23456',
-    endpointPath: '/api/knowledge',
-  },
-  {
     baseUrl: 'http://127.0.0.1:31937',
     endpointPath: '/api/knowledge',
   },
   {
     baseUrl: 'http://localhost:31937',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://127.0.0.1:23456',
+    endpointPath: '/api/knowledge',
+  },
+  {
+    baseUrl: 'http://localhost:23456',
     endpointPath: '/api/knowledge',
   },
 ];
@@ -626,7 +626,7 @@ async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
   throw new Error(
     `未连接到 RedBox Knowledge API。已尝试: ${attemptedUrls.join(', ')}。` +
     `最后错误: ${lastError?.message || 'unknown error'}。` +
-    ' 请确认桌面应用已启动，并且 assistant daemon 正在监听 127.0.0.1:31937。'
+    ' 请确认 LexBox 已启动，并且本地 Knowledge API 正在监听 127.0.0.1:31937。'
   );
 }
 
