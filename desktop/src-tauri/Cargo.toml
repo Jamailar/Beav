@@ -35,5 +35,8 @@ url = "2.5.2"
 urlencoding = "2.1.3"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+tauri = { version = "2.0.0", features = ["test"] }
+
 [features]
 default = []

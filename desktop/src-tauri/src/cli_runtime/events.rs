@@ -1,5 +1,5 @@
 use serde_json::json;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 use crate::cli_runtime::{CliEscalationRequestRecord, CliExecutionRecord, CliInstallMethod};
 use crate::events::emit_runtime_event_with_lineage;
@@ -64,7 +64,7 @@ fn execution_payload(record: &CliExecutionRecord) -> serde_json::Value {
     })
 }
 
-pub fn emit_cli_execution_started(app: &AppHandle, record: &CliExecutionRecord) {
+pub fn emit_cli_execution_started<R: Runtime>(app: &AppHandle<R>, record: &CliExecutionRecord) {
     emit_runtime_event_with_lineage(
         app,
         "runtime:cli-execution-started",
@@ -76,8 +76,8 @@ pub fn emit_cli_execution_started(app: &AppHandle, record: &CliExecutionRecord) 
     );
 }
 
-pub fn emit_cli_execution_log(
-    app: &AppHandle,
+pub fn emit_cli_execution_log<R: Runtime>(
+    app: &AppHandle<R>,
     record: &CliExecutionRecord,
     stream: &str,
     content: &str,
@@ -101,8 +101,8 @@ pub fn emit_cli_execution_log(
     );
 }
 
-pub fn emit_cli_execution_status(
-    app: &AppHandle,
+pub fn emit_cli_execution_status<R: Runtime>(
+    app: &AppHandle<R>,
     record: &CliExecutionRecord,
     reason: Option<&str>,
 ) {
@@ -123,8 +123,8 @@ pub fn emit_cli_execution_status(
     );
 }
 
-pub fn emit_cli_install_started(
-    app: &AppHandle,
+pub fn emit_cli_install_started<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: Option<&str>,
     task_id: Option<&str>,
     runtime_id: Option<&str>,
@@ -151,8 +151,8 @@ pub fn emit_cli_install_started(
     );
 }
 
-pub fn emit_cli_install_finished(
-    app: &AppHandle,
+pub fn emit_cli_install_finished<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: Option<&str>,
     task_id: Option<&str>,
     runtime_id: Option<&str>,
@@ -181,8 +181,8 @@ pub fn emit_cli_install_finished(
     );
 }
 
-pub fn emit_cli_escalation_requested(
-    app: &AppHandle,
+pub fn emit_cli_escalation_requested<R: Runtime>(
+    app: &AppHandle<R>,
     execution: &CliExecutionRecord,
     escalation: &CliEscalationRequestRecord,
 ) {
@@ -208,8 +208,8 @@ pub fn emit_cli_escalation_requested(
     );
 }
 
-pub fn emit_cli_escalation_resolved(
-    app: &AppHandle,
+pub fn emit_cli_escalation_resolved<R: Runtime>(
+    app: &AppHandle<R>,
     execution: Option<&CliExecutionRecord>,
     escalation: &CliEscalationRequestRecord,
 ) {
@@ -252,7 +252,11 @@ pub fn emit_cli_escalation_resolved(
     );
 }
 
-pub fn emit_cli_verification_finished(app: &AppHandle, record: &CliExecutionRecord, summary: &str) {
+pub fn emit_cli_verification_finished<R: Runtime>(
+    app: &AppHandle<R>,
+    record: &CliExecutionRecord,
+    summary: &str,
+) {
     emit_runtime_event_with_lineage(
         app,
         "runtime:cli-verification-finished",

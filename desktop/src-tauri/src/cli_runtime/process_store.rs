@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -60,15 +61,47 @@ pub fn write_execution_logs(
     stdout: &[u8],
     stderr: &[u8],
 ) -> Result<(), String> {
+    initialize_execution_logs(stdout_path, stderr_path)?;
+    append_execution_log_chunk(stdout_path, stdout)?;
+    append_execution_log_chunk(stderr_path, stderr)?;
+    Ok(())
+}
+
+pub fn initialize_execution_logs(stdout_path: &Path, stderr_path: &Path) -> Result<(), String> {
     if let Some(parent) = stdout_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if let Some(parent) = stderr_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(stdout_path, stdout).map_err(|error| error.to_string())?;
-    fs::write(stderr_path, stderr).map_err(|error| error.to_string())?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(stdout_path)
+        .map_err(|error| error.to_string())?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(stderr_path)
+        .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub fn append_execution_log_chunk(path: &Path, chunk: &[u8]) -> Result<(), String> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(chunk).map_err(|error| error.to_string())
 }
 
 pub fn read_log_tail_from_path(path: &Path, max_chars: usize) -> Result<String, String> {
@@ -237,6 +270,21 @@ mod tests {
         fs::write(&path, "0123456789abcdef").expect("log should write");
         let tail = read_log_tail_from_path(&path, 6).expect("tail should read");
         assert_eq!(tail, "abcdef");
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn append_execution_log_chunk_appends_without_truncating() {
+        let temp_root =
+            std::env::temp_dir().join(format!("redbox-cli-append-{}", crate::now_i64()));
+        fs::create_dir_all(&temp_root).expect("temp dir should exist");
+        let stdout_path = temp_root.join("stdout.log");
+        let stderr_path = temp_root.join("stderr.log");
+        initialize_execution_logs(&stdout_path, &stderr_path).expect("logs should initialize");
+        append_execution_log_chunk(&stdout_path, b"hello ").expect("first chunk should append");
+        append_execution_log_chunk(&stdout_path, b"world").expect("second chunk should append");
+        let content = fs::read_to_string(&stdout_path).expect("stdout log should read");
+        assert_eq!(content, "hello world");
         let _ = fs::remove_dir_all(&temp_root);
     }
 }
