@@ -1,7 +1,7 @@
 ---
 doc_type: plan
-execution_status: in_progress
-execution_stage: runtime_contract_foundation
+execution_status: completed
+execution_stage: completed
 last_updated: 2026-04-22
 owner: ai-runtime
 scope: desktop
@@ -27,7 +27,26 @@ success_metrics:
 
 # RedBox 对比 aionrs 后的优化计划
 
-Status: Current
+Status: Completed
+
+## Execution Result
+
+本计划已按底层收口顺序执行完成，对应原子提交如下：
+
+1. `5639f898` `Refactor provider compatibility policy handling`
+2. `8125ddc4` `refactor(desktop): unify runtime approval and event contracts`
+3. `136fdbf9` `refactor(desktop): extract memory into dedicated subsystem`
+4. `49fa6f03` `refactor(desktop): add runtime approval state`
+5. `463e7182` `refactor(desktop): formalize runtime context bundle`
+
+本次执行后的实际结果：
+
+- `provider_compat` 已收口为统一 turn policy，provider 差异不再散落在主流程条件分支里。
+- `runtime event`、`approval payload`、`manuscripts confirm` 已走统一 contract 和宿主状态。
+- `memory` 已从 `workspace_data + maintenance` 组合中拆成独立子系统。
+- `approval runtime` 已统一承接 `runtime query`、`tool confirm`、`package script confirm`，并在 Settings diagnostics 中可见。
+- `context bundle` 已形成类型化 summary，并随 `runtime warm` diagnostics 暴露给 Settings。
+- 本计划相关关键链路已补齐聚焦测试：provider policy、runtime contract、memory recall、approval runtime、context bundle。
 
 ## Scope
 
